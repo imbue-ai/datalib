@@ -1,4 +1,4 @@
-load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
 exports_files([
@@ -52,6 +52,18 @@ rust_test(
     size = "small",
     srcs = ["src/raw_store.rs"],
     crate_root = "src/raw_store.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# Same arrangement for `src/protected.rs`: where the protected folder
+# is, which libraries are in it, and the copy of latchkey's store made
+# for them. Nothing in it may reference `tauri`.
+rust_test(
+    name = "protected_test",
+    size = "small",
+    srcs = ["src/protected.rs"],
+    crate_root = "src/protected.rs",
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
 )

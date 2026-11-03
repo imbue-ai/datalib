@@ -1,4 +1,4 @@
-load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 load("//tools:test_slice.bzl", "rust_test_slice", "skip_slices")
@@ -341,10 +341,12 @@ rust_binary(
     ],
 )
 
-# The command line's parse: its `--help` examples.
+# The command line's parse: its `--help` examples, and the commands the
+# docs `datalib-step help` prints show for it.
 rust_test(
     name = "datalib_http_bin_unittests",
     size = "small",
     crate = ":datalib_http_bin",
     edition = "2021",
+    deps = ["//datalib/backend/agent_docs:datalib_agent_docs"],
 )

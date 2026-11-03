@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# `NormalizedPhoto`: a photo or video as one source describes it. Only the
+# shape, so render crates, the render store and the photos applet can all
+# take it. Bazel-only.
+rust_library(
+    name = "datalib_photo_schema",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_photo_schema",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:serde",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "photo_schema_unittests",
+    size = "small",
+    crate = ":datalib_photo_schema",
+    edition = "2021",
+    deps = ["@datalib_crates//:serde_json"],
+)

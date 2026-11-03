@@ -354,6 +354,7 @@ Two nullable measurements. What each one measures is decided per
 | a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
 | todoist.Todoist Project | — | its tasks, open and completed, and its comments; each task or comment row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
+| lightroom.Photo, lightroom.Video | — | 1 |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
@@ -391,6 +392,34 @@ modified row `diff_changed_columns` names the columns that differ,
 sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
 says a row came from a diff tree; nothing else about the row changes —
 `provider` is still the source's, so its icon and CSS apply.
+
+### `image`, `latitude`, `longitude`
+
+`image` names the picture a row shows, as a `datalib:` name
+(`datalib:photo/<uuid>`), never an address: the UI asks which applet
+serves the name's kind and draws the thumbnail from it, so moving the
+bytes moves no row. The search grid's Picture column (column type
+`image`) is hidden until a row in the results has one. `latitude` and `longitude` are where the thing was,
+in degrees. All three are null on every row but a Lightroom photo's
+today.
+
+### `h3`
+
+The finest [H3](https://h3geo.org) cell holding `latitude` and
+`longitude`, as an integer, which the builder sets from `.geo(…)`: a
+render gives a row a location and nothing else. `place:<cell>` and
+`near:<cell>` are ranges of this one indexed column, at any resolution
+(`datalib/backend/h3/README.md`).
+
+**A photo's document has no file.** Its rows name a `qmd_path` like any
+document's, so `source_id` and the id-from-path rule hold, but render
+never writes the file: the `photos` applet draws the photo from the
+`NormalizedPhoto` its document carries in `source_photos`
+(`datalib_photo_schema`), which the index copies the way it copies
+`source_contacts`. `/chat/<uuid>` answers such a document with its
+`image` and an empty body, and the document card hands it to the
+applet's card. qmd indexes nothing for it, which is why a photo's
+caption is a `caption:` term.
 
 ### `supplied_terms`
 

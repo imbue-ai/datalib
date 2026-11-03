@@ -2,8 +2,8 @@
 # The `build` job's "Stage tarball" step of release.yml, minus the
 # upload: lay out `datalib-<version>-<triple>/` from the binaries bazel
 # built, with the `latchkey` launcher, the commit hash, the manifest of
-# the runtime asset the binaries fetch on first use, the guides, the
-# example configs the agent guide points at and the third-party notices;
+# the runtime asset the binaries fetch on first use, every doc
+# `datalib-step help` prints and the third-party notices;
 # then tar it. Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar
 # into the current directory and prints the tarball's name.
 #
@@ -93,24 +93,19 @@ else
     git -C "$repo_root" rev-parse HEAD > "$stage/git-hash"
 fi
 
-# The guides, written by the `datalib-step` they ship beside, so each
-# file and its `datalib-step help` page cannot disagree; their links name
-# the commit just written. A directory, because install.sh links every
-# file at the top into the user's PATH.
-mkdir -p "$stage/docs"
-"$stage/datalib-step" help agent > "$stage/docs/agent_user.md"
-"$stage/datalib-step" help raw-stores > "$stage/docs/raw_stores.md"
-"$stage/datalib-step" help apps > "$stage/docs/building_on_datalib.md"
-"$stage/datalib-step" help search > "$stage/docs/searching.md"
-
-# The example configs the guide points at, at their paths in the repo so
-# an agent with no network finds them: the commented one, and every
-# source with every option set.
-# `cp` of a link copies what it names: in the test these are runfiles.
-mkdir -p "$stage/configs" "$stage/docs/user/config_examples"
-cp "$repo_root/configs/dag_example.toml" "$stage/configs/"
-cp "$repo_root/docs/user/config_examples/all_sources.toml" "$stage/docs/user/config_examples/"
-chmod 0644 "$stage/configs/dag_example.toml" "$stage/docs/user/config_examples/all_sources.toml"
+# Every doc compiled into `datalib-step` (the guides, the references they
+# send an agent to, the example configs), written by the `datalib-step`
+# they ship beside, so each file and its `datalib-step help` page cannot
+# disagree; a link to a file not compiled in names the commit just
+# written. At its path in the repo, under a directory, because
+# install.sh links every file at the top into the user's PATH.
+# `help docs` prints a `<topic> <path>` line per doc.
+"$stage/datalib-step" help docs | awk '$2 ~ /\.(md|toml)$/ { print $1, $2 }' > "$stage/.docs"
+while read -r topic path; do
+    mkdir -p "$stage/$(dirname "$path")"
+    "$stage/datalib-step" help "$topic" > "$stage/$path"
+done < "$stage/.docs"
+rm -f "$stage/.docs"
 
 # `runtime.manifest`: which runtime asset of THIS release the binaries
 # fetch on first use, with its sha256 and size read back from what the

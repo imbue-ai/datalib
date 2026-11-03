@@ -207,6 +207,8 @@ pub struct GridRowBuilder {
     markdown_uuid: Option<String>,
     byte_size: Option<i64>,
     item_count: Option<i64>,
+    image: Option<String>,
+    geo: Option<(f64, f64)>,
 }
 
 /// Generate a required-field setter (`impl Into<String>`).
@@ -275,6 +277,13 @@ impl GridRowBuilder {
     opt_setter!(notion_page_uuid);
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
+    opt_setter!(image);
+
+    /// Where the thing was: latitude and longitude, in degrees.
+    pub fn geo(mut self, v: impl Into<Option<(f64, f64)>>) -> Self {
+        self.geo = v.into();
+        self
+    }
 
     /// Mark this row as the one that *is* the rendered document. Exactly
     /// one row per document says so; the render store checks.
@@ -434,6 +443,13 @@ impl GridRowBuilder {
             diff_status: None,
             diff_changed_columns: None,
             supplied_terms: None,
+            image: self.image,
+            latitude: self.geo.map(|(lat, _)| lat),
+            longitude: self.geo.map(|(_, lng)| lng),
+            h3: self
+                .geo
+                .and_then(|(lat, lng)| datalib_h3::locate(lat, lng))
+                .map(datalib_h3::stored),
         })
     }
 }

@@ -89,7 +89,8 @@ opens and asks.
 ## The libraries screen
 
 It lists the recent libraries (`~/.datalib/recent-roots.json`), then
-any other library in the libraries folder, `~/Datalib`. It is not in
+any other library in the libraries folder, `~/Datalib`, or in the
+protected folder (below), by name. The libraries folder is not in
 `~/Documents`, `~/Desktop` or `~/Downloads` because macOS asks before
 an app reads those.
 Each shows the source
@@ -143,10 +144,12 @@ purpose: it is compiled a second time, as its own crate, by
 `//datalib/tauri:launcher_test`. `src/raw_store.rs` (what Browse does
 with a raw store: open it read-only in DB Browser for SQLite or the
 bundled doltlite shell) is kept free of `tauri` the same way, for
-`//datalib/tauri:raw_store_test`. Those two targets are the only way
-any of this crate's logic reaches `bazelisk test //...`, since the
-shell is a standalone cargo workspace Bazel does not build. Anything in
-either file that reaches for `tauri` breaks its target.
+`//datalib/tauri:raw_store_test`, and so is `src/protected.rs` (the
+protected folder, below) for `//datalib/tauri:protected_test`. Those
+targets are the only way any of this crate's logic reaches `bazelisk
+test //...`, since the shell is a standalone cargo workspace Bazel does
+not build. Anything in those files that reaches for `tauri` breaks its
+target.
 
 Picking a folder that turns out to be *empty* is not an error here: the
 shell opens it, and the app's own first-run screen
@@ -171,6 +174,52 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 `licenses/fluentui-emoji/`). `icons/` is generated from it with
 `pnpm exec tauri icon app-icon.png -o icons` (delete the `android/` and
 `ios/` folders it also writes).
+
+## A protected library
+
+On macOS, "New library" can put the library in a folder only Datalib
+opens without asking: the app group container
+`~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
+macOS guards a group container: any other app that reaches in
+(Terminal, an AI agent's shell, Finder) makes it ask the person first,
+and a yes lasts as long as that app runs. An app gets into its own
+group container without asking when the group's name starts with the
+Team ID that signed it, so only the Imbue-signed app can use this; a
+build from source is asked too, or refused. The option is marked
+experimental, and is meant to stop an agent running shell commands as
+you from reading the library or using its sign-ins, not a program set
+on stealing from you.
+
+- **Only the app's own executable is entitled** (`Datalib.entitlements`,
+  `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
+  programs an app starts as that app, so `datalib-http` and everything
+  it runs reach the library because the app started them. If macOS
+  judged each program by its own signature instead, an entitled
+  `datalib-doltlite` would let anyone who runs it in; unentitled, the
+  library fails to open instead, which says so.
+- **macOS makes the folder**, the first time the app asks for it
+  (`make_protected_container`, `NSFileManager`); the shell only ever
+  creates libraries inside the one it names.
+- **latchkey's store moves in too.** The server of a protected library
+  starts with `LATCHKEY_DIRECTORY` naming `<container>/latchkey`, and
+  every latchkey it runs inherits it. The first time, that store is a
+  copy of `~/.latchkey` (`protected::seed_latchkey`), so the library's
+  sources keep their sign-ins; the originals stay until the person
+  signs out of them. Every protected library shares that one store.
+- **Nothing hands it to another app.** The folder button is disabled on
+  a protected row, and Browse refuses a protected library's raw stores
+  (`refuse_if_protected`): Finder or Terminal would have to be let in,
+  and stay in.
+- **The release checks the signed app starts** (`datalib-tauri
+  --version` in `build-signed-app.sh`): macOS kills a program whose
+  signature cannot back its entitlements, before any window.
+
+What the first release with it should be checked for, on a Mac
+(#1525): the app makes and opens a protected library with no prompt;
+syncs and sign-ins work in it; from Terminal, `ls` of the folder and
+each of `Resources/binaries/` run directly get a prompt naming
+Terminal rather than getting in; one Allow for Terminal lets in
+everything that Terminal runs until it quits.
 
 ## Behaviour worth knowing
 

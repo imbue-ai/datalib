@@ -1,4 +1,4 @@
-load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("@bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([

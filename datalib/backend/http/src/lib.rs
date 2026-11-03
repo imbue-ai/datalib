@@ -694,6 +694,8 @@ async fn put_lib(
         component_args: req.component_args.or(prior_args).unwrap_or_default(),
         icon: merge(req.icon, prior_icon),
         dev_tool: req.dev_tool.unwrap_or(prior_dev_tool),
+        // Only an applet answers for a kind of name.
+        serves: Vec::new(),
     };
     // Writing the metadata also retires any tombstone at this name: the
     // name holds a real component again.

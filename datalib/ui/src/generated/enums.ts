@@ -27,6 +27,7 @@ export type ColumnType =
   | "chips"
   | "actions"
   | "markdown_uuid"
+  | "image"
   | "membership";
 
 /** `ChipKind in datalib/backend/columns/src/lib.rs`. */

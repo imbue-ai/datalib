@@ -1,0 +1,70 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Render half of the `lightroom` provider: a grid row per photo and video,
+# and the `NormalizedPhoto` the photos applet draws it from. The side that
+# knows `datalib_schema`; //datalib/backend/etl/providers/lightroom is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_lightroom_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_lightroom_render",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    deps = [
+        "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/h3:datalib_h3",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/photo_schema:datalib_photo_schema",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "//datalib/backend/uri:datalib_uri",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:regex",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "lightroom_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_lightroom_render",
+    edition = "2021",
+)
+
+# Catalog 03 of github.com/thadd3us/lightroom_db_diff, mirrored and read
+# back as photos (the `lightroom_catalog_03_previews` archive in
+# MODULE.bazel). `requires-network` for a cold cache, as `real_catalogs`.
+rust_test(
+    name = "catalog_03",
+    size = "medium",
+    srcs = ["tests/catalog_03.rs"],
+    crate_name = "catalog_03",
+    data = ["@lightroom_catalog_03_previews//:lrcat"],
+    edition = "2021",
+    env = {"LIGHTROOM_CATALOG_03": "$(rootpath @lightroom_catalog_03_previews//:lrcat)"},
+    tags = [
+        "no-remote-exec",
+        "requires-network",
+    ],
+    deps = [
+        ":datalib_etl_lightroom_render",
+        "//datalib/backend/etl/providers/lightroom:datalib_etl_lightroom",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/h3:datalib_h3",
+        "//datalib/backend/photo_schema:datalib_photo_schema",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -1144,7 +1144,7 @@ pub fn credential_hint(e: ClaudeError) -> anyhow::Error {
          does: observed 2026-08-31, the captured cookie and the browser you\n\
          normally use kept evicting each other, logging both out repeatedly.\n\
          Prefer the paste above until that is understood.\n\
-         See docs/user/getting_your_data.md for the full walkthrough."
+         `datalib-step help claude` has the full walkthrough."
     ))
 }
 

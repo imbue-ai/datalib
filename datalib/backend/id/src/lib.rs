@@ -88,6 +88,8 @@ pub enum IdNamespace {
     /// Drive's file ids, and the comment ids each file mints.
     GoogleDrive,
     GoogleTakeout,
+    /// A Lightroom catalog's images, by the `id_global` it mints for each.
+    Lightroom,
     Linkedin,
     Notion,
     Pdf,

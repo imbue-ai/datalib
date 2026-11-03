@@ -33,20 +33,21 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     write_recents(file, &roots)
 }
 
-/// Whether the screen offers to forget `root`. A library in the libraries
-/// folder is listed because it is there, not because it was opened, so
-/// it stays while it is there; one elsewhere is listed only from the
-/// recent list, and so is one whose folder is gone.
-pub fn forgettable(root: &Path, libraries_dir: &Path) -> bool {
-    !deletable(root, libraries_dir)
+/// Whether the screen offers to forget `root`. A library in one of the
+/// app's libraries folders (`~/Datalib`, and the protected one) is listed
+/// because it is there, not because it was opened, so it stays while it
+/// is there; one elsewhere is listed only from the recent list, and so is
+/// one whose folder is gone.
+pub fn forgettable(root: &Path, libraries_dirs: &[PathBuf]) -> bool {
+    !deletable(root, libraries_dirs)
 }
 
-/// Whether the screen offers to delete `root`. Only a library in the
-/// libraries folder: the app made that folder, and such a row has no
-/// Forget, so nothing else takes it off the list. A library elsewhere
-/// sits among a person's own folders and is theirs to delete.
-pub fn deletable(root: &Path, libraries_dir: &Path) -> bool {
-    directly_inside(root, libraries_dir) && is_data_root(root)
+/// Whether the screen offers to delete `root`. Only a library in one of
+/// the app's libraries folders: the app made that folder, and such a row
+/// has no Forget, so nothing else takes it off the list. A library
+/// elsewhere sits among a person's own folders and is theirs to delete.
+pub fn deletable(root: &Path, libraries_dirs: &[PathBuf]) -> bool {
+    libraries_dirs.iter().any(|dir| directly_inside(root, dir)) && is_data_root(root)
 }
 
 /// `root` is a folder of its own one level inside `dir`, judged on the
@@ -262,10 +263,10 @@ pub struct Library {
     pub found: bool,
 }
 
-/// The recent libraries, newest first, then any other library in
-/// `libraries_dir` by name: one made there and never opened again is
-/// still the person's.
-pub fn libraries(recents_file: &Path, libraries_dir: &Path) -> Vec<Library> {
+/// The recent libraries, newest first, then any other library in the
+/// app's libraries folders, by name whichever folder it is in: one made
+/// there and never opened again is still the person's.
+pub fn libraries(recents_file: &Path, libraries_dirs: &[PathBuf]) -> Vec<Library> {
     let recents = parse_recents(&std::fs::read_to_string(recents_file).unwrap_or_default());
     let mut out: Vec<Library> = recents
         .into_iter()
@@ -275,14 +276,13 @@ pub fn libraries(recents_file: &Path, libraries_dir: &Path) -> Vec<Library> {
             path,
         })
         .collect();
-    let mut beside: Vec<PathBuf> = std::fs::read_dir(libraries_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
+    let mut beside: Vec<PathBuf> = libraries_dirs
+        .iter()
+        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
         .map(|e| e.path())
         .filter(|p| is_data_root(p) && !out.iter().any(|l| &l.path == p))
         .collect();
-    beside.sort();
+    beside.sort_by(|a, b| (a.file_name(), a).cmp(&(b.file_name(), b)));
     out.extend(beside.into_iter().map(|path| Library { path, found: true }));
     out
 }
@@ -410,7 +410,7 @@ mod tests {
     fn a_missing_recents_file_lists_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let none = tmp.path().join("none");
-        assert!(libraries(&tmp.path().join("nope.json"), &none).is_empty());
+        assert!(libraries(&tmp.path().join("nope.json"), std::slice::from_ref(&none)).is_empty());
     }
 
     /// The recents file is not a format anyone should have to repair by
@@ -420,7 +420,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("recent-roots.json");
         std::fs::write(&f, "{not json at all").unwrap();
-        assert!(libraries(&f, &tmp.path().join("none")).is_empty());
+        assert!(libraries(&f, &[tmp.path().join("none")]).is_empty());
     }
 
     #[test]
@@ -435,11 +435,17 @@ mod tests {
 
         record_recent(&f, &a).unwrap();
         record_recent(&f, &b).unwrap();
-        assert_eq!(paths(&libraries(&f, &none)), vec![b.clone(), a.clone()]);
+        assert_eq!(
+            paths(&libraries(&f, std::slice::from_ref(&none))),
+            vec![b.clone(), a.clone()]
+        );
 
         // Re-opening `a` moves it up; it does not appear twice.
         record_recent(&f, &a).unwrap();
-        assert_eq!(paths(&libraries(&f, &none)), vec![a, b]);
+        assert_eq!(
+            paths(&libraries(&f, std::slice::from_ref(&none))),
+            vec![a, b]
+        );
     }
 
     #[test]
@@ -451,7 +457,7 @@ mod tests {
             make_root(&d);
             record_recent(&f, &d).unwrap();
         }
-        let got = libraries(&f, &tmp.path().join("none"));
+        let got = libraries(&f, &[tmp.path().join("none")]);
         assert_eq!(got.len(), MAX_RECENTS);
         assert_eq!(
             got[0].path,
@@ -477,7 +483,7 @@ mod tests {
         std::fs::remove_dir_all(&gone).unwrap();
 
         assert_eq!(
-            libraries(&f, &none),
+            libraries(&f, std::slice::from_ref(&none)),
             vec![
                 Library {
                     path: kept.clone(),
@@ -490,7 +496,10 @@ mod tests {
             ]
         );
         forget_recent(&f, &gone).unwrap();
-        assert_eq!(paths(&libraries(&f, &none)), vec![kept]);
+        assert_eq!(
+            paths(&libraries(&f, std::slice::from_ref(&none))),
+            vec![kept]
+        );
     }
 
     /// Paths are round-tripped, not reconstructed. A line-oriented
@@ -502,7 +511,10 @@ mod tests {
         let weird = tmp.path().join("two\nlines \"quoted\"");
         make_root(&weird);
         record_recent(&f, &weird).unwrap();
-        assert_eq!(paths(&libraries(&f, &tmp.path().join("none"))), vec![weird]);
+        assert_eq!(
+            paths(&libraries(&f, &[tmp.path().join("none")])),
+            vec![weird]
+        );
     }
 
     /// A library made in the libraries folder and never opened again is
@@ -522,7 +534,38 @@ mod tests {
         record_recent(&f, &work).unwrap();
         record_recent(&f, &elsewhere).unwrap();
 
-        assert_eq!(paths(&libraries(&f, &dir)), vec![elsewhere, work, default]);
+        assert_eq!(
+            paths(&libraries(&f, std::slice::from_ref(&dir))),
+            vec![elsewhere, work, default]
+        );
+    }
+
+    /// The protected folder is a second libraries folder: what is in it
+    /// is listed whether or not it was opened, and can be deleted rather
+    /// than forgotten.
+    #[test]
+    fn a_second_libraries_folder_is_listed_and_deletable_like_the_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let dir = libraries_dir(&tmp.path().join("home"));
+        let protected = tmp.path().join("container").join("Libraries");
+        let work = dir.join("Work");
+        let mail = protected.join("Mail");
+        make_root(&work);
+        make_root(&mail);
+        let dirs = [dir.clone(), protected.clone()];
+
+        assert_eq!(
+            paths(&libraries(&f, &dirs)),
+            vec![mail.clone(), work.clone()],
+            "by name, not by folder"
+        );
+        assert!(deletable(&mail, &dirs));
+        assert!(!forgettable(&mail, &dirs));
+        assert!(
+            !deletable(&mail, std::slice::from_ref(&dir)),
+            "only where it is"
+        );
     }
 
     /// The libraries folder's libraries are always listed, so forgetting
@@ -539,10 +582,13 @@ mod tests {
         make_root(&nested);
         make_root(&elsewhere);
 
-        assert!(!forgettable(&default, &dir));
-        assert!(forgettable(&elsewhere, &dir));
-        assert!(forgettable(&nested, &dir));
-        assert!(forgettable(&dir.join("Deleted"), &dir));
+        assert!(!forgettable(&default, std::slice::from_ref(&dir)));
+        assert!(forgettable(&elsewhere, std::slice::from_ref(&dir)));
+        assert!(forgettable(&nested, std::slice::from_ref(&dir)));
+        assert!(forgettable(
+            &dir.join("Deleted"),
+            std::slice::from_ref(&dir)
+        ));
     }
 
     /// Delete is offered for exactly the libraries Forget is not: the ones
@@ -559,14 +605,20 @@ mod tests {
         make_root(&elsewhere);
         std::fs::create_dir_all(dir.join("not a library")).unwrap();
 
-        assert!(deletable(&default, &dir));
-        assert!(!deletable(&elsewhere, &dir));
-        assert!(!deletable(&nested, &dir));
-        assert!(!deletable(&dir.join("not a library"), &dir));
-        assert!(!deletable(&dir.join("Deleted"), &dir));
-        assert!(!deletable(&dir, &dir));
+        assert!(deletable(&default, std::slice::from_ref(&dir)));
+        assert!(!deletable(&elsewhere, std::slice::from_ref(&dir)));
+        assert!(!deletable(&nested, std::slice::from_ref(&dir)));
+        assert!(!deletable(
+            &dir.join("not a library"),
+            std::slice::from_ref(&dir)
+        ));
+        assert!(!deletable(&dir.join("Deleted"), std::slice::from_ref(&dir)));
+        assert!(!deletable(&dir, std::slice::from_ref(&dir)));
         for root in [&default, &nested, &elsewhere] {
-            assert_ne!(deletable(root, &dir), forgettable(root, &dir));
+            assert_ne!(
+                deletable(root, std::slice::from_ref(&dir)),
+                forgettable(root, std::slice::from_ref(&dir))
+            );
         }
     }
 
@@ -625,7 +677,7 @@ mod tests {
         assert!(!old.join("Work").exists());
         assert!(old.join("Never opened").is_dir());
         assert_eq!(
-            paths(&libraries(&f, &dir)),
+            paths(&libraries(&f, std::slice::from_ref(&dir))),
             vec![
                 elsewhere,
                 dir.join(DEFAULT_NAME),
@@ -833,8 +885,8 @@ mod tests {
             "the text test alone passes"
         );
         assert!(is_data_root(&up));
-        assert!(!deletable(&up, &dir));
-        assert!(forgettable(&up, &dir));
+        assert!(!deletable(&up, std::slice::from_ref(&dir)));
+        assert!(forgettable(&up, std::slice::from_ref(&dir)));
 
         let outside = tmp.path().join("elsewhere");
         make_root(&outside);
@@ -843,10 +895,10 @@ mod tests {
             let link = dir.join("Linked");
             std::os::unix::fs::symlink(&outside, &link).unwrap();
             assert!(is_data_root(&link));
-            assert!(!deletable(&link, &dir));
-            assert!(forgettable(&link, &dir));
+            assert!(!deletable(&link, std::slice::from_ref(&dir)));
+            assert!(forgettable(&link, std::slice::from_ref(&dir)));
         }
-        assert!(deletable(&dir.join("Default"), &dir));
+        assert!(deletable(&dir.join("Default"), std::slice::from_ref(&dir)));
     }
 
     #[cfg(unix)]

@@ -39,6 +39,8 @@ mod time_series;
 mod topo_sort_config;
 
 #[cfg(test)]
+mod agent_docs_test;
+#[cfg(test)]
 mod all_sources_test;
 #[cfg(test)]
 mod config_examples_test;
@@ -64,8 +66,9 @@ perform (ingest, render_markdown, grid_index, …) for which group. To run one \
 step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
 it, and every step that reads it after it, and records what it published. \
 `datalib-step help <function>` shows how for each. Run by hand, with the \
-variables docs/dev/step_protocol.md § \"Running datalib-step by hand\" lists, \
-it works the same, but no step that reads it learns what it wrote.
+variables `datalib-step help step-protocol` lists under \"Running \
+datalib-step by hand\", it works the same, but no step that reads it learns \
+what it wrote.
 
 Its subcommands are tools you can run: ask a source which account its \
 credentials reach, put the runtime and models in place ahead of a first \
@@ -192,12 +195,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// How to set datalib up from a shell: the steps, the source types,
-    /// the step functions, and the guides whole (`help agent`, `help
-    /// raw-stores`, `help apps`, `help search`).
+    /// the step functions, and the docs whole (`help agent`, and `help
+    /// docs` for the rest).
     Help {
-        /// `agent`, `raw-stores`, `apps` or `search`, a source type (`slack`) and
-        /// optionally one of its methods (`slack api`), a function
-        /// (`embed`) or one of these commands (`probe`). None: the overview.
+        /// A doc (`agent`, `docs` lists the others), a source type
+        /// (`slack`) and optionally one of its methods (`slack api`), a
+        /// function (`embed`) or one of these commands (`probe`). None: the
+        /// overview.
         topic: Vec<String>,
     },
     /// One source's config stanzas: for each of its ingest methods, the

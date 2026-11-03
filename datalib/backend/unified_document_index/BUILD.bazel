@@ -23,6 +23,7 @@ rust_library(
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/h3:datalib_h3",
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
@@ -79,6 +80,8 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
     },
     deps = [
+        "//datalib/backend/h3:datalib_h3",
+        "@datalib_crates//:h3o",
         ":qmd_fixture",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/pin:datalib_pin",

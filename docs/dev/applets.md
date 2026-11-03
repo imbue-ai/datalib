@@ -189,7 +189,7 @@ Two kinds of file, and that is all:
 | File | Meaning |
 | --- | --- |
 | `<sha256>.js` | An ES module whose default export is the component factory. The server re-hashes it and skips the file if the name does not match its contents. |
-| `<name>.json` | Either `{title, description, component_hash, component_args, icon?, dev_tool?}` or `{renamed_to}`. |
+| `<name>.json` | Either `{title, description, component_hash, component_args, icon?, dev_tool?, serves?}` or `{renamed_to}`. |
 
 Each component document does two things: it defines
 `comp.<namespace>.<name>` in the app, resolved by loading the module at
@@ -416,8 +416,16 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack`, `unified_document_index`, `unified_time_series_index` and
-`datalib_contacts`), the same shape as `datalib-step`. One more,
+applet (`slack`, `unified_document_index`, `unified_time_series_index`,
+`datalib_contacts` and `photos`), the same shape as `datalib-step`.
+`photos` draws a photo or video by the uuid of its grid row, from the
+`NormalizedPhoto` its render stored in the grid index: `/photos` a page
+of them newest taken first, `/photo/<uuid>` one, `/photo/<uuid>/image?size=thumb|full`
+its picture from the source's own previews (else its original, with
+`X-Datalib-Image-From: original`), `/photo/<uuid>/original` the file in
+byte ranges. Its component's metadata says `"serves": ["photo"]`, which
+is how the UI finds the applet to draw a `datalib:photo/…` name with
+(`docs/dev/plans/photos_applet.md`). One more,
 `search`, is not an applet: it answers one `/search` with no server,
 through the same function the route calls (`answer_search`), so the
 command and the search box cannot drift apart.

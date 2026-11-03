@@ -38,6 +38,9 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid",
+    // `place:<cell>` and `near:<cell>` are ranges of this column
+    // (datalib/backend/h3/README.md).
+    index = "grid_rows_by_h3:h3",
     // The search bar's keys are on the columns they filter.
     search(
         order = "touched_at_utc desc, is_document desc, uuid desc",
@@ -317,4 +320,21 @@ pub struct GridRow {
     /// terms are its indexed form, one row per term.
     #[col(sql = "TEXT")]
     pub supplied_terms: Option<String>,
+    /// The picture this row shows, as a name (`datalib:photo/<uuid>`):
+    /// what the grid draws a thumbnail from. Which server hands out the
+    /// bytes is decided when it is drawn, so moving them moves no row.
+    /// Null on a row with no picture of its own.
+    #[col(sql = "VARCHAR(160)")]
+    pub image: Option<String>,
+    /// Where the thing the row describes was, in degrees (WGS 84): a
+    /// photo's GPS fix. Null when the source does not say.
+    #[col(sql = "REAL")]
+    pub latitude: Option<f64>,
+    #[col(sql = "REAL")]
+    pub longitude: Option<f64>,
+    /// The finest H3 cell holding (`latitude`, `longitude`), as an
+    /// integer: a cell at any resolution is a range of this column
+    /// (`datalib_h3`). Set by the builder from those two, never by hand.
+    #[col(sql = "INTEGER")]
+    pub h3: Option<i64>,
 }

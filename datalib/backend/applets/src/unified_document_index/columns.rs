@@ -283,6 +283,10 @@ pub fn searchable<V: View>(mut columns: Vec<ColumnSpec>) -> Vec<ColumnSpec> {
 
 fn declared() -> Vec<ColumnSpec> {
     vec![
+        // Hidden until a row has one: the grid shows it as soon as one does.
+        ColumnSpec::new("image", "Picture", ColumnType::Image)
+            .describe("The photo or video's picture, from the applet that serves photos.")
+            .hidden(),
         ColumnSpec::new("score", "Score", ColumnType::Number).describe(
             "How well the row matched a free-text search. Not comparable across searches.",
         ),
@@ -651,7 +655,7 @@ mod tests {
     /// might narrow by names its key, and a row field the grid can read
     /// the term's value from.
     #[test]
-    fn every_column_but_score_and_contents_says_how_to_search_it() {
+    fn every_column_but_score_contents_and_picture_says_how_to_search_it() {
         // A row as the applet sends it, with what it resolves filled in.
         let mut row = SearchRow {
             author: "Worf".into(),
@@ -661,7 +665,7 @@ mod tests {
         let row = serde_json::to_value(row).unwrap();
         for c in columns() {
             match (&c.search, c.field.as_str()) {
-                (None, "score" | "snippet") => {}
+                (None, "score" | "snippet" | "image") => {}
                 (None, field) => panic!("{field} has no search key"),
                 (Some(s), field) => assert!(
                     row.get(&s.field).is_some(),
@@ -731,6 +735,7 @@ mod tests {
             item_count: Some(1),
             diff_status: Some("modified".into()),
             diff_changed_columns: Some("text".into()),
+            image: Some("datalib:photo/p-1".into()),
             score: Some(0.5),
             link: Some("datalib:doc/md-1#m-1".into()),
         };
@@ -769,6 +774,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("column `{}` names no SearchRow field", spec.field));
             let fits = match spec.r#type {
                 ColumnType::Text => value.is_string(),
+                ColumnType::Image => value.as_str().is_some_and(|s| s.starts_with("datalib:")),
                 ColumnType::Count | ColumnType::Bytes => value.is_i64(),
                 ColumnType::Number => value.is_number(),
                 ColumnType::Datetime | ColumnType::Timestamp => value

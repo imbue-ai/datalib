@@ -192,6 +192,10 @@ pub fn rows_for_document(
         diff_status: None,
         diff_changed_columns: None,
         supplied_terms: None,
+        image: None,
+        latitude: None,
+        longitude: None,
+        h3: None,
     });
 
     for (number, text) in pages {
@@ -240,6 +244,10 @@ pub fn rows_for_document(
             diff_status: None,
             diff_changed_columns: None,
             supplied_terms: None,
+            image: None,
+            latitude: None,
+            longitude: None,
+            h3: None,
         });
     }
     rows

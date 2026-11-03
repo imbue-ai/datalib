@@ -17,6 +17,7 @@ rust_library(
         "src/diff_status.rs",
         "src/source_contact_handles.rs",
         "src/source_contacts.rs",
+        "src/source_photos.rs",
         "src/plain_text.rs",
     ],
     crate_name = "datalib_schema",
@@ -26,6 +27,7 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/h3:datalib_h3",
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
         "//datalib/backend/problems:datalib_problems",
         # `search(...)` on a table emits `impl ::datalib_query::table::SearchTable`.

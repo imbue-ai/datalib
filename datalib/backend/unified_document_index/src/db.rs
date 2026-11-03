@@ -4,8 +4,9 @@
 
 use crate::group::like_pattern;
 use crate::query::{extract_uuid_suffix, Field, FilterTerm, ParsedQuery};
-use crate::terms_keys::{self, TermsKey, TermsValue};
+use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
+use datalib_schema::grid_rows::GridRowColumn;
 use datalib_schema::providers::Provider;
 
 /// The source id datalib's own rows are filed under — the storage
@@ -33,6 +34,9 @@ pub struct ChatMeta {
     /// Canonical web URL back to the provider, used for the page-level
     /// "Open in …" button.
     pub source_url: Option<String>,
+    /// The picture the document is, where it is one: a
+    /// `datalib:photo/…` name, which has no page on disk.
+    pub image: Option<String>,
 }
 
 /// A term's value that stands for any value at all: `author:*`.
@@ -144,6 +148,9 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.
 fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    if let Some(clause) = cell_clause(key, term) {
+        return (clause, Vec::new());
+    }
     let codes: Vec<String> = key.kinds().iter().map(|k| k.code().to_string()).collect();
     let (matched, bound) = match terms_keys::value_of(key, &term.value, term.quoted, ANY_VALUE) {
         TermsValue::Any => (String::new(), Vec::new()),
@@ -237,6 +244,31 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
         ),
         bound,
     )
+}
+
+/// A value that names an H3 cell, on a key that reads cells: the rows
+/// whose location is in its ranges (datalib/backend/h3/README.md). The
+/// bounds are integers we computed, so they go into the SQL as written.
+fn cell_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> Option<String> {
+    let cell = datalib_h3::parse(&term.value)?;
+    let ranges = match key.cells {
+        Cells::AsTerm => return None,
+        Cells::Inside => vec![datalib_h3::finest_range(cell)],
+        Cells::Near => datalib_h3::neighbourhood_ranges(cell),
+    };
+    let col = GridRowColumn::H3.as_str();
+    let any = ranges
+        .iter()
+        .map(|r| format!("{col} BETWEEN {} AND {}", r.start(), r.end()))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    // With no statistics SQLite guesses seven ORed ranges keep most rows,
+    // and walks the newest-first index instead; they keep very few.
+    Some(if term.negate {
+        format!("({col} IS NULL OR NOT ({any}))")
+    } else {
+        format!("likelihood(({any}), 0.001)")
+    })
 }
 
 #[cfg(test)]

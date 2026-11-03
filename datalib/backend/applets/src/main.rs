@@ -5,6 +5,7 @@ mod datalib_contacts;
 mod gate;
 #[cfg(test)]
 mod hangup_tests;
+mod photos;
 mod slack;
 mod unified_document_index;
 mod unified_time_series_index;
@@ -83,6 +84,9 @@ enum Which {
     /// resolve a document's handles for its chips.
     #[command(name = "datalib_contacts")]
     DatalibContacts,
+    /// Photos and videos: a contact sheet, one photo's details, and its
+    /// pictures from the source's own previews.
+    Photos,
     /// Search a data root the way the app's search box does, with no
     /// server, and print the answer `/search` would give, as JSON.
     Search(SearchArgs),
@@ -208,6 +212,13 @@ fn run(cli: Cli) -> Result<()> {
             let port = cli.port.context("-p <port> is required")?;
             datalib_contacts::serve(port)
         }
+        Which::Photos => {
+            if let Some(dir) = &cli.frontend_dir {
+                photos::write_frontend(dir)?;
+            }
+            let port = cli.port.context("-p <port> is required")?;
+            photos::serve(port)
+        }
         Which::Search(args) => search(args),
     }
 }
@@ -252,5 +263,12 @@ mod cli_tests {
     fn the_help_examples_parse() {
         super::Cli::command().debug_assert();
         datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
+    }
+
+    #[test]
+    fn the_commands_the_docs_show_parse() {
+        let commands = datalib_agent_docs::commands_running("datalib-applet");
+        assert!(!commands.is_empty(), "no doc runs datalib-applet");
+        datalib_cli_help::assert_argvs_parse(super::Cli::command(), &commands);
     }
 }

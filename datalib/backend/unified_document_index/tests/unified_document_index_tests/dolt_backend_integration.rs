@@ -663,6 +663,7 @@ async fn every_wire_field_survives_the_round_trip() {
         .markdown_uuid(Some("row-1".to_string()))
         .byte_size(Some(4096))
         .item_count(Some(7))
+        .image(Some("datalib:photo/row-1".to_string()))
         .build()
         .unwrap();
     // The builder has no setters for these: a diff marks a finished row.
@@ -793,6 +794,23 @@ async fn every_filter_key_is_served_by_an_index() {
             if let Some(rest) = detail.split("INDEX ").nth(1) {
                 used.insert(rest.split_whitespace().next().unwrap_or("").to_string());
             }
+        }
+    }
+    // A cell is a range of the location column, at any resolution: it
+    // searches that column's index. Its rows come out in location order,
+    // so they are sorted after; a cell holds few enough for that.
+    let cell = "86283082fffffff";
+    for q in [format!("place:{cell}"), format!("near:{cell}")] {
+        let plan = plan_of(&writer, &q).await;
+        let by_location = plan
+            .iter()
+            .filter(|d| d.starts_with("SEARCH grid_rows"))
+            .all(|d| d.contains("INDEX grid_rows_by_h3 "));
+        match searched_index(&plan) {
+            Some(index) if by_location => {
+                used.insert(index.to_string());
+            }
+            _ => unserved.push(format!("{q:?} (not served by its location): {plan:?}")),
         }
     }
     // The other direction: an index no query plans with is a cost every
@@ -944,4 +962,81 @@ async fn an_entity_problem_is_located_at_its_items_document() {
         .collect();
     assert_eq!(documents, [Some("md-2".to_string()), None]);
     assert_eq!(repo.document_problems("md-2").await.unwrap(), vec![located]);
+}
+
+/// `place:<cell>` finds the rows located in a cell by H3's parent links;
+/// `near:<cell>` also finds one that lies in the cell on the map but
+/// descends from a neighbour (datalib/backend/h3/README.md § "Inside a
+/// cell"); `-place:<cell>` keeps everything else, rows with no location
+/// included.
+#[tokio::test]
+async fn a_cell_finds_the_rows_located_in_it() {
+    use datalib_h3::{ancestor, locate, Resolution};
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+
+    let town = Resolution::Six;
+    let (lat, lng) = (37.8199, -122.4783);
+    let cell = ancestor(locate(lat, lng).unwrap(), town).unwrap();
+    // A point in `cell` on the map whose finest cell descends from a
+    // neighbour: the edge case `near:` is for.
+    let edge = (0..400)
+        .flat_map(|i| {
+            (0..400).map(move |j| (lat - 0.2 + i as f64 * 0.001, lng - 0.2 + j as f64 * 0.001))
+        })
+        .find(|&(a, b)| {
+            let point = h3o::LatLng::new(a, b).unwrap();
+            point.to_cell(town) == cell && ancestor(locate(a, b).unwrap(), town) != Some(cell)
+        })
+        .expect("a cell has an edge");
+    let located = |uuid: &str, geo: Option<(f64, f64)>| {
+        GridRow::builder()
+            .uuid(uuid)
+            .provider(Provider::Lightroom)
+            .kind("Photo")
+            .source_label("Lightroom")
+            .is_document(true)
+            .geo(geo)
+            .build()
+            .unwrap()
+    };
+    insert_rows(
+        &writer,
+        &[
+            located("bridge", Some((lat, lng))),
+            located("edge", Some(edge)),
+            located("risa", Some((-33.86, 151.21))),
+            located("nowhere", None),
+        ],
+    )
+    .await;
+    commit(&writer, "rows").await;
+
+    let found = |q: String| {
+        let repo = &repo;
+        async move {
+            let mut uuids: Vec<String> = repo
+                .search(&parse_query(&q), 10)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect();
+            uuids.sort();
+            uuids
+        }
+    };
+    assert_eq!(found(format!("place:{cell}")).await, ["bridge"]);
+    assert_eq!(found(format!("near:{cell}")).await, ["bridge", "edge"]);
+    assert_eq!(
+        found(format!("-place:{cell}")).await,
+        ["edge", "nowhere", "risa"]
+    );
+    let region = ancestor(cell, Resolution::Two).unwrap();
+    assert_eq!(found(format!("place:{region}")).await, ["bridge", "edge"]);
 }

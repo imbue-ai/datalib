@@ -350,10 +350,11 @@ pub fn plan(
             datalib_etl_todoist,
             datalib_etl_todoist_render
         ),
-        SourceType::Lightroom => ingest_only!(
+        SourceType::Lightroom => arm!(
             datalib_etl_lightroom_config::LightroomConfig,
             datalib_etl_lightroom_config::LightroomRenderConfig,
-            datalib_etl_lightroom
+            datalib_etl_lightroom,
+            datalib_etl_lightroom_render
         ),
         SourceType::Linear => ingest_only!(
             datalib_etl_linear_config::LinearConfig,
@@ -684,6 +685,11 @@ mod tests {
             ("codex", json!({"max_tool_result_bytes": 1})),
             ("email", json!({"outlink_format": "gmail"})),
             ("email", json!({"only_render_labels": ["Inbox"]})),
+            ("lightroom", json!({"capture_time_zone": "Europe/Berlin"})),
+            (
+                "lightroom",
+                json!({"catalog_path": "/Pictures/Lightroom/Catalog.lrcat"}),
+            ),
             ("perseus", json!({"alignment_pairs": [["grc2", "eng2"]]})),
             ("signal", json!({"period": "day"})),
         ];

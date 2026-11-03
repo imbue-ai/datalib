@@ -25,6 +25,13 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   running `datalib-step probe`, which makes one real request.
 - **`--account` is a global option**, so it goes *before* the
   subcommand: `latchkey --account work curl …`, never after.
+- **One store, `~/.latchkey`**, shared by every library and by the
+  `latchkey` command a person runs. The exception is a protected
+  library in the desktop app: its server starts with
+  `LATCHKEY_DIRECTORY` naming a store inside the protected folder, a
+  copy of `~/.latchkey` made the first time one opens, and every
+  latchkey it runs inherits that (`datalib/tauri/README.md`, "A
+  protected library").
 - **Node starts with `--disable-sigusr1`**, from `bundled_command` and
   from the `latchkey` wrapper we ship (`scripts/latchkey-wrapper.sh`).
   Without it, any program running as the same user can send Node the
@@ -229,7 +236,11 @@ With no service name it deletes `credentials.json.enc` and
 `browser_state.json.enc` from latchkey's directory (`~/.latchkey`
 unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
 machine shares that directory, and under Minds the gateway's store is
-the host's, so this signs out everywhere. Latchkey's browser keeps no
+the host's, so this signs out everywhere. The one exception is the
+desktop app's protected libraries, which share a store of their own in
+the protected folder (`datalib/tauri/README.md`, "A protected
+library"). To clear that one, point `LATCHKEY_DIRECTORY` at it; macOS
+first asks whether your terminal may open the protected folder. Latchkey's browser keeps no
 profile of its own, so the cookies go with that file. It leaves
 `config.json` (the browser path and the services the wizard
 registered), `plugins/` and the keychain key; to test those first-run

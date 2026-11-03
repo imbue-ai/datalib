@@ -190,12 +190,21 @@ What that means for datalib today:
 - **latchkey's encryption key is in your keychain**, and the Node that
   latchkey runs on is allowed to read it without asking. So any program
   running as you can use your sign-ins.
-- **Locking your sign-ins so only the datalib app can use them is
-  possible, but not built.** datalib's programs are signed by Imbue,
-  so a lock like that would last through upgrades. It would stop a
-  script or an agent from casually using your sign-ins. It would not
-  stop a program determined to steal them: that program could still
-  read your mirror, and could try to steer datalib itself.
+- **The desktop app can keep a library in a protected folder
+  (experimental).** When you make a new library, tick **Keep it in a
+  protected folder**. The library then lives in a folder macOS guards
+  for the Datalib app, signed by Imbue, so that permission lasts
+  through upgrades: Terminal, an AI agent's shell, Finder or any other
+  app that reaches in makes macOS ask you first. Your latchkey
+  sign-ins are copied in with it, so `latchkey curl` run anywhere else
+  no longer finds them once you sign out of the originals
+  (`latchkey auth clear <service>`). Saying **Allow** lets that app in
+  for as long as it keeps running, so say no unless you mean it. What
+  is still unknown: whether an agent could get in by running one of
+  Datalib's own programs directly, and whether the Datalib app gets in
+  without asking at all; the first release with this option is what
+  answers both. It does not stop a program determined to steal from
+  you, which can try to steer Datalib itself.
 - **What you can do now:** run datalib on a computer where you trust
   every program you run. Sign in with read-only access where the
   service offers it ([Fastmail](getting_your_data.md#fastmail) does,
@@ -374,23 +383,25 @@ a source's smallest working config and puts it in the index steps'
 `inputs`; a source with more than one way in names it
 (`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
-[**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
+[**configs/dag_example.toml**](../../configs/dag_example.toml),
 a complete commented example.
 
 For ready-made configs and each source's knobs, the files in
-[docs/user/config_examples/](https://github.com/imbue-ai/datalib/tree/main/docs/user/config_examples)
-are the reference — copy a file, or just one source's entries, straight
-into `<data_root>/config.toml`:
+`docs/user/config_examples/` are the reference — copy a file, or just
+one source's entries, straight into `<data_root>/config.toml`:
 
-- [**sample_config.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.toml)
+- [**sample_config.toml**](config_examples/sample_config.toml)
   — the Slack source, the Claude source, and an email source that
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
-- [**claude_only.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.toml)
+- [**claude_only.toml**](config_examples/claude_only.toml)
   — just the Claude source, plus the two index steps.
-- [**all_sources.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.toml)
+- [**all_sources.toml**](config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
   every input mode for email and contacts).
+
+Each is compiled into `datalib-step` too, so a shell with no checkout
+prints it: `datalib-step help docs` names them.
 
 Upgrading from an earlier datalib? A `config.toml` written for one —
 steps naming a `datalib-step download …` command, a group `type`
