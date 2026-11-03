@@ -80,6 +80,7 @@ merge conflict waiting to happen.
 
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 - [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
+- [`datalib/backend/agent_docs/README.md`](datalib/backend/agent_docs/README.md) — every doc `datalib-step help` prints, how its links print, and the checks on its TOML and commands (`toml fragment`). Read before editing a doc an agent is sent to.
 
 ## Keep a forward path for existing data
 

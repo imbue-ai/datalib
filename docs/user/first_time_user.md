@@ -88,8 +88,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
   datalib (step 3).
 
 Also installed: `latchkey` (the credential tool, step 2, running on
-the fetched Node runtime), `datalib-fsindex` and `datalib-dirtree-diff` (a
-standalone directory scanner and a diff of two scans) and the two
+the fetched Node runtime), `datalib-fsindex` (a standalone directory
+scanner) and the two
 `latchkey-curl-*` binaries the web-API sources fetch through. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
 line to add to your `~/.zshrc` — add it and restart your shell.
@@ -383,23 +383,25 @@ a source's smallest working config and puts it in the index steps'
 `inputs`; a source with more than one way in names it
 (`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
-[**configs/dag_example.toml**](https://github.com/imbue-ai/datalib/blob/main/configs/dag_example.toml),
+[**configs/dag_example.toml**](../../configs/dag_example.toml),
 a complete commented example.
 
 For ready-made configs and each source's knobs, the files in
-[docs/user/config_examples/](https://github.com/imbue-ai/datalib/tree/main/docs/user/config_examples)
-are the reference — copy a file, or just one source's entries, straight
-into `<data_root>/config.toml`:
+`docs/user/config_examples/` are the reference — copy a file, or just
+one source's entries, straight into `<data_root>/config.toml`:
 
-- [**sample_config.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.toml)
+- [**sample_config.toml**](config_examples/sample_config.toml)
   — the Slack source, the Claude source, and an email source that
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
-- [**claude_only.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.toml)
+- [**claude_only.toml**](config_examples/claude_only.toml)
   — just the Claude source, plus the two index steps.
-- [**all_sources.toml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.toml)
+- [**all_sources.toml**](config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
   every input mode for email and contacts).
+
+Each is compiled into `datalib-step` too, so a shell with no checkout
+prints it: `datalib-step help docs` names them.
 
 Upgrading from an earlier datalib? A `config.toml` written for one —
 steps naming a `datalib-step download …` command, a group `type`

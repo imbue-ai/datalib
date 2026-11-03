@@ -266,9 +266,9 @@ pbpaste | docker run --rm -i -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 The browser login flows (`latchkey auth browser slack`, `google-gmail`,
 `github`, `fastmail`, `chatgpt`) cannot run inside the container, which has no
 browser. Run them on your host as usual (with the `latchkey` the
-datalib installer put on your `PATH`, or `npx -y latchkey@<the pin in
-datalib/backend/runtime/src/node_runtime.rs>` if you have only the
-image), then re-encrypt the result into the container's store. The
+datalib installer put on your `PATH`, or `npx -y latchkey@<version>` if
+you have only the image, with the version `LATCHKEY_VERSION` pins in
+[`node_runtime.rs`](../../datalib/backend/runtime/src/node_runtime.rs)), then re-encrypt the result into the container's store. The
 first container run against the folder creates its key; the re-encrypt
 reads that key from standard input:
 

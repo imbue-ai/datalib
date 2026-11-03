@@ -4,13 +4,15 @@
 //! changed: a queue the runner keeps for a consumer climbs seal by seal
 //! and falls to nothing when a pass ends, and its net change reads as
 //! growing at every peak. A group waits on the slowest of its steps and
-//! has no queue of its own: its steps count different things.
+//! has no queue of its own: its steps count different things. Once a
+//! step is at rest, what its queue still held when it ended is what it
+//! owes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use datalib_columns::Quantity;
-use datalib_metrics::{DEQUEUED, DONE, QUEUED};
-use datalib_runs::MetricSampleRow;
+use datalib_metrics::{DEQUEUED, DONE, OWED, QUEUED};
+use datalib_runs::{MetricRow, MetricSampleRow};
 use serde::Serialize;
 
 use crate::{secs_between, series_key, DagStepProgress};
@@ -352,6 +354,64 @@ fn eta(
     }
 }
 
+/// What a step's own queue still held when its last run ended — the
+/// runner's `owed`, which the runner does not empty with the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owed {
+    pub count: i64,
+    /// The run that ended with it.
+    pub run_id: String,
+}
+
+/// `step id → what it owes`, from the newest [`OWED`] sample per step.
+pub fn owed_by_step(latest: &[MetricRow]) -> HashMap<String, Owed> {
+    latest
+        .iter()
+        .filter(|m| m.name == OWED && m.labels.is_empty())
+        .map(|m| {
+            (
+                m.step.clone(),
+                Owed {
+                    count: m.value,
+                    run_id: m.run_id.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+/// A step's "owed" cell: blank while it works, since its queue says what
+/// is ahead of it then, and blank when it owes nothing.
+pub fn owed_cell(owed: Option<&Owed>, activity: Activity) -> Quantity {
+    match owed.filter(|o| o.count > 0 && activity == Activity::Idle) {
+        None => blank("count"),
+        Some(o) => Quantity {
+            value: Some(o.count),
+            unit: "count".into(),
+            note: None,
+            detail: Some(format!(
+                "{} the step saw waiting and did not get to before run {} ended: what its \
+                 own queue still held. The next sync starts on it.",
+                grouped(o.count),
+                o.run_id
+            )),
+        },
+    }
+}
+
+/// A group's "owed" cell: its first step that owes, by the label that
+/// step goes by. There is no sum, for the reason there is no queue.
+pub fn group_owed(children: &[(&str, &Quantity)]) -> Quantity {
+    children
+        .iter()
+        .find(|(_, q)| q.value.is_some())
+        .map(|(label, q)| Quantity {
+            detail: q.detail.as_ref().map(|d| format!("{label}: {d}")),
+            ..(*q).clone()
+        })
+        .unwrap_or_else(|| blank("count"))
+}
+
 /// How often a running step's shown ETA is logged.
 const LOG_SHOWN_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -686,5 +746,35 @@ mod tests {
         let stuck = step_cells(Some(&stuck), Activity::Running);
         let g = group_cells(&[("Ingest", &stuck), ("Render", &slow)]);
         assert_eq!(g.eta.note.as_deref(), Some(STALLED));
+    }
+
+    /// What a step owes is said only at rest: while it works, its queue
+    /// says what is ahead, and the count from its last run is stale. A
+    /// group shows its first step that owes, by name, and sums nothing.
+    #[test]
+    fn what_a_step_owes_shows_at_rest_and_a_group_shows_its_first() {
+        let owed = |count| Owed {
+            count,
+            run_id: "r7".into(),
+        };
+        let at_rest = owed_cell(Some(&owed(412)), Activity::Idle);
+        assert_eq!(at_rest.value, Some(412));
+        assert!(at_rest
+            .detail
+            .as_deref()
+            .unwrap()
+            .contains("before run r7 ended"));
+        for activity in [Activity::Running, Activity::BetweenPasses] {
+            assert_eq!(owed_cell(Some(&owed(412)), activity), blank("count"));
+        }
+        assert_eq!(owed_cell(Some(&owed(0)), Activity::Idle), blank("count"));
+        assert_eq!(owed_cell(None, Activity::Idle), blank("count"));
+
+        let render = owed_cell(Some(&owed(3)), Activity::Idle);
+        let none = blank("count");
+        let g = group_owed(&[("Ingest", &none), ("Render", &render), ("Index", &at_rest)]);
+        assert_eq!(g.value, Some(3));
+        assert!(g.detail.unwrap().starts_with("Render: 3 the step saw"));
+        assert_eq!(group_owed(&[("Ingest", &none)]), blank("count"));
     }
 }

@@ -18,8 +18,8 @@ This guide covers Gmail and the other mail sources (`email`), Slack
 (`slack`) and calendars (`calendar`), and the store that lists a
 calendar's occurrences one per date. For any other source,
 `.schema` in the shell below lists its tables; their meanings are not
-written down here yet. A [test](../../datalib/backend/datalib_step/src/raw_stores_doc_test.rs)
-checks every table and column this guide names against the tables the
+written down here yet. A test (`raw_stores_doc_test.rs`, beside
+`datalib-step`'s code) checks every table and column this guide names against the tables the
 code creates, so a column added or renamed fails the build until this
 page says what it holds.
 

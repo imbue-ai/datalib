@@ -11,7 +11,8 @@
 //! Instructions: `write <text>`, `fill <bytes>` (incidental IO in its
 //! tree); `seal <version> [rows]`; `streams`; `metric <name> <value>`;
 //! `progress_len <n>`, `progress_inc <n>`, `progress_msg <text>`;
-//! `log <level> <msg>`; `raw <line>`; `reads` (acks `DATALIB_READS`);
+//! `log <level> <msg>`; `raw <line>`; `stderr <line>`; `reads` (acks
+//! `DATALIB_READS`);
 //! `on_stop graceful|ignore|exit <code>`; `stall` (blocks until a signal
 //! ends it); `spin`; and the endings `ok [version]`, `fail <kind>`,
 //! `exit <code>`, `crash` (abort), `kill` (SIGKILL itself).
@@ -153,6 +154,9 @@ impl Puppet {
                 )
             }
             "raw" => self.raw(rest),
+            "stderr" => std::io::stderr()
+                .write_all(format!("{rest}\n").as_bytes())
+                .unwrap(),
             "reads" => {
                 let reads = std::env::var("DATALIB_READS").unwrap_or_default();
                 return self.ack(&format!("reads {reads}"));

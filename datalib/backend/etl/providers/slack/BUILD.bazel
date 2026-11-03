@@ -45,24 +45,6 @@ rust_library(
     ],
 )
 
-# Extract step (Slack). CLI driver. Emits structured tracing events:
-# pretty on a TTY, NDJSON on stderr otherwise, plus optional OTLP
-# export via --otlp-endpoint. Shells out to host `latchkey` at runtime.
-rust_binary(
-    name = "slack_ingest",
-    srcs = ["src/bin/slack_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_slack",
-        "//datalib/backend/obs:datalib_obs",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "slack_unittests",
     size = "small",

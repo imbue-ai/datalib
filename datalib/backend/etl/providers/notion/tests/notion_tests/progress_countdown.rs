@@ -85,7 +85,7 @@ fn assert_zero_only_once_done(series: &[u64]) {
 
 async fn run_recorded(roots: &[&str]) -> Recorder {
     let d = tempdir().unwrap();
-    let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
+    let tape = d.path().join("tape");
     serve_page(&tape, BRIDGE, EDITED, "");
     serve_page(&tape, SICKBAY, EDITED, "");
     serve_search(
@@ -94,11 +94,23 @@ async fn run_recorded(roots: &[&str]) -> Recorder {
         json!([page(BRIDGE, EDITED), page(SICKBAY, EDITED)]),
         None,
     );
+    run_recorded_on(&tape, roots, |o| o).await
+}
+
+async fn run_recorded_on(
+    tape: &std::path::Path,
+    roots: &[&str],
+    adjust: impl FnOnce(FetchOptions) -> FetchOptions,
+) -> Recorder {
+    let d = tempdir().unwrap();
+    let store = d.path().join("s.doltlite_db");
     let recorder = Recorder::default();
-    run_with(&tape, &store, |o| FetchOptions {
-        subtree_pages: roots.iter().map(|r| r.to_string()).collect(),
-        progress: Progress::new(Arc::new(recorder.clone())),
-        ..o
+    run_with(tape, &store, |o| {
+        adjust(FetchOptions {
+            subtree_pages: roots.iter().map(|r| r.to_string()).collect(),
+            progress: Progress::new(Arc::new(recorder.clone())),
+            ..o
+        })
     })
     .await
     .unwrap();
@@ -128,4 +140,42 @@ async fn a_roots_run_counts_objects_bodies_and_comments_once_each() {
     assert_eq!(recorder.announced_and_done(), (6, 6));
     let series = recorder.queued_series();
     assert_zero_only_once_done(&series);
+}
+
+/// What is left on the queue when the step ends is what it owes. Roots
+/// the search does not list are asked for one by one, and a walk cut
+/// short there by `max_pages` left the roots past the cap on the queue,
+/// though no run walks past the cap: the step ended owing them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_walk_cut_at_max_pages_leaves_nothing_on_the_queue() {
+    let d = tempdir().unwrap();
+    let tape = d.path().join("tape");
+    serve_page(&tape, BRIDGE, EDITED, "");
+    serve_page(&tape, SICKBAY, EDITED, "");
+    serve_workspace(&tape, &[]);
+    let recorder = run_recorded_on(&tape, &[BRIDGE, SICKBAY], |o| FetchOptions {
+        max_pages: Some(1),
+        ..o
+    })
+    .await;
+    let series = recorder.queued_series();
+    assert_eq!(series.last(), Some(&0), "{series:?}");
+}
+
+/// A credential that may not read comments: the comment listings the
+/// listing foresaw stayed on the queue, though no run lists them until
+/// the integration may, and the step ended owing them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn comments_the_credential_may_not_read_leave_nothing_on_the_queue() {
+    let d = tempdir().unwrap();
+    let tape = d.path().join("tape");
+    serve_workspace(&tape, &[BRIDGE, SICKBAY]);
+    for id in [BRIDGE, SICKBAY] {
+        serve_object(&tape, id, EDITED);
+        serve_body(&tape, id, "Captain's log.\n", false);
+        serve_status(&tape, &comments_url(id), 403);
+    }
+    let recorder = run_recorded_on(&tape, &[BRIDGE, SICKBAY], |o| o).await;
+    let series = recorder.queued_series();
+    assert_eq!(series.last(), Some(&0), "{series:?}");
 }

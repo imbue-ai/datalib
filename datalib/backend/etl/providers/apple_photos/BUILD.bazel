@@ -32,22 +32,6 @@ rust_library(
     ],
 )
 
-rust_binary(
-    name = "apple_photos_ingest",
-    srcs = ["src/bin/apple_photos_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_apple_photos",
-        "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
-        "//datalib/backend/obs:datalib_obs",
-        "//datalib/backend/source_common:datalib_source_common",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-    ],
-)
-
 # What the engine's own tests (against a Lightroom-shaped catalog) cannot
 # cover: the Core Data shapes — `ZUUID` indexed but never declared UNIQUE,
 # an R-tree virtual table with its shadow tables, the persistent-history

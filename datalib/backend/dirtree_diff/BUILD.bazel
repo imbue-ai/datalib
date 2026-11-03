@@ -21,7 +21,7 @@ rust_library(
     ],
 )
 
-# `datalib-dirtree-diff` once staged by `//datalib/backend:bin`.
+# `datalib-dirtree-diff` in the README; not in a release.
 rust_binary(
     name = "dirtree_diff",
     srcs = ["src/bin/dirtree_diff.rs"],

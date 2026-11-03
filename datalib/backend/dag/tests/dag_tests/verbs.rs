@@ -83,6 +83,22 @@ fn a_missing_config_names_init_and_init_makes_one() {
     assert!(out.status.success(), "{out:?}");
 }
 
+/// Agents waited for an idle root with `status | grep -q running`, and the
+/// idle line said "nothing running", so the wait never ended.
+#[test]
+fn an_idle_status_says_so_without_naming_a_line_kind() {
+    let td = root_with_a_source();
+    let out = dag(td.path(), &["status"]);
+    assert!(out.status.success(), "{out:?}");
+    let status = stdout(&out);
+    assert_eq!(
+        status.trim(),
+        "idle: no open requests, no steps turned off, nothing owed",
+        "{out:?}"
+    );
+    assert!(!status.contains("running"), "{status}");
+}
+
 #[test]
 fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
     let td = root_with_a_source();
@@ -142,6 +158,54 @@ fn a_sync_is_stopped_from_another_shell_by_its_request_id() {
     assert!(
         stdout(&dag(root, &["stop", &id])).contains("already over: stopped"),
         "a second stop says what became of it"
+    );
+}
+
+/// A sync that ended short left what its step still owed in nothing a
+/// person could read: the runner empties a step's queue as it ends.
+/// `status` names it, as of the run that left it, until the step's next
+/// run ends owing nothing.
+#[test]
+fn status_says_what_a_step_at_rest_still_owes() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    std::fs::write(
+        root.join("src.sh"),
+        r#"mkdir -p a/src
+if [ -f second ]; then
+  echo '{"event":"progress_length","step":"me","total":3}'
+  echo '{"event":"progress_inc","step":"me","delta":3}'
+else
+  echo '{"event":"progress_length","step":"me","total":9}'
+  echo '{"event":"progress_inc","step":"me","delta":2}'
+  exit 1
+fi
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        "[[steps]]\nid = \"a/src\"\ncommand = \"sh src.sh\"\n",
+    )
+    .unwrap();
+
+    let out = dag(root, &["--sync", "a/src"]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let status = stdout(&dag(root, &["status"]));
+    assert!(
+        status
+            .lines()
+            .any(|l| l.starts_with("owed a/src  7  as of run ")),
+        "{status}"
+    );
+
+    std::fs::write(root.join("second"), "").unwrap();
+    let out = dag(root, &["--sync", "a/src"]);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let status = stdout(&dag(root, &["status"]));
+    assert_eq!(
+        status.trim(),
+        "idle: no open requests, no steps turned off, nothing owed"
     );
 }
 

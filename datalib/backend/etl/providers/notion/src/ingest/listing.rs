@@ -366,7 +366,7 @@ impl Ctx<'_> {
     ) -> Result<Vec<String>> {
         let mut listed: Vec<String> = Vec::new();
         self.bar.expect(frontier.len() as u64);
-        for pid in frontier {
+        for (walked, pid) in frontier.iter().enumerate() {
             if self.stop().requested() {
                 break;
             }
@@ -379,6 +379,8 @@ impl Ctx<'_> {
                         s.listed
                     ),
                 );
+                // No run walks past the cap, so the rest is not owed.
+                self.bar.forgo((frontier.len() - walked) as u64);
                 break;
             }
             self.bar.doing(pid);

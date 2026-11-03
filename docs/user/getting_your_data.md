@@ -512,7 +512,7 @@ of the same account, the first sync downloads only what is newer than
 it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
 unpacked, its `Mail` folder) beside the `gmail` table,
 
-```toml
+```toml fragment
 [steps.params.mbox]
 path = "~/Downloads/gmail-takeout"
 ```
@@ -701,7 +701,7 @@ user `airvisual`, with the password shown on the device under
 Finder, **Go › Connect to Server…**) and point one `devices` entry at
 the mount, or at a copy of that folder:
 
-```toml
+```toml fragment
 [[steps.params.export.devices]]
 path = "/Volumes/airvisual"
 ```

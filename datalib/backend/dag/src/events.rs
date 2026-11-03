@@ -31,9 +31,13 @@ pub enum Event {
     },
     /// A streaming pass of the step ended: its process is over, and this
     /// is how, but the step is not — the final pass is still to come, so
-    /// its state stays where it was.
+    /// its state stays where it was. A pass that failed says so here, so
+    /// the failure is on the record even when the next pass succeeds.
     PassEnd {
         step: StepId,
+        status: RunState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,7 +197,15 @@ pub struct StepSummary {
     pub attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Passes that failed and were run again because what the step reads
+    /// moved; `status` is the last pass's.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failed_passes: u32,
     pub outputs: Vec<OutputSummary>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

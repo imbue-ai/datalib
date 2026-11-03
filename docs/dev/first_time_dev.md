@@ -188,8 +188,7 @@ as a subprocess. Datalib's own steps write `command = "datalib-step"`
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_document_index/grid_index/db.sqlite`. Several provider
-crates also build a standalone `<p>_ingest` binary. See
+`<root>/unified_document_index/grid_index/db.sqlite`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -208,6 +207,31 @@ No `--binary-dir` is needed: `datalib-dag` puts its own directory at the
 front of every step's `PATH`, so `datalib-step` is found beside it. Add
 `--sync <step-id>[,<step-id>…]` to run those steps and what is
 downstream of them.
+
+### One source's download, with no config
+
+There is no per-provider download program: `datalib-step` is the one,
+and it runs without the runner too. Give it the environment the runner
+would, the step's params as JSON, and the data root as its working
+directory. For a Lightroom catalog:
+
+```sh
+bin=$PWD/bazel-bin/datalib/backend/bin
+mkdir -p ~/lr-root && cd ~/lr-root
+echo '{"catalog": {"path": "/Users/me/Pictures/Catalog.lrcat"}}' > ../lr-params.json
+DATALIB_DAG_DATA_ROOT=$PWD DATALIB_DAG_STEP=lightroom/ingest \
+DATALIB_DAG_GROUP=lightroom DATALIB_DAG_FUNCTION=ingest \
+DATALIB_DAG_GROUP_TYPE=lightroom \
+  $bin/datalib-step --params-file ../lr-params.json
+```
+
+The params are the step's `[steps.params]` table as JSON (each
+provider's `INGEST.md` shows its table). The store lands where a sync
+would put it, here `lightroom/ingest/entities.doltlite_db`, committed.
+What a hand run gives up, and how to stop one without losing what it
+fetched: [`step_protocol.md`](step_protocol.md) §"Running
+`datalib-step` by hand". Use a root no app is serving; on one the app
+serves, `datalib-dag <config> --sync <step>` is the way.
 
 A sync also spawns `latchkey` and `qmd`, which the binaries run from a
 `runtime/` tree (Node plus both package trees, lockfile-pinned by

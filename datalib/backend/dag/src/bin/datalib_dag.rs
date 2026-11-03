@@ -395,15 +395,7 @@ async fn main() -> Result<()> {
 
         #[allow(clippy::disallowed_macros)]
         for s in &report.steps {
-            println!(
-                "{:<32} {:?}{}",
-                s.id,
-                s.status,
-                s.error
-                    .as_deref()
-                    .map(|e| format!("  ({e})"))
-                    .unwrap_or_default()
-            );
+            println!("{}", s.line());
         }
         // A dropped config entry is reported here as well as before
         // the run, because the per-step report is the thing a person
@@ -648,7 +640,7 @@ async fn run_verb(verb: Verb) -> Result<()> {
     }
     let store = Store::open(&data_root).await?;
     let said = match &verb {
-        Verb::Status { .. } => status_lines(&store).await?,
+        Verb::Status { .. } => status_lines(&store, &data_root).await?,
         Verb::Stop {
             request_id: id, by, ..
         } => match store.request(id).await?.map(|r| r.closed) {
@@ -732,9 +724,15 @@ fn init(data_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// One line per open request and per step turned off, in a shape a script can split
+/// What `status` prints when there is nothing to list. It starts with none
+/// of the other lines' first words, and never says "running": agents waited
+/// with `grep -q running`, which matched the idle line and looped forever.
+const IDLE: &str = "idle: no open requests, no steps turned off, nothing owed";
+
+/// One line per open request, per step turned off, per step running and
+/// per step at rest that still owes work, in a shape a script can split
 /// on two spaces.
-async fn status_lines(store: &Store) -> Result<Vec<String>> {
+async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for r in store.open_requests().await? {
         let stopping = r
@@ -751,14 +749,25 @@ async fn status_lines(store: &Store) -> Result<Vec<String>> {
     for (step, who) in store.turned_off().await? {
         lines.push(format!("off {step}  by {who}"));
     }
-    for inv in store.running_invocations().await? {
+    let running = store.running_invocations().await?;
+    for inv in &running {
         lines.push(format!(
             "running {}  since {}  in run {}",
             inv.step, inv.started_at_utc, inv.run_id
         ));
     }
+    // A running step's own queue says what is ahead of it now.
+    let at_rest = |step: &str| running.iter().all(|inv| inv.step != step);
+    for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await {
+        if owed.value > 0 && at_rest(&owed.step) {
+            lines.push(format!(
+                "owed {}  {}  as of run {}",
+                owed.step, owed.value, owed.run_id
+            ));
+        }
+    }
     if lines.is_empty() {
-        lines.push("nothing open, nothing off, nothing running".to_string());
+        lines.push(IDLE.to_string());
     }
     Ok(lines)
 }

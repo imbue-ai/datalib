@@ -64,7 +64,7 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data",
     },
     Example {
-        what: "list the open syncs (with their request ids), the steps turned off and the steps running",
+        what: "list the open syncs (with their request ids), the steps turned off, the steps running and what each step still owes",
         command: "datalib-dag status ~/datalib/config.toml",
     },
     Example {
@@ -164,8 +164,10 @@ pub enum Verb {
         /// everything synced into it.
         data_root: PathBuf,
     },
-    /// Print the open sync requests, the steps turned off, and the steps
-    /// running now.
+    /// Print the open sync requests, the steps turned off, the steps
+    /// running now, and what each step at rest still owed when its last
+    /// run ended, one line each starting `request`, `off`, `running` or
+    /// `owed`; a line starting `idle:` when there are none.
     Status {
         /// The config file, `<data_root>/config.toml`.
         config: PathBuf,

@@ -1,8 +1,10 @@
 //! `datalib-step help`: what an agent setting datalib up from a shell reads
 //! in place of the app's wizard. Every page is built here as a string from
 //! what this binary already knows (its source types, their ingest methods,
-//! its functions) and from the docs compiled into it; `main` prints them.
+//! its functions) and from the docs compiled into it
+//! (`datalib_agent_docs`); `main` prints them.
 
+use datalib_agent_docs::{Doc, DOCS, GETTING_YOUR_DATA};
 use datalib_cli_help::Example;
 use datalib_source_common::Reach;
 use strum::VariantArray;
@@ -14,27 +16,8 @@ use crate::methods::ingest_methods;
 use crate::source_docs::{fields, source_docs, Field};
 use crate::source_type::SourceType;
 
-const AGENT_GUIDE: &str = include_str!("../../../../docs/agent_user.md");
-const AGENT_GUIDE_PATH: &str = "docs/agent_user.md";
-pub const RAW_STORES: &str = include_str!("../../../../docs/user/raw_stores.md");
-const BUILDING_ON_DATALIB: &str = include_str!("../../../../docs/user/building_on_datalib.md");
-const SEARCHING: &str = include_str!("../../../../docs/user/searching.md");
-
-/// The guides printed whole, by topic word: `(word, text, path in the repo)`.
-/// A release writes each beside the binaries (`scripts/release/stage_tarball.sh`).
-const GUIDES: &[(&str, &str, &str)] = &[
-    ("agent", AGENT_GUIDE, AGENT_GUIDE_PATH),
-    ("raw-stores", RAW_STORES, "docs/user/raw_stores.md"),
-    (
-        "apps",
-        BUILDING_ON_DATALIB,
-        "docs/user/building_on_datalib.md",
-    ),
-    ("search", SEARCHING, "docs/user/searching.md"),
-];
-const GETTING_YOUR_DATA: &str = include_str!("../../../../docs/user/getting_your_data.md");
-const GETTING_YOUR_DATA_PATH: &str = "docs/user/getting_your_data.md";
-const REPO: &str = "https://github.com/imbue-ai/datalib";
+/// The topic that lists every doc compiled in.
+const DOCS_TOPIC: &str = "docs";
 
 /// One step of setting a source up: what to do, and the commands that do
 /// it. A command here is one a test runs through its binary's parser.
@@ -116,22 +99,24 @@ const SETUP: &[SetupStep] = &[
 ];
 
 pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
-    let base = format!("{REPO}/blob/{git_ref}");
     if let [word] = topic {
-        if let Some((_, text, path)) = GUIDES.iter().find(|(w, ..)| w == word) {
-            return Ok(absolute_links(text, path, &base));
+        if word == DOCS_TOPIC {
+            return Ok(docs_page());
+        }
+        if let Some(doc) = datalib_agent_docs::doc(word) {
+            return Ok(datalib_agent_docs::page(doc, git_ref));
         }
     }
     let source = topic.first().and_then(|w| SourceType::parse(w));
     match (topic, source) {
         ([], _) => Ok(overview(commands)),
-        ([_], Some(t)) => Ok(source_page(t, &base)),
+        ([_], Some(t)) => Ok(source_page(t, git_ref)),
         ([_, method], Some(t)) => Ok(method_page(t, known_method(t, method)?)),
         ([word], None) => match Function::parse(word) {
             Some(f) => Ok(function_page(f)),
             None => Err(format!(
-                "no help on {word:?}. Try `datalib-step help` for the topics: \
-                 `agent`, `raw-stores`, `apps`, `search`, a source type, a function or a \
+                "no help on {word:?}. Try `datalib-step help` for the topics: `agent`, \
+                 `docs` for every guide and reference, a source type, a function or a \
                  command."
             )),
         },
@@ -140,6 +125,39 @@ pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<Stri
             topic.join(" ")
         )),
     }
+}
+
+// One line per doc, `<topic> <path>`, which `scripts/release/stage_tarball.sh`
+// reads to write each beside the binaries; what it is for under it.
+fn docs_page() -> String {
+    use datalib_agent_docs::Kind;
+    let mut out = wrap(
+        "The docs compiled into datalib-step. `datalib-step help <topic>` prints one whole, \
+         and a release carries each beside its binaries at the path shown. A link from \
+         one to another prints as the command that prints it; a link to anything else in \
+         the repo, as its raw file at this build's commit.",
+        0,
+        0,
+    );
+    for (kind, heading) in [
+        (Kind::Guide, "Guides, for using datalib:"),
+        (
+            Kind::Reference,
+            "References, written for datalib's contributors too:",
+        ),
+        (Kind::Config, "Example configs, each one that loads:"),
+    ] {
+        out.push_str(&format!("\n{heading}\n"));
+        for d in DOCS.iter().filter(|d| d.kind == kind) {
+            out.push_str(&doc_line(d));
+        }
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
+fn doc_line(d: &Doc) -> String {
+    format!("  {:<18} {}\n{}", d.topic, d.path, wrap(d.about, 21, 21))
 }
 
 fn known_method(t: SourceType, method: &str) -> Result<&'static str, String> {
@@ -289,16 +307,8 @@ fn overview(commands: &[String]) -> String {
              troubleshooting",
         ),
         (
-            "datalib-step help raw-stores",
-            "what each source's raw store holds, and how to read and follow it",
-        ),
-        (
-            "datalib-step help apps",
-            "building an app on datalib: syncing, freshness, a step of your own",
-        ),
-        (
-            "datalib-step help search",
-            "the search's query language: keys, people, `me`, free text",
+            "datalib-step help docs",
+            "every doc compiled in: raw stores, apps, search, a step of your own, …",
         ),
         (
             "datalib-step help <type>",
@@ -335,13 +345,13 @@ fn overview(commands: &[String]) -> String {
     out.push_str("\nCommands:\n");
     out.push_str(&wrap(&commands.join(", "), 2, 2));
     out.push_str(
-        "\nThe guides also ship beside the binaries, as docs/agent_user.md, \
-         docs/raw_stores.md, docs/building_on_datalib.md and docs/searching.md.",
+        "\nA release also carries every doc beside the binaries, at the path \
+         `datalib-step help docs` shows; the agent guide is docs/agent_user.md.",
     );
     out
 }
 
-fn source_page(t: SourceType, base: &str) -> String {
+fn source_page(t: SourceType, git_ref: &str) -> String {
     let mut out = String::new();
     let sections = sections_for(t);
     // Each section is one way in, and the first alone reads as the whole.
@@ -362,10 +372,11 @@ fn source_page(t: SourceType, base: &str) -> String {
         out.push('\n');
     }
     for section in sections {
-        out.push_str(&absolute_links(
+        out.push_str(&datalib_agent_docs::print_links(
             section.trim_end(),
-            GETTING_YOUR_DATA_PATH,
-            base,
+            GETTING_YOUR_DATA,
+            git_ref,
+            false,
         ));
         out.push_str("\n\n");
     }
@@ -548,7 +559,9 @@ fn run_commands(f: Function) -> (String, Option<String>) {
 // every type.
 fn sections_for(t: SourceType) -> Vec<&'static str> {
     let declaration = format!("`type = \"{}\"`", t.as_str());
-    let doc = GETTING_YOUR_DATA;
+    let doc = datalib_agent_docs::by_path(GETTING_YOUR_DATA)
+        .expect("getting_your_data.md is compiled in")
+        .text;
     let starts: Vec<usize> = doc.match_indices("\n## ").map(|(i, _)| i + 1).collect();
     starts
         .iter()
@@ -556,56 +569,6 @@ fn sections_for(t: SourceType) -> Vec<&'static str> {
         .map(|(n, &start)| &doc[start..starts.get(n + 1).copied().unwrap_or(doc.len())])
         .filter(|s| s.lines().any(|l| l.starts_with(&declaration)))
         .collect()
-}
-
-// A copy read outside the repo (a tarball, a terminal, one section of a
-// doc) has no tree for a relative link or a bare `#anchor` to lead into,
-// so each points at its file under `base`.
-pub fn absolute_links(markdown: &str, doc_path: &str, base: &str) -> String {
-    let mut out = String::with_capacity(markdown.len());
-    let mut rest = markdown;
-    while let Some(i) = rest.find("](") {
-        let (before, after) = rest.split_at(i + 2);
-        out.push_str(before);
-        let Some(end) = after.find(')') else {
-            rest = after;
-            break;
-        };
-        out.push_str(&absolute_link(&after[..end], doc_path, base));
-        rest = &after[end..];
-    }
-    out.push_str(rest);
-    out
-}
-
-fn absolute_link(target: &str, doc_path: &str, base: &str) -> String {
-    if target.contains("://") || target.starts_with("mailto:") {
-        return target.to_string();
-    }
-    if target.starts_with('#') {
-        return format!("{base}/{doc_path}{target}");
-    }
-    let doc_dir = doc_path.rsplit_once('/').map_or("", |(dir, _)| dir);
-    let (path, fragment) = match target.split_once('#') {
-        Some((p, f)) => (p, Some(f)),
-        None => (target, None),
-    };
-    let mut parts: Vec<&str> = doc_dir.split('/').filter(|s| !s.is_empty()).collect();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            s => parts.push(s),
-        }
-    }
-    let mut url = format!("{base}/{}", parts.join("/"));
-    if let Some(f) = fragment {
-        url.push('#');
-        url.push_str(f);
-    }
-    url
 }
 
 fn first_sentence(s: &str) -> &str {
@@ -639,49 +602,75 @@ fn wrap(text: &str, first: usize, rest: usize) -> String {
 mod tests {
     use super::*;
 
-    const BASE: &str = "https://github.com/imbue-ai/datalib/blob/abc123";
-
     fn commands() -> Vec<String> {
         vec!["probe".into(), "pull-runtime".into()]
     }
 
     fn relative_links(page: &str) -> Vec<String> {
-        page.split("](")
-            .skip(1)
-            .filter_map(|rest| rest.split(')').next())
-            .filter(|t| !t.starts_with("https://"))
-            .map(str::to_string)
+        datalib_agent_docs::links(page)
+            .into_iter()
+            .filter(|l| {
+                datalib_agent_docs::resolve(l.target, "page.md")
+                    != datalib_agent_docs::Target::External
+            })
+            .map(|l| l.target.to_string())
             .collect()
-    }
-
-    #[test]
-    fn links_resolve_against_the_docs_own_directory() {
-        let md = "[a](../AGENTS.md) [b](dev/x.md#sec) [c](#here) [d](https://e.org/f) \
-                  [g](user/config_examples/all_sources.toml)";
-        assert_eq!(
-            absolute_links(md, "docs/guide.md", BASE),
-            format!(
-                "[a]({BASE}/AGENTS.md) [b]({BASE}/docs/dev/x.md#sec) \
-                 [c]({BASE}/docs/guide.md#here) [d](https://e.org/f) \
-                 [g]({BASE}/docs/user/config_examples/all_sources.toml)"
-            )
-        );
     }
 
     /// A guide is read outside the repo: from a tarball, or printed in a
     /// terminal. A relative link there leads nowhere.
     #[test]
-    fn no_guide_has_a_relative_link_left() {
+    fn every_doc_prints_by_its_topic_with_no_relative_link_left() {
         for (word, title) in [
             ("agent", "# datalib — agent user guide"),
             ("raw-stores", "# Reading the raw stores"),
             ("apps", "# Building an app on datalib"),
             ("search", "# Searching your mirror"),
+            ("step-protocol", "# Writing a step command"),
         ] {
             let page = page(&[word.into()], &commands(), "abc123").unwrap();
             assert!(page.starts_with(title), "{word}");
-            assert_eq!(relative_links(&page), Vec::<String>::new(), "{word}");
         }
+        for d in DOCS {
+            let page = page(&[d.topic.into()], &commands(), "abc123").unwrap();
+            assert_eq!(page, datalib_agent_docs::page(d, "abc123"), "{}", d.topic);
+            assert_eq!(relative_links(&page), Vec::<String>::new(), "{}", d.topic);
+        }
+    }
+
+    /// A doc's topic is looked up before a source type or a function, and
+    /// a command's own help before both, so one spelled like any of them
+    /// would hide it or be hidden.
+    #[test]
+    fn no_doc_topic_is_a_type_a_function_or_a_command() {
+        use clap::CommandFactory;
+        let commands: Vec<String> = crate::Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        for d in DOCS {
+            assert!(SourceType::parse(d.topic).is_none(), "{}", d.topic);
+            assert!(Function::parse(d.topic).is_none(), "{}", d.topic);
+            assert!(!commands.iter().any(|c| c == d.topic), "{}", d.topic);
+            assert_ne!(d.topic, DOCS_TOPIC);
+        }
+    }
+
+    /// The release script writes `datalib-step help <topic>` to `<path>`
+    /// for each line of `help docs` whose second word is a doc's path.
+    #[test]
+    fn the_docs_page_names_every_doc_as_the_release_script_reads_it() {
+        let page = page(&[DOCS_TOPIC.into()], &commands(), "abc123").unwrap();
+        let read: Vec<(&str, &str)> = page
+            .lines()
+            .filter_map(|l| {
+                let mut words = l.split_whitespace();
+                let (topic, path) = (words.next()?, words.next()?);
+                (path.ends_with(".md") || path.ends_with(".toml")).then_some((topic, path))
+            })
+            .collect();
+        let want: Vec<(&str, &str)> = DOCS.iter().map(|d| (d.topic, d.path)).collect();
+        assert_eq!(read, want, "{page}");
     }
 
     #[test]
@@ -736,15 +725,19 @@ mod tests {
         before.rfind('[') > before.rfind(']')
     }
 
-    /// A release has no source tree, so a path into it is a link to the
-    /// repo at this build's commit, never bare text.
+    /// A release has no source tree, so a path into it in a guide is a
+    /// link to the raw file at this build's commit, never bare text.
     #[test]
-    fn no_page_names_a_source_tree_path_outside_a_link() {
+    fn no_guide_names_a_source_tree_path_outside_a_link() {
         let mut topics: Vec<String> = SourceType::VARIANTS
             .iter()
             .map(|t| t.as_str().into())
             .collect();
-        topics.extend(["agent", "raw-stores", "apps", "search"].map(String::from));
+        topics.extend(
+            DOCS.iter()
+                .filter(|d| d.kind == datalib_agent_docs::Kind::Guide)
+                .map(|d| d.topic.to_string()),
+        );
         for topic in topics {
             let page = page(std::slice::from_ref(&topic), &commands(), "abc123").unwrap();
             for (i, _) in page.match_indices("datalib/backend/") {

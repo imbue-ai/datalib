@@ -1345,8 +1345,9 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
     /// Seals what has been written so far, so render can start on the
-    /// channels already walked while the rest are still arriving. `None`
-    /// -- the default -- commits once at the end.
+    /// channels already walked while the rest are still arriving. `None`,
+    /// the default, seals nothing mid-run: the caller's commit at the end
+    /// is the only one, and a caller that closes without it keeps nothing.
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: one writer per file

@@ -12,10 +12,11 @@ empty directory to a first sync, each with its command, and
 `datalib-step help <type>` (what a source mirrors, how it signs in, its
 ingest methods) and `datalib-step help <function>` (what a step does
 and how to run it) from there. `datalib-step help agent` prints this
-guide, which a release also carries beside its binaries as
-`docs/agent_user.md`, with the two guides for building on the data
-(`help raw-stores`, `help apps`) beside it. Every binary's `--help`
-ends with examples.
+guide, and every doc it links to is compiled in the same way:
+`datalib-step help docs` lists them, and a link from one to another
+prints as the command that prints it. A release also carries each
+beside its binaries, this one as `docs/agent_user.md`. Every binary's
+`--help` ends with examples.
 
 The human-facing guides are worth reading first, and worth pointing the
 user at: the [first-time user guide](user/first_time_user.md) is the
@@ -63,24 +64,26 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ```
 
 The split is by writer: `unified_document_index/` is produced by the pipeline
-and fully derived, `system/` is the server's own state. Canonical
-definition — the constants both sides read — is
-[`datalib/backend/runtime/src/layout.rs`](../datalib/backend/runtime/src/layout.rs).
+and fully derived, `system/` is the server's own state.
 
-Ten binaries ship in a release: `datalib-dag` (the sync runner),
-`datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway; `datalib-applet search` is the search box from the
-command line), `latchkey-curl-router` +
-`curl-impersonate` (Cloudflare-safe HTTP for downloaders),
-`datalib-doltlite` (the shell for reading and exporting the stores —
-see "Reading the mirrored data" below), `datalib-fsindex` (the
-directory-tree scanner, also reachable as a step) and
-`datalib-dirtree-diff` (diffs two of its scans into one HTML page),
-and `datalib-migrate-config` (rewrites a `config.toml` from a retired
-shape; see below). The authoritative list is the `:dist`
-filegroup in
-[`datalib/backend/BUILD.bazel`](../datalib/backend/BUILD.bazel).
+The binaries a release ships:
+
+- `datalib-dag` — the sync runner.
+- `datalib-step` — the built-in step commands.
+- `datalib-http` — the API server and web UI.
+- `datalib-applet` — the applet host, which the http gateway spawns on
+  demand; `datalib-applet search` is the search box from the command
+  line.
+- `datalib-doltlite` — the shell for reading and exporting the stores
+  (see "Reading the mirrored data" below).
+- `datalib-migrate-config` — rewrites a `config.toml` from a retired
+  shape (see below).
+- `datalib-fsindex` — the directory-tree scanner, also reachable as a
+  step.
+- `latchkey-curl-router` and `curl-impersonate` — Cloudflare-safe HTTP
+  for the downloaders.
+
+A release's directory holds every one, with `latchkey` beside them.
 End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
@@ -200,7 +203,11 @@ command for each kind of step.
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
-of scraping human output. Failures carry a kind
+of scraping human output. A step that reads one that streams its
+output runs once per seal it reads, each pass but the last closed by a `pass_end`
+whose `status` says how it went; one that failed and was run again is
+an `error` line in the step's log even when the step ends `succeeded`,
+and `run_summary` counts them in the step's `failed_passes`. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `permission` / `data` /
 `cancelled` / `incomplete`); the
 runner already retries transient/rate-limited ones with backoff, and
@@ -245,8 +252,16 @@ instead of a second one.
 **Watching.** `GET /api/requests` lists the open requests, then the
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
-<config>` prints the same from the shell, with the steps turned off and the steps
-running now. What each step is doing is in the loop's record, which the
+<config>` prints the open ones from the shell, with the steps turned off and the steps
+running now: one line each, starting `request `, `off ` or `running `.
+A line `owed <step>  <n>  as of run <id>` follows for each step at rest
+whose last run ended short of done (stopped, failed, given up) with work
+it saw waiting and did not get to — a Slack sync that was stopped, say,
+with the conversations, threads and files it had not reached; the next
+sync starts on them. With none of these there is one line starting
+`idle:`. To wait for your own
+sync, don't poll: `datalib-dag <config> --sync <step>` returns when its
+request closes. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 
 ```sh
@@ -342,7 +357,7 @@ is not null` lists the steps that failed. Every table and column is in
 If you are building an app that reads this data instead of calling the
 services (when to sync, how fresh the mirror is, deriving your own data
 as a step, when to ask the service after all), read [building on
-datalib](user/building_on_datalib.md) (`datalib-step help apps`).
+datalib](user/building_on_datalib.md).
 
 Pick the surface that fits the question:
 
@@ -420,8 +435,8 @@ Pick the surface that fits the question:
 - **Raw stores** — the per-source doltlite stores under
   `<group>/ingest/` keep what the service sent, when the rendered form
   isn't enough: Slack's and Google Calendar's JSON, Gmail's original
-  message. [Reading the raw stores](user/raw_stores.md) (`datalib-step
-  help raw-stores`) is the map: how to open one (`payload` is JSONB, so
+  message. [Reading the raw stores](user/raw_stores.md) is the map: how
+  to open one (`payload` is JSONB, so
   `json(payload)`), how to read one commit and follow changes, and
   each table and column, with the ids that trip people up. An
   attachment or a person's photo a page links as
@@ -457,8 +472,8 @@ Pick the surface that fits the question:
   ```
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_document_index/search?q=…` (the query language,
-  `from:me` included, is [Searching your mirror](user/searching.md),
-  `datalib-step help search`; `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
+  `from:me` included, is [Searching your mirror](user/searching.md);
+  `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,
@@ -505,8 +520,7 @@ Pick the surface that fits the question:
   It is minted fresh on every start, so re-read the file rather than
   caching the value; `DATALIB_TOKEN=<value>` pins it. The onboarding
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
-  are readable without it. Design notes:
-  [`datalib/backend/http/src/auth.rs`](../datalib/backend/http/src/auth.rs).
+  are readable without it.
 
 ## Extending datalib
 
@@ -520,14 +534,12 @@ Pick the surface that fits the question:
   [`docs/dev/step_protocol.md`](dev/step_protocol.md)** — it is
   the complete contract, with minimal shell and Python examples. The
   rules behind the scheduler (what makes a step stale, what a dropped
-  entry costs) are in
-  [`datalib/backend/dag/README.md`](../datalib/backend/dag/README.md).
+  entry costs) are [the runner's README](../datalib/backend/dag/README.md).
 - **Custom UI cards** — the web UI can host agent-authored components
   (ES modules whose default export is a card factory, saved with
   `PUT /api/lib/{name}`). The
   server serves its own guide for this at **`GET /agent/cards.md`**
-  (and one for config-editing agents at **`GET /agent/config.md`**);
-  source reference: [`docs/dev/cards.md`](dev/cards.md).
+  (and one for config-editing agents at **`GET /agent/config.md`**).
 
 ## Curating contacts
 
