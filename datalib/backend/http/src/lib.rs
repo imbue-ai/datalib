@@ -517,26 +517,13 @@ async fn proxy_impl(
 }
 
 /// An applet's answer, as the browser gets it. What an applet serves is
-/// data, written by whoever wrote the applet, and a document among it
-/// must not run in the app's origin, where it would hold the session: it
-/// gets the sandbox policy that runs nothing. A script or wasm file
-/// goes out as bytes, so the app page's `script-src 'self'` cannot run
-/// one a sender attached.
+/// data, written by whoever wrote the applet or sent what it reads, and
+/// must not run in the app's origin, where it would hold the session.
 fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
-    let mut resp = Response::builder()
-        .status(StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY))
-        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
-    if embed::is_scriptable_document(&r.content_type) {
-        resp = resp.header(header::CONTENT_SECURITY_POLICY, embed::DATA_DOCUMENT_CSP);
-    }
-    let content_type = if embed::is_executable(&r.content_type) {
-        "application/octet-stream".to_string()
-    } else {
-        r.content_type
-    };
-    resp.header(header::CONTENT_TYPE, content_type)
-        .body(Body::from(r.body))
-        .unwrap_or_else(|_| applet_error(StatusCode::BAD_GATEWAY, "malformed applet response"))
+    let mut resp = Response::new(Body::from(r.body));
+    *resp.status_mut() = StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    embed::set_data_headers(resp.headers_mut(), &r.content_type);
+    resp
 }
 
 fn applet_error(status: StatusCode, msg: &str) -> Response<Body> {
@@ -2236,29 +2223,42 @@ mod tests {
         r.headers().get(name).and_then(|v| v.to_str().ok())
     }
 
-    /// A document an applet serves is sandboxed on the way out, under the
-    /// policy of the kind it names — none means data, which runs
-    /// nothing. JSON is left alone. The header, not the body, is what a
-    /// browser reads.
+    /// The applet's status and a type a browser only shows pass through;
+    /// the header, not the body, is what a browser reads.
     #[test]
-    fn proxied_documents_are_sandboxed_and_data_is_not() {
-        let html = proxied("text/html; charset=utf-8");
-        assert_eq!(html.status(), StatusCode::OK);
-        assert_eq!(
-            header_of(&html, header::CONTENT_SECURITY_POLICY),
-            Some(embed::DATA_DOCUMENT_CSP)
-        );
-        assert_eq!(
-            header_of(&html, header::X_CONTENT_TYPE_OPTIONS),
-            Some("nosniff")
-        );
-
+    fn proxied_answers_keep_their_status_and_a_shown_type() {
         let json = proxied("application/json");
-        assert!(header_of(&json, header::CONTENT_SECURITY_POLICY).is_none());
+        assert_eq!(json.status(), StatusCode::OK);
+        assert_eq!(
+            header_of(&json, header::CONTENT_TYPE),
+            Some("application/json")
+        );
         assert_eq!(
             header_of(&json, header::X_CONTENT_TYPE_OPTIONS),
             Some("nosniff")
         );
+    }
+
+    /// Whatever type an applet names, its answer runs nothing in the
+    /// app's origin: `text/xsl` and a comma list are rendered as pages by
+    /// browsers, and no list of such types is ever complete.
+    #[test]
+    fn proxied_answers_run_nothing_whatever_their_type() {
+        for ct in [
+            "text/xsl; charset=utf-8",
+            "text/plain,text/html",
+            "text/html, application/x-foo",
+            "application/x-never-heard-of-it",
+            "application/json",
+            "image/png",
+            "",
+        ] {
+            assert_eq!(
+                header_of(&proxied(ct), header::CONTENT_SECURITY_POLICY),
+                Some(embed::DATA_DOCUMENT_CSP),
+                "{ct:?}"
+            );
+        }
     }
 
     /// A `.js` a sender attached is served as bytes: under `nosniff` a
@@ -2270,6 +2270,7 @@ mod tests {
             "text/javascript",
             "application/javascript",
             "application/wasm",
+            "text/css",
         ] {
             let r = proxied(ct);
             assert_eq!(
@@ -2278,8 +2279,6 @@ mod tests {
                 "{ct}"
             );
         }
-        let css = proxied("text/css");
-        assert_eq!(header_of(&css, header::CONTENT_TYPE), Some("text/css"));
     }
 
     /// The ages are how long a running step has gone without a metric

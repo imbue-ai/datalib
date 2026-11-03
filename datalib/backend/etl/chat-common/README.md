@@ -303,9 +303,8 @@ straight into a document's frame. The UI's own code still reaches into
 the frame, so the `data-section-uuid` wrappers work as before.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
-nothing. An attachment that is a document, such as an `.html` file at
-its `/data/…` address, is served under a policy that
-runs no script at all
-(`DATA_DOCUMENT_CSP` in `http/src/embed.rs`). A chart in a document is
+nothing. Every attachment at its `/data/…` address, whatever type it
+names, is served under a policy that runs no script at all
+(`set_data_headers` in `http/src/embed.rs`). A chart in a document is
 a `<div data-time-series="…">`, which the UI's own code draws into the
 frame (`docs/dev/time_series.md` §"Charts in documents").

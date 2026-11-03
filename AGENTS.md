@@ -829,6 +829,20 @@ card never writes**: a card's arguments come from whoever wrote the
 link. `//:lint_repo` refuses an evaluator anywhere in `datalib/ui/src`,
 and HTML drawn from a string outside its short allowlist.
 
+## A safety check names what it allows, not what it refuses
+
+**Treat everything as dangerous, then let through a short list of
+things known to be safe.** A list of dangerous things is always missing
+one. The server once sandboxed only the content types it knew could run
+script, and browsers render `text/xsl` and a comma list such as
+`text/plain,text/html` as pages too, so a sender's attachment ran
+script in the app (#1539). So serve every file sandboxed and keep only
+the types on a safe list; accept a path only in its canonical form
+under its root; pass a child process only the environment it needs. A
+deny-list is fine as a second layer behind such a check (a lint, a
+sanitizer behind a CSP), never as the only one. Don't add one; when
+you find one standing alone, turn it around.
+
 ## Timestamp convention
 
 **A stamp we mint goes in a column named `<x>_at_utc`, in UTC, with one

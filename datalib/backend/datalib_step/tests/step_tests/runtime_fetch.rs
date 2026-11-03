@@ -8,6 +8,7 @@
 //! to run. `datalib-step pull-runtime` resolves qmd through the same
 //! path a sync takes, so what it reports is what a sync would run.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
@@ -89,11 +90,20 @@ impl Install {
     }
 
     fn pull_runtime(&self, cache_home: &Path) -> std::process::Output {
+        self.pull_runtime_with(cache_home, &[])
+    }
+
+    fn pull_runtime_with(
+        &self,
+        cache_home: &Path,
+        args: &[&std::ffi::OsStr],
+    ) -> std::process::Output {
         let child = {
             let _spawning = copy_or_spawn();
             spawn_once_free(
                 Command::new(self.dir.join("datalib-step"))
                     .arg("pull-runtime")
+                    .args(args)
                     .env("XDG_CACHE_HOME", cache_home)
                     .env_remove("DATALIB_RUNTIME_DIR")
                     .env_remove("DATALIB_ALLOW_NPX")
@@ -107,12 +117,19 @@ impl Install {
 
 /// A `.tar.gz` of a runtime whose `node` echoes its arguments and whose
 /// qmd and latchkey entries exist, so `--version` through the resolver
-/// prints the path each resolved to.
+/// prints the path each resolved to. Its `node` refuses to run latchkey,
+/// as latchkey does on a machine with no encryption key and no keychain:
+/// `pull-runtime` must not need to.
 fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
     let src = base.join("runtime-src");
     let node = src.join("node/bin/node");
     fs::create_dir_all(node.parent().unwrap()).unwrap();
-    fs::write(&node, "#!/bin/sh\necho \"fake-node $*\"\n").unwrap();
+    fs::write(
+        &node,
+        "#!/bin/sh\ncase \"$*\" in *latchkey*) echo 'Error: no encryption key' >&2; exit 1;; esac\n\
+         echo \"fake-node $*\"\n",
+    )
+    .unwrap();
     fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
     let entry = src.join(format!(
         "qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js"
@@ -122,6 +139,13 @@ fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
     let entry = src.join(format!("latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL}"));
     fs::create_dir_all(entry.parent().unwrap()).unwrap();
     fs::write(&entry, "// latchkey\n").unwrap();
+    fs::write(
+        src.join(format!(
+            "latchkey/{LATCHKEY_VERSION}/node_modules/latchkey/package.json"
+        )),
+        format!("{{\"name\": \"latchkey\", \"version\": \"{LATCHKEY_VERSION}\"}}"),
+    )
+    .unwrap();
 
     let mut buf = Vec::new();
     {
@@ -221,8 +245,8 @@ fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
         stderr.contains(&format!("runtime: {}", expected_root.display())),
         "{stderr}"
     );
-    // The fake node echoed the entry it was given: both tools resolved
-    // from the fetched tree, at their pinned versions.
+    // The fake node echoed the entry it was given: qmd resolved from the
+    // fetched tree at its pin. latchkey is read, never run.
     assert!(
         stderr.contains(&format!(
             "qmd --version: fake-node --disable-sigusr1 {}/qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js --version",
@@ -232,7 +256,7 @@ fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
     );
     assert!(
         stderr.contains(&format!(
-            "latchkey --version: fake-node --disable-sigusr1 {}/latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL} --version",
+            "latchkey: {LATCHKEY_VERSION} ({}/latchkey/{LATCHKEY_VERSION})",
             expected_root.display()
         )),
         "{stderr}"
@@ -290,4 +314,62 @@ fn no_manifest_means_no_fetch() {
     assert!(!out.status.success(), "{stderr}");
     assert!(stderr.contains(MANIFEST_FILE), "{stderr}");
     assert!(!cache_home.exists());
+}
+
+/// `--into` puts the runtime where the binaries look first, whatever
+/// `HOME` is: an install made by root for another user found none (the
+/// eval pilot's workspaces). A second run replaces the tree whole.
+#[test]
+fn into_puts_the_runtime_beside_the_binaries() {
+    let td = tempfile::tempdir().unwrap();
+    let install = Install::new(td.path());
+    let body = fake_runtime_tarball(td.path());
+    let sha = sha256_hex(&body);
+    let (url_base, hits) = serve(body.clone());
+    install.write_manifest(&manifest_for(&url_base, body.len(), &sha));
+    let cache_home = td.path().join("cache");
+    let into = install.dir.join("runtime");
+    fs::create_dir_all(&into).unwrap();
+    fs::write(into.join("stale"), "").unwrap();
+
+    let out = install.pull_runtime_with(&cache_home, &[OsStr::new("--into"), into.as_os_str()]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "pull-runtime --into failed:\n{stderr}"
+    );
+    assert!(into.join("node/bin/node").is_file(), "{stderr}");
+    assert!(
+        !into.join("stale").exists(),
+        "the old tree is replaced whole"
+    );
+    assert!(
+        stderr.contains(&format!("runtime: {}", into.display())),
+        "{stderr}"
+    );
+    assert!(!cache_home.exists(), "the cache is not touched");
+    let mut beside: Vec<String> = fs::read_dir(&install.dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    beside.sort();
+    assert_eq!(
+        beside,
+        ["datalib-step", "runtime", MANIFEST_FILE],
+        "nothing left beside it"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    // The plain form now finds it there, as a sync would, and fetches nothing.
+    let out = install.pull_runtime(&cache_home);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "runtime: {}",
+            fs::canonicalize(&into).unwrap().display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
 }

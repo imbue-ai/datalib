@@ -407,7 +407,9 @@ pub fn staged_package(kind: &str, version: &str, pkg_rel: &str) -> Option<(PathB
     (node.is_file() && pkg.is_dir()).then_some((node, pkg))
 }
 
-fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
+/// [`bundled_command`] against a tree the caller names rather than the
+/// one the resolver would find.
+pub fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
     let node = root.join(NODE_REL);
     let entry = root.join(kind).join(version).join(entry_rel);
     if !node.is_file() || !entry.is_file() {

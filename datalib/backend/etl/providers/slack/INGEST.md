@@ -446,8 +446,8 @@ more at once would mostly wait out 429s.
 
 ### One transaction between two seals
 
-Everything the walk writes, from its first page to the authors looked
-up after it, goes through one SQL transaction at a time
+Everything the walk writes, and the authors looked up before and after
+it, goes through one SQL transaction at a time
 (`datalib_etl::raw_store::Batch`): history pages, threads and file
 edges through `owed::write_answer_into`, the sweep markers, and the
 users through `owed::drain_into`. The transaction commits when a seal
@@ -593,7 +593,9 @@ or users, so each is found its own way.
   hours), since its rows change only when someone edits a profile. A
   person who posts for the first time does not wait for it: storing a
   message adds a `users` row with no payload for an author not already
-  there, and each run then asks `users.info` for every such row. The
+  there, and each run then asks `users.info` for every such row, before
+  its walk and again after it, so the authors a stopped run left are
+  the next run's first requests. The
   answer is stored as `users.list` lists it (without the custom
   `profile.fields` only `users.info` carries), so the next listing is no
   change. A lookup that fails is an attempt on the user's own row

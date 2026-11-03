@@ -4,6 +4,7 @@
 mod account_state;
 mod archived;
 mod attachment_retry;
+mod authors_first;
 mod between_seals;
 mod config_change_backfill;
 mod dm_ingest;

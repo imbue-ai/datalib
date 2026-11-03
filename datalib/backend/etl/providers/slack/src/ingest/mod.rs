@@ -1067,6 +1067,22 @@ impl Mirror<'_> {
         owed::drain_into(&l, writes, owed, &lookup).await
     }
 
+    async fn look_up_authors(&self, writes: &mut Batch<'_>) -> Result<()> {
+        let started = std::time::Instant::now();
+        let users = self.fetch_users_owed(writes).await?;
+        if users != owed::Drained::default() {
+            info!(
+                event = "slack_users_looked_up",
+                got = users.got,
+                failed = users.failed,
+                left = users.left,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "looked up the authors no user listing had named"
+            );
+        }
+        Ok(())
+    }
+
     /// A page `history_params` asked for, stored in `tx` with the stretch
     /// it settles. `walk` is left where the page after starts.
     async fn store_page(
@@ -1871,6 +1887,15 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
+        // What the walk writes, and the authors looked up around it, is
+        // one transaction between two seals, and every read the walk
+        // makes goes through it: the store has one connection, and the
+        // open transaction holds it (INGEST.md § "One transaction between
+        // two seals").
+        let mut writes = Batch::new(db.pool(), opts.sealer.as_ref()).byte_limit(TRANSACTION_BYTES);
+        // Authors an earlier run named and did not look up, as a stopped
+        // run does not: until they are, their messages show no one.
+        mirror.look_up_authors(&mut writes).await?;
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
         // Messages a walk found above everything held.
@@ -1891,12 +1916,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let files = mirror.file_fetcher();
         let thread_loop = mirror.owed_loop(THREADS, M_REPLIES);
         let file_loop = mirror.owed_loop(SlackAttachmentRow::TABLE, "files");
-        // What the walk writes, and the authors looked up after it, is
-        // one transaction between two seals, and every read the walk
-        // makes goes through it: the store has one connection, and the
-        // open transaction holds it (INGEST.md § "One transaction between
-        // two seals").
-        let mut writes = Batch::new(db.pool(), opts.sealer.as_ref()).byte_limit(TRANSACTION_BYTES);
         // Answers are written in the order they were asked for, whatever
         // order they come in, so what the frontier sees between requests,
         // and so every request after, does not depend on which answered
@@ -2092,18 +2111,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 "told to stop; leaving the rest for the next run"
             );
         } else {
-            let started = std::time::Instant::now();
-            let users = mirror.fetch_users_owed(&mut writes).await?;
-            if users != owed::Drained::default() {
-                info!(
-                    event = "slack_users_looked_up",
-                    got = users.got,
-                    failed = users.failed,
-                    left = users.left,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "looked up the authors no user listing had named"
-                );
-            }
+            mirror.look_up_authors(&mut writes).await?;
         }
         writes.finish().await?;
         grand.messages = totals.messages;

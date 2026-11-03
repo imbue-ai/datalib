@@ -9,7 +9,7 @@ use axum::http::{header, HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
 use strum::EnumString;
 
-use crate::embed::{is_executable, is_scriptable_document, DATA_DOCUMENT_CSP};
+use crate::embed::set_data_headers;
 use crate::AppState;
 
 /// What an address under a step names. One kind so far; a kind this
@@ -85,35 +85,15 @@ async fn blob(s: &AppState, group: &str, function: &str, rest: &str) -> Response
 }
 
 /// The bytes, kept by the browser for good since an address never names
-/// other bytes. A document a sender wrote runs nothing in our origin, and
-/// script goes out as plain bytes, as from the applet gateway.
+/// other bytes, and served as data: they run nothing in our origin.
 fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
-    let served = if is_executable(content_type) {
-        "application/octet-stream"
-    } else {
-        content_type
-    };
     let mut resp = Response::new(Body::from(body));
     let headers = resp.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_str(served)
-            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
-    );
+    set_data_headers(headers, content_type);
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=31536000, immutable"),
     );
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    if is_scriptable_document(content_type) {
-        headers.insert(
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DATA_DOCUMENT_CSP),
-        );
-    }
     resp
 }
 
