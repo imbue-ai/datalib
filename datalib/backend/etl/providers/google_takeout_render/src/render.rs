@@ -605,6 +605,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 unread: false,
+                replies: None,
                 recipients: (!is_me).then(Recipient::the_account).into_iter().collect(),
                 mentions: Vec::new(),
                 problems: problems.clone(),
@@ -642,6 +643,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 unread: false,
+                replies: None,
                 recipients: (kind == "voicemail")
                     .then(Recipient::the_account)
                     .into_iter()
@@ -679,6 +681,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 is_aside: false,
                 branch: Vec::new(),
                 unread: false,
+                replies: None,
                 recipients: Vec::new(),
                 mentions: Vec::new(),
                 problems: problems.clone(),

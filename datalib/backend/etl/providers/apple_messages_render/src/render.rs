@@ -358,6 +358,7 @@ async fn load(
             is_aside: false,
             branch: Vec::new(),
             unread,
+            replies: None,
             recipients: (from_me == 0)
                 .then(Recipient::the_account)
                 .into_iter()

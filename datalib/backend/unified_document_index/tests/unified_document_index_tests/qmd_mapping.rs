@@ -60,6 +60,7 @@ fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRow {
         image: None,
         latitude: None,
         longitude: None,
+        h3: None,
     }
 }
 

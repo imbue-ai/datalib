@@ -18,10 +18,11 @@ use crate::read::ImageRow;
 use crate::xmp::{self, XmpFields};
 
 /// Bump when what a photo's row or terms say changes.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
 
-/// The H3 resolutions a photo is filed under: about a region, a city, a
-/// neighbourhood and a block.
+/// The H3 cells a photo's card names: about a region, a town, a
+/// neighbourhood and a block. Search does not need them; it reads the
+/// row's location (`grid_rows.h3`).
 pub const H3_RESOLUTIONS: [u8; 4] = [4, 6, 8, 10];
 
 /// Seconds from the unix epoch to 2001-01-01, where Lightroom counts from.
@@ -77,14 +78,13 @@ pub fn build(image: &ImageRow, ctx: &Context<'_>) -> Built {
     {
         problems.push(assumed_utc(ctx.source_id, &uuid));
     }
-    let geo =
-        image
-            .gps
-            .filter(|&(lat, lng)| on_the_globe(lat, lng))
-            .map(|(latitude, longitude)| Geo {
-                latitude,
-                longitude,
-            });
+    let geo = image
+        .gps
+        .filter(|&(lat, lng)| datalib_h3::locate(lat, lng).is_some())
+        .map(|(latitude, longitude)| Geo {
+            latitude,
+            longitude,
+        });
     let file_name = match &image.extension {
         Some(ext) => format!("{}.{ext}", image.base_name),
         None => image.base_name.clone(),
@@ -197,8 +197,9 @@ fn grid_row(
 }
 
 /// What a photo answers to in search: its keywords and every keyword
-/// above them, its people and albums as labels; its place names and H3
-/// cells; its caption, title and Lightroom's own id.
+/// above them, its people and albums as labels; its place names; its
+/// caption, title and Lightroom's own id. Its location is the row's own
+/// column, which `place:<cell>` reads.
 pub fn terms(photo: &NormalizedPhoto, image: &ImageRow) -> Vec<SearchTerm> {
     let label = |v: &str| SearchTerm::new(SearchTermKind::Label, v);
     let place = |v: &str| SearchTerm::new(SearchTermKind::Place, v);
@@ -207,7 +208,6 @@ pub fn terms(photo: &NormalizedPhoto, image: &ImageRow) -> Vec<SearchTerm> {
     out.extend(photo.people.iter().map(|p| label(&p.name)));
     out.extend(photo.albums.iter().map(|a| label(a)));
     out.extend(photo.place.names().map(place));
-    out.extend(photo.h3.iter().map(|c| place(&c.cell)));
     out.extend(
         photo
             .caption
@@ -296,25 +296,19 @@ fn apple_seconds(seconds: f64) -> Option<String> {
         .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, false))
 }
 
-/// `h3o` takes any finite pair; a fix off the globe is a bad record.
-fn on_the_globe(latitude: f64, longitude: f64) -> bool {
-    (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude)
-}
-
+/// The cells a fix is in, each the parent of its finest cell, so that
+/// searching any of them finds the photo (datalib/backend/h3/README.md).
 pub fn h3_cells(latitude: f64, longitude: f64) -> Vec<H3Cell> {
-    if !on_the_globe(latitude, longitude) {
-        return Vec::new();
-    }
-    let Ok(point) = h3o::LatLng::new(latitude, longitude) else {
+    let Some(finest) = datalib_h3::locate(latitude, longitude) else {
         return Vec::new();
     };
     H3_RESOLUTIONS
         .iter()
         .filter_map(|&r| {
-            let resolution = h3o::Resolution::try_from(r).ok()?;
+            let resolution = datalib_h3::Resolution::try_from(r).ok()?;
             Some(H3Cell {
                 resolution: r,
-                cell: point.to_cell(resolution).to_string(),
+                cell: datalib_h3::ancestor(finest, resolution)?.to_string(),
             })
         })
         .collect()
@@ -460,19 +454,20 @@ mod tests {
         );
     }
 
-    /// The cells nest: each finer one lies inside the coarser ones, which
-    /// is what lets a map ask for any of them.
+    /// Each cell the card names holds the photo's location by range, so
+    /// following it finds the photo, even where locating the point at that
+    /// resolution would name a neighbour.
     #[test]
-    fn a_fix_is_filed_under_nested_cells() {
+    fn every_cell_named_holds_the_photos_location() {
+        let finest = datalib_h3::locate(37.8275, -122.4819).unwrap();
         let cells = h3_cells(37.8275, -122.4819);
         assert_eq!(
             cells.iter().map(|c| c.resolution).collect::<Vec<_>>(),
             H3_RESOLUTIONS
         );
-        let finest: h3o::CellIndex = cells[3].cell.parse().unwrap();
-        for coarser in &cells[..3] {
-            let res = h3o::Resolution::try_from(coarser.resolution).unwrap();
-            assert_eq!(finest.parent(res).unwrap().to_string(), coarser.cell);
+        for c in &cells {
+            let cell = datalib_h3::parse(&c.cell).unwrap();
+            assert!(datalib_h3::finest_range(cell).contains(&datalib_h3::stored(finest)));
         }
         assert!(h3_cells(91.0, 0.0).is_empty());
     }

@@ -12,7 +12,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
-    NormalizedDoc, NormalizedReaction, UpstreamRef,
+    NormalizedDoc, NormalizedReaction, Replies, UpstreamRef,
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -26,6 +26,7 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_etl_render::processor::Unparsed;
 use datalib_etl_slack::ingest::schema_raw::split_key;
+use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
@@ -58,7 +59,9 @@ use datalib_schema::providers::Provider;
 ///     code keeps its shortcodes as typed.
 /// v15: the account's own profile is marked as the account, so search
 ///     reads its handles as `me`.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: a thread's root says how many replies Slack counts, and how many
+///     of them are not mirrored yet.
+pub const RENDER_VERSION: u32 = 16;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -313,10 +316,16 @@ fn build_chat(
         m.user_id.as_deref() != self_user_id
             && mark.is_some_and(|last_read| ids::after_mark(&m.ts, last_read))
     };
+    // What the page shows under the root, a broadcast reply among them.
+    let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
     let items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
-        .map(|m| build_item(source_id, m, root, team_url, labels, unread(m)))
+        .map(|m| {
+            let mut item = build_item(source_id, m, root, team_url, labels, unread(m));
+            item.replies = replies_of(m, held_replies, &mut item.problems);
+            item
+        })
         .collect();
 
     // "#channel: <root snippet>" preserves the old scannable H1; the
@@ -439,10 +448,27 @@ fn build_item(
         is_aside: false,
         branch: Vec::new(),
         unread,
+        replies: None,
         recipients: Vec::new(),
         mentions: mentioned_users(&m.text, &m.team_id),
         problems,
     }
+}
+
+fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Replies> {
+    if !m.is_thread_root {
+        return None;
+    }
+    let raw = m.raw_json.get("reply_count")?;
+    let Some(upstream) = raw.as_u64() else {
+        problems.push(Problem::field(
+            "reply_count",
+            Reason::CoercionFailed,
+            &raw.to_string(),
+        ));
+        return None;
+    };
+    Some(Replies { upstream, held })
 }
 
 fn thread_title(root_text: &str, labels: Labels<'_>) -> String {
@@ -617,5 +643,31 @@ mod reaction_tests {
                 .map(|r| r.emoji)
                 .collect();
         assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
+    }
+
+    /// Only a root carries Slack's count, and one that is not a number
+    /// is a problem on the root rather than a line that lies.
+    #[test]
+    fn a_root_counts_its_replies_and_a_count_that_is_no_number_is_a_problem() {
+        let mut problems = Vec::new();
+        let mut root = reacted(json!([]));
+        root.raw_json["reply_count"] = json!(3);
+        assert_eq!(
+            replies_of(&root, 1, &mut problems),
+            Some(Replies {
+                upstream: 3,
+                held: 1
+            })
+        );
+        let reply = Message {
+            is_thread_root: false,
+            ..root.clone()
+        };
+        assert_eq!(replies_of(&reply, 1, &mut problems), None);
+        assert!(problems.is_empty());
+
+        root.raw_json["reply_count"] = json!("three");
+        assert_eq!(replies_of(&root, 1, &mut problems), None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
     }
 }

@@ -732,6 +732,12 @@ code.hljs {
 .chat-body .msg-recipients a.chip:not(.handle-resolved) {
   color: var(--datalib-fg, inherit);
 }
+/* Under a thread's first message: how many replies, and how many are not
+   mirrored yet. */
+.chat-body .msg-replies {
+  font-size: 0.8rem;
+  color: var(--datalib-muted, #94a3b8);
+}
 /* A list longer than two lines folds to two, beside a button saying how
    many people it names (`foldRecipients` in chatSections.js). */
 .chat-body p:has(> .msg-recipients--folded),
@@ -6647,9 +6653,12 @@ Bring sunscreen.</p>
 <div class="preview-doc">
 <h3 class="preview-name">slack-diff/render_markdown/39/00000000-0000-8209-b9a9-5e8e8a2f0239.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8209-b9a9-5e8e8a2f0239">#bridge: Mr. Data, status report. <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100" target="_blank" rel="noopener noreferrer">↗</a></h1>
+<div class="diff-modified">
 <div id="m-0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" data-section-uuid="0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" class="msg msg--slack">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_PICARD" title="Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)" class="chip" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Mr. Data, status report.</p>
+<p><span class="msg-replies"><del>2</del><ins>3</ins> replies</span></p>
+</div>
 </div>
 <div id="m-0b7698f4-6540-876f-bf97-b10f5b2e219b" data-section-uuid="0b7698f4-6540-876f-bf97-b10f5b2e219b" class="msg msg--slack">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_DATA" title="Lt. Cmdr. Data (slack:T_NCC1701D/U_DATA)" class="chip" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</a> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000200000200?thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
@@ -6855,6 +6864,7 @@ Bring sunscreen.</p>
 <div id="m-0b7698f2-dea0-84c2-a732-f51e3d0eed12" data-section-uuid="0b7698f2-dea0-84c2-a732-f51e3d0eed12" class="msg msg--slack">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_PICARD" title="Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)" class="chip" data-handle="slack:T_NCC1701D/U_PICARD">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-05-28T15:08:20+00:00" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Mr. Data, status report.</p>
+<p><span class="msg-replies">3 replies</span></p>
 </div>
 <div id="m-0b7698f4-6540-8740-8097-5bd209562812" data-section-uuid="0b7698f4-6540-8740-8097-5bd209562812" class="msg msg--slack">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_DATA" title="Lt. Cmdr. Data (slack:T_NCC1701D/U_DATA)" class="chip" data-handle="slack:T_NCC1701D/U_DATA">Lt. Cmdr. Data</a> <time class="msg-ts" datetime="2369-05-28T15:10:00+00:00" title="2369-05-28 15:10:00 UTC">Wed May 28th, 2369 at 15:10</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000200000200?thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a></h2>
@@ -6893,6 +6903,7 @@ Bring sunscreen.</p>
 <div id="m-0b7698fa-7fc0-89d7-af94-d89a1724367f" data-section-uuid="0b7698fa-7fc0-89d7-af94-d89a1724367f" class="msg msg--slack unread first-unread">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_RIKER" title="William T. Riker (slack:T_NCC1701D/U_RIKER)" class="chip" data-handle="slack:T_NCC1701D/U_RIKER">William T. Riker</a> <time class="msg-ts" datetime="2369-05-28T15:16:40+00:00" title="2369-05-28 15:16:40 UTC">Wed May 28th, 2369 at 15:16</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_TENFWD/p12604000600000600" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Anyone up for poker tonight?</p>
+<p><span class="msg-replies">1 reply</span></p>
 </div>
 <div id="m-0b7698fc-0660-889a-8ed4-b5b9b5c39786" data-section-uuid="0b7698fc-0660-889a-8ed4-b5b9b5c39786" class="msg msg--slack">
 <h2><a href="slack://user?team=T_NCC1701D&amp;id=U_WORF" title="Worf (slack:T_NCC1701D/U_WORF)" class="chip" data-handle="slack:T_NCC1701D/U_WORF">Worf</a> <time class="msg-ts" datetime="2369-05-28T15:18:20+00:00" title="2369-05-28 15:18:20 UTC">Wed May 28th, 2369 at 15:18</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_TENFWD/p12604000700000700?thread_ts=12604000600.000600&amp;cid=C_TENFWD" target="_blank" rel="noopener noreferrer">↗</a></h2>
@@ -9455,6 +9466,7 @@ Warp Core Maintenance, Galaxy Class Recalibrate the dilithium articulation frame
 <li><span id="m-s2-react-2" data-section-uuid="s2-react-2">👍 Deanna Troi</span></li>
 <li><span id="m-s2-react-1" data-section-uuid="s2-react-1">🫡 <a href="mailto:riker@enterprise.org" title="Will Riker &lt;riker@enterprise.org&gt;" class="chip" data-handle="email:riker@enterprise.org">Will Riker</a></span></li>
 </ul>
+<p><span class="msg-replies">4 replies · 3 not mirrored yet</span></p>
 </div>
 <div id="m-s2-riker" data-section-uuid="s2-riker" class="msg msg--claude">
 <h2><span class="msg-author">Will Riker</span> <time class="msg-ts" datetime="2369-05-14T16:40:00+00:00" title="2369-05-14 16:40:00 UTC">Wed May 14th, 2369 at 16:40</time></h2>

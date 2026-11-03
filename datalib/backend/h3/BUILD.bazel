@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "datalib_h3",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_h3",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:h3o"],
+)
+
+rust_test(
+    name = "datalib_h3_unittests",
+    size = "small",
+    crate = ":datalib_h3",
+    edition = "2021",
+)
+
+# The H3 facts datalib depends on (README.md), one test each. Run it after
+# every h3o bump; a fact that moved fails by name.
+rust_test(
+    name = "h3_facts",
+    size = "small",
+    srcs = ["tests/h3_facts.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_h3",
+        "@datalib_crates//:h3o",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)

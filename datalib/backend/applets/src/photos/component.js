@@ -169,7 +169,7 @@ export default function photos(appletId, uuid) {
       if (places.length) row("Place", ...places.map((n) => chip(n, `place:${quoted(n)}`)));
       if (p.h3.length) {
         const city = p.h3.find((c) => c.resolution === 6) || p.h3[0];
-        row("Nearby", chip(`photos in this area`, `place:${city.cell}`));
+        row("Nearby", chip(`photos in this area`, `near:${city.cell}`));
       }
       const exposure = [
         p.exposure.shutter_seconds && (p.exposure.shutter_seconds < 1 ? `1/${Math.round(1 / p.exposure.shutter_seconds)} s` : `${p.exposure.shutter_seconds} s`),

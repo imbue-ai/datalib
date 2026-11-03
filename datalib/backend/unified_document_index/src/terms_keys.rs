@@ -26,6 +26,20 @@ pub struct TermsKey {
     /// Its values are people: a handle matches exactly and is drawn as a
     /// chip.
     pub person: bool,
+    /// What a value that names an H3 cell matches, in place of a term.
+    pub cells: Cells,
+}
+
+/// What a key makes of a value that is an H3 cell (`datalib_h3`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cells {
+    /// Nothing special: it is a term like any other.
+    AsTerm,
+    /// The rows located inside the cell, by H3's parent links.
+    Inside,
+    /// The rows inside the cell or one of its neighbours: every row that
+    /// lies in the cell on the map, and some just outside it.
+    Near,
 }
 
 impl TermsKey {
@@ -54,6 +68,7 @@ const fn person(key: &'static str, aliases: &'static [&'static str], kinds: Kind
         aliases,
         kinds,
         person: true,
+        cells: Cells::AsTerm,
     }
 }
 
@@ -80,18 +95,28 @@ pub const TERMS_KEYS: &[TermsKey] = &[
         aliases: &[],
         kinds: Kinds::These(&[Kind::Label]),
         person: false,
+        cells: Cells::AsTerm,
     },
     TermsKey {
         key: "place",
         aliases: &[],
         kinds: Kinds::These(&[Kind::Place]),
         person: false,
+        cells: Cells::Inside,
+    },
+    TermsKey {
+        key: "near",
+        aliases: &[],
+        kinds: Kinds::These(&[Kind::Place]),
+        person: false,
+        cells: Cells::Near,
     },
     TermsKey {
         key: "caption",
         aliases: &[],
         kinds: Kinds::These(&[Kind::Caption]),
         person: false,
+        cells: Cells::AsTerm,
     },
 ];
 

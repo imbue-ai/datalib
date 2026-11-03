@@ -263,6 +263,9 @@ datalib/
                    `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
     query/         the search-bar grammar every grid shares; no deps.
+    h3/            `datalib_h3`: where a thing is, as H3 cells over `h3o`;
+                   a location is its finest cell, a cell a range of them.
+                   README.md has the facts, each a test in `h3_facts`.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
                    `data-handle`. No first-party deps.

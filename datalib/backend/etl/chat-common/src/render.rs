@@ -81,7 +81,9 @@ use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stag
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
-use crate::types::{AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc};
+use crate::types::{
+    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
+};
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
     escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
@@ -696,8 +698,30 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         }
     }
 
+    if let Some(line) = item.replies.and_then(replies_line) {
+        s.push('\n');
+        s.push_str(&line);
+        s.push('\n');
+    }
+
     s.push_str("\n</div>\n\n");
     Section::keyed(&item.message_uuid, s)
+}
+
+fn replies_line(replies: Replies) -> Option<String> {
+    let noun = match replies.upstream {
+        0 => return None,
+        1 => "reply",
+        _ => "replies",
+    };
+    let missing = match replies.missing() {
+        0 => String::new(),
+        n => format!(" · {n} not mirrored yet"),
+    };
+    Some(format!(
+        "<span class=\"msg-replies\">{} {noun}{missing}</span>",
+        replies.upstream
+    ))
 }
 
 /// Who an item was addressed to, one paragraph straight under its
@@ -1310,6 +1334,7 @@ mod tests {
                     is_aside: false,
                     branch: Vec::new(),
                     unread: false,
+                    replies: None,
                     recipients: Vec::new(),
                     mentions: Vec::new(),
                     problems: Vec::new(),
@@ -1631,6 +1656,7 @@ mod tests {
             is_aside: false,
             branch: Vec::new(),
             unread: false,
+            replies: None,
             recipients: Vec::new(),
             mentions: Vec::new(),
             problems: Vec::new(),
@@ -1888,6 +1914,7 @@ mod tests {
             is_aside: true,
             branch: Vec::new(),
             unread: false,
+            replies: None,
             recipients: Vec::new(),
             mentions: Vec::new(),
             problems: Vec::new(),
@@ -1972,6 +1999,42 @@ mod tests {
         );
         assert_eq!(class_of("spoken-unread"), "msg msg--test unread");
         assert_eq!(md.matches("first-unread").count(), 1, "{md}");
+    }
+
+    /// A thread whose replies are still to be fetched read like a message
+    /// nobody answered. Its first message now says how many replies there
+    /// are, and how many the mirror does not hold yet.
+    #[test]
+    fn a_thread_says_how_many_replies_it_has_and_how_many_are_not_mirrored() {
+        let line_of = |replies: Option<Replies>| {
+            let mut chat = mk_chat();
+            chat.buckets[0].items[0].replies = replies;
+            let md = join(&render_markdown(
+                &test_profile(),
+                &chat,
+                &chat.buckets[0],
+                "Test · Bridge Crew",
+            ));
+            md.lines()
+                .find(|l| l.contains("msg-replies"))
+                .map(str::to_string)
+        };
+        let replies = |upstream, held| Some(Replies { upstream, held });
+        assert_eq!(
+            line_of(replies(12, 3)).as_deref(),
+            Some("<span class=\"msg-replies\">12 replies · 9 not mirrored yet</span>")
+        );
+        assert_eq!(
+            line_of(replies(1, 1)).as_deref(),
+            Some("<span class=\"msg-replies\">1 reply</span>")
+        );
+        assert_eq!(
+            line_of(replies(2, 3)).as_deref(),
+            Some("<span class=\"msg-replies\">2 replies</span>"),
+            "a reply held after upstream deleted it is none missing"
+        );
+        assert_eq!(line_of(replies(0, 0)), None);
+        assert_eq!(line_of(None), None);
     }
 
     /// A document's sections are one per item, each keyed by the item
