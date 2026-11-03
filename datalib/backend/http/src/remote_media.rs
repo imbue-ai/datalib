@@ -127,20 +127,18 @@ pub struct Fetched {
 /// An address the route may fetch from: routable on the public
 /// internet. Everything the machine or its LAN answers on is refused —
 /// loopback, RFC 1918 and the carrier-grade range, link-local (which is
-/// where cloud metadata services live), and the v6 equivalents, with a
-/// v4-mapped v6 address judged as the v4 it wraps.
+/// where cloud metadata services live) and every other special-purpose
+/// block. A v6 address is accepted only in global unicast, and one that
+/// carries a v4 address is judged as that v4.
 pub fn is_public_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_public_v4(v4),
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => is_public_v4(v4),
-            None => is_public_v6(v6),
-        },
+        IpAddr::V6(v6) => is_public_v6(v6),
     }
 }
 
 fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, _, _] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     !(ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_private()
@@ -150,21 +148,41 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         // 100.64.0.0/10, carrier-grade NAT: a LAN as far as this is concerned.
         || (a == 100 && (64..=127).contains(&b))
+        // 192.0.0.0/24 protocol assignments, 192.88.99.0/24 the 6to4 relay.
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 88 && c == 99)
+        // 198.18.0.0/15 benchmarking.
+        || (a == 198 && (b & 0xfe) == 18)
         // 0.0.0.0/8 "this network", and 240.0.0.0/4 reserved.
         || a == 0
         || a >= 240)
 }
 
 fn is_public_v6(ip: Ipv6Addr) -> bool {
-    let first = ip.segments()[0];
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        // fc00::/7 unique local, fe80::/10 link local.
-        || (first & 0xfe00) == 0xfc00
-        || (first & 0xffc0) == 0xfe80
-        // 2001:db8::/32 documentation.
-        || (first == 0x2001 && ip.segments()[1] == 0x0db8))
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::from((u32::from(hi) << 16) | u32::from(lo));
+    match ip.segments() {
+        // ::ffff:a.b.c.d mapped, ::a.b.c.d compatible (which also holds
+        // :: and ::1, refused as 0.0.0.0/8).
+        [0, 0, 0, 0, 0, 0xffff | 0, hi, lo] => is_public_v4(v4(hi, lo)),
+        // 64:ff9b::/96, NAT64: the gateway connects to the v4 inside.
+        [0x64, 0xff9b, 0, 0, 0, 0, hi, lo] => is_public_v4(v4(hi, lo)),
+        // 2002::/16, 6to4: the v4 is the next 32 bits.
+        [0x2002, hi, lo, ..] => is_public_v4(v4(hi, lo)),
+        // 2001::/32, Teredo: the server's v4, then the client's inverted.
+        [0x2001, 0, s_hi, s_lo, _, _, c_hi, c_lo] => {
+            is_public_v4(v4(s_hi, s_lo)) && is_public_v4(v4(!c_hi, !c_lo))
+        }
+        [first, second, ..] => {
+            // 2000::/3, global unicast, is the only v6 block accepted.
+            let global_unicast = (first & 0xe000) == 0x2000;
+            // 2001::/23 protocol assignments, 2001:db8::/32 and
+            // 3fff::/20 documentation.
+            let special = (first == 0x2001 && second < 0x0200)
+                || (first == 0x2001 && second == 0x0db8)
+                || (first == 0x3fff && second < 0x1000);
+            global_unicast && !special
+        }
+    }
 }
 
 /// The URL as something this route will fetch: http or https, with a
@@ -231,6 +249,9 @@ pub async fn fetch(raw: &str, policy: &RemotePolicy) -> Result<Fetched, Refusal>
         let client = reqwest::Client::builder()
             .tls_backend_preconfigured(datalib_fetch::tls_config())
             .resolve_to_addrs(&host, &addrs)
+            // A proxy would look the host up again itself, and the
+            // addresses judged above would no longer be the ones reached.
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TOTAL_TIMEOUT)
@@ -608,6 +629,53 @@ mod tests {
             "93.184.216.34",
             "2606:4700::1111",
             "::ffff:8.8.8.8",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(is_public_address(ip), "{ip} should be allowed");
+        }
+    }
+
+    /// An address can carry another: NAT64, 6to4, Teredo and the
+    /// v4-compatible form all reach the v4 inside, so a name answering
+    /// with one of them reached the LAN past the v6 ranges the check
+    /// listed. Only global unicast is accepted now, and the v4 inside
+    /// is judged on its own.
+    #[test]
+    fn an_address_that_carries_a_private_one_is_not_public() {
+        for ip in [
+            "64:ff9b::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::a00:1",
+            "2002:7f00:1::1",
+            "2002:c0a8:101::1",
+            "::127.0.0.1",
+            "::10.0.0.1",
+            "::ffff:0:10.0.0.1",
+            // Teredo: server 65.54.227.120, client 192.168.1.1 inverted.
+            "2001:0:4136:e378:8000:63bf:3f57:fefe",
+            // Teredo: server 10.0.0.1.
+            "2001:0:a00:1::1",
+            "fec0::1",
+            "2001:2::1",
+            "2001:10::1",
+            "3fff::1",
+            "100::1",
+            "5f00::1",
+            "198.18.0.1",
+            "198.19.255.255",
+            "192.0.0.8",
+            "192.88.99.1",
+        ] {
+            let ip: IpAddr = ip.parse().unwrap();
+            assert!(!is_public_address(ip), "{ip} should be refused");
+        }
+        for ip in [
+            "64:ff9b::808:808",
+            "2002:808:808::1",
+            // Teredo: server 65.54.227.120, client 8.8.8.8 inverted.
+            "2001:0:4136:e378:8000:63bf:f7f7:f7f7",
+            "2a00:1450:4001::1",
+            "198.20.0.1",
         ] {
             let ip: IpAddr = ip.parse().unwrap();
             assert!(is_public_address(ip), "{ip} should be allowed");
