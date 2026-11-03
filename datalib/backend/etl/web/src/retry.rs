@@ -3,7 +3,7 @@
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -30,6 +30,9 @@ pub struct RetryGuard {
     last_progress: Mutex<Instant>,
     /// Ends a backoff sleep early when the step is asked to stop.
     stop: datalib_etl::stop::StopFlag,
+    /// Why the source gave up, once it has: the next request it makes
+    /// stops it instead of leaving.
+    gave_up: OnceLock<String>,
     /// One permit per request the source may have out at once. A download
     /// that fans out at several levels multiplies their limits; this is the
     /// one bound on the product.
@@ -96,6 +99,7 @@ impl RetryGuard {
             sequential_failures: AtomicU64::new(0),
             last_progress: Mutex::new(Instant::now()),
             stop,
+            gave_up: OnceLock::new(),
             requests: Semaphore::new(requests_at_once.max(1)),
             requests_at_once: requests_at_once.max(1),
         })
@@ -137,6 +141,17 @@ impl RetryGuard {
             .acquire()
             .await
             .expect("the request semaphore is never closed")
+    }
+
+    /// The source is done asking this run. The request that found out
+    /// still fails as itself, for its caller to report; the next one stops
+    /// the source ([`RetryGuard::gave_up`]).
+    pub fn give_up(&self, why: impl Into<String>) {
+        let _ = self.gave_up.set(why.into());
+    }
+
+    pub fn gave_up(&self) -> Option<&str> {
+        self.gave_up.get().map(String::as_str)
     }
 
     pub fn on_progress(&self) {

@@ -300,13 +300,16 @@ pub enum HttpError {
 
 impl HttpError {
     /// What this failure says about the service. A timeout and the curl
-    /// exits for a connection that never completed (7 could not connect,
-    /// 28 timeout, 35 TLS, 56 receive) are the service not answering,
-    /// which is also what the retry loop retries.
+    /// exits for a connection that never completed (6 could not resolve
+    /// the host, 7 could not connect, 28 timeout, 35 TLS, 52 empty reply,
+    /// 55 send, 56 receive) are the service not answering, which is also
+    /// what the retry loop retries. 6 is a typo'd host as well as a
+    /// network that is not up yet, as after a laptop wakes; the guard's
+    /// budget is what ends the first.
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
-            HttpError::Curl { exit, .. } if matches!(*exit, 7 | 28 | 35 | 56) => {
+            HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
                 Some(Upstream::Unavailable)
             }
             HttpError::Curl { exit, stderr, .. } if latchkey_did_not_permit(*exit, stderr) => {
@@ -543,6 +546,16 @@ where
         // Held for the attempt only, never through a backoff, so a request
         // waiting to retry leaves its slot to one that can go now.
         let slot = guard.request_slot().await;
+        // A source that gave up asks for nothing more this run: every other
+        // request would meet the same dead service, and a loop that went
+        // on would fail each of its units in turn and still end
+        // `succeeded`. The stop ends every loop at its next boundary,
+        // sealed, and the step ends `incomplete` saying why. It waits for
+        // this request, not the one that gave up, so that one's caller
+        // still reports it as itself.
+        if let Some(why) = guard.gave_up() {
+            guard.stop().give_up(why);
+        }
         // Once the step is asked to stop, no new request leaves. Every
         // page loop in every API provider funnels through here, so this
         // is what ends a half-walked channel or thread without each loop
@@ -590,9 +603,12 @@ where
         };
 
         let Some(retry_after) = retry else {
-            // Accepted — record forward progress and hand the response (or
-            // terminal error) back to the caller untouched.
-            guard.on_progress();
+            // Accepted: hand it back untouched. Only an answer is
+            // progress; a terminal error is not, or a source whose every
+            // request fails at once would never run out of time.
+            if outcome.is_ok() {
+                guard.on_progress();
+            }
             return outcome;
         };
 
@@ -602,6 +618,10 @@ where
                 Ok(resp) => format!("HTTP {}", resp.status),
                 Err(e) => e.to_string(),
             };
+            guard.give_up(format!(
+                "gave up on {} after {reason}; last attempt: {detail}",
+                req.service
+            ));
             return Err(HttpError::GaveUp {
                 service: req.service,
                 url: req.url.clone(),
@@ -1272,6 +1292,114 @@ mod tests {
             }
             other => panic!("expected GaveUp, got {other:?}"),
         }
+    }
+
+    /// A laptop waking from sleep has no DNS for a few seconds, and curl
+    /// says exit 6. That failed the request at once, so a source failed
+    /// each of its units in turn and still ended `succeeded`. It is
+    /// retried now, and a network that comes back is ridden through.
+    #[tokio::test]
+    async fn a_host_that_does_not_resolve_yet_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let offline = dir.path().join("offline");
+        std::fs::write(&offline, "").unwrap();
+
+        let stop = datalib_etl::stop::StopFlag::new();
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 100, fast, fast, stop);
+        let back = offline.clone();
+        let answer = playback::scope(
+            playback::Playback::at(dir.path()).offline(&offline),
+            crate::retry::scope(guard.clone(), async {
+                let request = latchkey_curl(&req);
+                tokio::pin!(request);
+                // Back online once the request has failed at least once.
+                loop {
+                    tokio::select! {
+                        answer = &mut request => break answer,
+                        _ = tokio::time::sleep(Duration::from_millis(5)) => {
+                            if guard.budget().sequential_failures > 0 {
+                                let _ = std::fs::remove_file(&back);
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await;
+        assert_eq!(answer.unwrap().status, 200);
+    }
+
+    /// When the guard gives up, the whole source stops, not only the
+    /// request that tripped it: every other unit would meet the same dead
+    /// network, fail on its first request, and the run would still end
+    /// `succeeded`. The stop says why, so the step ends `incomplete`.
+    #[tokio::test]
+    async fn a_give_up_stops_the_source_and_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let offline = dir.path().join("offline");
+        std::fs::write(&offline, "").unwrap();
+
+        let stop = datalib_etl::stop::StopFlag::new();
+        let fast = Duration::from_millis(1);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast, stop.clone());
+        let playback = playback::Playback::at(dir.path()).offline(&offline);
+        let (first, second) = playback::scope(
+            playback,
+            crate::retry::scope(guard, async {
+                let first = latchkey_curl(&req).await;
+                // Back online: the source has stopped all the same.
+                std::fs::remove_file(&offline).unwrap();
+                (first, latchkey_curl(&req).await)
+            }),
+        )
+        .await;
+        assert!(
+            matches!(first, Err(HttpError::GaveUp { .. })),
+            "the request that gave up fails as itself, for its caller to report; got {first:?}"
+        );
+        let why = stop.gave_up().expect("the next request stopped the source");
+        assert!(why.contains("gave up on slack"), "{why}");
+        assert!(why.contains("Could not resolve host"), "{why}");
+        assert!(
+            matches!(second, Err(HttpError::Interrupted { .. })),
+            "no request leaves after a give-up; got {second:?}"
+        );
+    }
+
+    /// A request that fails for good (here a tape with no answer) is not
+    /// progress: it used to reset the no-progress clock, so a source whose
+    /// every request failed that way never ran out of time.
+    #[tokio::test]
+    async fn a_terminal_failure_is_not_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            100,
+            fast,
+            fast,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let before = guard.budget().time_without_progress;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let err = playback::scope(
+            dir.path(),
+            crate::retry::scope(guard.clone(), async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::PlaybackMiss(_)), "got {err:?}");
+        assert!(
+            guard.budget().time_without_progress > before + Duration::from_millis(15),
+            "the clock kept running"
+        );
     }
 
     fn always_429(dir: &std::path::Path, req: &HttpRequest) {

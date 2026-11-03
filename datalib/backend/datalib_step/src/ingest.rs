@@ -73,12 +73,19 @@ pub async fn run(
         datalib_etl::run_problems::noting_give_up(datalib_obs::diagnostics::scope(
             diagnostics.clone(),
             datalib_etl_web::retry::scope(
-                guard,
+                guard.clone(),
                 datalib_etl::download_metrics::scope(metrics.clone(), body),
             ),
         ))
         .await;
-    ran?;
+    // A source that stopped answering ends the run however the processor
+    // took its last refused request, even when that was its last request.
+    let stopped_answering = guard.gave_up().map(str::to_string);
+    match (ran, &stopped_answering) {
+        (Err(e), Some(_)) => tracing::info!("after giving up: {e:#}"),
+        (ran, _) => ran?,
+    }
+    let gave_up = gave_up.or(stopped_answering);
 
     // What the download could not fetch, counted the way every render
     // step counts its own: the Manage row's errors and warnings. Whole
