@@ -149,7 +149,9 @@ Who sets it, always only on a message someone else sent:
 
 - Slack: past the conversation's `last_read` for a top-level message,
   past a followed thread's own `last_read` for a reply.
-- Email: no `$seen`.
+- Email: a `Read(false)` mark on the email, from its own
+  `read_marks` row (no `$seen` upstream). Mail the account sent is not
+  exempted: it is unread only when upstream says so.
 - Apple Messages: `message.is_read = 0`, built into `Read` per message.
 - Signal: `IncomingMessageDetails.read` false.
 - SMS Backup & Restore: `read="0"`, from the newest backup file that
@@ -166,8 +168,9 @@ transcripts have none to carry.
 
 A read mark is state that moves while the message does not, so a
 provider that renders it must re-render when it moves, and only the
-documents it moved across. Email's `$seen` is a row of its own
-(`email_keywords`), whose diff already names the email. Slack keeps its
+documents it moved across. Email's marks are rows of `read_marks`, and
+its diff scan adds the thread of each email whose mark
+`read_marks::moved` names. Slack keeps its
 marks in volatile sidecars, and its diff scan reads the sidecar's diff
 for the threads a moved mark crossed (`slack_render`'s `parse.rs`).
 

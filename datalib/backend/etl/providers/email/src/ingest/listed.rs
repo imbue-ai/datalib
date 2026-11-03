@@ -932,6 +932,48 @@ mod tests {
             .collect()
     }
 
+    /// `UNREAD` left the Gmail label ids for the read marks, and a label
+    /// filter naming it still keeps the unread emails and only them: the
+    /// filter decides which threads a run deletes.
+    #[tokio::test]
+    async fn a_filter_on_unread_keeps_the_emails_marked_unread() {
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
+        let got: Vec<FetchedEmail> = [("E1", true), ("E2", false)]
+            .into_iter()
+            .map(|(id, read)| {
+                let mut keywords = serde_json::Map::new();
+                if read {
+                    keywords.insert("$seen".into(), true.into());
+                }
+                let envelope = json!({
+                    "id": id, "blobId": format!("B{id}"), "threadId": format!("T{id}"),
+                    "mailboxIds": {"gmail:g@x:INBOX": true}, "keywords": keywords,
+                    "_source": {"via": super::super::schema_raw::GMAIL_API_VIA},
+                });
+                FetchedEmail::from_jmap_envelope("g@x", &envelope).unwrap()
+            })
+            .collect();
+        let mut tx = db.pool().begin().await.unwrap();
+        let now = IsoOffsetTimestamp::now_local();
+        write_batch_in_tx(&mut tx, &now, got, &[], same_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let unread = ["UNREAD".to_string()];
+        let kept = kept_threads(db.pool(), "g@x", Keeps::GmailLabels(&unread))
+            .await
+            .unwrap();
+        assert_eq!(kept, ["TE2".to_string()].into());
+        let inbox = ["INBOX".to_string()];
+        let kept = kept_threads(db.pool(), "g@x", Keeps::GmailLabels(&inbox))
+            .await
+            .unwrap();
+        assert_eq!(kept, ["TE1".to_string(), "TE2".to_string()].into());
+        db.close().await;
+    }
+
     /// A store an older build wrote climbs the whole ladder with its
     /// tokens intact and nothing to fetch again: what `gmail_messages`
     /// mapped and what a JMAP account's state covered are listed and

@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
+use datalib_etl::read_marks::{self, ReadMark};
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_render::pages::{BucketPages, KeyColumn};
 use datalib_etl_render::processor::Unparsed;
@@ -83,6 +84,8 @@ pub struct EmailStore {
     /// Rows whose stored payload would not read as JSON, dropped —
     /// reported by the processor rather than skipped in silence.
     pub unparsed: Vec<Unparsed>,
+    /// Every email's read mark, by email id.
+    marks: BTreeMap<String, ReadMark>,
 }
 
 /// One page of threads, with every email row and join they read and no
@@ -126,7 +129,7 @@ impl EmailStore {
                 }
             };
             let wanted = self.scan.render.as_ref().map(|_| &looked_at[..]);
-            let docs = load_buckets(pool, &thread_ids, wanted).await?;
+            let docs = load_buckets(pool, &thread_ids, wanted, &self.marks).await?;
             Ok(Some(Page { docs, looked_at }))
         })
     }
@@ -181,9 +184,11 @@ pub struct EmailThreadBucket {
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
     pub blobs: BlobBundle,
+    /// Each email's read mark, by email id.
+    pub marks: HashMap<String, ReadMark>,
     /// Every raw row this thread reads — its emails, their mailbox,
-    /// keyword and `.eml` edges from the load; its account and the
-    /// mailboxes it is filed under as render looks them up.
+    /// keyword and `.eml` edges and read marks from the load; its account
+    /// and the mailboxes it is filed under as render looks them up.
     pub inputs: Inputs,
 }
 
@@ -236,6 +241,7 @@ async fn open_async(
     let accounts = load_accounts(&pool, &mut unparsed).await?;
     let mailboxes = load_payloads(&pool, "mailboxes", &mut unparsed).await?;
     let scan = scan_diff(&pool, source_id, range, &pin, label_filter).await?;
+    let marks = read_marks::load(&pool).await?;
     let threads = match &scan.render {
         None => thread_count(&pool).await?,
         Some(set) => set.len(),
@@ -253,6 +259,7 @@ async fn open_async(
         scan,
         threads,
         unparsed,
+        marks,
     }))
 }
 
@@ -336,7 +343,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
 /// account or mailbox change reaches a thread through the inputs it
 /// declared — except under a label filter, where the mailbox tree
 /// decides which threads render at all, so any mailbox change renders
-/// everything.
+/// everything. A read mark that moved renders the thread of its email.
 async fn scan_diff(
     pool: &SqlitePool,
     source_id: &str,
@@ -344,7 +351,7 @@ async fn scan_diff(
     pin: &datalib_etl::pin::Pin,
     label_filter: bool,
 ) -> Result<ScanResult> {
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
+    let mut scan = datalib_etl::doltlite_raw::scan_buckets(
         pool,
         range.cursor,
         pin,
@@ -381,6 +388,9 @@ async fn scan_diff(
         },
     )
     .await?;
+    if let (Some(from), Some(render)) = (range.cursor, scan.render.as_mut()) {
+        render.extend(threads_of_moved_marks(pool, from, pin.commit()).await?);
+    }
     // The driver names buckets by the thread uuid; the load wants the
     // `(account, thread)` pair. Only a run that narrows maps them.
     let by_uuid: HashMap<String, String> = match (range.stale, &scan.render) {
@@ -402,6 +412,28 @@ async fn scan_diff(
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
     })
+}
+
+/// The `account|thread` key of the thread of each email whose read mark
+/// moved between the two commits.
+async fn threads_of_moved_marks(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<String>> {
+    let moved: Vec<String> = read_marks::moved(pool, from, to)
+        .await?
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    if moved.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT account_id, thread_id FROM emails
+          WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&moved)?)
+    .fetch_all(pool)
+    .await
+    .context("the threads of the emails whose read mark moved")?;
+    Ok(rows.into_iter().map(|(a, t)| format!("{a}|{t}")).collect())
 }
 
 /// The `account|thread` key of each thread whose uuid is in `uuids`.
@@ -491,6 +523,7 @@ async fn load_buckets(
     pool: &SqlitePool,
     thread_ids: &[String],
     wanted: Option<&[(String, String)]>,
+    marks: &BTreeMap<String, ReadMark>,
 ) -> Result<Vec<EmailThreadBucket>> {
     let mut by_key: BTreeMap<(String, String), EmailThreadBucket> = BTreeMap::new();
     let new_bucket = |account_id: &str, thread_id: &str| EmailThreadBucket {
@@ -539,6 +572,10 @@ async fn load_buckets(
         bucket
             .inputs
             .read("email_blobs", &EmlBlobRow::pk_recipe(&id, &blob_id));
+        bucket.inputs.read(read_marks::TABLE, &id);
+        if let Some(mark) = marks.get(&id) {
+            bucket.marks.insert(id.clone(), mark.clone());
+        }
         bucket.emails.push(LoadedEmail {
             id,
             account_id,
@@ -664,7 +701,7 @@ mod tests {
             "INSERT INTO email_mailboxes (id, email_id, mailbox_id)
              SELECT 'e' || value || '#inbox', 'e' || value, 'inbox' FROM s",
             "INSERT INTO email_keywords (id, email_id, keyword)
-             SELECT 'e' || value || '#$seen', 'e' || value, '$seen' FROM s",
+             SELECT 'e' || value || '#$flagged', 'e' || value, '$flagged' FROM s",
         ] {
             sqlx::query(sqlx::AssertSqlSafe(format!("{numbered} {insert}")))
                 .bind(n as i64)
@@ -674,7 +711,9 @@ mod tests {
         }
         let thread_ids: Vec<String> = (1..=n).map(|i| format!("t{i}")).collect();
 
-        let docs = load_buckets(&pool, &thread_ids, None).await.unwrap();
+        let docs = load_buckets(&pool, &thread_ids, None, &BTreeMap::new())
+            .await
+            .unwrap();
 
         assert_eq!(docs.len(), n);
         let last = docs
@@ -688,7 +727,74 @@ mod tests {
             Some(format!("<r{n}>").as_str())
         );
         assert_eq!(last.joins.mailboxes[&email[0].id], vec!["inbox"]);
-        assert_eq!(last.joins.keywords[&email[0].id], vec!["$seen"]);
+        assert_eq!(last.joins.keywords[&email[0].id], vec!["$flagged"]);
+    }
+
+    /// An email read upstream moves its read mark and nothing else of it.
+    /// That moves the store's version, and the next render renders the
+    /// thread holding that email and no other.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_moved_read_mark_renders_only_the_thread_of_its_email() {
+        use datalib_etl::doltlite_raw::{commit_run, content_commit, head_commit};
+        use datalib_etl_email::ingest::db::RawDb;
+        use datalib_etl_email::ingest::listed::{same_id, write_batch_in_tx};
+        use datalib_etl_email::ingest::schema_raw::FetchedEmail;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&db_path_for(dir.path())).await.unwrap();
+        let write = |seen: &'static [&'static str]| {
+            let db = db.clone();
+            async move {
+                let got: Vec<FetchedEmail> = ["E1", "E2"]
+                    .into_iter()
+                    .map(|id| {
+                        let keywords: serde_json::Map<String, Value> = seen
+                            .contains(&id)
+                            .then(|| ("$seen".to_string(), Value::Bool(true)))
+                            .into_iter()
+                            .collect();
+                        let envelope = serde_json::json!({
+                            "id": id, "blobId": format!("B{id}"), "threadId": format!("T{id}"),
+                            "keywords": keywords, "mailboxIds": {"M1": true},
+                        });
+                        FetchedEmail::from_jmap_envelope("A1", &envelope).unwrap()
+                    })
+                    .collect();
+                let mut tx = db.pool().begin().await.unwrap();
+                let now = datalib_time::IsoOffsetTimestamp::now_local();
+                write_batch_in_tx(&mut tx, &now, got, &[], same_id)
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+                commit_run(db.pool(), "sync").await.unwrap();
+            }
+        };
+        write(&[]).await;
+        let rendered = head_commit(db.pool()).await.unwrap().unwrap();
+        let version = content_commit(db.pool()).await.unwrap();
+        write(&["E1"]).await;
+        assert_ne!(content_commit(db.pool()).await.unwrap(), version);
+        db.close().await;
+
+        let store = open(
+            dir.path(),
+            "mail",
+            RawRange {
+                cursor: Some(&rendered),
+                pin: None,
+                // The driver found nothing stale by what the thread declared.
+                stale: Some(&HashSet::new()),
+            },
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        let render = store.scan.render.clone();
+        store.close();
+        assert_eq!(
+            render,
+            Some(HashSet::from([("A1".to_string(), "TE1".to_string())]))
+        );
     }
 
     /// A narrowed page returns each wanted thread, one with no email
@@ -725,9 +831,14 @@ mod tests {
             ("a1".to_string(), "t1".to_string()),
             ("a1".to_string(), "t2".to_string()),
         ];
-        let docs = load_buckets(&pool, &["t1".into(), "t2".into()], Some(&wanted))
-            .await
-            .unwrap();
+        let docs = load_buckets(
+            &pool,
+            &["t1".into(), "t2".into()],
+            Some(&wanted),
+            &BTreeMap::new(),
+        )
+        .await
+        .unwrap();
         let got: Vec<(&str, &str, usize)> = docs
             .iter()
             .map(|d| (d.account_id.as_str(), d.thread_id.as_str(), d.emails.len()))

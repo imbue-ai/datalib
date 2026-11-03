@@ -87,7 +87,8 @@ async fn upsert_mailboxes(
 /// Move every email filed under each `from` mailbox to its `to`, or off
 /// it when `to` is `None`, then drop the `from` row. Payload and join rows
 /// move together, so the `emails` diff and the `email_mailboxes` diff tell
-/// the same story. Returns how many emails moved.
+/// the same story; the read marks stay as they are. Returns how many
+/// emails moved.
 ///
 /// For a label that went away upstream (`None`), and for a row whose id
 /// changed recipe while the label stayed (`Some`).

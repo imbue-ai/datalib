@@ -184,8 +184,8 @@
     ]
   },
   "email": {
-    "schema_hash": "4bad296846f9492c56d7f4774752f95f9180d0c661fb07e77074348e28b49215",
-    "schema_version": 7,
+    "schema_hash": "c32369116f9f56f842a0527c7c4fd015fd549f6fa3ba49a41aea7f56052b8142",
+    "schema_version": 8,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE accounts( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL, email_address TEXT NULL, is_personal INTEGER NULL, is_read_only INTEGER NULL)",
@@ -212,6 +212,7 @@
       "CREATE TABLE mailboxes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX mailboxes_by_account ON mailboxes(account_id)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE thread_members(id TEXT PRIMARY KEY, thread_id TEXT NOT NULL)",
