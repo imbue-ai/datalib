@@ -250,7 +250,10 @@ doltlite -readonly slack/ingest/entities.doltlite_db \
 
 `HEAD`, `HEAD^1`, `HEAD~N`, branch names, tags and full commit hashes
 all work as refs; a short hash prefix does not. The cheapest "git
-status between commits" view.
+status between commits" view. A table added between the two has `''`,
+not NULL, as its `from_table_name` and `diff_type` `added`; a dropped
+one has `''` as its `to_table_name` and `dropped`
+(`a_summary_names_an_added_or_dropped_table_with_an_empty_string`).
 
 **Per-table row counts.** Two forms, and the vtab is usually the one
 you want — it covers every table that changed in one query:
