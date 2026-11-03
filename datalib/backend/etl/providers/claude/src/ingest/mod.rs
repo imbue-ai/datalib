@@ -55,9 +55,10 @@ pub const DEFAULT_OVERLAP: usize = 3;
 pub(crate) const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 pub(crate) const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
-/// How long a completed `/organizations` listing stays good. Matches
-/// slack's `MANIFEST_TTL`, and for the same reason: the org set is
-/// near-static, so re-listing it on every download is pure waste.
+/// How long a completed `/organizations` listing stays good: the six
+/// hours slack's `list_every_hours` defaults to, and for the same
+/// reason. The org set is near-static, so re-listing it on every
+/// download is pure waste.
 pub const ORGS_TTL: chrono::Duration = chrono::Duration::hours(6);
 pub(crate) const ORGS_SWEEP_KEY: &str = "orgs";
 
