@@ -853,6 +853,8 @@ mod load_tests {
     async fn messages_whose_chat_is_gone_are_counted_by_chat() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
             .await
             .unwrap();
