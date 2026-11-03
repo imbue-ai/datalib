@@ -1,10 +1,14 @@
 //! A store written while each thread's stamp was a `replies_pages` row
 //! opens under this build with a `threads` row held at that stamp,
 //! nothing to fetch again, and the old table gone: rung 1 of
-//! `schema_raw::LADDER`.
+//! `schema_raw::LADDER`. And one whose read marks sat in its sidecars
+//! opens with them in `read_marks`: rung 2.
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow};
-use datalib_etl_slack::ingest::schema_raw::{slack_message_key, MessageRow, THREADS};
+use datalib_etl::read_marks::{self, ReadMark};
+use datalib_etl_slack::ingest::schema_raw::{
+    slack_message_key, ChannelReadStateRow, MessageRow, LADDER, THREADS,
+};
 use datalib_etl_slack::ingest::{db_path_for, RawDb};
 use datalib_etl_web::owed;
 
@@ -142,6 +146,115 @@ async fn a_store_with_thread_stamps_opens_holding_each_thread_at_its_stamp() {
             .fetch_one(db.pool())
             .await
             .unwrap();
-    assert_eq!(version, "1");
+    assert_eq!(version, LADDER.len().to_string());
+    db.close().await;
+}
+
+/// A store from before `read_marks` kept a conversation's mark in its
+/// read state's sidecar and a followed thread's in its root's: rung 2
+/// moves both into `read_marks` and out of the sidecars, leaving the
+/// rest of each sidecar as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_with_read_marks_in_its_sidecars_opens_with_them_in_read_marks() {
+    let d = tempfile::tempdir().unwrap();
+    let path = db_path_for(d.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let ddl = [
+        MessageRow::ddl(),
+        dr::bookkeeping_ddl_for("messages"),
+        ChannelReadStateRow::ddl(),
+        dr::bookkeeping_ddl_for("channel_read_states"),
+    ];
+    let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+    let pool = dr::open(&path, &ddl).await.unwrap();
+    thread_root(&pool, READ, "3.0").await;
+    thread_root(&pool, TRIED, "7.0").await;
+    let sidecars = [
+        (
+            "messages_bookkeeping",
+            slack_message_key("T1", "C1", READ),
+            r#"{"last_read":"2.0","subscribed":true,"blocks":[{"block_id":"Ab1"}]}"#,
+        ),
+        (
+            "messages_bookkeeping",
+            slack_message_key("T1", "C1", TRIED),
+            r#"{"blocks":[{"block_id":"Zz9"}]}"#,
+        ),
+    ];
+    for (table, id, volatile) in sidecars {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {table} SET volatile_payload = jsonb(?) WHERE id = ?"
+        )))
+        .bind(volatile)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (channel, volatile) in [
+        (
+            "C1",
+            r#"{"last_read":"1.5","latest":"3.0","has_unreads":true}"#,
+        ),
+        ("C2", r#"{"latest":"9.0"}"#),
+    ] {
+        sqlx::query("INSERT INTO channel_read_states (id, payload) VALUES (?, jsonb(?))")
+            .bind(channel)
+            .bind(format!(r#"{{"id":"{channel}"}}"#))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO channel_read_states_bookkeeping (id, attempt_count, volatile_payload) \
+             VALUES (?, 0, jsonb(?))",
+        )
+        .bind(channel)
+        .bind(volatile)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    dr::commit_run(&pool, "an earlier build").await.unwrap();
+    pool.close().await;
+
+    let db = RawDb::open(&path).await.unwrap();
+    let marks = read_marks::load(db.pool()).await.unwrap();
+    assert_eq!(
+        marks.into_iter().collect::<Vec<_>>(),
+        [
+            ("C1".to_string(), ReadMark::Through("1.5".into())),
+            (
+                slack_message_key("T1", "C1", READ),
+                ReadMark::Through("2.0".into())
+            ),
+        ]
+    );
+    let left: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT id, json(volatile_payload) FROM channel_read_states_bookkeeping \
+         UNION ALL SELECT id, json(volatile_payload) FROM messages_bookkeeping ORDER BY id",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        left,
+        [
+            (
+                "C1".to_string(),
+                Some(r#"{"latest":"3.0","has_unreads":true}"#.to_string())
+            ),
+            ("C2".to_string(), Some(r#"{"latest":"9.0"}"#.to_string())),
+            (
+                slack_message_key("T1", "C1", READ),
+                Some(r#"{"subscribed":true,"blocks":[{"block_id":"Ab1"}]}"#.to_string())
+            ),
+            (
+                slack_message_key("T1", "C1", TRIED),
+                Some(r#"{"blocks":[{"block_id":"Zz9"}]}"#.to_string())
+            ),
+        ]
+    );
+    let read_states = db.load_read_states().await.unwrap();
+    assert_eq!(read_states[0]["last_read"], "1.5", "{read_states:?}");
     db.close().await;
 }

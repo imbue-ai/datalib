@@ -316,6 +316,7 @@ const MIRRORED: &[&str] = &[
     "threads",
     "slack_attachments",
     "channel_read_states",
+    "read_marks",
     "bookmarks",
     "saved_items",
 ];

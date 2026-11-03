@@ -168,8 +168,8 @@ A read mark is state that moves while the message does not, so a
 provider that renders it must re-render when it moves, and only the
 documents it moved across. Email's `$seen` is a row of its own
 (`email_keywords`), whose diff already names the email. Slack keeps its
-marks in volatile sidecars, and its diff scan reads the sidecar's diff
-for the threads a moved mark crossed (`slack_render`'s `parse.rs`).
+marks in `read_marks`, and its diff scan asks `read_marks::moved` for
+the threads a moved mark crossed (`slack_render`'s `parse.rs`).
 
 ## Replies not mirrored yet
 

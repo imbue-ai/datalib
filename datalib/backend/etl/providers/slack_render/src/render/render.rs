@@ -14,6 +14,7 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, Replies, UpstreamRef,
 };
+use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
@@ -61,7 +62,11 @@ use datalib_schema::providers::Provider;
 ///     reads its handles as `me`.
 /// v16: a thread's root says how many replies Slack counts, and how many
 ///     of them are not mirrored yet.
-pub const RENDER_VERSION: u32 = 16;
+/// v17: the read marks are read from `read_marks`. The output is the
+///     same, but the first render across the rung that made the table
+///     cannot tell which marks moved in that range (`read_marks::moved`),
+///     so every thread renders once.
+pub const RENDER_VERSION: u32 = 17;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -308,13 +313,17 @@ fn build_chat(
     let channel_mark = shared.read_marks.channels.get(&root.channel_id);
     let thread_mark = shared.read_marks.threads.get(&bucket.thread_key);
     let unread = |m: &Message| {
-        let mark = if m.is_thread_root {
+        let conversation = if m.is_thread_root {
             channel_mark
         } else {
             thread_mark
         };
-        m.user_id.as_deref() != self_user_id
-            && mark.is_some_and(|last_read| ids::after_mark(&m.ts, last_read))
+        let from_me = m.user_id.as_deref() == self_user_id;
+        let marks = Marks {
+            own: None,
+            conversation,
+        };
+        is_unread(&m.ts, from_me, marks, ids::ts_order)
     };
     // What the page shows under the root, a broadcast reply among them.
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
