@@ -63,6 +63,10 @@ pub struct StepSpec {
     /// what it reads, in either order. Not in the fingerprint, for the same
     /// reason as `streams_output`.
     pub reads_pinned: bool,
+    /// Whether it starts only once nothing upstream of it is running or
+    /// about to (`start = "after_inputs_settle"`): it reads every streaming
+    /// producer as one that does not stream. Not in the fingerprint either.
+    pub waits_for_settled_inputs: bool,
     /// The named locks it holds while it runs (`supervisor::locks`);
     /// `None` for the default one its shape gives it. Not in the
     /// fingerprint: it changes when the step may run, not what it makes.
@@ -131,6 +135,7 @@ impl StepSpec {
             compacts: false,
             streams_output: false,
             reads_pinned: true,
+            waits_for_settled_inputs: false,
             locks: None,
             group: None,
             group_type: None,
@@ -283,11 +288,14 @@ pub struct StepCtx {
     /// `data_root`.
     pub inputs: Vec<ArtifactPath>,
     /// The subset of `inputs` whose version differs from the one this
-    /// step consumed at its last success. Empty when the step has no
-    /// last success to compare against — it is running because it has
-    /// never completed, or because its own definition changed, so
-    /// "what moved" has no meaning and the step should do all its work.
+    /// step consumed at its last success; all of them when it has no
+    /// success under its current definition to compare against. Empty
+    /// only when nothing moved.
     pub changed_inputs: Vec<ArtifactPath>,
+    /// The subset of `inputs` whose producer's most recent run ended
+    /// without succeeding: what the step reads of them is what they
+    /// committed before that.
+    pub failed_inputs: Vec<ArtifactPath>,
     /// The version of each input this invocation was started against,
     /// by input path: what it reads, as far as the runner knows. An input
     /// with no version yet is left out.

@@ -114,7 +114,8 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
-| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success; empty when there is no last success to compare against (never completed, or the step's own config changed) — do all your work |
+| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
+| `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
@@ -174,6 +175,14 @@ What that means from your side:
   once more when the producer ends if it moved since your last run;
   never twice at once. A step that sets `reads = "files"` is not
   started while what it reads is being written.
+* **Or ask to start once it has all settled.** A step whose config entry
+  says `start = "after_inputs_settle"` is not started on seals: it
+  waits until nothing upstream of it is running or about to run, then
+  runs once, on what its producers ended with. Unlike `reads = "files"`
+  it holds no writer back while it runs; if a sync that starts
+  meanwhile moves what it read, it runs again once that sync has
+  settled. The default,
+  `start = "on_each_seal"`, is the behaviour above.
 * **Read the commit you were started against, never `main`.**
   `DATALIB_READS` holds, for each input, the version you were started
   against, as `<fingerprint>:<version>`: a hash of the producing step's
@@ -184,13 +193,18 @@ What that means from your side:
   its own record (`sync_runs`, its stamps), which moves `main` but not
   the version, so you are not run for it. `main` may have moved on
   since; when its content moved, the loop runs you again for it.
-* **An empty `DATALIB_DAG_CHANGED_INPUTS` means every input.** There is
-  no success to compare with: a first run, or your definition changed
-  since. Do all your work.
-* **A failed input is read at its last commit.** What a producer
-  committed before it failed is a version like any other, and you are
-  started on it. Only a step none of whose inputs has ever published
-  anything is held back (`blocked`).
+* **`DATALIB_DAG_CHANGED_INPUTS` names what moved.** On a first run,
+  or when your definition changed since your last success, there is
+  nothing to compare with, and it names every input: do all your work.
+  So does a reset of your step. Empty only ever means nothing you read
+  moved.
+* **A failed input is read at its last commit, and named.** What a
+  producer committed before it failed is a version like any other, and
+  you are started on it; `DATALIB_DAG_FAILED_INPUTS` names each input
+  whose producer's last run did not succeed, so you can tell a partial
+  input from a whole one and decide whether to go on. Only a step none
+  of whose inputs has ever published anything is held back
+  (`blocked`).
 
 ## stdout: the event protocol (optional)
 
@@ -718,9 +732,11 @@ A python step using inputs + progress + outcome:
 #!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys
 
-inputs = [p for p in os.environ["DATALIB_DAG_INPUTS"].split("\n") if p]
-# Empty when there is no last success to compare with: then every input counts.
-changed = {p for p in os.environ["DATALIB_DAG_CHANGED_INPUTS"].split("\n") if p} or set(inputs)
+def lines(name): return [p for p in os.environ.get(name, "").split("\n") if p]
+
+inputs = lines("DATALIB_DAG_INPUTS")
+changed = set(lines("DATALIB_DAG_CHANGED_INPUTS"))  # every input on a first run
+failed = set(lines("DATALIB_DAG_FAILED_INPUTS"))    # read, but partial
 root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
 out = os.environ["DATALIB_DAG_STEP"]   # the one tree this step writes
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
@@ -730,6 +746,9 @@ def emit(obj): print(json.dumps(obj), flush=True)
 
 emit({"event": "progress_length", "step": "", "total": len(inputs)})
 for src in inputs:
+    if src in failed:
+        emit({"event": "log", "step": "", "level": "warn",
+              "msg": f"{src} did not finish its last run; reading what it committed"})
     if src in changed:
         pass  # ... process only what moved ...
     emit({"event": "progress_inc", "step": "", "delta": 1})

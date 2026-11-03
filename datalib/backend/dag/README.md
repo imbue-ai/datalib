@@ -136,7 +136,11 @@ starts** in a tick, visited in topological order, iff:
    (or with this step reading its files), and none is about to
    run, held only by a lock or a reader, since that one would
    rewrite what this step reads. A producer waiting on its own upstream
-   holds nobody back, so a fan-in never waits for its slowest source;
+   holds nobody back, so a fan-in never waits for its slowest source.
+   A step that says `start = "after_inputs_settle"` waits for more:
+   while any step upstream of it is running or waiting, streaming or
+   not, it waits, so it runs once on what they ended with rather than
+   once per seal;
 7. **it has something to read**: a step with inputs none of whose
    producers ever published is `blocked`, or waits if one is about to run;
 8. **every lock it would take is free** (below, "What keeps steps apart");
@@ -330,8 +334,8 @@ follows from it:
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.
 
-Neither `locks` nor `reads` is in the fingerprint: they change when a
-step may run, not what it makes. A config edit that changes only them
+None of `locks`, `reads` and `start` is in the fingerprint: they change
+when a step may run, not what it makes. A config edit that changes only them
 is still taken on mid-sync, like any other. The built-in steps that read
 files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
 `keyword_index`, which globs its render tree's `.md` files; `embed` and

@@ -409,6 +409,99 @@ async fn a_consumer_is_handed_the_version_the_loop_recorded() {
     h.finish().await;
 }
 
+/// `start = "after_inputs_settle"`: the consumer of a streaming producer
+/// is not started on its seals, and runs once, on what it ended with.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_that_waits_for_settled_inputs_runs_once_after_its_producer_ends() {
+    let mut h = Harness::new(&[source("a"), reads("c", &["a"]).after_inputs_settle()]).await;
+    let sync = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "streams").await;
+    h.run("a", "seal s1").await;
+    h.run("a", "seal s2").await;
+    h.until("c to wait for a after its seals", |s| {
+        let sealed = s.version("a").is_some_and(|v| v.ends_with(":s2"));
+        (sealed && s.detail("c") == Some("waiting for a")).then_some(())
+    })
+    .await;
+    assert_eq!(h.state().await.started("c"), 0);
+    h.run("a", "ok s3").await;
+    h.started("c").await;
+    let reads = h.env("c", "DATALIB_READS").await;
+    assert!(reads.contains(":s3\""), "{reads}");
+    h.run("c", "ok c1").await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("c"), 1);
+    h.finish().await;
+}
+
+/// A first run is told every input changed; a later one only what moved.
+/// It used to be told nothing on a first run, and a step that took an
+/// empty list for "nothing to do" did nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_first_run_is_told_every_input_changed() {
+    let steps = [source("a"), source("b"), reads("c", &["a", "b"])];
+    let mut h = Harness::new(&steps).await;
+    let first = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "ok a1").await;
+    h.run("b", "ok b1").await;
+    h.started("c").await;
+    assert_eq!(h.env("c", "DATALIB_DAG_CHANGED_INPUTS").await, "a,b");
+    h.run("c", "ok c1").await;
+    assert_eq!(h.closed(&first).await, RequestOutcome::Done);
+
+    let again = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "ok a2").await;
+    h.started("c").await;
+    assert_eq!(h.env("c", "DATALIB_DAG_CHANGED_INPUTS").await, "a");
+    h.run("c", "ok c2").await;
+    assert_eq!(h.closed(&again).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
+/// A consumer still runs on what a failed input committed, and is told
+/// which input that is: in the busy period the input failed in, and in a
+/// later one, from the record.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_is_told_which_inputs_failed() {
+    let steps = [source("a"), source("b"), reads("c", &["a", "b"])];
+    let mut h = Harness::new(&steps).await;
+    let first = h.sync(&["a", "b"]).await;
+    h.started("a").await;
+    h.started("b").await;
+    h.run("a", "ok a1").await;
+    h.run("b", "ok b1").await;
+    h.started("c").await;
+    assert_eq!(h.env("c", "DATALIB_DAG_FAILED_INPUTS").await, "");
+    h.run("c", "ok c1").await;
+    assert_eq!(h.closed(&first).await, RequestOutcome::Done);
+    h.period_over().await;
+
+    let failing = h.sync(&["b"]).await;
+    h.started("b").await;
+    h.run("b", "seal b2").await;
+    h.run("b", "fail data").await;
+    h.started("c").await;
+    assert_eq!(h.env("c", "DATALIB_DAG_FAILED_INPUTS").await, "b");
+    assert_eq!(h.env("c", "DATALIB_DAG_CHANGED_INPUTS").await, "b");
+    h.run("c", "ok c2").await;
+    assert_eq!(h.closed(&failing).await, RequestOutcome::Failed);
+    h.period_over().await;
+
+    let other = h.sync(&["a"]).await;
+    h.started("a").await;
+    h.run("a", "ok a2").await;
+    h.started("c").await;
+    assert_eq!(h.env("c", "DATALIB_DAG_FAILED_INPUTS").await, "b");
+    assert_eq!(h.env("c", "DATALIB_DAG_CHANGED_INPUTS").await, "a");
+    h.run("c", "ok c3").await;
+    assert_eq!(h.closed(&other).await, RequestOutcome::Done);
+    h.finish().await;
+}
+
 /// A consumer runs on each seal of a streaming producer, one pass at a
 /// time, and its queue rises on seals and drains on reads.
 #[tokio::test(flavor = "multi_thread")]

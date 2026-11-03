@@ -204,7 +204,8 @@ command for each kind of step.
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
 `step_finish` per step, closed by one `run_summary` — parse it instead
 of scraping human output. A step that reads one that streams its
-output runs once per seal it reads, each pass but the last closed by a `pass_end`
+output runs once per seal it reads (unless it says `start =
+"after_inputs_settle"`), each pass but the last closed by a `pass_end`
 whose `status` says how it went; one that failed and was run again is
 an `error` line in the step's log even when the step ends `succeeded`,
 and `run_summary` counts them in the step's `failed_passes`. Failures carry a kind

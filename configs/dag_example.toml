@@ -247,9 +247,12 @@ inputs = ["slack-diff/keyword_index"]
 #
 # A step that reads its inputs' files off disk rather than at a pinned
 # commit says `reads = "files"`, and no writer of them runs beside it.
-# Neither changes a step's fingerprint: they say when it may run, not
-# what it makes. See datalib/backend/dag/README.md, "What keeps steps
-# apart".
+# A step that would rather not run at every seal of a download that
+# streams says `start = "after_inputs_settle"`: it waits until nothing
+# upstream of it is running or due, then runs once, and holds no writer
+# back while it does. None of these changes a step's fingerprint: they
+# say when it may run, not what it makes. See
+# datalib/backend/dag/README.md, "What keeps steps apart".
 
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read, by composed id. Adding a source
