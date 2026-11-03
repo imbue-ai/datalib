@@ -76,8 +76,13 @@ impl MirrorOptions {
         }
     }
 
+    /// Without case, as SQLite matches table names.
     fn is_kept(&self, name: &str) -> bool {
-        RESERVED_TABLES.contains(&name) || self.sidecar_tables.iter().any(|t| t == name)
+        RESERVED_TABLES
+            .iter()
+            .copied()
+            .chain(self.sidecar_tables.iter().map(String::as_str))
+            .any(|t| t.eq_ignore_ascii_case(name))
     }
 }
 
@@ -838,6 +843,27 @@ mod tests {
             stable_key_columns: vec!["id_global".into()],
             ..MirrorOptions::new("/dev/null")
         }
+    }
+
+    /// SQLite matches table names without case, so a source table named
+    /// `Problems` is the store's own `problems`; in append-only mode its
+    /// rows were upserted into it.
+    #[test]
+    fn a_kept_table_is_kept_in_any_case() {
+        let o = MirrorOptions {
+            sidecar_tables: vec!["ingested_files".into()],
+            ..opts()
+        };
+        for name in [
+            "problems",
+            "Problems",
+            "SYNC_RUNS",
+            "_DataLib_Meta",
+            "Ingested_Files",
+        ] {
+            assert!(o.is_kept(name), "{name}");
+        }
+        assert!(!o.is_kept("photos"));
     }
 
     fn unique(column: &str) -> KeyCandidates {
