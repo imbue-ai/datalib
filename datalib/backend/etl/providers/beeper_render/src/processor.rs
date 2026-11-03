@@ -69,6 +69,9 @@ impl SourceRender for BeeperRender {
             ctx.page_size.bytes,
         )
         .context("beeper render_all")?;
+        for u in &summary.unrendered {
+            ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
+        }
         // A room this run looked at that has no event left builds no
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.

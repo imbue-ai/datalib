@@ -80,6 +80,9 @@ impl SourceRender for SignalRender {
             ctx.page_size.bytes,
         )
         .context("signal render_all")?;
+        for u in &summary.unrendered {
+            ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
+        }
         // A chat this run looked at that came back with no items builds
         // no chat at all, so chat-common never sees it: declared with
         // nothing, its documents go. The rendered ones follow and

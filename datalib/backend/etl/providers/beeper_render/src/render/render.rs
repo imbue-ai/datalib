@@ -21,7 +21,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::batches;
 use datalib_etl_render::photo;
 
-use super::normalize::{bundle_key, to_networks, Avatars};
+use super::normalize::{bundle_key, to_networks, Avatars, Unrendered};
 use super::parse::{DocBucket, ParsedBeeper};
 
 /// Bump when Beeper's own contribution to the rendered output changes.
@@ -50,6 +50,7 @@ pub struct RenderSummary {
     /// Every room rendered, with what it read — what the processor
     /// declares through `RenderCtx::declare_bucket`.
     pub buckets: Buckets,
+    pub unrendered: Vec<Unrendered>,
 }
 
 /// Entry point. Renders every `(room, period)` bucket the parser
@@ -104,7 +105,9 @@ fn render_open(
         ..Default::default()
     };
     let empty = BlobBundle::default();
-    for network in to_networks(parsed, source_id, &avatars) {
+    let (networks, unrendered) = to_networks(parsed, source_id, &avatars);
+    summary.unrendered = unrendered;
+    for network in networks {
         let mut renderer = ChatRenderer::new(
             &network.profile,
             out_dir,
