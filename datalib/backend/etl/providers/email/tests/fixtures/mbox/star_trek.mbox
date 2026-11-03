@@ -199,3 +199,33 @@ Content-Type: text/html; charset=utf-8
 <img src="data:," alt="" onerror="window.__hostileRan='onerror'">
 <p>— Quark, proprietor</p>
 </body></html>
+
+From 1853826400000007191@xxx Fri Jan 09 21:00:00 +0000 2026
+X-GM-THRID: 1853826400000007191
+X-Gmail-Labels: Inbox
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <bar-tab-001@quarks.example>
+From: Quark's Bar <prizes@quarks.example>
+To: Jean-Luc Picard <picard@enterprise.starfleet>
+Subject: Your bar tab
+Date: Fri, 9 Jan 2026 21:00:00 +0000
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary-latinum"
+
+--boundary-latinum
+Content-Type: text/plain; charset=utf-8
+
+Captain, your tab is attached. Prompt payment is appreciated.
+
+— Quark, proprietor
+
+--boundary-latinum
+Content-Type: text/xsl; charset=utf-8; name="bar_tab.xsl"
+Content-Disposition: attachment; filename="bar_tab.xsl"
+
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<h1 id="tab">Bar tab: three bars of gold-pressed latinum</h1>
+<script>window.__hostileRan = 'bar_tab'</script>
+</body></html>
+
+--boundary-latinum--

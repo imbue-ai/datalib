@@ -171,46 +171,78 @@ pub const DATA_DOCUMENT_CSP: &str = "sandbox; default-src 'none'; style-src 'uns
 /// header naming sources would intersect with it.
 pub const DACTAL_SANDBOX_CSP: &str = "sandbox allow-scripts allow-downloads";
 
-/// Content types a page would run as code from `<script src>` or
-/// `WebAssembly.instantiateStreaming`. A render tree holds none of its
-/// own, so one served from this origin came from upstream — and the app
-/// page's `script-src 'self'` would let it run.
-pub fn is_executable(content_type: &str) -> bool {
-    let mime = content_type
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    matches!(
-        mime.as_str(),
-        "text/javascript"
-            | "application/javascript"
-            | "application/x-javascript"
-            | "application/ecmascript"
-            | "text/ecmascript"
-            | "application/wasm"
-    )
+/// The types data keeps when served: ones a browser shows rather than
+/// runs, and never takes as a script or a stylesheet. A list of the
+/// types that *do* run would never be complete — browsers render
+/// `text/xsl` as a page, and take one entry of a comma list — so this is
+/// the only list, and it names what is safe.
+const SHOWN_KINDS: &[&str] = &["image/", "audio/", "video/"];
+const SHOWN_TYPES: &[&str] = &[
+    "application/json",
+    "application/pdf",
+    "text/csv",
+    "text/html",
+    "text/markdown",
+    "text/plain",
+];
+
+/// The headers for bytes this origin serves as data — anything a sender,
+/// an upstream service or an applet chose: a blob, a fetched remote
+/// image, an applet's answer. Every one runs under [`DATA_DOCUMENT_CSP`],
+/// whatever type it names, except a PDF, whose viewer the sandbox turns
+/// off and which runs in an origin of its own. A type that is not one of
+/// [`SHOWN_TYPES`] goes out as `application/octet-stream`, which under
+/// `nosniff` no page loads as script.
+pub fn set_data_headers(headers: &mut header::HeaderMap, declared: &str) {
+    let shown = mime_essence(declared).filter(|m| {
+        SHOWN_KINDS.iter().any(|k| m.starts_with(k)) || SHOWN_TYPES.contains(&m.as_str())
+    });
+    let served = match (&shown, charset(declared)) {
+        (Some(mime), Some(cs)) => format!("{mime}; charset={cs}"),
+        (Some(mime), None) => mime.clone(),
+        (None, _) => "application/octet-stream".to_string(),
+    };
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&served).expect("built from token characters"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    if shown.as_deref() != Some("application/pdf") {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(DATA_DOCUMENT_CSP),
+        );
+    }
 }
 
-/// Content types a browser would run script from if it navigated to
-/// them. Everything else — JSON, images as `<img>`, text — is inert.
-pub fn is_scriptable_document(content_type: &str) -> bool {
-    let mime = content_type
+/// `type/subtype`, lowercased, when `content_type` names exactly one
+/// type; `None` for a comma list or anything else malformed.
+pub fn mime_essence(content_type: &str) -> Option<String> {
+    let essence = content_type.split(';').next()?.trim().to_ascii_lowercase();
+    let (kind, sub) = essence.split_once('/')?;
+    (is_token(kind) && is_token(sub)).then_some(essence)
+}
+
+fn charset(content_type: &str) -> Option<&str> {
+    content_type
         .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    matches!(
-        mime.as_str(),
-        "text/html"
-            | "application/xhtml+xml"
-            | "image/svg+xml"
-            | "text/xml"
-            | "application/xml"
-            | "application/xslt+xml"
-    ) || mime.ends_with("+xml")
+        .skip(1)
+        .find_map(|param| {
+            let (key, value) = param.split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case("charset")
+                .then(|| value.trim().trim_matches('"'))
+        })
+        .filter(|v| is_token(v))
+}
+
+fn is_token(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
 }
 
 /// Files the token gate lets through unauthenticated: the DACTAL page
@@ -294,7 +326,7 @@ fn asset_response(
             header::ACCESS_CONTROL_ALLOW_ORIGIN,
             HeaderValue::from_static("*"),
         );
-        if is_scriptable_document(mime.as_ref()) {
+        if mime.essence_str() == "text/html" {
             headers.insert(
                 header::CONTENT_SECURITY_POLICY,
                 HeaderValue::from_static(DACTAL_SANDBOX_CSP),
@@ -349,28 +381,81 @@ mod tests {
         }
     }
 
+    fn served(declared: &str) -> (String, Option<String>) {
+        let mut headers = header::HeaderMap::new();
+        set_data_headers(&mut headers, declared);
+        let get = |name| {
+            headers
+                .get(name)
+                .map(|v: &HeaderValue| v.to_str().unwrap().to_string())
+        };
+        assert_eq!(
+            get(header::X_CONTENT_TYPE_OPTIONS).as_deref(),
+            Some("nosniff")
+        );
+        (
+            get(header::CONTENT_TYPE).unwrap(),
+            get(header::CONTENT_SECURITY_POLICY),
+        )
+    }
+
+    /// Browsers render `text/xsl` as a page and take one entry of a comma
+    /// list; a check that matched dangerous types let both run script in
+    /// the app's origin. Data is sandboxed whatever it is called.
     #[test]
-    fn scriptable_documents_are_the_ones_a_browser_would_run() {
-        for ct in [
+    fn data_is_sandboxed_whatever_type_it_names() {
+        for declared in [
+            "text/xsl; charset=utf-8",
+            "text/plain,text/html",
+            "text/html, application/x-foo",
+            "image/png, text/html",
             "text/html",
-            "text/html; charset=utf-8",
-            "TEXT/HTML",
             "image/svg+xml",
-            "application/xhtml+xml",
-            "application/xml",
-            "application/rss+xml",
-        ] {
-            assert!(is_scriptable_document(ct), "{ct}");
-        }
-        for ct in [
-            "application/json",
-            "text/plain",
             "image/png",
-            "text/markdown; charset=utf-8",
-            "application/octet-stream",
+            "application/json",
+            "application/x-never-heard-of-it",
+            "",
+            "not a type",
         ] {
-            assert!(!is_scriptable_document(ct), "{ct}");
+            assert_eq!(
+                served(declared).1.as_deref(),
+                Some(DATA_DOCUMENT_CSP),
+                "{declared:?}"
+            );
         }
+    }
+
+    #[test]
+    fn data_keeps_its_type_only_when_it_is_one_shown_type() {
+        for (declared, expected) in [
+            ("image/png", "image/png"),
+            ("IMAGE/JPEG", "image/jpeg"),
+            ("video/mp4", "video/mp4"),
+            ("text/html; charset=utf-8", "text/html; charset=utf-8"),
+            ("text/plain; Charset=\"UTF-8\"", "text/plain; charset=UTF-8"),
+            ("text/plain; charset=utf-8, text/html", "text/plain"),
+            ("application/json", "application/json"),
+            ("text/xsl; charset=utf-8", "application/octet-stream"),
+            ("text/plain,text/html", "application/octet-stream"),
+            ("image/png, text/html", "application/octet-stream"),
+            ("text/javascript", "application/octet-stream"),
+            ("application/wasm", "application/octet-stream"),
+            ("text/css", "application/octet-stream"),
+            ("", "application/octet-stream"),
+        ] {
+            assert_eq!(served(declared).0, expected, "{declared:?}");
+        }
+    }
+
+    /// The sandbox turns off the browser's PDF viewer, which runs in an
+    /// origin of its own.
+    #[test]
+    fn a_pdf_is_the_one_shown_type_without_the_sandbox() {
+        assert_eq!(
+            served("application/pdf"),
+            ("application/pdf".to_string(), None)
+        );
+        assert!(served("application/pdf,text/html").1.is_some());
     }
 
     fn directive<'a>(csp: &'a str, name: &str) -> Option<&'a str> {
@@ -391,20 +476,6 @@ mod tests {
         assert!(directive(csp, "connect-src").is_none());
         for d in csp.split(';') {
             assert!(!d.contains("http"), "no remote origin in {d:?}");
-        }
-    }
-
-    #[test]
-    fn executable_types_are_scripts_and_wasm() {
-        for ct in [
-            "text/javascript",
-            "application/javascript; charset=utf-8",
-            "application/wasm",
-        ] {
-            assert!(is_executable(ct), "{ct}");
-        }
-        for ct in ["text/plain", "application/json", "text/css", "text/html"] {
-            assert!(!is_executable(ct), "{ct}");
         }
     }
 }
