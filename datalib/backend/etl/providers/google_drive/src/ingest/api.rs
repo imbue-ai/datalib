@@ -211,6 +211,9 @@ pub enum ApiError {
     /// 404: no such file, or not one this account can see.
     #[error("{0}")]
     NotFound(String),
+    /// A plain download larger than one request takes.
+    #[error("{0}")]
+    TooLarge(String),
     /// About this one request: a file this account cannot read, a 5xx
     /// past its retries, a network failure.
     #[error("{0}")]
@@ -219,6 +222,10 @@ pub enum ApiError {
 
 pub fn is_service(e: &anyhow::Error) -> bool {
     matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Service(..)))
+}
+
+pub fn is_too_large(e: &anyhow::Error) -> bool {
+    matches!(e.downcast_ref::<ApiError>(), Some(ApiError::TooLarge(_)))
 }
 
 pub fn is_not_found(e: &anyhow::Error) -> bool {
@@ -338,6 +345,7 @@ fn transport_error(e: HttpError, url: &str) -> ApiError {
             format!("GET {url}: {e}{}", sign_in_hint(url)),
             Upstream::CredentialRefused,
         ),
+        HttpError::TooLarge { .. } => ApiError::TooLarge(e.to_string()),
         other => ApiError::Request(other.to_string()),
     }
 }

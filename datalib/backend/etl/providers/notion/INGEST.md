@@ -258,6 +258,7 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | a truncated subtree's follow-up | `page_markdown:<id>`; the body is owed, not stored short | the body fetching whole; a hole the tree places as a database is linked, not followed |
 | more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
+| an attachment larger than one plain request takes (1 GiB) | `notion_attachments:<page>#<slot>`, a warning (`over_size_limit`); it stays owed, and curl stops at once when the size is announced | the file shrinking, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |
 | a database or block a page sits under | `tree:<id>` | the parent fetching |
 | a user, other than with a 403 or a 404 | `users:<id>` | the user fetching |
