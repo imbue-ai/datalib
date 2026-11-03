@@ -49,6 +49,7 @@ import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
 import { mountTimeSeries } from "./timeSeriesEmbed";
 import {
+  finishFrameClick,
   isBrowserClick,
   linkFromClick,
   rewriteIdButtonsForCopy,
@@ -524,12 +525,14 @@ function onFrameLoad() {
     onCopyClick(ev);
     onRemoteChipClick(ev);
     onFrameLinkClick(ev);
+    finishFrameClick(ev);
   });
   on("auxclick", (ev) => {
     // A right button's auxclick belongs to the context menu, not the link.
     if (ev.button === 2) return;
     onEntityChipClick(ev);
     onFrameLinkClick(ev);
+    finishFrameClick(ev);
   });
   on("dblclick", onChipDblClick);
   on("dragstart", onChipDragStart);

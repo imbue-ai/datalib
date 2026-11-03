@@ -146,7 +146,7 @@ comes first: the bodies go into the CAS, then the edge rows that name
 them are written.
 
 Destroyed emails hard-delete the row, its mailbox and keyword joins, its
-`email_blobs` edge, its listing and the sidecar row that held it, and
+read mark, its `email_blobs` edge, its listing and the sidecar row that held it, and
 its thread row is rewritten or goes. The bytes stay in the CAS — another
 email may share the same `.eml` blob, and doltlite's history retains the
 prior state either way.
@@ -407,6 +407,22 @@ headers, the `.eml`'s blob ref). The payload is the JMAP `Email/get` envelope
 columns exist for indexing and cheap projection; the `mailboxIds` / `keywords`
 join inputs are read back out of the payload.
 
+### Whether an email was read is a read mark
+
+Every email has one row in `read_marks` (`datalib_etl::read_marks`,
+the table every source with read state shares): `read` is 1 or 0, keyed
+by the email's id. Each mode decides it the way JMAP does, by `$seen`:
+JMAP's own keyword; for Gmail, the absence of the `UNREAD` label; for
+an mbox, the absence of an `Unread` entry in `X-Gmail-Labels` (an mbox
+without that header reads as read: `Status:` and `X-Status:` are not
+read). `$seen` is then kept nowhere else: not in `email_keywords`, not
+in the payload's `keywords`, and `UNREAD` is not in `label_ids`. A mark
+changes often and on its own, and kept on the row it would rewrite the
+whole envelope each time; in its own narrow table it costs one small
+row. It is content, so a read upstream moves the store's version and
+the render redraws the thread holding that email (`read_marks::moved`).
+Rung 8 of the ladder moves the `$seen` an older build kept into marks.
+
 ### Gmail's own ids and labels
 
 For Gmail, `id` and `thread_id` are Gmail's message and thread ids,
@@ -415,9 +431,10 @@ zero-padded to 16 digits (`envelope::GmailId::key`). Gmail's web URLs
 and the API spell the same hex without the padding, which only an id
 from Gmail's first months has. A row the Gmail API answered for also
 carries `label_ids`, Gmail's label ids as a sorted JSON array
-(`["INBOX","UNREAD"]`). The labels are read back from the row's
-mailboxes and keywords, so `UNREAD` (no `$seen`), `STARRED` and
-`IMPORTANT` are among them. It is NULL for JMAP and mbox rows, and for
+(`["INBOX","STARRED"]`). The labels are read back from the row's
+mailboxes and keywords, so `STARRED` and `IMPORTANT` are among them;
+`UNREAD` is the email's read mark and is not. A label filter naming
+`UNREAD` keeps the emails whose mark says unread. It is NULL for JMAP and mbox rows, and for
 a Takeout's until Gmail sends its labels. Rung 6 of the ladder fills it
 on a store from before; rung 7 rewrites the decimal thread ids older
 builds stored (the spelling of a Takeout's `X-GM-THRID`) in hex.
@@ -438,6 +455,7 @@ hash.
 | `listed_messages` | JMAP and Gmail API modes: a row per message upstream named, with the token that last named it as changed; its `_bookkeeping` sidecar counts the fetches and holds, in `held_version`, the token the email was fetched for |
 | `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end, and `#threads` for a whole `thread_members` |
 | `thread_members` | JMAP and Gmail API modes under a label filter: a row per message in the account, keyed by upstream's id, naming its `threads` row; see "Whole threads" |
-| `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`) |
+| `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`). `email_keywords` never holds `$seen` |
+| `read_marks` | one row per email: whether it was read (`read`), keyed by the email's id; written with the email, gone with it |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
 | `ingested_files` | unused: the shared per-file cursor table, declared but written by no mode |

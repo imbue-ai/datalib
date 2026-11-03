@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use datalib_etl::read_marks::ReadMark;
 use serde_json::{json, Value};
 
 use crate::support::{
@@ -137,10 +138,19 @@ async fn a_thread_the_filter_no_longer_keeps_goes_whole() {
 }
 
 /// Gmail's ids in the API's hex, the thread's as the message's, and its
-/// labels as it spells them, with `UNREAD` and `STARRED` back among them.
+/// labels as it spells them, `STARRED` back among them; `UNREAD` is the
+/// email's read mark, not one of its labels.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_email_carries_gmails_ids_and_labels() {
     let h = Harness::new();
+    let mut system = labels();
+    for id in ["STARRED", "UNREAD"] {
+        system
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "id": id, "name": id, "type": "system" }));
+    }
+    put_gmail_account(&h.0.playback, "1000", system);
     put_gmail(
         &h.0.playback,
         &gmail_get_url(REPLY),
@@ -166,8 +176,18 @@ async fn an_email_carries_gmails_ids_and_labels() {
             (
                 REPLY.to_string(),
                 HAIL.to_string(),
-                r#"["INBOX","STARRED","UNREAD"]"#.to_string(),
+                r#"["INBOX","STARRED"]"#.to_string(),
             ),
+        ]
+    );
+    let marks =
+        h.0.read(|db| async move { datalib_etl::read_marks::load(db.pool()).await.unwrap() })
+            .await;
+    assert_eq!(
+        marks.into_iter().collect::<Vec<_>>(),
+        [
+            (HAIL.to_string(), ReadMark::Read(true)),
+            (REPLY.to_string(), ReadMark::Read(false)),
         ]
     );
 }

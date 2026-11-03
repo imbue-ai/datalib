@@ -40,6 +40,10 @@ anyhow = "1.0"
 serde_json = "1.0"
 # Reopens the main window at its last size.
 tauri-plugin-window-state = "2"
+# Where a window may go (`src/navigation.rs`), a module free of tauri so
+# Bazel can test it. Already in the lock under tauri, which re-exports
+# its `Url`.
+url = "2"
 
 # Which app the OS would open a raw store with (`src/raw_store.rs`), and
 # the protected folder (`src/protected.rs`). Both are already in the lock

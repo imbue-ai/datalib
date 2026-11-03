@@ -1212,14 +1212,28 @@ def _check_no_playback_set_var(root: Path) -> int:
 # Card source is parsed as a call and never evaluated, and the app
 # page's CSP has no 'unsafe-eval' (docs/dev/cards.md § "Card source").
 # An evaluator anywhere in datalib/ui/src would need the CSP widened
-# again and would undo that, so none is allowed. A string drawn as HTML,
-# or a module imported from a computed URL, is allowed only where the
-# entry below says why the string is not data someone else wrote.
-_UI_EVAL = re.compile(r"\bnew\s+Function\b|\beval\s*\(")
+# again and would undo that, so none is allowed: `Function`, with or
+# without `new`, `eval`, and a timer handed a string. A string drawn as
+# HTML — set as markup, parsed into a document or a fragment, or made a
+# frame's document — or a module imported from a computed URL, is
+# allowed only where the entry below says why the string is not data
+# someone else wrote. And every SlickGrid says `enableHtmlRendering:
+# false`, or a cell's formatter output is drawn as HTML.
+_UI_EVAL = re.compile(
+    r"(?<![\w$.])Function\s*\(|\bnew\s+Function\b|\beval\s*\("
+    r"|\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"
+)
 _UI_HTML_OR_IMPORT = re.compile(
     r"\.(?:inner|outer)HTML\s*\+?=(?!=)|\bv-html\b|\binsertAdjacentHTML\b"
     r"|\bdocument\.write(?:ln)?\s*\(|\bimport\s*\(\s*(?![\"'])"
+    r"|\bsetHTMLUnsafe\b|\bcreateContextualFragment\b|\bparseFromString\b"
+    r"|\b(?:inner|outer)HTML\s*:|:(?:inner|outer)-?html\s*=|v-bind:(?:inner|outer)-?html\b"
+    r"|\.srcdoc\s*=(?!=)|\bsrcdoc\s*:|:srcdoc\s*=|v-bind:srcdoc\b"
+    r"|setAttribute(?:NS)?\s*\([^)]*[\"'`]srcdoc[\"'`]",
+    re.IGNORECASE,
 )
+_UI_SLICKGRID = re.compile(r"\bnew\s+SlickVanillaGridBundle\b")
+_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\benableHtmlRendering\s*:\s*false\b")
 _UI_SINK_ALLOWED = {
     "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
     "sanitizer, into the document frame, whose CSP has script-src 'none'",
@@ -1247,6 +1261,11 @@ def _check_no_ui_code_sinks(root: Path) -> int:
             )
             if sink:
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
+        grids = len(_UI_SLICKGRID.findall(text))
+        if grids > len(_UI_SLICKGRID_TEXT_ONLY.findall(text)):
+            hits.append(
+                f"  {rel}: {grids} SlickGrid(s), not each with `enableHtmlRendering: false`"
+            )
     if not hits:
         print(
             "OK: no evaluator in datalib/ui/src, and HTML from strings only where allowed."
@@ -1256,7 +1275,8 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         "ERROR: a string turned into code or markup in the UI:\n\n"
         + "\n".join(hits)
         + "\n\n  `new Function` and `eval` are never allowed: the page's CSP has no\n"
-        "  'unsafe-eval'. For HTML, set `textContent` instead; if the string\n"
+        "  'unsafe-eval', and neither are `Function(...)` or a timer given a string.\n"
+        "  For HTML, set `textContent` instead; if the string\n"
         "  really is the app's own markup, add the file to _UI_SINK_ALLOWED in\n"
         "  scripts/lint_repo.py with the reason it is not someone else's data.",
         file=sys.stderr,

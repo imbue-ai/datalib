@@ -50,8 +50,11 @@ command = "bin/weather-chart"
 
 - **`artifacts`**: a key is a target triple datalib is released for, or
   `any` for a build that runs everywhere (a script). A URL is relative to
-  the manifest's own, or absolute. The platform datalib runs on takes
-  its own build first, then `any`.
+  the manifest's own and stays in its directory once parsed (no `..`,
+  spelled or percent-encoded), or is an absolute `https` link. A
+  `file://` build is taken only from a `file://` manifest, so a
+  published manifest cannot name a file on the machine that fetches it.
+  The platform datalib runs on takes its own build first, then `any`.
 - **`sources`**: `commands` maps a function to the command its step
   runs. `ingest` is required. `render_markdown` and `render_time_series`
   are optional; each is a step that reads the ingest's tree and writes
@@ -110,6 +113,10 @@ the package with:
 | `github:alice/datalib-weather@v1.2.0` | that release's |
 | `https://…/datalib-package.toml` | that file, from any host |
 | `file:///…/datalib-package.toml` | a package being developed, on this machine |
+
+Nothing else is fetched: a pin whose `url` is `http://` or any other
+scheme is refused, whether it came from the config or from
+`POST /api/packages/fetch`.
 
 ## What a library records
 

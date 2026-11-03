@@ -6,8 +6,8 @@ beside it. The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
 `channels`, `messages`, `threads` (one id per thread whose replies have
 been asked for), `slack_attachments` (the edges to file bytes in the
-CAS), and the account's own state: `channel_read_states`, `saved_items`
-and `bookmarks`. Each row is keyed by its upstream Slack identifier — a
+CAS), and the account's own state: `channel_read_states`, `read_marks`,
+`saved_items` and `bookmarks`. Each row is keyed by its upstream Slack identifier — a
 message and a thread by `{team}#{channel}#{ts}` — with the response
 stored as JSONB in `payload` and a `<table>_bookkeeping` sidecar beside
 each table.
@@ -310,8 +310,10 @@ nothing to remember in between.
 asked for 999 messages a page (`MESSAGES_PER_PAGE`, Slack's most, and
 the same for `conversations.replies`). Slack may answer fewer, so a
 short page is not read as the end; the cursor says whether there is
-more. Each page is one transaction: its messages, an edge for each file they
-carry, and a `coverage` span for the stretch the page settles, from its
+more. A page is written together, in the run's open transaction ([one
+transaction between two seals](#one-transaction-between-two-seals)): its
+messages, an edge for each file they carry, and a `coverage` span for
+the stretch the page settles, from its
 oldest message up to where the page before left off (the last page
 reaches the bottom of the stretch). A walk cut off after its first page
 has covered the top, and the next run walks what is under it. The spans
@@ -339,11 +341,11 @@ It is a query over every stored root, not over the roots this run
 happened to list, so a root stored by a run that died before its replies
 is owed. Each history page then adds the threads its own roots owe. A
 thread is one record whose fetch is paged: the walk asks for one thread
-per request, `conversations.replies` is walked to its end, and one
-transaction (`owed::write_answer`) stores the thread's row and
-messages, deletes the stored replies the walk did not return, and
-holds the thread at the version it was listed at. A walk cut off part
-way stores nothing of the thread.
+per request, `conversations.replies` is walked to its end, and
+`owed::write_answer_into` stores the thread's row and messages, deletes
+the stored replies the walk did not return, and holds the thread at the
+version it was listed at, all in the run's open transaction. A walk cut
+off part way stores nothing of the thread.
 Until a thread is read, its root's page says how many replies are not
 mirrored yet ([`../slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)
 §"Replies not mirrored yet").
@@ -432,7 +434,7 @@ making one request at a time leaves (`tests/slack_tests/requests_at_once.rs`).
 A request that is out never reads or writes the store: the store has
 one connection, the writer's, and a request parked holding it would
 stall the write ahead of it. So a batch of files has its file objects
-read before its request goes out. A stop ends the walk at once; what
+read, through the writer's transaction, before its request goes out. A stop ends the walk at once; what
 is out, and an answer that arrived after the stop, is dropped unwritten
 and stays owed. Rate limits and retries stay per request, in the
 shared transport ([Rate limits](#rate-limits)).
@@ -441,6 +443,46 @@ Three is what was measured: on one workspace, pages of 999 three at a
 time read history 5.5 times as fast as pages of 200 one at a time, and
 Slack rate-limited none of it. Slack limits each method on its own, so
 more at once would mostly wait out 429s.
+
+### One transaction between two seals
+
+Everything the walk writes, and the authors looked up before and after
+it, goes through one SQL transaction at a time
+(`datalib_etl::raw_store::Batch`): history pages, threads and file
+edges through `owed::write_answer_into`, the sweep markers, and the
+users through `owed::drain_into`. The transaction commits when a seal
+is due, and at the end of the run. Every read the walk makes goes
+through it too, since it holds the store's one connection.
+
+A doltlite `COMMIT` writes a fresh copy of every page of the tree it
+touched, and the copies it replaced stay in the file, since nothing
+runs `dolt_gc()` on a raw store ([`docs/dev/doltlite.md`](../../../../../docs/dev/doltlite.md)
+§"What a write costs"). A transaction per page of history and per
+thread therefore grew the store several times over what it keeps.
+Measured on a synthetic workspace through playback (20 channels of
+1,000 messages in pages of 200, a thread of 4 replies on every 20th
+message; no media, no seal due mid-run):
+
+| writes | store after the first run | after a second run that finds nothing new | first run |
+|---|---|---|---|
+| a transaction per page and per thread (1,100) | 84.8 MB | +29 KB | 1.7 s |
+| one transaction | 16.5 MB | +29 KB | 1.6 s to 2.1 s |
+
+Committing more often bought nothing: the rows between two seals are no
+safer for it, since a writer's open discards whatever no seal reached.
+A stop still ends the run at a seal, and what is owed is still a query
+over the store, so a run cut off anywhere is finished by the next
+(`tests/slack_tests/every_cut.rs`). What a run killed between seals
+fetched, the next run fetches again.
+
+An open transaction holds its writes in memory, at about twice their
+size, and a long first sync's seals come hours apart. So the
+transaction also commits, without a seal, once the messages written
+into it weigh `TRANSACTION_BYTES` (32 MB of their JSON).
+
+The listings and searches before the walk (users, channels, the
+account's own state, the reply and involves-me searches) still commit
+as they go: they write a few small pages each.
 
 ## Noticing a deleted message
 
@@ -608,7 +650,7 @@ newest-first order (see [The order a run fetches in](#the-order-a-run-fetches-in
 and stored through `owed::write_answer` (`ingest/files.rs`), from the
 file object the stored message carries: a request is `FILE_BATCH` files,
 and storing them puts their bytes into the blob CAS (its own file, which
-commits itself) before the one transaction that gives their edges a
+commits itself) before the run's open transaction gives their edges a
 `blake3` and holds them, so a kill between leaves only unnamed bytes. A
 file whose bytes we already hold, under any message, is not fetched
 again, unless two batches out at once both carry it: the CAS keeps one
@@ -643,21 +685,33 @@ otherwise), leaves that table as it was, and does not stop the sync.
 - **`channel_read_states`**, from one `client.counts` call: each
   conversation's `last_read`, `latest`, `has_unreads` and
   `mention_count`. Its `latest` also decides which DMs are walked
-  ([Which conversations a run walks](#which-conversations-a-run-walks)). **All of it is volatile**: the content payload is just
-  `{"id": …}`, and the state lives in the `volatile_payload` column of
-  `channel_read_states_bookkeeping`. Reading a channel is not a change to
-  it, so it must not show in `dolt_diff_channel_read_states` or wake the
-  render. `RawDb::load_read_states` lays the two halves back together.
-  Upserted every run; never pruned.
+  ([Which conversations a run walks](#which-conversations-a-run-walks)).
+  `last_read` goes to `read_marks` (below); **the rest is volatile**:
+  the content payload is just `{"id": …}`, and the state lives in the
+  `volatile_payload` column of `channel_read_states_bookkeeping`, so a
+  new `latest` alone does not wake the render.
+  `RawDb::load_read_states` lays the three back together. Upserted every
+  run; never pruned.
 - **A followed thread's own mark.** `conversations.replies` puts
   `last_read` and `subscribed` on its copy of the root of a thread the
   account follows (the `conversations.history` copy has neither).
-  Those two are volatile on `messages` too
-  (`MESSAGE_VOLATILE_PATHS`), so reading a thread is not an edit to its
-  root. The sidecar is merged by top-level key, so the history copy,
-  which has neither, does not take them away. A
-  thread is only re-fetched when it has a new reply, so its mark is as
-  fresh as its last reply, not as the last sync.
+  `last_read` goes to `read_marks`; `subscribed` is volatile on
+  `messages` (`MESSAGE_VOLATILE_PATHS`), so following a thread is not
+  an edit to its root. A copy without a mark leaves the thread's mark as
+  it was, and the sidecar is merged by top-level key, so the history
+  copy takes neither away. A thread is only re-fetched when it has a
+  new reply, so its mark is as fresh as its last reply, not as the last
+  sync.
+- **`read_marks`** (`datalib_etl::read_marks`), the account's read
+  marks, `last_read` in `read_through`, and nowhere else in the store.
+  A conversation's mark is keyed by its conversation id, a followed
+  thread's by its thread key, `{team}#{channel}#{ts}`; the two cannot
+  collide, as a thread key has two `#` and a conversation id none
+  (`schema_raw::is_thread_mark`). A mark is content: reading a channel
+  moves the store's version and wakes the render, which redraws only
+  the threads the mark crossed. A thread's mark goes with the thread
+  when history prunes it. A store from before the table has its marks
+  moved out of the two sidecars by rung 2 of the raw ladder.
 - **`saved_items`**, from `saved.list`: in progress, completed and
   archived. With no `filter` Slack returns only the in-progress ones, so
   the walk asks for each of `saved`, `completed` and `archived` (checked

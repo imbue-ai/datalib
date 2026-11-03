@@ -144,8 +144,10 @@ purpose: it is compiled a second time, as its own crate, by
 `//datalib/tauri:launcher_test`. `src/raw_store.rs` (what Browse does
 with a raw store: open it read-only in DB Browser for SQLite or the
 bundled doltlite shell) is kept free of `tauri` the same way, for
-`//datalib/tauri:raw_store_test`, and so is `src/protected.rs` (the
-protected folder, below) for `//datalib/tauri:protected_test`. Those
+`//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
+folder, below) for `//datalib/tauri:protected_test`, and
+`src/navigation.rs` (where a window may go) for
+`//datalib/tauri:navigation_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
 not build. Anything in those files that reaches for `tauri` breaks its
@@ -228,8 +230,13 @@ everything that Terminal runs until it quits.
   library's page, and goes back to the libraries screen when the
   library closes. Switching library stops the open one's server and
   closes the windows it opened. The window's navigation rules
-  (`app_window`) read the open server's origin at each navigation,
-  since each library's server has a port of its own.
+  (`app_window`, deciding by `src/navigation.rs`) read the open
+  server's origin at each navigation, since each library's server has a
+  port of its own. A window shows that server's pages, the libraries
+  screen, and a frame's `about:srcdoc` or `about:blank`; a web, mail or
+  phone link goes to the OS; every other scheme, a file dropped on the
+  window among them, goes nowhere. A link asking for a new window gets a
+  second window of the app only for one of the app's pages.
 - View → Zoom In / Zoom Out / Actual Size (⌘= or ⌘+, ⌘−, ⌘0) zoom the
   page, as in a browser: the way to make text larger, since the status
   bar's density moves spacing only. The shell holds the level

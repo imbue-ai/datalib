@@ -3116,7 +3116,11 @@ pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, Strin
 /// the row keeps it as UTC with the offset beside it. A value that is
 /// not a stamp at all (email keeps its opaque JMAP state tokens and
 /// Gmail history ids here) is kept as written, with no offset.
-pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &str) -> Result<()> {
+pub async fn upsert_scope_state<'e>(
+    db: impl sqlx::SqliteExecutor<'e>,
+    scope: &str,
+    last_seen_at: &str,
+) -> Result<()> {
     let stamp = datalib_time::split_stamp(last_seen_at);
     sqlx::query(
         "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
@@ -3126,7 +3130,7 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
     .bind(scope)
     .bind(&stamp.utc)
     .bind(&stamp.tz_offset)
-    .execute(pool)
+    .execute(db)
     .await
     .with_context(|| format!("upsert sync_scope_state {scope}"))?;
     Ok(())

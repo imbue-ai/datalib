@@ -7,10 +7,14 @@
 //! each table holds, and why the `.eml` hash lives on `email_blobs` rather
 //! than on `emails`, is in this provider's INGEST.md.
 
+use std::borrow::Cow;
+
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload};
+use datalib_etl::read_marks::ReadMarkRow;
 use datalib_etl_macros::{CasEdgeRow, RawTable};
 use serde_json::Value;
+use sqlx::SqliteConnection;
 
 use super::labels;
 
@@ -207,7 +211,9 @@ impl ThreadRow {
 /// Gmail's own ids, keyed by [`super::envelope::GmailId::key`] whether
 /// the API or a Takeout named them. `label_ids` is set only for a message
 /// Gmail's API answered for: its label ids as a sorted JSON array
-/// ([`labels::gmail_label_ids`]).
+/// ([`labels::gmail_label_ids`]). Whether it was read is not here but in
+/// `read_marks` ([`FetchedEmail`]): neither the payload's `keywords` nor
+/// `label_ids` holds `$seen` or `UNREAD`.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "emails",
@@ -244,6 +250,14 @@ impl EmailRow {
     /// parts in the JMAP response are deliberately ignored — render
     /// reads them out of the `.eml` blob.
     pub fn from_jmap_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
+        let envelope: Cow<'_, Value> = match envelope.pointer(SEEN_POINTER) {
+            Some(_) => {
+                let mut copy = envelope.clone();
+                copy["keywords"].as_object_mut()?.remove(SEEN);
+                Cow::Owned(copy)
+            }
+            None => Cow::Borrowed(envelope),
+        };
         let id = envelope.get("id")?.as_str()?.to_string();
         let blob_id = envelope.get("blobId")?.as_str()?.to_string();
         let thread_id = envelope.get("threadId")?.as_str()?.to_string();
@@ -301,7 +315,7 @@ impl EmailRow {
         Some(Self {
             id_and_payload: WirePayload {
                 id,
-                payload: serde_json::to_string(envelope).ok()?,
+                payload: serde_json::to_string(&*envelope).ok()?,
             },
             account_id: account_id.to_string(),
             thread_id,
@@ -343,6 +357,37 @@ impl EmailRow {
             .and_then(|v| v.as_object())
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default()
+    }
+}
+
+/// JMAP's keyword for a message that has been read. The download reads it
+/// off what upstream says, Gmail's `UNREAD` and an mbox's `Unread` label
+/// turned into its absence, and keeps it as a read mark.
+pub const SEEN: &str = "$seen";
+const SEEN_POINTER: &str = "/keywords/$seen";
+
+/// An email as upstream answered for it: the row, and whether it has been
+/// read, which the store keeps in `read_marks` rather than among the
+/// keywords. A mark changes often and on its own; on the row it would
+/// rewrite the whole envelope each time.
+#[derive(Debug, Clone)]
+pub struct FetchedEmail {
+    pub row: EmailRow,
+    pub read: bool,
+}
+
+impl FetchedEmail {
+    /// [`EmailRow::from_jmap_envelope`], read when the envelope carries
+    /// `$seen`.
+    pub fn from_jmap_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
+        Some(Self {
+            read: envelope.pointer(SEEN_POINTER).is_some(),
+            row: EmailRow::from_jmap_envelope(account_id, envelope)?,
+        })
+    }
+
+    pub fn mark(&self) -> ReadMarkRow {
+        ReadMarkRow::read(self.row.id(), self.read)
     }
 }
 
@@ -389,10 +434,11 @@ impl EmailMailboxRow {
     }
 }
 
-/// `email_keywords` — N:M: JMAP keywords (`$seen`, `$flagged`, user
-/// keywords). Mbox equivalents come from `Status:` / `X-Status:`
-/// headers (`R` → seen, `F` → flagged) and from `X-Keywords:` when
-/// present. Synthesized `id` PK like [`EmailMailboxRow`].
+/// `email_keywords` — N:M: JMAP keywords (`$flagged`, `$important`,
+/// user keywords), every one but `$seen`, which is a read mark. An mbox's
+/// come from its Gmail labels (`Starred` → `$flagged`, `Important` →
+/// `$important`); its `Status:`, `X-Status:` and `X-Keywords:` headers
+/// are not read. Synthesized `id` PK like [`EmailMailboxRow`].
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "email_keywords",
@@ -501,7 +547,42 @@ pub const LADDER: &[Migration] = &[
         name: "a Gmail thread id is Gmail's hex, as a message id is",
         apply: |conn| Box::pin(super::listed::migrate_gmail_thread_ids_to_hex(conn)),
     },
+    Migration {
+        version: 8,
+        name: "whether an email was read moves from $seen to read_marks",
+        apply: |conn| Box::pin(move_seen_into_read_marks(conn)),
+    },
 ];
+
+/// Every email gets a mark, read where it had `$seen`; then `$seen` leaves
+/// the keyword rows and the payload, and `UNREAD` the Gmail label ids. The
+/// table is made here rather than by the DDL, which would clear the
+/// cursors and leave unread every email upstream does not name again.
+async fn move_seen_into_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
+    for ddl in ReadMarkRow::all_ddl() {
+        // Audited: the DDL is the derive's, from a literal table name.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    for sql in [
+        "INSERT OR REPLACE INTO read_marks (id, read_through, read)
+         SELECT e.id, NULL, EXISTS (SELECT 1 FROM email_keywords k
+                                     WHERE k.email_id = e.id AND k.keyword = '$seen')
+           FROM emails e",
+        "DELETE FROM email_keywords WHERE keyword = '$seen'",
+        // Through `json` and back, so the payload is the bytes a fresh
+        // download writes and a re-fetch of the email changes nothing.
+        "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$seen\"')))
+          WHERE payload -> '$.keywords.\"$seen\"' IS NOT NULL",
+        "UPDATE emails SET label_ids = (SELECT json_group_array(value) FROM json_each(emails.label_ids)
+                                         WHERE value != 'UNREAD')
+          WHERE EXISTS (SELECT 1 FROM json_each(emails.label_ids) WHERE value = 'UNREAD')",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -511,6 +592,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(EmailRow::all_ddl());
     out.extend(EmailMailboxRow::all_ddl());
     out.extend(EmailKeywordRow::all_ddl());
+    out.extend(ReadMarkRow::all_ddl());
     out.extend(EmlBlobRow::all_ddl());
     out.push(datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string());
     out.extend(super::listed::DDL.iter().map(|ddl| ddl.to_string()));

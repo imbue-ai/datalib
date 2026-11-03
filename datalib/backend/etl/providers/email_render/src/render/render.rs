@@ -17,6 +17,7 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     Recipient, RecipientRole, UpstreamRef,
 };
+use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -53,7 +54,9 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     account, so search reads it as `me`.
 /// v17: mail-parser 1.0: base64 without its final `=` decodes whole,
 ///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
-pub const RENDER_VERSION: u32 = 17;
+/// v18: whether an email is unread comes from its read mark, and every
+///     thread declares the marks it reads.
+pub const RENDER_VERSION: u32 = 18;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -580,14 +583,18 @@ fn build_chat(
             &mut problems,
         );
         let email_id = ids::email(source_id, &em.account_id, &em.id, date_ms);
-        // Every download path stores read-ness as JMAP does, the presence
-        // of `$seen` (Gmail's `UNREAD` label and an mbox's `Unread` are
-        // turned into its absence), so no `$seen` is unread.
-        let unread = !bucket
-            .joins
-            .keywords
-            .get(&em.id)
-            .is_some_and(|kws| kws.iter().any(|k| k == "$seen"));
+        // Every download path keeps a `Read` mark per email. Mail the
+        // account sent is not exempted: it is unread only when upstream
+        // says so, which a mail server rarely does.
+        let unread = is_unread(
+            &em.id,
+            false,
+            Marks {
+                own: bucket.marks.get(&em.id),
+                conversation: None,
+            },
+            |_, _| None,
+        );
         items.push(NormalizedChatItem {
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
@@ -1160,9 +1167,9 @@ mod render_params_tests {
 
     #[test]
     fn starred_and_important_lead_in_a_fixed_order() {
-        let kws = vec!["$seen".into(), "$important".into(), "$flagged".into()];
+        let kws = vec!["$answered".into(), "$important".into(), "$flagged".into()];
         assert_eq!(flag_labels(Some(&kws)), vec!["Starred", "Important"]);
-        assert!(flag_labels(Some(&vec!["$seen".into()])).is_empty());
+        assert!(flag_labels(Some(&vec!["$answered".into()])).is_empty());
         assert!(flag_labels(None).is_empty());
     }
 

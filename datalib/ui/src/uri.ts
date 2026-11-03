@@ -9,6 +9,11 @@ export type DocName = { page: string; section: string | null };
 
 const DOC = "datalib:doc/";
 
+// What a page, a section and a photo are named by: a uuid
+// (docs/dev/entity_ids.md). An id is put into a route, so one of any
+// other shape (`..`) could name another route.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function writeDoc(name: DocName): string {
   return name.section === null ? DOC + name.page : `${DOC}${name.page}#${name.section}`;
 }
@@ -20,7 +25,7 @@ export function parseDoc(link: string): DocName | null {
   const hash = rest.indexOf("#");
   const page = hash === -1 ? rest : rest.slice(0, hash);
   const section = hash === -1 ? "" : rest.slice(hash + 1);
-  if (page === "" || page.includes("/")) return null;
+  if (!UUID.test(page) || (section !== "" && !UUID.test(section))) return null;
   return { page, section: section === "" ? null : section };
 }
 
@@ -35,5 +40,5 @@ export function writePhoto(id: string): string {
 export function parsePhoto(link: string): string | null {
   if (!link.startsWith(PHOTO)) return null;
   const id = link.slice(PHOTO.length);
-  return id === "" || id.includes("/") || id.includes("#") ? null : id;
+  return UUID.test(id) ? id : null;
 }

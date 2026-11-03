@@ -41,7 +41,8 @@ table in `src/ingest/labels.rs` is where they are reconciled.
 
 - `src/ingest/schema_raw.rs` is one schema for every mode: `accounts`,
   `mailboxes`, `threads`, `emails`, `email_blobs`, the two join tables
-  `email_mailboxes` and `email_keywords`, and the two tables the two
+  `email_mailboxes` and `email_keywords`, `read_marks` (whether each
+  email was read), and the two tables the two
   API modes keep their progress in: `listed_messages` (what upstream
   named, with what is held for it on the table's sidecar) and
   `listed_whole`.

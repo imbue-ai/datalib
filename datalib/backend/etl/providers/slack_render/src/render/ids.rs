@@ -18,10 +18,10 @@ pub fn ts_micros(ts: &str) -> Option<i64> {
     secs.checked_mul(1_000_000)?.checked_add(micros)
 }
 
-/// Whether the message at `ts` came after a `last_read` mark, i.e. is
-/// unread. `false` when either will not parse: an unknown is not unread.
-pub fn after_mark(ts: &str, last_read: &str) -> bool {
-    matches!((ts_micros(ts), ts_micros(last_read)), (Some(t), Some(r)) if t > r)
+/// Two `ts`es in time order, as a decimal; `None` when either will not
+/// parse. The order `datalib_etl_chat_common::unread::is_unread` asks for.
+pub fn ts_order(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    Some(ts_micros(a)?.cmp(&ts_micros(b)?))
 }
 
 /// Parse a Slack `ts` — unix seconds with a fractional part, always UTC
