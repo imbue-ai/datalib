@@ -37,7 +37,8 @@ use tokio::sync::mpsc;
 use super::db::{EmailRow, RawDb};
 use super::envelope::{self, header_text, GmailId};
 use super::labels::{self, mailbox_id, map_label, split_gmail_labels, LabelMap};
-use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow};
+use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, FetchedEmail};
+use datalib_etl::read_marks::{self, ReadMarkRow};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
@@ -1255,7 +1256,7 @@ impl Accumulator {
             });
 
         // Synthesize a JMAP-shaped `Email/get` envelope so the row goes
-        // through the exact same `EmailRow::from_jmap_envelope` path as
+        // through the exact same `FetchedEmail::from_jmap_envelope` path as
         // the JMAP source. Shared with every other non-JMAP mode — see
         // `super::envelope`.
         let envelope = envelope::synthesize(
@@ -1270,8 +1271,9 @@ impl Accumulator {
             },
         );
 
-        if let Some(row) = EmailRow::from_jmap_envelope(&self.account_id, &envelope) {
-            pending.emails.push(row);
+        if let Some(email) = FetchedEmail::from_jmap_envelope(&self.account_id, &envelope) {
+            pending.marks.push(email.mark());
+            pending.emails.push(email.row);
         }
         Ok(true)
     }
@@ -1339,6 +1341,8 @@ impl Accumulator {
 #[derive(Default)]
 struct PendingBatch {
     emails: Vec<EmailRow>,
+    /// One per email in `emails`.
+    marks: Vec<ReadMarkRow>,
     /// `.eml` bytes + their `email_blobs` edges for this batch. The
     /// accumulator holds the bytes (in its [`BlobBundle`]) and resolves
     /// each edge's `blake3` off them at flush time — see
@@ -1354,6 +1358,7 @@ struct PendingBatch {
 impl PendingBatch {
     fn clear(&mut self) {
         self.emails.clear();
+        self.marks.clear();
         self.cas = CasEdgeAccumulator::new();
         // `seen_blob_ids` deliberately persists across flushes: an
         // identical attachment landing in a later batch should still
@@ -1362,7 +1367,7 @@ impl PendingBatch {
 }
 
 /// Flush one accumulated `PendingBatch` to disk: one entity-pool
-/// transaction (emails + join tables + emails bookkeeping), then the
+/// transaction (emails + join tables + read marks + emails bookkeeping), then the
 /// shared CAS-edge flush ([`CasEdgeAccumulator::flush`]) which does
 /// the CAS `put_many` + `email_blobs` edge upsert + edge bookkeeping.
 async fn flush_batch(
@@ -1378,6 +1383,7 @@ async fn flush_batch(
     bulk_insert_emails(&mut etx, &batch.emails).await?;
     bulk_insert_email_mailboxes(&mut etx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut etx, &batch.emails).await?;
+    read_marks::write(&mut etx, &batch.marks).await?;
     etx.commit().await.context("commit entity tx")?;
 
     // CAS bytes + `email_blobs` edges (each carrying the bundle-derived
@@ -1419,6 +1425,7 @@ async fn flush_seed(
     bulk_insert_emails(&mut tx, &batch.emails).await?;
     bulk_insert_email_mailboxes(&mut tx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut tx, &batch.emails).await?;
+    read_marks::write(&mut tx, &batch.marks).await?;
     super::listed::rebuild_threads_in_tx(&mut tx, now, &threads).await?;
     tx.commit().await.context("commit seed tx")?;
     batch
@@ -1852,11 +1859,15 @@ mod tests {
                 .await
                 .unwrap();
         assert!(exists);
-        // Unread label suppressed $seen for Picard's message; Riker
-        // (no Unread) gets $seen.
+        // The Unread label leaves Picard's message unread; Riker's (no
+        // Unread) is read. Either way the mark is all there is of it.
+        let riker = emails.iter().find(|e| e.id != picard.id).unwrap();
+        let marks = read_marks::load(db.pool()).await.unwrap();
+        assert_eq!(marks[&picard.id], read_marks::ReadMark::Read(false));
+        assert_eq!(marks[&riker.id], read_marks::ReadMark::Read(true));
         let joins = db.load_email_joins().await.unwrap();
-        assert!(!joins.keywords[&picard.id].iter().any(|k| k == "$seen"));
-        assert!(joins.keywords[&picard.id].iter().any(|k| k == "$flagged"));
+        assert_eq!(joins.keywords[&picard.id], ["$flagged"]);
+        assert!(!joins.keywords.contains_key(&riker.id));
     }
 
     #[tokio::test(flavor = "multi_thread")]
