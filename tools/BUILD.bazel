@@ -237,6 +237,23 @@ py_test(
     main = "release_notes_test.py",
 )
 
+# The custom step example in docs/dev/step_protocol.md, run as written
+# under the real runner, so it cannot drift from what a step is handed.
+py_test(
+    name = "step_protocol_example_test",
+    size = "small",
+    srcs = ["step_protocol_example_test.py"],
+    args = [
+        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //docs/dev:step_protocol.md)",
+    ],
+    data = [
+        "//datalib/backend/dag:datalib_dag_bin",
+        "//docs/dev:step_protocol.md",
+    ],
+    main = "step_protocol_example_test.py",
+)
+
 # The qmd model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(

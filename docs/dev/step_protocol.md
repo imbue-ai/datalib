@@ -750,7 +750,8 @@ for src in inputs:
         emit({"event": "log", "step": "", "level": "warn",
               "msg": f"{src} did not finish its last run; reading what it committed"})
     if src in changed:
-        pass  # ... process only what moved ...
+        # ... process only what moved ...
+        emit({"event": "log", "step": "", "level": "info", "msg": f"{src} moved"})
     emit({"event": "progress_inc", "step": "", "delta": 1})
 
 # A content version: same output bytes → same string, every run. A
