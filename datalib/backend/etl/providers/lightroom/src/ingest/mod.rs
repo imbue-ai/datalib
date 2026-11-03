@@ -6,6 +6,4 @@ pub mod backups;
 pub mod sync;
 pub mod unpack;
 
-pub use datalib_etl_sqlite_mirror::{
-    fetch, fetch_and_commit, mirror, FetchOptions, MirrorOptions, MirrorStats,
-};
+pub use datalib_etl_sqlite_mirror::{fetch, mirror, FetchOptions, MirrorOptions, MirrorStats};

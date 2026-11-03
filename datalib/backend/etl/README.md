@@ -311,11 +311,21 @@ branch". Nothing but the store's writer touches a draft.
 
 Every provider's `FetchOptions` carries `pub db: RawDb` — a live handle,
 not a path and not an `Option`. **Whoever opens a store closes it**, and
-for a download that is always the caller: the step's processor, the
-provider's `*_download` binary, or the test. `fetch` borrows it for the
+for a download that is always the caller: the step's processor or the
+test. `fetch` borrows it for the
 run and returns. A `fetch` that opened its own store while the caller
 held one would now be refused at open rather than failing the caller's
 commit later.
+
+**Whoever opens it also seals it.** `fetch` never commits, so a caller
+that closes without `commit_run` leaves a store a reader sees as empty
+and the next writer's open discards. The step's processor goes
+through `RunCtx::run_store`, which hands `fetch` a `Sealer`, commits on
+`Ok` and closes on every path; a test that drives `fetch` itself calls
+`commit_all` before it closes. There is no other caller: to run one
+download outside a sync, run `datalib-step` by hand
+([`docs/dev/first_time_dev.md`](../../../docs/dev/first_time_dev.md)
+§"One source's download, with no config").
 
 ### A reader opens read-only and pinned
 
