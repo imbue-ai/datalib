@@ -45,6 +45,25 @@ pub struct Playback {
     offline: Option<PathBuf>,
     meet: Option<std::sync::Arc<Meet>>,
     max_bytes: Option<u64>,
+    asked: Option<Asked>,
+}
+
+/// The URL of every request a [`Playback`] was asked, in order
+/// ([`Playback::asked`]).
+#[derive(Debug, Clone, Default)]
+pub struct Asked(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Asked {
+    /// How many requests went to a URL containing `part`.
+    pub fn count(&self, part: &str) -> usize {
+        let urls = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        urls.iter().filter(|u| u.contains(part)).count()
+    }
+
+    fn push(&self, url: &str) {
+        let mut urls = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        urls.push(url.to_string());
+    }
 }
 
 /// Requests held until every one named has arrived ([`Playback::meet`]).
@@ -64,6 +83,7 @@ impl Playback {
             offline: None,
             meet: None,
             max_bytes: None,
+            asked: None,
         }
     }
 
@@ -117,6 +137,13 @@ impl Playback {
         self
     }
 
+    /// Add every request's URL to `asked` as it arrives, answered or
+    /// not, so a test can say a call went out, or did not, by count.
+    pub fn asked(mut self, asked: Asked) -> Self {
+        self.asked = Some(asked);
+        self
+    }
+
     /// Like [`Playback::hold`], but a request waits only once its process
     /// has sealed a checkpoint, so a download publishes something before
     /// it parks.
@@ -139,6 +166,7 @@ impl Playback {
             offline: path_in(PLAYBACK_OFFLINE_ENV),
             meet: None,
             max_bytes: None,
+            asked: None,
         })
     }
 
@@ -154,6 +182,9 @@ impl Playback {
             service: req.service,
             url: req.url.clone(),
         };
+        if let Some(asked) = &self.asked {
+            asked.push(&req.url);
+        }
         if !self.delay.is_zero() {
             tokio::time::sleep(self.delay).await;
         }

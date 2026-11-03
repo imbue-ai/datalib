@@ -28,7 +28,9 @@ Required Slack OAuth scopes (user token):
 `client.counts` and `saved.list` are not in Slack's published API; they
 are what Slack's own web client calls, and they answer the browser-session
 token `latchkey` holds. A token that cannot call them costs those two
-tables and nothing else (see "The account's own state" below).
+tables and nothing else (see "The account's own state" below), and is
+not asked them again for a week after a refusal ([A call this token
+may not make](#a-call-this-token-may-not-make)).
 
 ### File downloads
 
@@ -49,8 +51,8 @@ a file download is retried, rate-limited and replayed like an API call.
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
 | `search.messages`           | Replies posted since the last search, to roots history will not read again; with `scope = "involves_me"`, the messages that involve the account |
-| `client.counts`             | How far the account has read, and which conversations have something new |
-| `saved.list`                | The account's "Saved for later" items    |
+| `client.counts`             | How far the account has read, and which conversations have something new; not asked for a week after a refusal |
+| `saved.list`                | The account's "Saved for later" items; not asked for a week after a refusal |
 | `bookmarks.list`            | A conversation's header bookmarks        |
 
 `shapes.rs` knows each method's response shape: where its items are and
@@ -209,7 +211,8 @@ day, and one per DM on a first sync.
 
 A DM named in `dm_conversations` is held to the same rules: naming it
 narrows which DMs are mirrored, nothing else. A run whose
-`client.counts` call fails walks every conversation, as before.
+`client.counts` call fails, or that does not ask it because Slack
+refused it within the week, walks every conversation, as before.
 `slack_walks_planned` counts the closed DMs and the ones checked.
 
 ### Only what involves me
@@ -638,6 +641,33 @@ channel with nothing in range by an empty page and `ok: true`, so a
 range that holds nothing looks like a successful sync without it. A run that was stopped leaves the row as it was; the first run
 that ends with a message in the store clears it.
 
+### A call this token may not make
+
+`client.counts` and `saved.list` answer only some tokens. A token
+Slack refuses them (`unknown_method`, `not_allowed_token_type`,
+`missing_scope`), or a request latchkey's permissions or its gateway
+do not allow (the gateway's own 403), will be refused the same way
+every sync until someone changes the token. Asking anyway put a
+warning or an error on the Manage row of every sync, though nothing
+else was missing.
+
+So a refusal is remembered: a `refused:<method>` sweep marker
+(`slack:sweep:refused:client.counts` in `sync_scope_state`), stamped
+with the run's `now`. While it is younger than `REFUSAL_REMEMBERED_FOR`
+(a week) the call is not made, and the run writes one `info` row,
+`listing:<method>`, saying when it was refused, when it will be asked
+again, and what goes without it. `info` is not counted on the Manage
+row; the problems grid shows it. Once the marker is a week old the
+next run asks again: an answer forgets the marker and the row goes, a
+refusal stamps it anew. A failure that may pass (an HTTP 5xx, curl
+failing, Slack's `internal_error`) is not a refusal: it is the usual
+error row and the call is asked again next run. A reset of the
+download forgets the marker along with everything else.
+
+Without `client.counts` a run walks every conversation, as when the
+call fails, and the read marks it carries stay as they were; without
+`saved.list` the saved items stay as they were.
+
 ## Attachments
 
 Each file a stored message carries that Slack serves (not a tombstone,
@@ -681,6 +711,9 @@ messages. They are fetched after the conversation listing and before
 the message walk. A listing that fails becomes a `problems` row on the
 Manage screen (a warning when Slack refused the token, an error
 otherwise), leaves that table as it was, and does not stop the sync.
+A refused `client.counts` or `saved.list` is not asked again for a week
+and is an `info` row instead
+([A call this token may not make](#a-call-this-token-may-not-make)).
 
 - **`channel_read_states`**, from one `client.counts` call: each
   conversation's `last_read`, `latest`, `has_unreads` and
