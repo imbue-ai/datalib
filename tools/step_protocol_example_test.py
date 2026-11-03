@@ -42,7 +42,7 @@ PRODUCER = textwrap.dedent(
 
 
 def example_from_doc() -> str:
-    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.S)
+    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
     steps = [b for b in blocks if b.startswith("#!/usr/bin/env python3")]
     assert len(steps) == 1, f"expected one step example in {DOC}, found {len(steps)}"
     return steps[0]
@@ -84,7 +84,7 @@ class StepProtocolExample(unittest.TestCase):
                 [[steps]]
                 group = "report"
                 function = "build"
-                command = "{py} {base / 'example.py'}"
+                command = "{py} {base / "example.py"}"
                 inputs = ["a/make", "b/make"]
                 """
             )
@@ -101,12 +101,15 @@ class StepProtocolExample(unittest.TestCase):
         """Run every step once; return the example's new log lines."""
         run = subprocess.run(
             [str(DAG), str(self.config), "--sync", "a/make,b/make"],
+            check=False,
             capture_output=True,
             text=True,
             timeout=120,
         )
         self.assertIn(run.returncode, (0, 2), run.stderr)
-        db = sqlite3.connect(f"file:{self.root / 'system/runs/runs.sqlite'}?mode=ro", uri=True)
+        db = sqlite3.connect(
+            f"file:{self.root / 'system/runs/runs.sqlite'}?mode=ro", uri=True
+        )
         try:
             rows = db.execute(
                 "SELECT seq, level, msg FROM log WHERE step = 'report/build' AND seq > ? "
