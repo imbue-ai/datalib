@@ -31,8 +31,7 @@ const EXAMPLES: &[Example] = &[
     bin_name = "datalib-fsindex",
     about = "Scan a directory tree and record (path, kind, size, blake3) per entry into a doltlite db.",
     long_about = "Scan a directory tree and record (path, kind, size, blake3) per entry \
-                  into a doltlite db, one commit per scan. datalib-dirtree-diff compares \
-                  two scans. The same scanner runs as the `fsindex` source's ingest step.",
+                  into a doltlite db, one commit per scan. The same scanner runs as the `fsindex` source's ingest step.",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Args {

@@ -47,10 +47,12 @@ wrote diff.html — 1 move(s) (+3 rolled up), 0 modified, 1 added,
 entries inside it are rolled up rather than repeated. Both scans live in
 one 9 KB file.
 
-Both binaries ship in `//datalib/backend:dist`, so a release carries
-them like every other binary. From a source checkout they are
-`bazel-bin/datalib/backend/bin/datalib-fsindex` and
-`…/datalib-dirtree-diff` after `bazelisk build //datalib/backend:bin`.
+A release carries `datalib-fsindex` but not this tool; build it from a
+checkout. There, `datalib-fsindex` is
+`bazel-bin/datalib/backend/bin/datalib-fsindex` after `bazelisk build
+//datalib/backend:bin`, and `datalib-dirtree-diff` is
+`bazel-bin/datalib/backend/dirtree_diff/dirtree_diff` after the build
+above.
 sqlx links the same doltlite amalgamation the rest of the tree does, so
 there is no CLI to locate and no subprocess per query.
 
