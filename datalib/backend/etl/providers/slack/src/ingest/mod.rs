@@ -30,7 +30,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::download_problems::{DownloadProblem, RunProblem, SilentEntry};
 use datalib_etl::events;
 use datalib_etl::progress::RunBar;
-use datalib_etl::raw_store::Sealer;
+use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_web::coverage::{self, Span};
@@ -74,6 +74,12 @@ pub const MESSAGES_PER_PAGE: &str = "999";
 /// Three is what was measured to read history 5.5 times as fast with no
 /// request rate-limited (INGEST.md § "Three requests at once").
 const AT_ONCE: usize = 3;
+
+/// What the walk writes into one transaction before committing it with
+/// no seal due, by the JSON of the messages: an open transaction holds
+/// its writes in memory, and a first sync's seals come hours apart
+/// (INGEST.md § "One transaction between two seals").
+const TRANSACTION_BYTES: usize = 32 << 20;
 
 // Per-method drivers.
 
@@ -964,9 +970,18 @@ impl Fetcher<Thread> for Threads<'_> {
         }
         Ok(())
     }
+
+    fn weight(&self, thread: &Thread) -> usize {
+        weight(&thread.rows)
+    }
 }
 
-/// Owed users, for [`owed::drain`]: one `users.info` each.
+/// What `rows` weigh in a transaction: their messages as JSON.
+fn weight(rows: &[MessageInput]) -> usize {
+    rows.iter().map(|m| m.payload.to_string().len()).sum()
+}
+
+/// Owed users, for [`owed::drain_into`]: one `users.info` each.
 struct UserLookup<'a> {
     db: &'a RawDb,
     latchkey: &'a LatchkeySettings,
@@ -1018,15 +1033,15 @@ impl Fetcher<Value> for UserLookup<'_> {
     }
 }
 
-/// Users looked up per transaction.
+/// Users looked up per write into the walk's batch.
 const USER_FLUSH: usize = 50;
 
 impl Mirror<'_> {
     /// Every user [`RawDb::users_owed`] names, one `users.info` each. A
     /// lookup that fails is an attempt on the user's own row, owed still.
-    async fn fetch_users_owed(&self) -> Result<owed::Drained> {
-        self.db.settle_listed_users().await?;
-        let owed = self.db.users_owed().await?;
+    async fn fetch_users_owed(&self, writes: &mut Batch<'_>) -> Result<owed::Drained> {
+        self.db.settle_listed_users(writes.tx().await?).await?;
+        let owed = self.db.users_owed(writes.tx().await?).await?;
         if owed.is_empty() {
             return Ok(owed::Drained::default());
         }
@@ -1049,12 +1064,12 @@ impl Mirror<'_> {
             db: self.db,
             latchkey: self.latchkey,
         };
-        owed::drain(&l, owed, &lookup).await
+        owed::drain_into(&l, writes, owed, &lookup).await
     }
 
-    async fn look_up_authors(&self) -> Result<()> {
+    async fn look_up_authors(&self, writes: &mut Batch<'_>) -> Result<()> {
         let started = std::time::Instant::now();
-        let users = self.fetch_users_owed().await?;
+        let users = self.fetch_users_owed(writes).await?;
         if users != owed::Drained::default() {
             info!(
                 event = "slack_users_looked_up",
@@ -1068,10 +1083,15 @@ impl Mirror<'_> {
         Ok(())
     }
 
-    /// A page `history_params` asked for, stored in one transaction with
-    /// the stretch it settles. `walk` is left where the page after
-    /// starts.
-    async fn store_page(&self, channel_id: &str, walk: &mut Walk, resp: Value) -> Result<Page> {
+    /// A page `history_params` asked for, stored in `tx` with the stretch
+    /// it settles. `walk` is left where the page after starts.
+    async fn store_page(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        channel_id: &str,
+        walk: &mut Walk,
+        resp: Value,
+    ) -> Result<Page> {
         let params = history_params(channel_id, walk);
         let stretch = &walk.stretch;
         let open_top = stretch.span.hi == END_OF_TIME;
@@ -1124,7 +1144,7 @@ impl Mirror<'_> {
             });
         let pruned = self
             .db
-            .store_history_page(channel_id, &rows, covered.as_ref(), enumerated.as_ref())
+            .store_history_page(tx, channel_id, &rows, covered.as_ref(), enumerated.as_ref())
             .await?;
 
         if short {
@@ -1177,9 +1197,10 @@ impl Mirror<'_> {
         }
     }
 
-    /// The bookkeeping [`owed::write_answer`] writes an answer for
+    /// The bookkeeping [`owed::write_answer_into`] writes an answer for
     /// `table` with. It reads none of the sizes: the walk asks for one
-    /// thread or [`FILE_BATCH`] files at a time, [`AT_ONCE`] at once.
+    /// thread or [`FILE_BATCH`] files at a time, [`AT_ONCE`] at once, and
+    /// its batch decides when what they wrote commits.
     fn owed_loop(&self, table: &'static str, phase: &'static str) -> owed::Loop<'_> {
         owed::Loop {
             pool: self.db.pool(),
@@ -1283,17 +1304,18 @@ fn threads_on(rows: &[MessageInput]) -> Vec<Listed> {
 /// first the run knows of it.
 async fn queue_owed(
     db: &RawDb,
+    conn: &mut sqlx::SqliteConnection,
     frontier: &mut Frontier,
     bar: &RunBar,
     rows: &[MessageInput],
     media: bool,
 ) -> Result<()> {
     let mut new = 0;
-    for thread in owed::owed(db.pool(), THREADS, threads_on(rows)).await? {
+    for thread in owed::owed_in(conn, THREADS, threads_on(rows)).await? {
         new += u64::from(frontier.threads.push(thread_reach(&thread), thread));
     }
     if media {
-        new += queue_files(frontier, db.files_owed_by(rows).await?);
+        new += queue_files(frontier, db.files_owed_by(conn, rows).await?);
     }
     if new > 0 {
         bar.expect(new);
@@ -1865,9 +1887,15 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             sealer: opts.sealer.as_ref(),
             blake3_by_file: &blake3_by_file,
         };
+        // What the walk writes, and the authors looked up around it, is
+        // one transaction between two seals, and every read the walk
+        // makes goes through it: the store has one connection, and the
+        // open transaction holds it (INGEST.md § "One transaction between
+        // two seals").
+        let mut writes = Batch::new(db.pool(), opts.sealer.as_ref()).byte_limit(TRANSACTION_BYTES);
         // Authors an earlier run named and did not look up, as a stopped
         // run does not: until they are, their messages show no one.
-        mirror.look_up_authors().await?;
+        mirror.look_up_authors(&mut writes).await?;
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
         // Messages a walk found above everything held.
@@ -1923,7 +1951,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         })
                     }
                     Next::Files(owed) => {
-                        let objects = files.objects(&owed).await?;
+                        let objects = files.objects(writes.tx().await?, &owed).await?;
                         let files = &files;
                         Box::pin(async move {
                             let answer = files.fetch_objects(owed.clone(), objects).await;
@@ -1940,10 +1968,18 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 break;
             }
             let before = totals.written();
+            let mut page_bytes = 0;
             match answered {
                 Answered::Thread(listed, answer) => {
                     let replies_before = threads.replies.load(Ordering::Relaxed);
-                    owed::write_answer(&thread_loop, &threads, vec![listed], answer).await?;
+                    owed::write_answer_into(
+                        &thread_loop,
+                        &mut writes,
+                        &threads,
+                        vec![listed],
+                        answer,
+                    )
+                    .await?;
                     let replies = threads.replies.load(Ordering::Relaxed) - replies_before;
                     totals.replies += replies;
                     totals.pruned += threads.pruned.swap(0, Ordering::Relaxed);
@@ -1951,8 +1987,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         std::mem::take(&mut *threads.with_files.lock().expect("not poisoned"));
                     let mut files_found = 0;
                     if opts.media {
-                        files_found =
-                            queue_files(&mut frontier, db.files_owed_by(&with_files).await?);
+                        let owed = db.files_owed_by(writes.tx().await?, &with_files).await?;
+                        files_found = queue_files(&mut frontier, owed);
                         if files_found > 0 {
                             bar.expect(files_found);
                         }
@@ -1968,7 +2004,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 Answered::Files(owed, answer) => {
                     let asked = owed.len();
                     let downloaded_before = files.downloaded.load(Ordering::Relaxed);
-                    let drained = owed::write_answer(&file_loop, &files, owed, answer).await?;
+                    let drained =
+                        owed::write_answer_into(&file_loop, &mut writes, &files, owed, answer)
+                            .await?;
                     let downloaded = files.downloaded.load(Ordering::Relaxed) - downloaded_before;
                     let outcomes: BTreeMap<&str, usize> = [
                         ("downloaded", downloaded),
@@ -1997,8 +2035,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                     let span = info_span!("channel", channel_name = %name, channel_id = %cid);
                     let stored = match answer {
                         Ok(resp) => {
+                            let tx = writes.tx().await?;
                             mirror
-                                .store_page(cid, &mut frontier.walks[i], resp)
+                                .store_page(tx, cid, &mut frontier.walks[i], resp)
                                 .instrument(span)
                                 .await
                         }
@@ -2013,7 +2052,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                             if open_top {
                                 news_in[target] += page.rows.len();
                             }
-                            queue_owed(&db, &mut frontier, &bar, &page.rows, opts.media).await?;
+                            page_bytes = weight(&page.rows);
+                            let conn = writes.tx().await?;
+                            queue_owed(&db, conn, &mut frontier, &bar, &page.rows, opts.media)
+                                .await?;
                         }
                         Err(e) if interrupted(&e) => break,
                         // A channel that failed costs only the rest of its
@@ -2035,36 +2077,32 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         );
                         bar.did(1);
                         walked += usize::from(!failed[target]);
-                        if refreshing[target] && !failed[target] {
-                            db.record_manifest_sweep(&refresh_sweep_key(cid), &now)
-                                .await?;
+                        let swept = [
+                            (refreshing[target], refresh_sweep_key(cid)),
+                            (reading_archived[target], archived_read_key(cid)),
+                            (checking[target], closed_dm_check_key(cid)),
+                        ];
+                        for (_, key) in swept.iter().filter(|(due, _)| *due && !failed[target]) {
+                            db::record_sweep(&mut **writes.tx().await?, key, &now).await?;
                         }
-                        if reading_archived[target] && !failed[target] {
-                            db.record_manifest_sweep(&archived_read_key(cid), &now)
-                                .await?;
-                        }
-                        if checking[target] && !failed[target] {
-                            db.record_manifest_sweep(&closed_dm_check_key(cid), &now)
-                                .await?;
-                            // The daily check is the fallback behind
-                            // `client.counts`; it finding news means a DM
-                            // was reopened and closed between runs.
-                            if rechecking[target] && news_in[target] > 0 {
-                                warn!(
-                                    event = "slack_closed_dm_had_news",
-                                    channel = %name,
-                                    messages = news_in[target],
-                                    "a DM closed in the sidebar had messages client.counts did not show"
-                                );
-                            }
+                        // The daily check is the fallback behind
+                        // `client.counts`; it finding news means a DM was
+                        // reopened and closed between runs.
+                        if rechecking[target] && !failed[target] && news_in[target] > 0 {
+                            warn!(
+                                event = "slack_closed_dm_had_news",
+                                channel = %name,
+                                messages = news_in[target],
+                                "a DM closed in the sidebar had messages client.counts did not show"
+                            );
                         }
                     }
                 }
             }
             bar.doing(&totals.line());
-            if let Some(sealer) = opts.sealer.as_ref() {
-                sealer.wrote((totals.written() - before) as u64).await;
-            }
+            writes
+                .wrote_bytes((totals.written() - before) as u64, page_bytes)
+                .await?;
         }
         drop(out);
         if stopped() {
@@ -2073,8 +2111,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 "told to stop; leaving the rest for the next run"
             );
         } else {
-            mirror.look_up_authors().await?;
+            mirror.look_up_authors(&mut writes).await?;
         }
+        writes.finish().await?;
         grand.messages = totals.messages;
         grand.replies = totals.replies;
         grand.pruned = totals.pruned;
