@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 use datalib_etl::upstream::Upstream;
@@ -268,17 +268,31 @@ pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec
     match resp.status {
         200 => Ok(resp.body),
         301 | 302 | 303 | 307 | 308 => {
-            let to = resp.header("location").ok_or_else(|| {
-                anyhow!(
-                    "GET {}: {} with no Location",
-                    ShownUrl::new(HTTP_SERVICE, url),
-                    resp.status
-                )
-            })?;
+            let shown = ShownUrl::new(HTTP_SERVICE, url);
+            let to = resp
+                .header("location")
+                .ok_or_else(|| anyhow!("GET {shown}: {} with no Location", resp.status))?;
+            if !is_signed_download(to) {
+                bail!(
+                    "GET {shown}: redirected to {}, not an https googleusercontent.com link",
+                    ShownUrl::new(HTTP_SERVICE, to)
+                );
+            }
             get(req_signed(to)).await
         }
         _ => Err(status_error(url, &resp).into()),
     }
+}
+
+/// Where Drive sends a revision's export: an https link on
+/// `googleusercontent.com`, which goes out plain.
+fn is_signed_download(location: &str) -> bool {
+    let Ok(url) = url::Url::parse(location) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or("");
+    url.scheme() == "https"
+        && (host == "googleusercontent.com" || host.ends_with(".googleusercontent.com"))
 }
 
 /// The link a revision's `exportLinks` gives for `format`. A revision
@@ -420,6 +434,27 @@ pub fn page_items(v: &Value, key: &str) -> Result<(Vec<Value>, Option<String>)> 
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// The redirect's `Location` went to plain curl as it came; only an
+    /// https link on Google's download host is followed now.
+    #[test]
+    fn a_revision_export_follows_only_a_google_download() {
+        assert!(is_signed_download(
+            "https://doc-0c-docstext.googleusercontent.com/export/a?b=c"
+        ));
+        for to in [
+            "http://doc-0c-docstext.googleusercontent.com/export/a",
+            "https://evil.example/export/a",
+            "https://googleusercontent.com.evil.example/a",
+            "https://evilgoogleusercontent.com/a",
+            "https://doc.googleusercontent.com@evil.example/a",
+            "file:///etc/passwd",
+            "-K/etc/passwd",
+            "/export/a",
+        ] {
+            assert!(!is_signed_download(to), "{to}");
+        }
+    }
 
     fn resp(status: u16, body: &str) -> HttpResponse {
         HttpResponse {

@@ -1,5 +1,6 @@
 //! What a built-in step has published, as the version its outcome reports:
-//! where its store's `main` is, spelled as the step's seals spell it. Read however the step ended, since a
+//! where its store's `main` is (for an ingest, the last commit at which
+//! content moved), spelled as the step's seals spell it. Read however the step ended, since a
 //! failed or stopped step's commits stand, and a writer's open can publish
 //! one its crashed predecessor left. A seal names the same commit the same
 //! way, so finishing on the commit last sealed moves nothing downstream.
@@ -15,7 +16,9 @@ use crate::source::StepEnv;
 /// The version a step's success reports too; `None` for a step whose tree
 /// holds no doltlite store.
 pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> {
-    use datalib_etl::doltlite_raw::{content_version_at_path, head_commit_at_path};
+    use datalib_etl::doltlite_raw::{
+        content_commit_at_path, content_version_at_path, head_commit_at_path,
+    };
     if matches!(env.function, Function::GridIndex) {
         return grid_index_generation(data_root).await;
     }
@@ -24,6 +27,7 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
     };
     match env.function {
         Function::RenderMarkdown => content_version_at_path(&store).await,
+        Function::Ingest => content_commit_at_path(&store).await,
         _ => head_commit_at_path(&store).await,
     }
 }

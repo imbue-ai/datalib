@@ -27,11 +27,12 @@ pub const HEARTBEAT: Duration = Duration::from_secs(10);
 pub struct Timing {
     /// How long to hold a burst of filesystem events before publishing.
     pub debounce: Duration,
-    /// The least time between two `manage.rows` frames. While a step runs
-    /// the runner records its progress several times a second, and every
-    /// frame is a refetch by every Manage card open; a row redrawn once a
-    /// second is live enough.
-    pub manage_rows_every: Duration,
+    /// The least time between two frames of a dataset that carries a
+    /// step's progress (`manage.rows`, `requests`). While a step runs the
+    /// runner records its progress several times a second, and every frame
+    /// is a refetch by every reader holding the stream; once a second is
+    /// live enough.
+    pub progress_every: Duration,
     pub heartbeat: Duration,
 }
 
@@ -39,7 +40,7 @@ impl Default for Timing {
     fn default() -> Self {
         Timing {
             debounce: Duration::from_millis(300),
-            manage_rows_every: Duration::from_secs(1),
+            progress_every: Duration::from_secs(1),
             heartbeat: HEARTBEAT,
         }
     }
@@ -61,10 +62,10 @@ async fn until(at: Option<Instant>) {
     }
 }
 
-/// A dataset the UI fetches, named by what serves it. A card subscribes
-/// to the ones it reads and refetches those; a change to anything else
-/// never reaches it. The UI's `LiveTable` is generated from it
-/// (`ui_mirror.rs`).
+/// A dataset a reader fetches, named by the route that serves it. A card
+/// subscribes to the ones it reads and refetches those, and so does an
+/// app built on datalib; a change to anything else never reaches it. The
+/// UI's `LiveTable` is generated from it (`ui_mirror.rs`).
 #[derive(
     Debug,
     Clone,
@@ -95,6 +96,12 @@ pub enum Table {
     #[serde(rename = "runs")]
     #[strum(serialize = "runs")]
     Runs,
+    /// `GET /api/requests` and `GET /api/requests/{id}`: the loop's
+    /// record and each step's progress in its current run. What an app
+    /// waiting on the sync it asked for reads again.
+    #[serde(rename = "requests")]
+    #[strum(serialize = "requests")]
+    Requests,
     /// `GET /api/processes`: a process started or ended — a step's new
     /// attempt, a runner, a page. Not a step's progress, which moves
     /// several times a second while it runs.
@@ -252,8 +259,8 @@ const STORE_SUFFIX: &str = ".doltlite_db";
 /// The datasets a part of the run store feeds.
 fn tables_of(part: StorePart) -> &'static [Table] {
     match part {
-        StorePart::Runs | StorePart::StepRuns => &[Table::Runs, Table::ManageRows],
-        StorePart::Metrics => &[Table::ManageRows],
+        StorePart::Runs | StorePart::StepRuns => &[Table::Runs, Table::ManageRows, Table::Requests],
+        StorePart::Metrics => &[Table::ManageRows, Table::Requests],
         StorePart::RunLog => &[Table::Log, Table::ManageRows],
         StorePart::ProcessLog => &[Table::Log],
         StorePart::Processes => &[Table::Processes],
@@ -347,8 +354,8 @@ fn frames(
 fn min_interval(event: RootEvent, timing: &Timing) -> Option<Duration> {
     match event {
         RootEvent::TableChanged {
-            table: Table::ManageRows,
-        } => Some(timing.manage_rows_every),
+            table: Table::ManageRows | Table::Requests,
+        } => Some(timing.progress_every),
         _ => None,
     }
 }
@@ -524,10 +531,12 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 out.insert(RootEvent::ConfigChanged);
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
+                out.insert(table(Table::Requests));
             }
             Moved::Supervisor => {
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
+                out.insert(table(Table::Requests));
             }
             Moved::RunStore => {
                 for part in moved_parts(&datalib_runs::versions(root).await, &mut seen.runs) {
@@ -1092,7 +1101,7 @@ mod tests {
             table: Table::ManageRows,
         };
         let t0 = Instant::now();
-        let every = Timing::default().manage_rows_every;
+        let every = Timing::default().progress_every;
         let later = t0 + every;
         let mut throttle = Throttle::default();
         throttle.offer(rows.into(), t0);
@@ -1170,6 +1179,35 @@ mod tests {
             .flat_map(|p| tables_of(p).iter().copied())
             .collect();
         assert_eq!(tables, HashSet::from([Table::Log, Table::ManageRows]));
+    }
+
+    /// An app waiting on its own sync reads `GET /api/requests/{id}` again
+    /// on `requests`, so a step's progress moving must send one, as it
+    /// sends `manage.rows` to the Manage screen.
+    #[test]
+    fn a_progress_tick_wakes_the_requests() {
+        let mut seen = BTreeMap::from([(StorePart::Metrics, 7)]);
+        let now = BTreeMap::from([(StorePart::Metrics, 8)]);
+        let tables: HashSet<Table> = moved_parts(&now, &mut seen)
+            .into_iter()
+            .flat_map(|p| tables_of(p).iter().copied())
+            .collect();
+        assert!(tables.contains(&Table::Requests), "{tables:?}");
+    }
+
+    #[test]
+    fn requests_frames_are_throttled_like_the_manage_rows() {
+        let requests = RootFrame::from(RootEvent::TableChanged {
+            table: Table::Requests,
+        });
+        let t0 = Instant::now();
+        let mut throttle = Throttle::default();
+        assert_eq!(throttle.offer(requests, t0), Some(requests));
+        assert_eq!(throttle.offer(requests, t0), None);
+        assert_eq!(
+            throttle.next_due(),
+            Some(t0 + Timing::default().progress_every)
+        );
     }
 
     /// A step's progress tick is a `step_runs` write, about once a
@@ -1258,7 +1296,7 @@ mod tests {
     fn at_once() -> Timing {
         Timing {
             debounce: Duration::ZERO,
-            manage_rows_every: Duration::ZERO,
+            progress_every: Duration::ZERO,
             heartbeat: Duration::from_secs(3600),
         }
     }
@@ -1362,7 +1400,13 @@ mod tests {
             .unwrap();
         let (mut rx, _feed) = watching(td.path()).await;
         store.turn_off("a/raw", "loop").await.unwrap();
-        until(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
+        let requests = RootEvent::TableChanged {
+            table: Table::Requests,
+        };
+        let got = until(&mut rx, RootEvent::TableChanged { table: Table::Dag }).await;
+        if !got.contains(&requests) {
+            until(&mut rx, requests).await;
+        }
     }
 
     /// A data root reached through a symlink still reports.

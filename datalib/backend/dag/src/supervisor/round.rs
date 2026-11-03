@@ -374,7 +374,7 @@ impl Runner {
                         for r in o.request.roots.iter_mut() {
                             *r = to_new[r];
                         }
-                        let reached = downstream_of(graph, &o.request.roots);
+                        let reached = graph.downstream_of(&o.request.roots);
                         for (slot, s) in slots.iter_mut().zip(reached) {
                             slot.ever_in_scope |= s;
                         }
@@ -813,7 +813,7 @@ impl Runner {
         slots: &mut [Slot],
     ) -> Result<()> {
         let mut admit = |id: String, roots: Vec<usize>, open: &mut Vec<Open>| {
-            for (slot, reached) in slots.iter_mut().zip(downstream_of(graph, &roots)) {
+            for (slot, reached) in slots.iter_mut().zip(graph.downstream_of(&roots)) {
                 slot.ever_in_scope |= reached;
             }
             *seq += 1;
@@ -1715,18 +1715,6 @@ fn paths_of(graph: &Graph, consumed: &Consumed) -> HashMap<String, String> {
         .iter()
         .filter_map(|(&p, v)| Some((graph.steps[p].output().as_str().to_string(), v.clone()?)))
         .collect()
-}
-
-fn downstream_of(graph: &Graph, roots: &[usize]) -> Vec<bool> {
-    let mut seen = vec![false; graph.steps.len()];
-    let mut stack = roots.to_vec();
-    while let Some(i) = stack.pop() {
-        if std::mem::replace(&mut seen[i], true) {
-            continue;
-        }
-        stack.extend(graph.dependents[i].iter().copied());
-    }
-    seen
 }
 
 impl Graph {

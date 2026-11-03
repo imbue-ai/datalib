@@ -54,6 +54,7 @@ export type LiveTable =
   | "dag"
   | "manage.rows"
   | "runs"
+  | "requests"
   | "processes"
   | "log"
   | "storage"

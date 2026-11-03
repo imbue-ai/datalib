@@ -141,11 +141,14 @@ pub async fn run(
     }
 }
 
-/// The entities store's head, spelled as a seal spells it. Every edge row
-/// names bytes the blob CAS already holds, so the entities store's commit
-/// is the whole of what a render can read.
+/// The entities store's version: the last commit at which content moved,
+/// spelled as a seal spells it. Every edge row names bytes the blob CAS
+/// already holds, so the entities store's commit is the whole of what a
+/// render can read.
 pub(crate) async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
-    datalib_etl::doltlite_raw::head_commit_at_path(&datalib_etl::raw_layout::entities_db(raw_dir))
-        .await
-        .context("entities head")
+    datalib_etl::doltlite_raw::content_commit_at_path(&datalib_etl::raw_layout::entities_db(
+        raw_dir,
+    ))
+    .await
+    .context("entities version")
 }

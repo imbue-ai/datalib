@@ -5,15 +5,21 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use std::time::Duration;
+
+use datalib_etl::checkpointer::Cadence;
 use datalib_etl::control::DownloadControl;
+use datalib_etl::download_metrics::DownloadMetrics;
+use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, CHANNEL_TYPES, DEFAULT_SINCE_TS,
 };
 use datalib_etl_web::interrupt::{run, How};
 use datalib_etl_web::playback;
+use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
 
 use crate::every_cut::ts;
@@ -96,28 +102,41 @@ fn record_workspace(api: &Path) {
 
 /// One download into `dir`, killed at its `at`-th request. Returns the
 /// requests it made. One request at a time, so the order requests are
-/// made in is the order they land in.
+/// made in is the order they land in; and a seal at every point the
+/// download calls consistent, since a killed run keeps what was sealed.
 async fn download(dir: &Path, at: Option<u64>) -> u64 {
     let db = RawDb::open(&db_path_for(dir)).await.unwrap();
     let stop = StopFlag::new();
-    let opts = FetchOptions {
-        refresh_window_days: 0,
-        members_only: false,
-        media: false,
-        control: DownloadControl {
-            stop: stop.clone(),
-            ..Default::default()
-        },
-        ..FetchOptions::new(db.clone())
+    let control = DownloadControl {
+        stop: stop.clone(),
+        checkpoint_cadence: Some(Cadence {
+            at_most_every: Duration::ZERO,
+        }),
     };
-    let ran = run(
-        at,
-        How::Kill,
-        stop.clone(),
-        one_at_a_time(stop, fetch(opts)),
-    )
-    .await;
-    db.commit_all("test").await.unwrap();
+    let progress = Progress::noop();
+    let ctx = RunCtx::new(
+        "slack",
+        dir,
+        "2369-04-14T00:00:00+00:00",
+        &progress,
+        &control,
+        DownloadMetrics::new(),
+        Diagnostics::new(),
+    );
+    let sealing = ctx.run_store(db.pool().clone(), None, |sealer| {
+        let opts = FetchOptions {
+            refresh_window_days: 0,
+            members_only: false,
+            media: false,
+            sealer: Some(sealer),
+            control: control.clone(),
+            ..FetchOptions::new(db.clone())
+        };
+        async { fetch(opts).await.map(|_| String::new()) }
+    });
+    let ran = run(at, How::Kill, stop.clone(), one_at_a_time(stop, sealing)).await;
+    // Closed uncommitted, as a killed process leaves it: the next open
+    // keeps what was sealed.
     db.close().await;
     ran.requests
 }

@@ -250,7 +250,10 @@ doltlite -readonly slack/ingest/entities.doltlite_db \
 
 `HEAD`, `HEAD^1`, `HEAD~N`, branch names, tags and full commit hashes
 all work as refs; a short hash prefix does not. The cheapest "git
-status between commits" view.
+status between commits" view. A table added between the two has `''`,
+not NULL, as its `from_table_name` and `diff_type` `added`; a dropped
+one has `''` as its `to_table_name` and `dropped`
+(`a_summary_names_an_added_or_dropped_table_with_an_empty_string`).
 
 **Per-table row counts.** Two forms, and the vtab is usually the one
 you want — it covers every table that changed in one query:
@@ -745,6 +748,13 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   keys are uuidv4s, uuidv5s and content hashes; adjacent keys are
   `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
   `datalib_id` mints.
+- **A row is stored whole.** Changing one small column rewrites the
+  row and the leaf it sits in, whatever else the row holds: in 400
+  rows, one integer changed on a 4 KB row grew the file by 15 KB, and
+  50 changed beside 1 KB payloads by 235 KB, against 9 KB for the same
+  50 in a table of `(id, mark)` alone. A value that changes often and
+  on its own, such as a read mark, belongs in a narrow table of its
+  own (`a_small_column_change_rewrites_its_whole_row`).
 - **A commit pins whatever its transaction wrote.** Commit once at the
   end and `dolt_gc()` reclaims every intermediate page (439 MB → 15 MB).
   Commit after each of 200 transactions and gc reclaims nothing

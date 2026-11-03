@@ -120,11 +120,23 @@ impl Sealer {
 /// through [`tx`](Self::tx); one made through the pool waits for good.
 /// [`finish`](Self::finish) commits what is left, and must be awaited
 /// before the pool is used again; dropping a `Batch` rolls it back.
+///
+/// An open transaction holds its writes in memory, at about twice their
+/// size, and the seals grow further apart the longer a run goes. A
+/// download that can write more between two seals than it should hold
+/// sets a [`byte_limit`](Self::byte_limit) and says what each write
+/// weighs ([`wrote_bytes`](Self::wrote_bytes)): past it, the transaction
+/// commits without a seal.
 pub struct Batch<'a> {
     pool: &'a SqlitePool,
     sealer: Option<&'a Sealer>,
     open: Option<sqlx::Transaction<'static, sqlx::Sqlite>>,
     unsealed: u64,
+    /// Bytes written into the open transaction, as its writers weighed
+    /// them.
+    holding: usize,
+    /// `0` for no limit.
+    byte_limit: usize,
 }
 
 impl<'a> Batch<'a> {
@@ -136,7 +148,16 @@ impl<'a> Batch<'a> {
             sealer,
             open: None,
             unsealed: 0,
+            holding: 0,
+            byte_limit: 0,
         }
+    }
+
+    /// Commit, sealing only if a seal is due, once the writes in the
+    /// open transaction weigh `bytes`.
+    pub fn byte_limit(mut self, bytes: usize) -> Self {
+        self.byte_limit = bytes;
+        self
     }
 
     /// The open transaction, begun if there is none.
@@ -150,9 +171,18 @@ impl<'a> Batch<'a> {
     /// `rows` landed in the open transaction: if a seal is due, commit it
     /// and seal.
     pub async fn wrote(&mut self, rows: u64) -> Result<()> {
+        self.wrote_bytes(rows, 0).await
+    }
+
+    /// [`wrote`](Self::wrote) for rows weighing `bytes`: past the
+    /// [`byte_limit`](Self::byte_limit), the transaction commits even when
+    /// no seal is due.
+    pub async fn wrote_bytes(&mut self, rows: u64, bytes: usize) -> Result<()> {
         self.unsealed += rows;
+        self.holding += bytes;
         match self.sealer {
             Some(sealer) if sealer.due() => self.hand_over(sealer).await,
+            _ if self.byte_limit > 0 && self.holding >= self.byte_limit => self.commit().await,
             _ => Ok(()),
         }
     }
@@ -176,6 +206,7 @@ impl<'a> Batch<'a> {
         if let Some(tx) = self.open.take() {
             tx.commit().await.context("commit a batch")?;
         }
+        self.holding = 0;
         Ok(())
     }
 }
@@ -311,13 +342,19 @@ impl SealState {
                 .await;
         }
         let msg = format!("checkpoint {}: entities", self.source_id);
+        let before = crate::doltlite_raw::content_commit(&self.pool).await?;
         let sealed = crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
-        // `None` means there was nothing dirty after all; no version moved,
-        // so there is nothing to announce.
-        if let Some(hash) = sealed {
-            self.publish_problem_counts().await;
-            self.progress.checkpoint_rows(&hash, rows);
-            record_seal();
+        // `None` means there was nothing dirty after all.
+        if sealed.is_none() {
+            return Ok(());
+        }
+        self.publish_problem_counts().await;
+        record_seal();
+        // A seal of the sync's own bookkeeping moves no version, so no
+        // consumer is woken for it.
+        let version = crate::doltlite_raw::content_commit(&self.pool).await?;
+        if let Some(version) = version.filter(|v| Some(v) != before.as_ref()) {
+            self.progress.checkpoint_rows(&version, rows);
         }
         Ok(())
     }
@@ -506,6 +543,51 @@ mod tests {
             "a due seal commits the batch and seals it"
         );
         writes.finish().await.unwrap();
+    }
+
+    /// The seals of a long run come hours apart, and an open transaction
+    /// holds what it wrote in memory, so a batch with a byte limit
+    /// commits once its writes weigh that much, and seals no sooner.
+    #[tokio::test]
+    async fn a_batch_past_its_byte_limit_commits_without_sealing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entities = store(&dir.path().join("entities.doltlite_db")).await;
+        if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
+            return;
+        }
+        let sealer = Sealer {
+            state: Arc::new(state_with_cadence(
+                entities.clone(),
+                None,
+                crate::progress::Progress::noop(),
+                crate::checkpointer::Cadence {
+                    at_most_every: std::time::Duration::from_secs(3600),
+                },
+            )),
+        };
+        let before = commits(&entities).await;
+        let mut writes = Batch::new(&entities, Some(&sealer)).byte_limit(10);
+        let mut committed = Vec::new();
+        for id in ["a", "b", "c"] {
+            sqlx::query("INSERT INTO rows_t VALUES (?)")
+                .bind(id)
+                .execute(&mut **writes.tx().await.unwrap())
+                .await
+                .unwrap();
+            writes.wrote_bytes(1, 6).await.unwrap();
+            committed.push(writes.open.is_none());
+        }
+        assert_eq!(
+            committed,
+            [false, true, false],
+            "the second write takes the batch past 10 bytes"
+        );
+        writes.finish().await.unwrap();
+        assert_eq!(
+            commits(&entities).await,
+            before,
+            "an hour's cadence has not come round, whatever the batch weighed"
+        );
     }
 
     /// The version announced has to be the commit the seal just made —

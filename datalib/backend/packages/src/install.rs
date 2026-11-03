@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use url::Url;
 
 use crate::manifest::{is_sha256, Artifact, Manifest};
 use crate::platform::this_target;
@@ -38,7 +39,7 @@ pub struct Lookup {
 }
 
 pub fn lookup(source_text: &str) -> Result<Lookup> {
-    let url = source::manifest_url(source_text)?;
+    let url = source::manifest(&source::manifest_url(source_text)?)?;
     let fetched = read_url(&url)?;
     let text = std::str::from_utf8(&fetched.bytes).context("the manifest is not UTF-8")?;
     let manifest = Manifest::parse(text)?;
@@ -76,7 +77,7 @@ pub fn ensure(data_root: &Path, url: &str, sha256: &str) -> Result<Manifest> {
     if let Some(m) = installed(data_root, sha256) {
         return Ok(m);
     }
-    let fetched = read_url(url)?;
+    let fetched = read_url(&source::manifest(url)?)?;
     if fetched.sha256 != sha256 {
         bail!(
             "the manifest at {url} is not the one this library added (sha256 {}, pinned {sha256}); \
@@ -133,11 +134,12 @@ struct Fetched {
     final_url: String,
 }
 
-fn read_url(url: &str) -> Result<Fetched> {
-    if let Some(path) = url.strip_prefix("file://") {
-        let bytes = fs::read(path).with_context(|| format!("read {path}"))?;
+fn read_url(url: &Url) -> Result<Fetched> {
+    if url.scheme() == "file" {
+        let path = local_path(url)?;
+        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         if bytes.len() as u64 > MANIFEST_LIMIT {
-            bail!("{path}: larger than {MANIFEST_LIMIT} bytes");
+            bail!("{}: larger than {MANIFEST_LIMIT} bytes", path.display());
         }
         return Ok(Fetched {
             sha256: datalib_fetch::sha256_bytes(&bytes),
@@ -145,7 +147,7 @@ fn read_url(url: &str) -> Result<Fetched> {
             final_url: url.to_string(),
         });
     }
-    let u = datalib_fetch::get_unpinned(url, MANIFEST_LIMIT)?;
+    let u = datalib_fetch::get_unpinned(url.as_str(), MANIFEST_LIMIT)?;
     Ok(Fetched {
         bytes: u.bytes,
         sha256: u.sha256,
@@ -153,18 +155,22 @@ fn read_url(url: &str) -> Result<Fetched> {
     })
 }
 
-fn fetch_pinned(url: &str, sha256: &str, dest: &Path) -> Result<()> {
-    match url.strip_prefix("file://") {
-        Some(path) => {
-            fs::copy(path, dest).with_context(|| format!("copy {path}"))?;
-            let got = datalib_fetch::sha256_file(dest)?;
-            if got != sha256 {
-                bail!("{url}: sha256 {got}, the manifest says {sha256}");
-            }
-            Ok(())
-        }
-        None => datalib_fetch::download_verified("[packages]", url, sha256, dest),
+fn fetch_pinned(url: &Url, sha256: &str, dest: &Path) -> Result<()> {
+    if url.scheme() != "file" {
+        return datalib_fetch::download_verified("[packages]", url.as_str(), sha256, dest);
     }
+    let path = local_path(url)?;
+    fs::copy(&path, dest).with_context(|| format!("copy {}", path.display()))?;
+    let got = datalib_fetch::sha256_file(dest)?;
+    if got != sha256 {
+        bail!("{url}: sha256 {got}, the manifest says {sha256}");
+    }
+    Ok(())
+}
+
+fn local_path(url: &Url) -> Result<PathBuf> {
+    url.to_file_path()
+        .map_err(|()| anyhow::anyhow!("{url} is not a path on this machine"))
 }
 
 #[cfg(test)]
@@ -231,5 +237,21 @@ mod tests {
             .to_string();
         assert!(e.contains("not the one this library added"), "{e}");
         assert!(installed(root.path(), &found.sha256).is_none());
+    }
+
+    /// `POST /api/packages/fetch` passes its url straight here: a pin
+    /// that is not https or a local file is refused before anything is
+    /// fetched.
+    #[test]
+    fn a_pin_over_http_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        for url in [
+            "http://127.0.0.1:1/datalib-package.toml",
+            "ftp://h/datalib-package.toml",
+        ] {
+            let e = ensure(root.path(), url, &sha).unwrap_err().to_string();
+            assert!(e.contains("https"), "{url}: {e}");
+        }
     }
 }

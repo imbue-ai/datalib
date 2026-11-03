@@ -40,7 +40,9 @@ async fn stopped_sync(t: &Tree) {
 
 async fn authors_owed(t: &Tree) -> Vec<String> {
     let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
-    let owed = db.users_owed().await.unwrap();
+    let mut conn = db.pool().acquire().await.unwrap();
+    let owed = db.users_owed(&mut conn).await.unwrap();
+    drop(conn);
     db.close().await;
     owed.into_iter().map(|l| l.key).collect()
 }

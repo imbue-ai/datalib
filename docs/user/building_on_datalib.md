@@ -84,11 +84,62 @@ open-and-return form: it answers as soon as the loop has taken the
 request on. The command line has no flag that does the same.
 
 **To wait for the downloads only**, not the render and indexes after
-them, read the loop's record instead of the request. A request stays
-open until everything downstream of its roots has run, which for an
-app that reads only the raw stores is time spent waiting on the search
-index. A download is done for your request once its `steps` row says
-it started after the request opened and has finished since:
+them, ask about your request's steps rather than the request. A
+request stays open until everything downstream of its roots has run,
+which for an app that reads only the raw stores is time spent waiting
+on the search index. With the app up, `GET /api/requests/<id>` answers
+with the request and each step it covers, its roots first:
+
+```sh
+curl -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+  <origin>/api/requests/<request id>
+```
+
+```json
+{"id": "…", "roots": ["slack/ingest"], "by": "today", "state": "open", …,
+ "steps": [
+   {"id": "slack/ingest", "root": true, "phase": "done",
+    "last_run": {"status": "succeeded", …}, "progress": {…}, …},
+   {"id": "slack/render_markdown", "root": false, "phase": "running", …},
+   …]}
+```
+
+Each step's `phase` is where it stands for your request: `pending` (it
+has work left: waiting its turn, or the loop has not taken the request
+on yet), `running`, or `done` (nothing left for it). Once a root is
+`done`, `last_run.status` says how its run ended: `succeeded`, `failed`
+or `stopped`. A step turned off is done without running, and its
+`state` says `off`. `progress` is what the step has reported in the
+loop's current run: the same numbers as `GET /api/runs/{run}/steps`
+(see "How fresh is the mirror?").
+
+**Don't poll on a timer; subscribe.** `GET /api/sync/stream` is the
+server-sent-event stream the app's own pages use to know when to fetch
+again, and any client with the token can hold it. Each frame names
+what moved and carries nothing else:
+
+```sh
+curl -N -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+  <origin>/api/sync/stream
+```
+
+```text
+event: root
+data: {"kind":"table_changed","table":"requests"}
+```
+
+Open the stream first, then read `GET /api/requests/<id>`, then read
+it again on every frame whose `table` is `requests`: one is sent when
+a step's phase may have moved, and at most once a second while a
+step's progress moves. Each `table` names the route to read again
+(`dag` is `GET /api/dag`, `runs` is `GET /api/runs`); skip the ones
+you don't read. A frame with `"kind":"heartbeat"` says only that the
+stream is alive. If the stream drops, reconnect and read again, since
+frames sent while you were away are not replayed.
+
+With no app up, read the loop's record yourself. A download is done
+for your request once its `steps` row says it started after the
+request opened and has finished since:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite "
@@ -287,8 +338,10 @@ first:
   environment is a JSON object from each input to the version the loop
   started it against, written `<fingerprint>:<version>`: a hash of the
   producing step's definition, a colon, then the version that step
-  reported. For a raw store that version is the store's commit, so the
-  commit is everything after the first `:`
+  reported. For a raw store that version is a commit: the last one at
+  which the store's content moved, which can be older than `main`, since
+  every sync commits its own record whether or not it found anything.
+  The commit is everything after the first `:`
   (`v=$(printf '%s' "$DATALIB_READS" | jq -r '."gmail/ingest"')`, then
   `${v#*:}`). Open that commit
   (`<data_root>/gmail/ingest/entities.doltlite_db/<commit>`, see
@@ -327,8 +380,10 @@ datalib-doltlite -readonly -json slack/ingest/entities.doltlite_db \
 Store `NEW` as the cursor only once your own work is saved. With no
 cursor yet, read the whole commit instead. Read `NEW`, not `main`:
 `main` may already be past it, and the loop runs your step again for
-what it moved to. Outside a step, `dolt_hashof('main')` is the store's
-current commit. A raw
+what it moved to. Outside a step, `dolt_hashof('datalib_content')` is
+the commit the loop would hand you, and `dolt_hashof('main')` the
+store's latest, which may be later only by the sync's own record: read
+`sync_runs` or `coverage` at `main`. A raw
 store's history is never folded away, so a cursor stays good; the
 recipe and its edge cases are in [raw_stores.md](raw_stores.md)
 § "Reading one commit, and following changes".

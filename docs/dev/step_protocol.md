@@ -178,9 +178,12 @@ What that means from your side:
   `DATALIB_READS` holds, for each input, the version you were started
   against, as `<fingerprint>:<version>`: a hash of the producing step's
   definition, a colon, and the version that step reported. For a raw
-  store that version is its commit, so the commit is everything after
-  the first `:` (`${v#*:}` in a shell). `main` may have moved on since;
-  the loop runs you again for what it moved to.
+  store that version is a commit, so the commit is everything after
+  the first `:` (`${v#*:}` in a shell): the last one at which the
+  store's content moved. A sync that found nothing new still commits
+  its own record (`sync_runs`, its stamps), which moves `main` but not
+  the version, so you are not run for it. `main` may have moved on
+  since; when its content moved, the loop runs you again for it.
 * **An empty `DATALIB_DAG_CHANGED_INPUTS` means every input.** There is
   no success to compare with: a first run, or your definition changed
   since. Do all your work.
@@ -381,7 +384,9 @@ and the outcome's are compared as strings, so if you finish on the
 commit you last sealed, report it exactly as the checkpoint did, and
 your consumers do not run again for it. A doltlite store's head is a
 good version for both: it moves only when a commit changed something
-([`doltlite.md`](doltlite.md#diffs)).
+([`doltlite.md`](doltlite.md#diffs)). A built-in ingest reports a
+better one, the last commit at which a table its readers read moved:
+its own bookkeeping commits on every run and should not wake them.
 
 A step that did not run keeps the version recorded for its output last
 time, or `datalib_dag::version::UNKNOWN` if there is none.

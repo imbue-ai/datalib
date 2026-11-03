@@ -60,6 +60,20 @@ impl Graph {
             .collect()
     }
 
+    /// Step index → whether it is one of `roots` or reads, transitively,
+    /// what one of them writes: what a request on `roots` covers.
+    pub fn downstream_of(&self, roots: &[usize]) -> Vec<bool> {
+        let mut seen = vec![false; self.steps.len()];
+        let mut stack = roots.to_vec();
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            stack.extend(self.dependents[i].iter().copied());
+        }
+        seen
+    }
+
     pub fn build(steps: Vec<StepSpec>) -> Result<Graph> {
         let (graph, diags) = Self::build_graded(steps, &BTreeSet::new());
         if let Some(d) = diags.first() {
