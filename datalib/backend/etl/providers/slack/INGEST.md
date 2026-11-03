@@ -551,7 +551,9 @@ or users, so each is found its own way.
   hours), since its rows change only when someone edits a profile. A
   person who posts for the first time does not wait for it: storing a
   message adds a `users` row with no payload for an author not already
-  there, and each run then asks `users.info` for every such row. The
+  there, and each run then asks `users.info` for every such row, before
+  its walk and again after it, so the authors a stopped run left are
+  the next run's first requests. The
   answer is stored as `users.list` lists it (without the custom
   `profile.fields` only `users.info` carries), so the next listing is no
   change. A lookup that fails is an attempt on the user's own row

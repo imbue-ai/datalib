@@ -120,8 +120,16 @@ two data roots on one machine then share one copy and the `latchkey` launcher ca
 hand (it looks there after the two sibling candidates).
 
 `datalib-step pull-runtime` runs the same path ahead of time and prints
-the tree it resolved and `qmd --version` through it. `install.sh`
-suggests it; an offline first sync fails the `qmd` and `latchkey` steps
+the tree it resolved, `qmd --version` through it, and the latchkey the
+tree holds, read from its `package.json` rather than run: `latchkey
+--version` looks up its encryption key first, so it fails where there is
+none and, on a mac, makes one. `pull-runtime --into <dir>` puts the tree
+at `<dir>` instead of the cache, whatever `HOME` is, replacing what was
+there in one rename; `<dir>` as `runtime/` beside the binaries, or one
+level up, is where they look first. An install made by one user for
+another (root installing into a workspace, say) wants this: the cache is
+per `HOME`, and the user who runs the sync may not share it. `install.sh`
+suggests `pull-runtime`; an offline first sync fails the `qmd` and `latchkey` steps
 with the fetch error named and succeeds at everything else, the same as
 the models.
 
