@@ -5,8 +5,11 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 use datalib_etl_whatsapp_config::WhatsappRenderConfig;
+use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use std::path::Path;
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -47,6 +50,25 @@ impl SourceRender for WhatsappRender {
         let Some(parsed) = parsed else {
             return Ok("no msgstore mirrored yet".into());
         };
+        let dropped: Vec<ProblemRow> = parsed
+            .dropped
+            .iter()
+            .map(|d| {
+                ProblemRow::new(
+                    ctx.name,
+                    Stage::Parse,
+                    Scope::Entity(&d.entity_id()),
+                    None,
+                    Outcome::Dropped,
+                    d.problem.clone(),
+                    Some(self.render_version()),
+                )
+            })
+            .collect();
+        ctx.report_entity_problems(
+            &ReadScope::Whole(crate::render::parse::READ_WHOLE.to_vec()),
+            &dropped,
+        )?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let (consumed, buckets) = render_all(
             &parsed.chats,
