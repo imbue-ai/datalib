@@ -922,6 +922,13 @@ latchkey auth browser slack
 (`"2025-01-01"`) or an offset from the sync (`"-30d"`); unset is
 2024-01-01. Messages older than a sliding `since` stay mirrored.
 
+Archived channels are left out unless the `api` table sets
+`archived = true`, or names the channel in `channels`. Set it together
+with `all_channels = true`: Slack drops almost everyone from a channel
+it archives, so without `all_channels` it adds almost nothing. Each
+archived channel is read once; later syncs don't ask it for anything
+new unless Slack unarchives it.
+
 ## SMS Backup and Restore
 
 `type = "sms_backup_restore"` — the app's XML export on disk

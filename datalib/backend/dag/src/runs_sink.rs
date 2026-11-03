@@ -35,6 +35,9 @@ struct Acc {
     /// The labels of every `queued` series written for the step, so its
     /// finish can empty them all.
     queued: BTreeSet<String>,
+    /// This attempt's last value of its own `queued`, the one without a
+    /// `from`: what it still owes if it ends now.
+    own_queued: Option<i64>,
     /// The passes started so far: a streaming consumer runs once per
     /// seal it reads, each pass a first attempt.
     passes: u32,
@@ -53,6 +56,24 @@ fn raise_peak(process: Option<&mut ProcessRow>, bytes: i64) -> Option<ProcessRow
     }
     p.peak_rss_bytes = Some(bytes);
     Some(p.clone())
+}
+
+/// What a step owes as it ends `status`, its own queue last at `queued`;
+/// `None` keeps what its last run said, for a step this run did not
+/// invoke. Only an end short of done owes: a render's or an index's bar
+/// ends a successful run still holding work it announced and then found
+/// it had no need to do, and a download that gives up with work owed
+/// ends `incomplete`, which is a failure.
+fn owed_at_end(status: RunState, ran: bool, queued: Option<i64>) -> Option<i64> {
+    if !ran {
+        return None;
+    }
+    Some(match status {
+        RunState::Failed | RunState::Stopped => queued.unwrap_or(0).max(0),
+        RunState::Succeeded | RunState::SkippedUpToDate | RunState::Blocked | RunState::Running => {
+            0
+        }
+    })
 }
 
 /// Record a running total's new value, and say what it was if this is
@@ -92,6 +113,9 @@ const RUNNER_TARGET: &str = "datalib_dag::runner";
 /// The gauge of work still ahead of a step: its own, and one per
 /// producer (`queued{from=<producer>}`) that the scheduler keeps.
 const QUEUED: &str = datalib_metrics::QUEUED;
+
+/// What a step's own queue held when it ended; not emptied with it.
+const OWED: &str = datalib_metrics::OWED;
 
 impl RunStoreSink {
     /// Returns `None` when the store could not be opened. The store is
@@ -147,6 +171,9 @@ impl RunStoreSink {
             let acc = steps.entry(step.clone()).or_default();
             if name == QUEUED {
                 acc.queued.insert(labels.clone());
+                if labels.is_empty() {
+                    acc.own_queued = Some(value);
+                }
             }
             let raised = if name == crate::memory::RSS_PEAK_BYTES {
                 raise_peak(acc.process.as_mut(), value)
@@ -368,8 +395,10 @@ impl EventSink for RunStoreSink {
                 let finished_at_utc = now().0;
                 let mut ended = None;
                 let mut queued = BTreeSet::new();
+                let mut owed = None;
                 self.update(step, |a| {
                     queued = std::mem::take(&mut a.queued);
+                    owed = owed_at_end(*status, a.process.is_some(), a.own_queued);
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
@@ -384,6 +413,10 @@ impl EventSink for RunStoreSink {
                 });
                 if let Some(p) = ended {
                     self.writer.process(p);
+                }
+                // Stays after the queue is emptied, until its next run ends.
+                if let Some(owed) = owed {
+                    self.write_metric(step, OWED, String::new(), owed);
                 }
                 // Ended is ended, however: nothing is ahead of it now.
                 for labels in queued {
@@ -990,6 +1023,137 @@ mod tests {
                 metric_value(&snap, "slack/raw", datalib_metrics::DONE),
                 Some(3)
             );
+        }
+    }
+
+    /// Emptying a stopped step's queue left nothing to say what it still
+    /// owed: Slack's conversations, threads and files not reached were
+    /// only in its store. What its own queue held as it ended is its
+    /// `owed`, which outlives the run; a producer's queue for it is not
+    /// owed, and the next run that ends the step replaces the count. A
+    /// step that never counted owes nothing it can show.
+    #[tokio::test]
+    async fn what_a_step_owes_when_it_ends_outlives_the_run_until_its_next_ends() {
+        let td = tempfile::tempdir().unwrap();
+        let sync = |run: &str, events: Vec<Event>| {
+            let sink = RunStoreSink::start(
+                td.path(),
+                run,
+                "2026-09-11T10:00:00+01:00",
+                None,
+                Retention::default(),
+            )
+            .expect("start the store");
+            for e in &events {
+                sink.emit(e);
+            }
+        };
+        let start = |step: &str| Event::StepStart {
+            step: step.into(),
+            attempt: 1,
+            builtin: true,
+        };
+        let length = |total| Event::ProgressLength {
+            step: "slack/ingest".into(),
+            total: Some(total),
+        };
+        let finish = |step: &str, status| Event::StepFinish {
+            step: step.into(),
+            status,
+            error: None,
+            exit_code: None,
+            signal: None,
+        };
+        let from_ingest = Event::Metric {
+            step: "slack/render_markdown".into(),
+            name: QUEUED.into(),
+            labels: BTreeMap::from([("from".to_string(), "slack/ingest".to_string())]),
+            value: 40,
+        };
+        async fn owed(root: &std::path::Path) -> Vec<(String, i64, String)> {
+            datalib_runs::latest_metric(root, OWED)
+                .await
+                .into_iter()
+                .map(|m| (m.step, m.value, m.run_id))
+                .collect()
+        }
+
+        sync(
+            "run-1",
+            vec![
+                start("slack/ingest"),
+                length(12),
+                inc("slack/ingest", 3),
+                finish("slack/ingest", RunState::Stopped),
+                start("slack/render_markdown"),
+                from_ingest,
+                finish("slack/render_markdown", RunState::Stopped),
+                start("tools/backfill"),
+                finish("tools/backfill", RunState::Succeeded),
+            ],
+        );
+        let snap = snapshot(td.path()).await;
+        assert_eq!(
+            metric_value(&snap, "slack/ingest", QUEUED),
+            Some(0),
+            "the queue is emptied as before"
+        );
+        assert_eq!(
+            owed(td.path()).await,
+            [
+                ("slack/ingest".to_string(), 9, "run-1".to_string()),
+                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
+                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+            ]
+        );
+
+        sync(
+            "run-2",
+            vec![
+                start("slack/ingest"),
+                length(4),
+                inc("slack/ingest", 4),
+                finish("slack/ingest", RunState::Succeeded),
+                finish("slack/render_markdown", RunState::SkippedUpToDate),
+            ],
+        );
+        assert_eq!(
+            owed(td.path()).await,
+            [
+                ("slack/ingest".to_string(), 0, "run-2".to_string()),
+                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
+                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+            ],
+            "a step the run skipped keeps what its last run said"
+        );
+    }
+
+    /// Renders and embeds end most successful runs with work still on
+    /// their bar that they found they had no need to do, which read as
+    /// "20,349 owed" on a healthy source. Only an end short of done owes;
+    /// a step the run did not invoke keeps its last word.
+    #[test]
+    fn only_a_step_that_ended_short_of_done_owes() {
+        use strum::VariantArray;
+        let ends: Vec<(RunState, Option<i64>)> = RunState::VARIANTS
+            .iter()
+            .map(|&s| (s, owed_at_end(s, true, Some(20_349))))
+            .collect();
+        assert_eq!(
+            ends,
+            [
+                (RunState::Running, Some(0)),
+                (RunState::Succeeded, Some(0)),
+                (RunState::SkippedUpToDate, Some(0)),
+                (RunState::Blocked, Some(0)),
+                (RunState::Failed, Some(20_349)),
+                (RunState::Stopped, Some(20_349)),
+            ]
+        );
+        assert_eq!(owed_at_end(RunState::Failed, true, None), Some(0));
+        assert_eq!(owed_at_end(RunState::Stopped, true, Some(-3)), Some(0));
+        for &s in RunState::VARIANTS {
+            assert_eq!(owed_at_end(s, false, Some(9)), None, "{s:?}");
         }
     }
 

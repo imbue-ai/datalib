@@ -217,7 +217,8 @@ pub struct FetchOptions {
     /// construction").
     pub db: RawDb,
     /// Seals a flushed batch, so render can start on the mail already
-    /// mirrored while the walk continues. `None` commits once at the end.
+    /// mirrored while the walk continues. `None` seals nothing mid-run:
+    /// the caller's commit at the end is the only one.
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     pub hostname: String,
     pub account_id: Option<String>,

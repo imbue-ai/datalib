@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use datalib_etl_slack::ingest::{db_path_for, FetchOptions, InvolvesMeOptions};
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, InvolvesMeOptions, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, History, CHANNEL_TYPES};
 use datalib_etl_slack_config::InvolvesMe;
 use serde_json::{json, Value};
@@ -146,7 +146,7 @@ fn record_first_walks(api: &Path) {
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C3", "ts": ROOT, "limit": "200"}),
+        json!({"channel": "C3", "ts": ROOT, "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": [
             root(MY_REPLY),
             {"ts": MY_REPLY, "user": "U1", "text": "I'll deal", "thread_ts": ROOT},

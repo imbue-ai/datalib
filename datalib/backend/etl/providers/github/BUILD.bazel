@@ -39,22 +39,6 @@ rust_library(
     ],
 )
 
-rust_binary(
-    name = "github_ingest",
-    srcs = ["src/bin/github_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_github",
-        "//datalib/backend/obs:datalib_obs",
-        "//datalib/backend/time:datalib_time",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "github_unittests",
     size = "small",

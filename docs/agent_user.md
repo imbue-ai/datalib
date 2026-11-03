@@ -66,19 +66,25 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 The split is by writer: `unified_document_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state.
 
-Ten binaries ship in a release: `datalib-dag` (the sync runner),
-`datalib-step` (the built-in step commands), `datalib-http` (API
-server + web UI), `datalib-applet` (the applet host, spawned on demand
-by the http gateway; `datalib-applet search` is the search box from the
-command line), `latchkey-curl-router` +
-`curl-impersonate` (Cloudflare-safe HTTP for downloaders),
-`datalib-doltlite` (the shell for reading and exporting the stores —
-see "Reading the mirrored data" below), `datalib-fsindex` (the
-directory-tree scanner, also reachable as a step) and
-`datalib-dirtree-diff` (diffs two of its scans into one HTML page),
-and `datalib-migrate-config` (rewrites a `config.toml` from a retired
-shape; see below). A release's directory holds every one, with
-`latchkey` beside them. End-to-end setup walkthrough:
+The binaries a release ships:
+
+- `datalib-dag` — the sync runner.
+- `datalib-step` — the built-in step commands.
+- `datalib-http` — the API server and web UI.
+- `datalib-applet` — the applet host, which the http gateway spawns on
+  demand; `datalib-applet search` is the search box from the command
+  line.
+- `datalib-doltlite` — the shell for reading and exporting the stores
+  (see "Reading the mirrored data" below).
+- `datalib-migrate-config` — rewrites a `config.toml` from a retired
+  shape (see below).
+- `datalib-fsindex` — the directory-tree scanner, also reachable as a
+  step.
+- `latchkey-curl-router` and `curl-impersonate` — Cloudflare-safe HTTP
+  for the downloaders.
+
+A release's directory holds every one, with `latchkey` beside them.
+End-to-end setup walkthrough:
 [`docs/user/first_time_user.md`](user/first_time_user.md).
 
 ## Configuring sources
@@ -247,8 +253,13 @@ instead of a second one.
 newest closed ones: each with its `roots`, `by`, and `state` (`open`, or
 how it ended: `done`, `failed`, `stopped`). `datalib-dag status
 <config>` prints the open ones from the shell, with the steps turned off and the steps
-running now: one line each, starting `request `, `off ` or `running `,
-or one line starting `idle:` when there is none. To wait for your own
+running now: one line each, starting `request `, `off ` or `running `.
+A line `owed <step>  <n>  as of run <id>` follows for each step at rest
+whose last run ended short of done (stopped, failed, given up) with work
+it saw waiting and did not get to — a Slack sync that was stopped, say,
+with the conversations, threads and files it had not reached; the next
+sync starts on them. With none of these there is one line starting
+`idle:`. To wait for your own
 sync, don't poll: `datalib-dag <config> --sync <step>` returns when its
 request closes. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:

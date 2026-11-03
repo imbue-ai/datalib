@@ -25,8 +25,8 @@ const SRC_SCHEMA: &str = "datalib_mirror_src";
 /// silent clobber of the store's own metadata.
 const RESERVED_TABLES: &[&str] = datalib_etl::doltlite_raw::SHARED_TABLES;
 
-/// Everything the engine needs. Built from a provider's config by its
-/// processor, or from flags by a standalone CLI.
+/// Everything the engine needs, built from a provider's config by its
+/// processor.
 #[derive(Debug, Clone)]
 pub struct MirrorOptions {
     /// The SQLite database to mirror (a `.lrcat` for Lightroom,

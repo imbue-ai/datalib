@@ -11,11 +11,15 @@ mod search;
 pub mod shapes;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use futures::stream::{FuturesOrdered, StreamExt};
 use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, info_span, instrument, warn, Instrument};
@@ -36,7 +40,7 @@ pub use db::{
     block_on_load_all, db_path_for, Enumerated, FetchTarget, LoadedMessage, LoadedRaw,
     MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
-use files::{FileFetcher, FILE_BATCH};
+use files::{File, FileFetcher, FILE_BATCH};
 use frontier::{Frontier, Next, Walk};
 use involving::{InvolvingSearch, InvolvingTotals, Query};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
@@ -57,10 +61,19 @@ pub const DEFAULT_REFRESH_EVERY_MINUTES: i64 = 60;
 /// and an author with no `users` row is looked up on its own.
 pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 
-/// `conversations.list` answers fewer than `limit` after dropping the
-/// archived channels: on a real workspace, 381 open channels took 5
-/// calls at 1000 and 23 at 200.
+/// On a real workspace, 381 open channels took 5 calls at 1000 and 23
+/// at 200; listed with its 469 archived ones, 850 took 5 at 1000.
 const CHANNELS_PER_PAGE: &str = "1000";
+
+/// What `conversations.history` and `conversations.replies` are asked
+/// for per page: Slack's most. It may answer fewer, so a page's size
+/// is never read as the end of anything; the cursor is.
+pub const MESSAGES_PER_PAGE: &str = "999";
+
+/// Requests the walk has out at once, within the source's own limit.
+/// Three is what was measured to read history 5.5 times as fast with no
+/// request rate-limited (INGEST.md § "Three requests at once").
+const AT_ONCE: usize = 3;
 
 // Per-method drivers.
 
@@ -146,11 +159,12 @@ async fn fetch_channels(
     progress: &datalib_etl::progress::Progress,
     latchkey: &LatchkeySettings,
 ) -> Result<Vec<FetchTarget>> {
+    // Archived channels are listed whatever the config says, so each
+    // stored `is_archived` follows Slack's: a listing that left them out
+    // would never say a mirrored channel had been archived.
+    // `channels_for_fetch` leaves them out of the walk unless asked.
     let mut params = BTreeMap::new();
-    params.insert(
-        "exclude_archived".to_string(),
-        if include_archived { "false" } else { "true" }.to_string(),
-    );
+    params.insert("exclude_archived".to_string(), "false".to_string());
     params.insert("limit".to_string(), CHANNELS_PER_PAGE.to_string());
     params.insert("types".to_string(), conversation_types(dms).to_string());
 
@@ -758,6 +772,12 @@ enum Newest<'a> {
     Closed {
         check_due: bool,
     },
+    /// An archived channel, which takes no new messages. `read` once a
+    /// walk that reached its newest message has finished since Slack
+    /// last listed it open.
+    Archived {
+        read: bool,
+    },
     At(&'a str),
 }
 
@@ -769,6 +789,10 @@ const CLOSED_DM_CHECK_EVERY: chrono::Duration = chrono::Duration::days(1);
 
 fn closed_dm_check_key(channel_id: &str) -> String {
     format!("closed_dm:{channel_id}")
+}
+
+fn archived_read_key(channel_id: &str) -> String {
+    format!("archived:{channel_id}")
 }
 
 /// Whether a stretch a conversation `owes` reaches down to its newest
@@ -785,7 +809,9 @@ fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
 /// newest message is already covered costs no request, except its
 /// re-read when `refresh_from` says one is due. A closed DM is walked
 /// whole when its check is due, and otherwise only for a gap under
-/// what is held, which a `since` moved earlier leaves.
+/// what is held, which a `since` moved earlier leaves. An archived
+/// channel is walked whole once, and after that only for such a gap:
+/// nothing in it is new or edited.
 fn to_walk(
     wanted: &[Span],
     refresh_from: Option<&str>,
@@ -794,8 +820,10 @@ fn to_walk(
 ) -> Vec<Stretch> {
     let all = stretches(wanted, refresh_from, held);
     match newest {
-        Newest::Unknown | Newest::Closed { check_due: true } => all,
-        Newest::Closed { check_due: false } => all
+        Newest::Unknown | Newest::Closed { check_due: true } | Newest::Archived { read: false } => {
+            all
+        }
+        Newest::Closed { check_due: false } | Newest::Archived { read: true } => all
             .into_iter()
             .filter(|s| !s.reread && s.span.hi != END_OF_TIME)
             .collect(),
@@ -881,12 +909,11 @@ struct Page {
     last: bool,
 }
 
-/// Owed threads, for [`owed::drain`]: a thread is one record whose
-/// fetch is paged.
+/// Owed threads, for [`owed`]: a thread is one record whose fetch is
+/// paged.
 struct Threads<'a> {
     mirror: &'a Mirror<'a>,
-    /// Top-level messages stored so far, for the progress line.
-    messages: usize,
+    /// Replies stored.
     replies: AtomicUsize,
     pruned: AtomicUsize,
     /// The stored replies that carry files, whose bytes are owed next.
@@ -901,8 +928,7 @@ impl Fetcher<Thread> for Threads<'_> {
     ) -> std::result::Result<Vec<Fetched<Thread>>, BatchError> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
-            let fetched = self.mirror.fetch_thread(&listed.key, &self.replies).await;
-            let outcome = match fetched {
+            let outcome = match self.mirror.fetch_thread(&listed.key).await {
                 Ok(thread) => Outcome::Got(thread),
                 // The loop reads a stop off its flag; every other error
                 // is this thread's.
@@ -911,11 +937,6 @@ impl Fetcher<Thread> for Threads<'_> {
             };
             out.push(Fetched { listed, outcome });
             self.mirror.bar.did(1);
-            self.mirror.bar.doing(&format!(
-                "msgs={} replies={}",
-                self.messages,
-                self.replies.load(Ordering::Relaxed)
-            ));
         }
         Ok(out)
     }
@@ -930,6 +951,8 @@ impl Fetcher<Thread> for Threads<'_> {
         let mut with_files = self.with_files.lock().expect("not poisoned");
         for f in batch {
             if let Outcome::Got(thread) = &f.outcome {
+                let replies = thread.rows.iter().filter(|m| !m.is_thread_root).count();
+                self.replies.fetch_add(replies, Ordering::Relaxed);
                 with_files.extend(
                     thread
                         .rows
@@ -1029,24 +1052,13 @@ impl Mirror<'_> {
         owed::drain(&l, owed, &lookup).await
     }
 
-    /// The next page of `walk`, in one transaction with the stretch it
-    /// settles. `walk` is left where the page after starts.
-    async fn page(&self, channel_id: &str, walk: &mut Walk) -> Result<Page> {
+    /// A page `history_params` asked for, stored in one transaction with
+    /// the stretch it settles. `walk` is left where the page after
+    /// starts.
+    async fn store_page(&self, channel_id: &str, walk: &mut Walk, resp: Value) -> Result<Page> {
+        let params = history_params(channel_id, walk);
         let stretch = &walk.stretch;
         let open_top = stretch.span.hi == END_OF_TIME;
-        let mut params = BTreeMap::new();
-        params.insert("channel".to_string(), channel_id.to_string());
-        params.insert("oldest".to_string(), key_ts(&stretch.span.lo));
-        params.insert("inclusive".to_string(), stretch.inclusive.to_string());
-        params.insert("include_all_metadata".to_string(), "true".to_string());
-        params.insert("limit".to_string(), "200".to_string());
-        if !open_top {
-            params.insert("latest".to_string(), key_ts(&stretch.span.hi));
-        }
-        if let Some(c) = &walk.cursor {
-            params.insert("cursor".to_string(), c.clone());
-        }
-        let resp = call(M_HISTORY, &params, self.latchkey).await?;
         let messages: Vec<Value> = resp
             .get("messages")
             .and_then(|v| v.as_array())
@@ -1110,49 +1122,15 @@ impl Mirror<'_> {
         Ok(Page { rows, pruned, last })
     }
 
-    /// `owed`, one `conversations.replies` walk each. A thread that fails
-    /// costs that thread: an attempt on its own row, which is owed still.
-    /// Returns the stored replies that carry files.
-    async fn fetch_threads(
-        &self,
-        owed: Vec<Listed>,
-        totals: &mut Totals,
-    ) -> Result<Vec<MessageInput>> {
-        let l = owed::Loop {
-            pool: self.db.pool(),
-            table: THREADS,
-            phase: M_REPLIES,
-            stop: self.stop,
-            found: self.found,
-            sealer: self.sealer,
-            batch: 1,
-            concurrency: 1,
-            flush: 1,
-            flush_bytes: 0,
-            failures_in_a_row: 0,
-        };
-        let threads = Threads {
-            mirror: self,
-            messages: totals.messages,
-            replies: AtomicUsize::new(0),
-            pruned: AtomicUsize::new(0),
-            with_files: Mutex::new(Vec::new()),
-        };
-        owed::drain(&l, owed, &threads).await?;
-        totals.replies += threads.replies.into_inner();
-        totals.pruned += threads.pruned.into_inner();
-        Ok(threads.with_files.into_inner().expect("not poisoned"))
-    }
-
     /// Every page of `conversations.replies` for the thread `key` names:
     /// the thread whole, root copy included, or an error.
-    async fn fetch_thread(&self, key: &str, replies: &AtomicUsize) -> Result<Thread> {
+    async fn fetch_thread(&self, key: &str) -> Result<Thread> {
         let (_, channel_id, thread_ts) =
             schema_raw::split_key(key).ok_or_else(|| anyhow::anyhow!("{key}: not a thread key"))?;
         let mut base = BTreeMap::new();
         base.insert("channel".to_string(), channel_id.to_string());
         base.insert("ts".to_string(), thread_ts.to_string());
-        base.insert("limit".to_string(), "200".to_string());
+        base.insert("limit".to_string(), MESSAGES_PER_PAGE.to_string());
 
         let mut rows: Vec<MessageInput> = Vec::new();
         let mut cursor: Option<String> = None;
@@ -1167,13 +1145,10 @@ impl Mirror<'_> {
                 .and_then(|v| v.as_array())
                 .map(|a| a.to_vec())
                 .unwrap_or_default();
-            let page: Vec<MessageInput> = msgs
-                .iter()
-                .filter_map(|m| reply_message_input(self.team_id, channel_id, thread_ts, m))
-                .collect();
-            let on_page = page.iter().filter(|m| !m.is_thread_root).count();
-            replies.fetch_add(on_page, Ordering::Relaxed);
-            rows.extend(page);
+            rows.extend(
+                msgs.iter()
+                    .filter_map(|m| reply_message_input(self.team_id, channel_id, thread_ts, m)),
+            );
 
             let has_more = resp.get("has_more").and_then(|v| v.as_bool());
             cursor = next_cursor(&resp);
@@ -1186,44 +1161,72 @@ impl Mirror<'_> {
         }
     }
 
-    /// `owed` file edges, [`FILE_BATCH`] to a request.
-    async fn fetch_files(&self, owed: Vec<Listed>, totals: &mut Totals) -> Result<()> {
-        let l = owed::Loop {
+    /// The bookkeeping [`owed::write_answer`] writes an answer for
+    /// `table` with. It reads none of the sizes: the walk asks for one
+    /// thread or [`FILE_BATCH`] files at a time, [`AT_ONCE`] at once.
+    fn owed_loop(&self, table: &'static str, phase: &'static str) -> owed::Loop<'_> {
+        owed::Loop {
             pool: self.db.pool(),
-            table: SlackAttachmentRow::TABLE,
-            phase: "files",
+            table,
+            phase,
             stop: self.stop,
             found: self.found,
             sealer: self.sealer,
-            batch: FILE_BATCH,
+            batch: 1,
             concurrency: 1,
-            flush: FILE_BATCH,
+            flush: 1,
             flush_bytes: 0,
             failures_in_a_row: 0,
-        };
-        let files = FileFetcher {
+        }
+    }
+
+    fn file_fetcher(&self) -> FileFetcher<'_> {
+        FileFetcher {
             db: self.db,
             latchkey: self.latchkey,
             blob_size_limit_bytes: self.blob_size_limit_bytes,
             blake3_by_file: self.blake3_by_file,
             bar: self.bar,
             downloaded: AtomicUsize::new(0),
-        };
-        let drained = owed::drain(&l, owed, &files).await?;
-        let downloaded = files.downloaded.into_inner();
-        for (outcome, n) in [
-            ("downloaded", downloaded),
-            ("skipped", drained.got.saturating_sub(downloaded)),
-            ("too_large", drained.skipped),
-            ("error", drained.failed),
-        ] {
-            if n > 0 {
-                *totals.media.entry(outcome.to_string()).or_insert(0) += n;
-            }
         }
-        Ok(())
     }
 }
+
+/// The `conversations.history` params for `walk`'s next page.
+fn history_params(channel_id: &str, walk: &Walk) -> BTreeMap<String, String> {
+    let stretch = &walk.stretch;
+    let mut params = BTreeMap::new();
+    params.insert("channel".to_string(), channel_id.to_string());
+    params.insert("oldest".to_string(), key_ts(&stretch.span.lo));
+    params.insert("inclusive".to_string(), stretch.inclusive.to_string());
+    params.insert("include_all_metadata".to_string(), "true".to_string());
+    params.insert("limit".to_string(), MESSAGES_PER_PAGE.to_string());
+    if stretch.span.hi != END_OF_TIME {
+        params.insert("latest".to_string(), key_ts(&stretch.span.hi));
+    }
+    if let Some(c) = &walk.cursor {
+        params.insert("cursor".to_string(), c.clone());
+    }
+    params
+}
+
+/// A request the walk has out, with its answer once it comes.
+enum Answered {
+    Page(usize, Result<Value>),
+    Thread(
+        Listed,
+        std::result::Result<Vec<Fetched<Thread>>, BatchError>,
+    ),
+    Files(
+        Vec<Listed>,
+        std::result::Result<Vec<Fetched<File>>, BatchError>,
+    ),
+}
+
+/// One request out, answering with when it was asked for. Nothing out
+/// touches the store: the store has one connection, the writer's, and a
+/// request parked holding it would stall the write in front of it.
+type Out<'a> = Pin<Box<dyn Future<Output = (Answered, Instant)> + Send + 'a>>;
 
 /// A thread's place in the queue: its latest reply, or its root when the
 /// listing names none.
@@ -1342,8 +1345,9 @@ pub struct FetchOptions {
     /// source's `latchkey_settings:` block.
     pub latchkey: LatchkeySettings,
     /// Seals what has been written so far, so render can start on the
-    /// channels already walked while the rest are still arriving. `None`
-    /// -- the default -- commits once at the end.
+    /// channels already walked while the rest are still arriving. `None`,
+    /// the default, seals nothing mid-run: the caller's commit at the end
+    /// is the only one, and a caller that closes without it keeps nothing.
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
     /// The store this run writes into, opened and closed by the caller.
     /// A download never opens a store of its own: one writer per file
@@ -1357,6 +1361,9 @@ pub struct FetchOptions {
     /// `0` re-reads it every run.
     pub refresh_every_minutes: i64,
     pub members_only: bool,
+    /// Also mirror archived conversations. A channel named in `channels`
+    /// is mirrored archived or not.
+    pub archived: bool,
     pub media: bool,
     /// Mirror direct messages (1:1 and group). Off by default — see
     /// `SlackApiSync::dms`.
@@ -1394,6 +1401,7 @@ impl FetchOptions {
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             refresh_every_minutes: DEFAULT_REFRESH_EVERY_MINUTES,
             members_only: true,
+            archived: false,
             media: true,
             dms: false,
             dm_conversations: None,
@@ -1461,6 +1469,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "refresh_window_days": opts.refresh_window_days,
         "refresh_every_minutes": opts.refresh_every_minutes,
         "members_only": opts.members_only,
+        "archived": opts.archived,
         "media": opts.media,
         "dms": opts.dms,
         "dm_conversations": opts.dm_conversations,
@@ -1495,12 +1504,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // The two listings need nothing from each other; a DM's title,
         // which needs the user directory, is worked out once both are in.
         // A listing that fails leaves the stored one.
+        let include_archived = opts.archived || opts.channels.is_some();
         let (users, listed) = tokio::join!(
             fetch_users(&db, &now, &setup, &opts.latchkey),
             fetch_channels(
                 &db,
                 opts.members_only,
-                opts.channels.is_some(),
+                include_archived,
                 opts.dms,
                 &setup,
                 &opts.latchkey,
@@ -1515,7 +1525,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             // walking; with none stored there is nothing to do at all.
             Err(e) => {
                 let stored = db
-                    .channels_for_fetch(opts.members_only, opts.channels.is_some(), opts.dms)
+                    .channels_for_fetch(opts.members_only, include_archived, opts.dms)
                     .await?;
                 if stored.is_empty() {
                     return Err(e.context("no channels are stored from an earlier listing"));
@@ -1733,8 +1743,31 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mut checking = vec![false; targets.len()];
         let mut rechecking = vec![false; targets.len()];
         let mut closed = 0usize;
+        let archived: HashSet<&str> = listed
+            .iter()
+            .filter(|t| t.is_archived)
+            .map(|t| t.id.as_str())
+            .collect();
+        // Archived channels whose first walk since Slack archived them is
+        // due.
+        let mut reading_archived = vec![false; targets.len()];
         for (target, (cid, _)) in targets.iter().enumerate() {
+            let archived_read = db
+                .manifest_sweep_age(&archived_read_key(cid), &now)
+                .await?
+                .is_some();
+            if archived_read && !archived.contains(cid.as_str()) {
+                // Listed open again: if Slack archives it later, what was
+                // posted in between is read then.
+                db.forget_manifest_sweep(&archived_read_key(cid)).await?;
+            }
             let newest = match (&open_latest, target >= first_dm) {
+                _ if archived.contains(cid.as_str()) => {
+                    reading_archived[target] = !archived_read;
+                    Newest::Archived {
+                        read: archived_read,
+                    }
+                }
                 (None, _) => Newest::Unknown,
                 (Some(open), is_dm) => match open.get(cid) {
                     Some(latest) => Newest::At(latest),
@@ -1768,7 +1801,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 newest,
             );
             refreshing[target] = walks.iter().any(|w| w.reread);
-            quiet[target] = matches!(newest, Newest::At(_)) && walks.iter().all(|w| w.reread);
+            quiet[target] = matches!(newest, Newest::At(_) | Newest::Archived { read: true })
+                && walks.iter().all(|w| w.reread);
             frontier
                 .walks
                 .extend(walks.into_iter().map(|stretch| Walk::new(target, stretch)));
@@ -1791,6 +1825,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             refreshing = refreshing.iter().filter(|r| **r).count(),
             closed_dms = closed,
             closed_dms_checked = checking.iter().filter(|c| **c).count(),
+            archived = targets
+                .iter()
+                .filter(|(cid, _)| archived.contains(cid.as_str()))
+                .count(),
+            archived_first_read = reading_archived.iter().filter(|r| **r).count(),
             "left out the history with nothing new since what is held"
         );
 
@@ -1820,24 +1859,77 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mut walked = (0..targets.len())
             .filter(|t| quiet[*t] && !walking.contains(t))
             .count();
+        let at_once = AT_ONCE.min(datalib_etl_web::retry::current_or_default().requests_at_once());
+        let threads = Threads {
+            mirror: &mirror,
+            replies: AtomicUsize::new(0),
+            pruned: AtomicUsize::new(0),
+            with_files: Mutex::new(Vec::new()),
+        };
+        let files = mirror.file_fetcher();
+        let thread_loop = mirror.owed_loop(THREADS, M_REPLIES);
+        let file_loop = mirror.owed_loop(SlackAttachmentRow::TABLE, "files");
+        // Answers are written in the order they were asked for, whatever
+        // order they come in, so what the frontier sees between requests,
+        // and so every request after, does not depend on which answered
+        // first.
+        let mut out: FuturesOrdered<Out<'_>> = FuturesOrdered::new();
+        let stopped = || opts.control.stop.requested();
         loop {
-            // Asked to stop: end here rather than make a request the
-            // transport would refuse.
-            if opts.control.stop.requested() {
-                info!(
-                    event = "slack_interrupted",
-                    "told to stop; leaving the rest for the next run"
-                );
+            // Asked to stop: end here, without waiting on what is out or
+            // writing what answered since. It stays owed.
+            if stopped() {
+                break;
+            }
+            while out.len() < at_once {
+                let started = Instant::now();
+                let request: Out<'_> = match frontier.next(FILE_BATCH) {
+                    Next::Nothing => break,
+                    Next::Page(i) => {
+                        let walk = &frontier.walks[i];
+                        let (cid, name) = &targets[walk.target];
+                        bar.doing(&format!("{name}: listing"));
+                        let params = history_params(cid, walk);
+                        let latchkey = &opts.latchkey;
+                        Box::pin(async move {
+                            let answer = call(M_HISTORY, &params, latchkey).await;
+                            (Answered::Page(i, answer), started)
+                        })
+                    }
+                    Next::Thread(listed) => {
+                        let threads = &threads;
+                        Box::pin(async move {
+                            let answer = threads.fetch(vec![listed.clone()]).await;
+                            (Answered::Thread(listed, answer), started)
+                        })
+                    }
+                    Next::Files(owed) => {
+                        let objects = files.objects(&owed).await?;
+                        let files = &files;
+                        Box::pin(async move {
+                            let answer = files.fetch_objects(owed.clone(), objects).await;
+                            (Answered::Files(owed, answer), started)
+                        })
+                    }
+                };
+                out.push_back(request);
+            }
+            let Some((answered, started)) = out.next().await else {
+                break;
+            };
+            if stopped() {
                 break;
             }
             let before = totals.written();
-            let started = std::time::Instant::now();
-            match frontier.next() {
-                Next::Done => break,
-                Next::Threads(owed) => {
-                    let threads = owed.len();
-                    let replies_before = totals.replies;
-                    let with_files = mirror.fetch_threads(owed, &mut totals).await?;
+            match answered {
+                Answered::Thread(listed, answer) => {
+                    let replies_before = threads.replies.load(Ordering::Relaxed);
+                    owed::write_answer(&thread_loop, &threads, vec![listed], answer).await?;
+                    let replies = threads.replies.load(Ordering::Relaxed) - replies_before;
+                    totals.replies += replies;
+                    totals.pruned += threads.pruned.swap(0, Ordering::Relaxed);
+                    let with_files =
+                        std::mem::take(&mut *threads.with_files.lock().expect("not poisoned"));
                     let mut files_found = 0;
                     if opts.media {
                         files_found =
@@ -1847,44 +1939,55 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         }
                     }
                     info!(
-                        event = "slack_threads_read",
-                        threads,
-                        replies = totals.replies - replies_before,
+                        event = "slack_thread_read",
+                        replies,
                         files_found,
                         elapsed_ms = started.elapsed().as_millis() as u64,
-                        "read a batch of threads"
+                        "read a thread"
                     );
                 }
-                Next::Files(owed) => {
-                    let files = owed.len();
-                    let media_before = totals.media.clone();
-                    mirror.fetch_files(owed, &mut totals).await?;
-                    let outcomes: BTreeMap<&str, usize> = totals
-                        .media
-                        .iter()
-                        .map(|(k, n)| (k.as_str(), n - media_before.get(k).copied().unwrap_or(0)))
-                        .filter(|(_, n)| *n > 0)
-                        .collect();
+                Answered::Files(owed, answer) => {
+                    let asked = owed.len();
+                    let downloaded_before = files.downloaded.load(Ordering::Relaxed);
+                    let drained = owed::write_answer(&file_loop, &files, owed, answer).await?;
+                    let downloaded = files.downloaded.load(Ordering::Relaxed) - downloaded_before;
+                    let outcomes: BTreeMap<&str, usize> = [
+                        ("downloaded", downloaded),
+                        ("skipped", drained.got.saturating_sub(downloaded)),
+                        ("too_large", drained.skipped),
+                        ("error", drained.failed),
+                    ]
+                    .into_iter()
+                    .filter(|(_, n)| *n > 0)
+                    .collect();
+                    for (outcome, n) in &outcomes {
+                        *totals.media.entry(outcome.to_string()).or_insert(0) += n;
+                    }
                     info!(
                         event = "slack_files_fetched",
-                        files,
+                        files = asked,
                         outcomes = ?outcomes,
                         elapsed_ms = started.elapsed().as_millis() as u64,
                         "fetched a batch of files"
                     );
                 }
-                Next::Page(i) => {
+                Answered::Page(i, answer) => {
                     let target = frontier.walks[i].target;
                     let open_top = frontier.walks[i].stretch.span.hi == END_OF_TIME;
                     let (cid, name) = &targets[target];
-                    bar.doing(&format!("{name}: listing"));
                     let span = info_span!("channel", channel_name = %name, channel_id = %cid);
-                    match mirror
-                        .page(cid, &mut frontier.walks[i])
-                        .instrument(span)
-                        .await
-                    {
+                    let stored = match answer {
+                        Ok(resp) => {
+                            mirror
+                                .store_page(cid, &mut frontier.walks[i], resp)
+                                .instrument(span)
+                                .await
+                        }
+                        Err(e) => Err(e),
+                    };
+                    match stored {
                         Ok(page) => {
+                            frontier.answered(i, page.last);
                             totals.messages += page.rows.len();
                             totals.pruned += page.pruned;
                             messages_in[target] += page.rows.len();
@@ -1892,9 +1995,6 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                                 news_in[target] += page.rows.len();
                             }
                             queue_owed(&db, &mut frontier, &bar, &page.rows, opts.media).await?;
-                            if page.last {
-                                frontier.walks.remove(i);
-                            }
                         }
                         Err(e) if interrupted(&e) => break,
                         // A channel that failed costs only the rest of its
@@ -1903,7 +2003,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         // files are queued with everyone's.
                         Err(e) => {
                             found.push(listing_problem(&format!("{M_HISTORY} {name}"), &e));
-                            frontier.walks.retain(|w| w.target != target);
+                            frontier.end(target);
                             failed[target] = true;
                         }
                     }
@@ -1918,6 +2018,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         walked += usize::from(!failed[target]);
                         if refreshing[target] && !failed[target] {
                             db.record_manifest_sweep(&refresh_sweep_key(cid), &now)
+                                .await?;
+                        }
+                        if reading_archived[target] && !failed[target] {
+                            db.record_manifest_sweep(&archived_read_key(cid), &now)
                                 .await?;
                         }
                         if checking[target] && !failed[target] {
@@ -1943,7 +2047,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 sealer.wrote((totals.written() - before) as u64).await;
             }
         }
-        if !opts.control.stop.requested() {
+        drop(out);
+        if stopped() {
+            info!(
+                event = "slack_interrupted",
+                "told to stop; leaving the rest for the next run"
+            );
+        } else {
             let started = std::time::Instant::now();
             let users = mirror.fetch_users_owed().await?;
             if users != owed::Drained::default() {
@@ -1978,7 +2088,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         Ok::<(), anyhow::Error>(())
     };
 
-    let result = work.await;
+    // On the heap: the walk's state is large enough, in a build without
+    // optimisation, to overflow a worker thread's stack beside the
+    // futures a caller wraps it in.
+    let result = Box::pin(work).await;
     run.finish(&result, &grand).await;
     result?;
 
@@ -2331,6 +2444,26 @@ mod tests {
         );
     }
 
+    /// An archived channel is read whole once; after that it asks for
+    /// nothing newer and re-reads no window, and only a gap under what
+    /// is held (a `since` moved earlier, a walk cut off) is still owed.
+    #[test]
+    fn an_archived_channel_read_once_owes_only_a_gap_under_what_is_held() {
+        let window = Some("1735000000.000000");
+        let held = [span(SINCE, "1735689600.000300")];
+        assert_eq!(
+            planned_walk(window, &held, Newest::Archived { read: false }).len(),
+            2,
+            "its first read since it was archived also re-reads its window"
+        );
+        assert!(planned_walk(window, &held, Newest::Archived { read: true }).is_empty());
+        let cut_off = [span("1735689600.000050", "1735689600.000300")];
+        assert_eq!(
+            planned_walk(window, &cut_off, Newest::Archived { read: true }),
+            [gap(SINCE, "1735689600.000050", true)]
+        );
+    }
+
     /// A quiet conversation still re-reads its window when one is due,
     /// and only that: the open top above its newest message is not asked.
     #[test]
@@ -2436,6 +2569,7 @@ mod tests {
             id: id.into(),
             name: Some(name.into()),
             is_dm: false,
+            is_archived: false,
             dm_user_ids: Vec::new(),
         }
     }
@@ -2445,6 +2579,7 @@ mod tests {
             id: id.into(),
             name: None,
             is_dm: true,
+            is_archived: false,
             dm_user_ids: vec![user_id.into()],
         }
     }
@@ -2454,6 +2589,7 @@ mod tests {
             id: id.into(),
             name: Some(name.into()),
             is_dm: true,
+            is_archived: false,
             dm_user_ids: members.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -2575,6 +2711,7 @@ mod tests {
             id: "D9".into(),
             name: None,
             is_dm: true,
+            is_archived: false,
             dm_user_ids: Vec::new(),
         };
         let plan = select_targets(&[legacy_group, nameless], None, None, &labels(), SELF);

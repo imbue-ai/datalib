@@ -507,6 +507,67 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
     assert_eq!(chips("group:unified_document_index"), vec![]);
 }
 
+/// A stopped sync's queue is emptied as it ends, and nothing on the row
+/// said what it had not got to. The `owed` its run left reaches the row
+/// of a step at rest, with the run it is from, and the group shows it by
+/// the step's name; a step that owes nothing shows nothing.
+#[tokio::test]
+async fn what_a_step_owes_reaches_its_row_and_its_group() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let owed = |step: &str, value: i64| datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: step.into(),
+            name: datalib_metrics::OWED.into(),
+            labels: String::new(),
+            value,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        };
+        w.metric(owed("slack/ingest", 1412));
+        w.metric(owed("slack/render_markdown", 0));
+    }
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    let ingest = &rows["slack/ingest"]["owed"];
+    assert_eq!(ingest["value"], 1412, "{ingest}");
+    assert_eq!(ingest["unit"], "count");
+    assert!(
+        ingest["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("1,412 the step saw waiting and did not get to before run r1 ended"),
+        "{ingest}"
+    );
+    assert_eq!(
+        rows["slack/render_markdown"]["owed"]["value"],
+        serde_json::Value::Null,
+        "owes nothing: nothing drawn"
+    );
+    let group = &rows["group:slack"]["owed"];
+    assert_eq!(group["value"], 1412, "{group}");
+    assert!(
+        group["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("Ingest: 1,412 the step"),
+        "{group}"
+    );
+    assert_eq!(
+        rows["group:unified_document_index"]["owed"]["value"],
+        serde_json::Value::Null
+    );
+}
+
 /// The dashboard reads one run for a group: each step that took part
 /// with every series it reported and its warning and error lines
 /// counted up, and a step that did not, marked absent — in config order.

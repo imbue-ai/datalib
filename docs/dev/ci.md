@@ -42,6 +42,14 @@ reference behind them.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 
+Each bazel job first deletes the runner's unused preinstalls (Android
+SDK, .NET, GHC), which the job mounts into its container for the
+purpose (`prepare-bazel`'s "Free the runner's disk"). A runner starts
+with about 14 GB free, and the image and the build have left as little
+as 2.6 GB of it: under the pipeline's 10 GB `[disk_space]` floor, so
+every test that syncs waited on `waiting for disk space` until it timed
+out. The step prints `df -h /` before and after.
+
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
 checkout step), not the branch head. So when `main` moves, the PR's

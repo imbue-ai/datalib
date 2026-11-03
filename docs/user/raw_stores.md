@@ -501,6 +501,8 @@ user, channel or message JSON from `users.list`,
 `workspaces.self_user_id` is the account the mirror signs in as, which
 is how to tell "me" from everyone else. A direct message is a
 `channels` row with `is_dm = 1`; `dm_user_ids` lists who is in it.
+`channels` holds every channel Slack listed, archived ones
+(`is_archived = 1`) too, whether or not their messages are mirrored.
 
 **Threads.** `is_thread_root = 1` is set on **every top-level
 message**, whether anyone replied or not; a reply has 0. Every message,
@@ -551,7 +553,8 @@ messages of a DM closed in the account's Slack sidebar (Slack reopens a
 DM when a message arrives and the next sync reads it, but one closed
 again before that sync is only read by the daily check of closed DMs);
 channels the account is not in,
-unless it sets `all_channels`; with `scope = "involves_me"`, channels
+unless it sets `all_channels`; archived channels, unless it sets
+`archived = true` or names them in `channels`; with `scope = "involves_me"`, channels
 where nothing involves the account, and the part of each channel
 before `context_before` (and after `context_after`, when set); files, when it sets `media = false`;
 Slack Lists. A message deleted in Slack is dropped from the mirror only

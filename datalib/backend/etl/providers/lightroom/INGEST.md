@@ -576,15 +576,10 @@ path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 and, for a folder of backups beside it or instead of it,
 `[steps.params.backups]` with `path = "~/Pictures/Lightroom/Backups"`.
 
-Or standalone, with `--catalog` (a `.lrcat` or a `.zip`), `--backups`,
-or both:
-
-```sh
-bazelisk build //datalib/backend/etl/providers/lightroom:lightroom_ingest
-bazel-bin/datalib/backend/etl/providers/lightroom/lightroom_ingest \
-  --catalog ~/Pictures/Lightroom/Catalog.lrcat \
-  --db ~/backups/lightroom.doltlite_db
-```
+To run it with no config, run `datalib-step` by hand with those params
+as JSON; [`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One
+source's download, with no config" has this exact case. The backup is
+then `<root>/lightroom/ingest/entities.doltlite_db`.
 
 ## Reading the backup
 
@@ -594,7 +589,7 @@ has where to get it and the general recipes):
 ```sh
 bazelisk build //third-party/doltlite:doltlite
 dl=bazel-bin/third-party/doltlite/doltlite
-db=~/backups/lightroom.doltlite_db
+db=~/lr-root/lightroom/ingest/entities.doltlite_db
 
 # What has this backup captured?
 $dl -readonly $db "SELECT commit_hash, date, message FROM dolt_log;"

@@ -1,12 +1,12 @@
-# Setup every bazel job in this repo needs, in one place: point bazel at the
-# BuildBuddy cache. Both `test.yml` jobs use it; `release.yml`'s matrix legs
+# Setup every bazel job in this repo needs, in one place: room on the
+# runner's disk, and bazel pointed at the BuildBuddy cache. Both `test.yml` jobs use it; `release.yml`'s matrix legs
 # do their own thing because they run on bare runners rather than in the
 # devcontainer.
 #
 # Callers must run `actions/checkout` first — a local composite action is
 # loaded from the checked-out workspace, so it cannot check itself out.
 name: Prepare bazel environment
-description: Configure the BuildBuddy remote cache.
+description: Free the runner's disk and configure the BuildBuddy remote cache.
 
 inputs:
   buildbuddy-api-key:
@@ -30,6 +30,20 @@ inputs:
 runs:
   using: composite
   steps:
+    # Under 10 GB free the pipeline holds every step, so a test that
+    # syncs would wait out its timeout (docs/dev/ci.md § "What runs
+    # where"). The job mounts the runner's unused preinstalls under
+    # /runner-unused; a mount point cannot be removed, only emptied.
+    - name: Free the runner's disk
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        df -h /
+        for dir in /runner-unused/*; do
+          find "$dir" -mindepth 1 -delete || true
+        done
+        df -h /
     # The devcontainer image carries a pre-fetched output base at these
     # paths (`PREFETCH_OUTPUT_BASE` in `.devcontainer/Dockerfile`): every
     # external repository already downloaded and extracted. Pointing

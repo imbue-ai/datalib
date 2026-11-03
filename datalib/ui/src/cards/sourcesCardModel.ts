@@ -123,7 +123,9 @@ is no pace to go by: <i>stalled</i> (nothing has moved for a minute),
 step reads in passes climbs as work arrives and falls to nothing when a pass ends,
 so its ETA holds steady through the climb rather than reading it as growth. A group shows no queue, since its steps
 count different things, and waits on its slowest step; a stall anywhere under it shows. Hover either for how it
-was reached. The <b>chart button</b> in a row's Actions — or <b>Show sync dashboard</b> on its
+was reached. Once a row is at rest, its Status says what its last run saw waiting and did not get to — a sync
+stopped, given up or failed part way (<i>412 owed</i>); the next sync starts on it, and a group shows its
+first step that owes. The <b>chart button</b> in a row's Actions — or <b>Show sync dashboard</b> on its
 menu — opens the group's
 <b>sync dashboard</b>: its row and each step's,
 laid out one under another with the same actions, charts over the run — what was

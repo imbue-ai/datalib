@@ -2,7 +2,7 @@
 
 The ingest step of a `slack` group mirrors a Slack workspace into
 `<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
-beside it (`slack-ingest` does the same from the command line). The
+beside it. The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
 `channels`, `messages`, `threads` (one id per thread whose replies have
 been asked for), `slack_attachments` (the edges to file bytes in the
@@ -116,6 +116,41 @@ A DM is titled after its counterparts — `@Jean-Luc Picard`,
 `mpdm-…` handle is the fallback when participants can't be resolved;
 it is not split back into people, because a Slack handle may itself
 contain dashes.
+
+### Archived channels
+
+Every run lists `conversations.list` with the archived channels in
+(`exclude_archived=false`), whatever the config, so each stored
+`is_archived` follows Slack's. A listing that left them out would
+never say that a channel mirrored while open had since been archived,
+and the run would go on walking it. Listing them costs no extra
+request: on a real workspace, 850 channels, 469 of them archived, took
+5 calls at 1000, as many as its 381 open ones alone.
+
+Which of them a run walks is `channels_for_fetch`'s choice: archived
+ones only when the source sets `archived = true`, or names them in
+`channels` (a named channel is mirrored archived or not). Without
+`all_channels` the member filter above still applies, and Slack mostly
+drops membership when it archives a channel: of those 469, the account
+was still a member of 7. So **`archived` is meant with
+`all_channels`**; on its own it adds next to nothing.
+
+The flag covers every conversation the run mirrors, so with `dms` it
+also brings in a DM Slack marks archived. With `scope = "involves_me"`
+an archived channel is one more channel search can choose.
+
+**An archived channel is read once.** It takes no new messages and no
+edits, but `client.counts` rarely says so: it listed 1 of those 469
+archived channels (and 127 of the 381 open ones), so each of the rest
+would have cost a history request every run. Instead, the first run
+that finds a channel archived walks it whole, as any channel
+`client.counts` does not name, and stamps a sweep marker
+(`archived:<id>`) when that walk ends. While the marker is there the
+channel is quiet: no request for anything newer and no refresh-window
+re-read, only a gap under what is held (a `since` moved earlier, a
+walk cut off). The marker is dropped the first time a listing shows
+the channel open again; from then on the usual rules walk it, and if
+Slack archives it again, what was posted in between is read once more.
 
 ### Which conversations a run walks
 
@@ -252,8 +287,8 @@ range. Setting it to 7 on a fresh store still walks everything from
 window is counted back from the run's own clock (`FetchOptions::now`,
 which the step pins), as the age of a listing sweep is.
 
-Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30), for a configured
-source and for the `slack-ingest` CLI alike. `0` turns the pass off.
+Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30). `0` turns the pass
+off.
 
 ## What a run still owes
 
@@ -271,8 +306,11 @@ nothing to remember in between.
 | reply time, searched | everything from `since` to half an hour ago | the `coverage` spans of scope `replies:<channel>` | the gaps |
 | a file's bytes | an edge in `slack_attachments`, written with its message | the edge's `blake3`, and the fetch that landed it | an edge with no `blake3`, when `media` is on |
 
-**History.** `conversations.history` returns a stretch newest first.
-Each page is one transaction: its messages, an edge for each file they
+**History.** `conversations.history` returns a stretch newest first,
+asked for 999 messages a page (`MESSAGES_PER_PAGE`, Slack's most, and
+the same for `conversations.replies`). Slack may answer fewer, so a
+short page is not read as the end; the cursor says whether there is
+more. Each page is one transaction: its messages, an edge for each file they
 carry, and a `coverage` span for the stretch the page settles, from its
 oldest message up to where the page before left off (the last page
 reaches the bottom of the stretch). A walk cut off after its first page
@@ -300,11 +338,12 @@ version (`held_version` in `threads_bookkeeping`, keyed like the root).
 It is a query over every stored root, not over the roots this run
 happened to list, so a root stored by a run that died before its replies
 is owed. Each history page then adds the threads its own roots owe. A
-thread is one record whose fetch is paged: `owed::drain` asks
-for one at a time, `conversations.replies` is walked to its end, and one
-transaction stores the thread's row and messages, deletes the stored
-replies the walk did not return, and holds the thread at the version it
-was listed at. A walk cut off part way stores nothing of the thread.
+thread is one record whose fetch is paged: the walk asks for one thread
+per request, `conversations.replies` is walked to its end, and one
+transaction (`owed::write_answer`) stores the thread's row and
+messages, deletes the stored replies the walk did not return, and
+holds the thread at the version it was listed at. A walk cut off part
+way stores nothing of the thread.
 Until a thread is read, its root's page says how many replies are not
 mirrored yet ([`../slack_render/TRANSLATE.md`](../slack_render/TRANSLATE.md)
 §"Replies not mirrored yet").
@@ -360,8 +399,8 @@ newest message fetching it brings:
 - the owed threads, at their `latest_reply`;
 - the owed files, at their message's `ts`.
 
-The next request is for the threads, then the files, owed at or above
-the newest page any walk has left, and otherwise for that page. Every
+The next request is for a thread, then files, owed at or above the
+newest page any walk can ask for now, and otherwise for that page. Every
 channel's first page is asked for before any channel's second, because
 until it answers nothing says where a channel's newest message is. So a
 thread with a reply this morning on a root from last year is read
@@ -371,6 +410,37 @@ This changes only when a request is made, never what it asks: every
 request is one the walk of a single channel would make, with the same
 `oldest`, `latest` and cursor. Nothing about the order is stored. Each
 run works out what is owed from the store, as above, and orders that.
+
+### Three requests at once
+
+The walk keeps up to three requests out (`AT_ONCE`), or fewer when the
+source's `common.download_params.maximum_requests_at_once` is lower.
+Each is the next one the rule above picks from what is not already
+asked for. A channel with a page out asks for nothing more of its
+history until that page answers, since the next page's cursor comes
+from it; meanwhile other channels' pages, threads and files go out. A
+first sync therefore asks for three channels' first pages together.
+With one request at a time the order is exactly the rule above; with
+three, a thread or a file owed below a page that is out can go before
+that page answers.
+
+Answers are written by the one writer in the order they were asked
+for, whatever order they arrive in. What the walk sees between two
+requests, and so every request it makes after, does not depend on
+which answer came first, and the store a run leaves is the one a run
+making one request at a time leaves (`tests/slack_tests/requests_at_once.rs`).
+A request that is out never reads or writes the store: the store has
+one connection, the writer's, and a request parked holding it would
+stall the write ahead of it. So a batch of files has its file objects
+read before its request goes out. A stop ends the walk at once; what
+is out, and an answer that arrived after the stop, is dropped unwritten
+and stays owed. Rate limits and retries stay per request, in the
+shared transport ([Rate limits](#rate-limits)).
+
+Three is what was measured: on one workspace, pages of 999 three at a
+time read history 5.5 times as fast as pages of 200 one at a time, and
+Slack rate-limited none of it. Slack limits each method on its own, so
+more at once would mostly wait out 429s.
 
 ## Noticing a deleted message
 
@@ -463,6 +533,8 @@ what is owed is computed from the config a run has now.
 | `media` off → on | Every edge without bytes is owed, and fetched from its stored message. No channel is walked again. |
 | `common.blob_size_limit_bytes` raised | The edges skipped for their size are still without bytes, so they are fetched. |
 | a new channel, or `dms` on | The conversation has no coverage, so it is walked from `since` once `client.counts` shows a message in range, names nothing, or leaves out a DM whose check is due (see [Which conversations a run walks](#which-conversations-a-run-walks)). |
+| `archived` on | Each archived channel the walk now takes in has no coverage, so it is walked from `since`, once. |
+| `archived` off | Nothing. What is stored stays; the archived channels are no longer walked. |
 
 ## What appeared since the last sync
 
@@ -471,10 +543,10 @@ or users, so each is found its own way.
 
 - **Channels.** Every run lists `conversations.list` whole, so a channel
   created a minute ago, or the DMs `dms = true` just asked for, are
-  walked by the next run. It asks for 1000 a page: Slack drops the
-  archived channels from a page after filling it, so it answers fewer
-  than it was asked for, and on a real workspace 381 open channels took
-  5 calls at 1000 and 23 at 200.
+  walked by the next run. It asks for 1000 a page, archived channels
+  included ([Archived channels](#archived-channels)); on a real
+  workspace 850 channels took 5 calls at 1000, where its 381 open ones
+  had taken 23 at 200.
 - **Users.** `users.list` is listed at most once per `MANIFEST_TTL` (six
   hours), since its rows change only when someone edits a profile. A
   person who posts for the first time does not wait for it: storing a
@@ -531,13 +603,14 @@ not hosted elsewhere) is a `slack_attachments` row, written without a
 
 When `media` is on, the owed files are fetched in the run's
 newest-first order (see [The order a run fetches in](#the-order-a-run-fetches-in))
-through `owed::drain` (`ingest/files.rs`), from the
+and stored through `owed::write_answer` (`ingest/files.rs`), from the
 file object the stored message carries: a request is `FILE_BATCH` files,
 and storing them puts their bytes into the blob CAS (its own file, which
 commits itself) before the one transaction that gives their edges a
 `blake3` and holds them, so a kill between leaves only unnamed bytes. A
 file whose bytes we already hold, under any message, is not fetched
-again.
+again, unless two batches out at once both carry it: the CAS keeps one
+copy either way.
 
 A file that does not land — the fetch failed, or it is over
 `common.blob_size_limit_bytes` — keeps its edge without bytes, with
@@ -617,7 +690,8 @@ source's `common.download_params` limit on requests at once:
 `users.list` beside `conversations.list`; then `client.counts`,
 `saved.list` and the bookmarks beside the reply search. Each page of
 one listing still waits for the page before it, since its cursor
-names where the next one starts.
+names where the next one starts. The walk after them keeps up to three
+requests out ([Three requests at once](#three-requests-at-once)).
 
 ## Rate limits
 

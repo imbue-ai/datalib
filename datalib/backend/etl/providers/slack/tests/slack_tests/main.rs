@@ -2,6 +2,7 @@
 //! behaviour.
 
 mod account_state;
+mod archived;
 mod attachment_retry;
 mod config_change_backfill;
 mod dm_ingest;
@@ -20,6 +21,7 @@ mod progress_countdown;
 mod quiet_channels;
 mod reply_count;
 mod reply_search;
+mod requests_at_once;
 mod run_problems;
 mod slack_render;
 mod slack_translate;

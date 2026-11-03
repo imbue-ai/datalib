@@ -90,13 +90,15 @@ impl std::fmt::Debug for Progress {
 struct NoopSink;
 impl ProgressSink for NoopSink {}
 
-/// One bar for a whole run, whose announced total only ever grows.
+/// One bar for a whole run, whose announced total only grows, but for
+/// work the run itself decides not to do ([`RunBar::forgo`]).
 ///
 /// A step cannot have two independent progress bars: the runner sums
 /// every increment into one `done` and keeps only the last total, so a
 /// second bar announcing its own size pins the Manage screen's
 /// "N queued" at zero. `datalib/backend/dag/README.md` § "One bar per
-/// step" has the whole rule.
+/// step" has the whole rule. What is still on it when the step ends is
+/// what the step owes, so a tick announced is a tick done or owed.
 ///
 /// Shared and interior-mutable so it passes by reference the way
 /// [`Progress`] does. A phase that fans out ticks from its tasks and
@@ -105,6 +107,7 @@ impl ProgressSink for NoopSink {}
 pub struct RunBar {
     bar: Progress,
     announced: Arc<AtomicU64>,
+    done: Arc<AtomicU64>,
 }
 
 impl RunBar {
@@ -119,6 +122,7 @@ impl RunBar {
         Self {
             bar: progress.clone(),
             announced: Arc::new(AtomicU64::new(fixed)),
+            done: Arc::default(),
         }
     }
 
@@ -151,7 +155,31 @@ impl RunBar {
         self.announced.load(Ordering::SeqCst)
     }
 
+    /// Take back `n` ticks announced for work this run will not do and
+    /// does not owe: what a cap in the config leaves out, what upstream
+    /// refuses to show, what the store turned out to hold already. Left on
+    /// the bar, they would read as owed once the step ends.
+    pub fn forgo(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        let before = self
+            .announced
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                Some(cur.saturating_sub(n))
+            })
+            .unwrap_or_else(|cur| cur);
+        self.bar.set_length(Some(before.saturating_sub(n)));
+    }
+
+    /// What has been ticked done so far, so a phase can tell what of its
+    /// own it reached.
+    pub fn done(&self) -> u64 {
+        self.done.load(Ordering::SeqCst)
+    }
+
     pub fn did(&self, n: u64) {
+        self.done.fetch_add(n, Ordering::SeqCst);
         self.bar.inc(n);
     }
 
@@ -321,8 +349,12 @@ mod tests {
         finish_and_clear: Arc<AtomicUsize>,
         checkpoints: Arc<std::sync::Mutex<Vec<String>>>,
         metrics: Arc<std::sync::Mutex<Vec<(String, i64)>>>,
+        lengths: Arc<std::sync::Mutex<Vec<Option<u64>>>>,
     }
     impl ProgressSink for RecordingSink {
+        fn set_length(&self, total: Option<u64>) {
+            self.lengths.lock().unwrap().push(total);
+        }
         fn finish_and_clear(&self) {
             self.finish_and_clear.fetch_add(1, Ordering::SeqCst);
         }
@@ -423,5 +455,18 @@ mod tests {
                 "FanOut must forward metric to its {name} sink",
             );
         }
+    }
+
+    /// What is left on a run's bar when its step ends is what the step
+    /// owes, so work the run takes back comes off the total it announced.
+    #[test]
+    fn work_forgone_comes_off_the_announced_total() {
+        let sink = Arc::new(RecordingSink::default());
+        let bar = RunBar::new(&Progress::new(sink.clone()), 10);
+        bar.did(3);
+        bar.forgo(4);
+        bar.forgo(0);
+        assert_eq!((bar.announced(), bar.done()), (6, 3));
+        assert_eq!(*sink.lengths.lock().unwrap(), vec![Some(10), Some(6)]);
     }
 }

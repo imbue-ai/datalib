@@ -206,7 +206,6 @@ The first sync from a given source is often very long (hours to days, many GB, s
 - Every binary flattens [`obs::ObsArgs`](/datalib/backend/obs/src/lib.rs) into its clap parser, so every stage takes the same logging / OTLP flags. On a TTY, pretty log lines on stderr; otherwise JSON. Log emissions route through an `IndicatifWriter` coordinating with the shared `MultiProgress` (`datalib_obs::shared_multi()`) so progress bars don't get stomped by log lines. Where each log line goes and how to read it: [`logging.md`](logging.md).
 - `GET /metrics` on `datalib-http` serves every step's counters and gauges in Prometheus's text format, for any scraper ([`logging.md`](logging.md) §"From outside the app").
 - `--otlp-endpoint http://host:4317` exports spans + events via OTLP, so a single Tempo/Jaeger collector can ingest every stage. (See [the privacy-boundary unresolved question](/docs/dev/data_architecture_ingestion_practices.md#observability-and-the-privacy-boundary) for the contract that constrains what may be in those spans.)
-- A provider's standalone download binary ends with a `*_download_complete` event (`slack_download_complete`, `jmap_download_complete`, …) carrying the counts from its `FetchSummary`.
 - Long-running operations must report something visible every few seconds; a download that walks 100k items silently for an hour is a bug.
 
 ## Stoppable and resumable
@@ -604,7 +603,10 @@ stop that writes what was answered, and one outcome per record (got;
 got but partly unusable, held with a warning; gone; failed, owed with
 an error; skipped by our rule, owed with a warning). A provider says
 how it lists, how it fetches a batch and how it stores one; how a stop,
-a failure, a skip or a give-up is handled is in `owed.rs`, once.
+a failure, a skip or a give-up is handled is in `owed.rs`, once. A
+provider whose next request depends on the last answer (Slack's
+newest-first walk) makes its own requests and writes each answer
+through `owed::write_answer`, which writes it as `drain` would.
 
 The one position kept is upstream's own **delta token** (JMAP `state`,
 Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,

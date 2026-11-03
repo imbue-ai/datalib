@@ -15,7 +15,7 @@ pub mod ingest;
 pub mod mirror;
 pub mod plan;
 
-pub use ingest::{fetch, fetch_and_commit, FetchOptions};
+pub use ingest::{fetch, FetchOptions};
 pub use mirror::{
     open_mirror, open_sqlite, run, run_or_report, snapshot, MirrorOptions, MirrorStats,
     NothingToMirror, Snapshot,

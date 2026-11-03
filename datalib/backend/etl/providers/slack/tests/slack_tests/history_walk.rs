@@ -2,7 +2,7 @@
 //! what a run still owes of it is the range wanted minus the stretches
 //! its pages covered.
 
-use datalib_etl_slack::ingest::{db_path_for, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, History, DEFAULT_SINCE_TS};
 use serde_json::json;
 
@@ -20,7 +20,7 @@ async fn a_walk_that_fails_after_its_first_page_is_finished_from_under_it() {
     let first = Tree::new();
     record_general(&first.api);
     let cold = json!({"channel": "C1", "include_all_metadata": "true", "inclusive": "true",
-                      "limit": "200", "oldest": DEFAULT_SINCE_TS});
+                      "limit": MESSAGES_PER_PAGE, "oldest": DEFAULT_SINCE_TS});
     record_call(
         &first.api,
         "conversations.history",

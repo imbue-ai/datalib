@@ -160,14 +160,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* What is queued and when it is done, after the status of a row at work. */
+/* What is queued and when it is done, after the status of a row at work;
+   what is owed, after the status of a row at rest. */
 .sx-queue,
-.sx-eta {
+.sx-eta,
+.sx-owed {
   flex: 0 0 auto;
   color: var(--datalib-muted);
 }
 .sx-queue::before,
-.sx-eta::before {
+.sx-eta::before,
+.sx-owed::before {
   content: "· ";
   color: var(--datalib-faint);
 }

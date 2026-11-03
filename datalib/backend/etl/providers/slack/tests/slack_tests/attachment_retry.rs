@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_etl::blob_cas::blake3_hex;
-use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{record_call, History};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::synthesize::write_fixture;
@@ -72,7 +72,7 @@ fn first_world_failing_after_the_first_page(file_status: u16) -> Tree {
             "channel": "C1",
             "include_all_metadata": "true",
             "inclusive": "true",
-            "limit": "200",
+            "limit": MESSAGES_PER_PAGE,
             "oldest": datalib_etl_slack::recorded::DEFAULT_SINCE_TS,
         }),
         json!({

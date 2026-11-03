@@ -8,7 +8,7 @@ use std::path::Path;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+use datalib_etl_slack::ingest::{db_path_for, fetch, FetchOptions, RawDb, MESSAGES_PER_PAGE};
 use datalib_etl_slack::recorded::{
     record_auth, record_call, record_conversations, record_users, CHANNEL_TYPES, DEFAULT_SINCE_TS,
 };
@@ -17,7 +17,7 @@ use datalib_etl_web::playback;
 use serde_json::{json, Value};
 
 use crate::every_cut::ts;
-use crate::support::{stored_ts, Tree};
+use crate::support::{one_at_a_time, stored_ts, Tree};
 
 /// `#archive`'s thread: its root is the channel's third-oldest message,
 /// and its replies are newer than anything in `#bridge`.
@@ -32,7 +32,7 @@ fn said(n: u64) -> Value {
 /// first.
 fn record_two_pages(api: &Path, channel: &str, first: Vec<Value>, second: Vec<Value>) {
     let page = json!({"channel": channel, "include_all_metadata": "true", "inclusive": "true",
-                      "limit": "200", "oldest": DEFAULT_SINCE_TS});
+                      "limit": MESSAGES_PER_PAGE, "oldest": DEFAULT_SINCE_TS});
     record_call(
         api,
         "conversations.history",
@@ -88,14 +88,15 @@ fn record_workspace(api: &Path) {
     record_call(
         api,
         "conversations.replies",
-        json!({"channel": "C1_ARCHIVE", "ts": ts(ROOT), "limit": "200"}),
+        json!({"channel": "C1_ARCHIVE", "ts": ts(ROOT), "limit": MESSAGES_PER_PAGE}),
         json!({"ok": true, "has_more": false, "messages": messages}),
     )
     .unwrap();
 }
 
 /// One download into `dir`, killed at its `at`-th request. Returns the
-/// requests it made.
+/// requests it made. One request at a time, so the order requests are
+/// made in is the order they land in.
 async fn download(dir: &Path, at: Option<u64>) -> u64 {
     let db = RawDb::open(&db_path_for(dir)).await.unwrap();
     let stop = StopFlag::new();
@@ -109,7 +110,13 @@ async fn download(dir: &Path, at: Option<u64>) -> u64 {
         },
         ..FetchOptions::new(db.clone())
     };
-    let ran = run(at, How::Kill, stop, fetch(opts)).await;
+    let ran = run(
+        at,
+        How::Kill,
+        stop.clone(),
+        one_at_a_time(stop, fetch(opts)),
+    )
+    .await;
     db.commit_all("test").await.unwrap();
     db.close().await;
     ran.requests
