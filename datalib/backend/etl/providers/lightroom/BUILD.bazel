@@ -62,24 +62,6 @@ rust_test(
     ],
 )
 
-rust_binary(
-    name = "lightroom_ingest",
-    srcs = ["src/bin/lightroom_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_lightroom",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/etl/files:datalib_etl_files",
-        "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
-        "//datalib/backend/obs:datalib_obs",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
-
 # Four real Lightroom catalogs from github.com/thadd3us/lightroom_db_diff,
 # fetched by Bazel (see the `http_file` block in MODULE.bazel) rather than
 # vendored: ~7 MB of binary that would otherwise sit in this repo's

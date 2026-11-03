@@ -2,8 +2,7 @@
 
 The ingest step of a `slack` group mirrors a Slack workspace into
 `<data_root>/<group>/ingest/entities.doltlite_db`, with the blob CAS
-beside it (`slack-ingest` does the same from the command line, sealing
-and committing the store the way the step does). The
+beside it. The
 tables (`src/ingest/schema_raw.rs`) are `workspaces`, `users`,
 `channels`, `messages`, `threads` (one id per thread whose replies have
 been asked for), `slack_attachments` (the edges to file bytes in the
@@ -253,8 +252,8 @@ range. Setting it to 7 on a fresh store still walks everything from
 window is counted back from the run's own clock (`FetchOptions::now`,
 which the step pins), as the age of a listing sweep is.
 
-Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30), for a configured
-source and for the `slack-ingest` CLI alike. `0` turns the pass off.
+Unset, it is `DEFAULT_REFRESH_WINDOW_DAYS` (30). `0` turns the pass
+off.
 
 ## What a run still owes
 

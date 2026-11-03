@@ -46,22 +46,6 @@ rust_library(
     ],
 )
 
-rust_binary(
-    name = "claude_ingest",
-    srcs = ["src/bin/claude_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_claude",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/obs:datalib_obs",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
-
 # Every hermetic Claude test in one binary; the modules are listed in
 # its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
 # link of the provider stack and that is most of what a test here costs.

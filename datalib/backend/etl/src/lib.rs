@@ -34,7 +34,6 @@ pub mod raw_store;
 pub mod run_problems;
 pub mod scope_state;
 pub mod sniff;
-pub mod standalone;
 pub mod stop;
 pub mod store_handle;
 pub mod upstream;

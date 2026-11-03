@@ -1,7 +1,5 @@
-//! Indicatif-backed [`ProgressSink`] shared by every binary that wants
-//! a live terminal progress bar — the CLI pipeline binaries
-//! and the standalone provider CLIs (`fsindex`, the various
-//! `<provider>_download` bins) alike.
+//! Indicatif-backed [`ProgressSink`] for a binary that wants a live
+//! terminal progress bar: the standalone `fsindex` CLI.
 //!
 //! One bar per step, never a tree of them: a step cannot have two
 //! independent bars (`datalib/backend/dag/README.md` § "One bar per

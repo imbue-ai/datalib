@@ -41,22 +41,6 @@ rust_library(
     ],
 )
 
-rust_binary(
-    name = "notion_ingest",
-    srcs = ["src/bin/notion_ingest.rs"],
-    edition = "2021",
-    visibility = ["//datalib:__subpackages__"],
-    deps = [
-        ":datalib_etl_notion",
-        "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/obs:datalib_obs",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:clap",
-        "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "notion_unittests",
     size = "small",

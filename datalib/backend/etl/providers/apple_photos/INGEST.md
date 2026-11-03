@@ -183,14 +183,12 @@ path = "~/Pictures/Photos Library.photoslibrary"
 
 `library.path` may name the bundle or the `Photos.sqlite` inside it.
 
-Or standalone:
-
-```sh
-bazelisk build //datalib/backend/etl/providers/apple_photos:apple_photos_ingest
-bazel-bin/datalib/backend/etl/providers/apple_photos/apple_photos_ingest \
-  --library ~/Pictures/Photos\ Library.photoslibrary \
-  --db ~/backups/photos.doltlite_db
-```
+To run it with no config, run `datalib-step` by hand with
+`DATALIB_DAG_GROUP_TYPE=apple_photos` and those params as JSON,
+`{"library": {"path": "…"}}`
+([`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One source's
+download, with no config"). The backup is then
+`<root>/<group>/ingest/entities.doltlite_db`.
 
 Reading the backup is as for lightroom (`dolt_log`, `dolt_diff_<table>`,
 `dolt_history_<table>`; the Bazel-built `doltlite` shell). The queries
