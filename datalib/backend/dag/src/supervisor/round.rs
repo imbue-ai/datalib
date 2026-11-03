@@ -9,6 +9,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use super::announce::{Listener, CONFIG_CHANGED};
+use super::inputs;
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
@@ -587,7 +588,7 @@ impl Runner {
                 seq += 1;
                 facts.steps[i].running = Some(Running { started: Seq(seq) });
                 let (stop, rx) = watch::channel(false);
-                let ctx = self.ctx_for(graph, &facts, i, &start.consumed, &checkpoint, rx);
+                let ctx = self.ctx_for(graph, &facts, &state, i, &start.consumed, &checkpoint, rx);
                 let started_at = now_stamp();
                 mark_running(&mut state, &graph.steps[i].id, &started_at);
                 let invocation = InvocationRow {
@@ -1107,26 +1108,38 @@ impl Runner {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn ctx_for(
         &self,
         graph: &Graph,
         facts: &Facts,
+        state: &Record,
         i: usize,
         consumed: &Consumed,
         checkpoint: &crate::step::CheckpointSink,
         stop: watch::Receiver<bool>,
     ) -> StepCtx {
         let spec = &graph.steps[i];
-        // "What moved" only means something against a success under the same
-        // definition; otherwise the step redoes all of its work.
-        let changed_inputs: Vec<ArtifactPath> = match &facts.steps[i].last_success {
-            Some(last) if last.fingerprint == consumed.fingerprint => graph
-                .deps_in_order(i)
-                .filter(|p| last.reads.get(p) != consumed.reads.get(p))
-                .map(|p| graph.steps[p].output())
-                .collect(),
-            _ => vec![],
+        let producers: Vec<usize> = graph.deps_in_order(i).collect();
+        let paths = |ps: Vec<usize>| -> Vec<ArtifactPath> {
+            ps.into_iter().map(|p| graph.steps[p].output()).collect()
         };
+        let changed_inputs = paths(inputs::changed(
+            &producers,
+            facts.steps[i].last_success.as_ref(),
+            consumed,
+        ));
+        let recorded = |p: usize| {
+            let last = state.steps.get(&graph.steps[p].id)?.last_run.as_ref()?;
+            RunState::parse(&last.status)
+        };
+        let failed_inputs = paths(
+            producers
+                .iter()
+                .copied()
+                .filter(|&p| inputs::ended_short(&facts.steps[p], recorded(p)))
+                .collect(),
+        );
         StepCtx {
             step_id: spec.id.clone(),
             group: spec.group.clone(),
@@ -1135,6 +1148,7 @@ impl Runner {
             data_root: self.data_root.clone(),
             inputs: graph.resolved_inputs[i].clone(),
             changed_inputs,
+            failed_inputs,
             reads: paths_of(graph, consumed).into_iter().collect(),
             checkpoint: checkpoint.clone(),
             progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
@@ -1620,6 +1634,7 @@ fn same_graph(a: &Graph, b: &Graph) -> bool {
                     s.id.clone(),
                     s.streams_output,
                     s.reads_pinned,
+                    s.waits_for_settled_inputs,
                     s.locks.clone(),
                 )
             })
@@ -1658,6 +1673,7 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
             reads: graph.deps_in_order(i).collect(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
+            waits_for_settled_inputs: spec.waits_for_settled_inputs,
             locks: super::locks::held_by(spec)
                 .iter()
                 .map(|(name, hold)| (lock_ix(name), *hold))
