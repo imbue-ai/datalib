@@ -492,7 +492,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/6c/00000000-0000-83c9-9b62-3a0c19713d6c.md",
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -665,6 +665,18 @@ expression: snapshot
       "title": "You've won a holosuite upgrade!"
     },
     {
+      "bucket_key": "table_of_contents",
+      "created_at": "2369-04-15T00:01:00.000Z",
+      "kind": "document",
+      "markdown_uuid": "00000000-0000-85ee-bff7-b3a1f5972355",
+      "md_path": "notion/render_markdown/55/00000000-0000-85ee-bff7-b3a1f5972355.md",
+      "modified_at": "2369-04-15T00:01:00.000Z",
+      "provider": "notion",
+      "renderer_version": "rust-v1.13",
+      "source_id": "notion",
+      "title": "Notion TOC: Table-of-Contents (Datalib generated)"
+    },
+    {
       "bucket_key": "1PicardLog41153",
       "created_at": "2369-04-09T08:00:00.000Z",
       "kind": "chat",
@@ -792,7 +804,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/4a/00000000-0000-86d5-851e-a6d36ec0864a.md",
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2052,7 +2064,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/24/0b75b842-ba60-80f0-ab79-7448df7f2124.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
     },
@@ -2064,7 +2076,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/4a/0b75b842-ba60-8131-881b-f4b981d5c44a.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
     },
@@ -2076,7 +2088,7 @@ expression: snapshot
       "md_path": "notion/render_markdown/59/0b75b842-ba60-88dd-b090-baf44d88db59.md",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.12",
+      "renderer_version": "rust-v1.13",
       "source_id": "notion",
       "title": "Shift Roster"
     },
@@ -4049,6 +4061,36 @@ expression: snapshot
       "upstream_entity_kind": "thread",
       "upstream_id": "19b9ceb55deedc16",
       "uuid": "00000000-0000-85ec-8481-370bffc3afe9"
+    },
+    {
+      "account": null,
+      "author": null,
+      "byte_size": null,
+      "channel": null,
+      "content_hash": "8c14aa5bcbab7101",
+      "conversation_name": "Notion TOC: Table-of-Contents (Datalib generated)",
+      "conversation_uuid": "00000000-0000-85ee-bff7-b3a1f5972355",
+      "created_at": "2369-04-15T00:01:00.000Z",
+      "entire_chat": "/chat/00000000-0000-85ee-bff7-b3a1f5972355",
+      "git_sha": null,
+      "item_count": 0,
+      "kind": "Notion Table of Contents",
+      "markdown_uuid": "00000000-0000-85ee-bff7-b3a1f5972355",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 49,
+      "project": null,
+      "provider": "notion",
+      "qmd_path": "notion/render_markdown/55/00000000-0000-85ee-bff7-b3a1f5972355.md",
+      "source_label": "Notion",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "table_of_contents",
+      "upstream_id": "toc",
+      "uuid": "00000000-0000-85ee-bff7-b3a1f5972355"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -19162,8 +19204,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 177,
-    "grid_rows_count": 567,
+    "documents_count": 178,
+    "grid_rows_count": 568,
     "storage_rows_count": 257
   }
 }

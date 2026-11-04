@@ -1,5 +1,6 @@
 //! Render stage: read the raw store written by [`datalib_etl_notion::ingest`] and
-//! emit one document per Notion page, plus one per comment thread.
+//! emit one document per Notion page, one per comment thread, and one
+//! table of contents.
 
 mod enhanced;
 pub mod grid_rows;
@@ -13,5 +14,6 @@ pub mod parse;
 // inception elsewhere still fails the build.
 #[allow(clippy::module_inception)]
 pub mod render;
+pub mod toc;
 
 pub use parse::{parse_api_dir, ParsedNotion};

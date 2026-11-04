@@ -305,3 +305,40 @@ async fn a_parent_moves_its_tree_row_only_when_renamed() {
     assert_eq!(tree_changed(&db, &edited, &renamed).await, [A]);
     db.close().await;
 }
+
+/// The table of contents renders when `tree` moves and not otherwise, so
+/// it appears even on a store that had no page when it last rendered, and
+/// a run that only edited a page's body never names it by this scan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tree_change_names_the_table_of_contents_and_an_edit_does_not() {
+    let d = tempdir().unwrap();
+    let f = d.path().join("notion.doltlite_db");
+    let top = json!({"type": "workspace", "workspace": true});
+    let none: HashSet<String> = HashSet::new();
+
+    let db = RawDb::open(&f).await.unwrap();
+    db.upsert_pages(&[titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone())])
+        .await
+        .unwrap();
+    let seeded = commit(&db, "seed").await;
+    db.upsert_page_markdown(&[body(A, "# Bridge\n")])
+        .await
+        .unwrap();
+    let edited = commit(&db, "A edited").await;
+    db.close().await;
+
+    let toc = datalib_etl_notion_render::render::toc::BUCKET;
+    let just_the_edit = parse_api_dir(&f, warm(&seeded, &none)).unwrap();
+    assert_eq!(just_the_edit.render, Some(set(&[A])));
+
+    let db = RawDb::open(&f).await.unwrap();
+    db.upsert_pages(&[titled(B, "Ready room", "2026-09-08T00:00:00.000Z", top)])
+        .await
+        .unwrap();
+    commit(&db, "B arrived").await;
+    db.close().await;
+
+    let parsed = parse_api_dir(&f, warm(&edited, &none)).unwrap();
+    assert_eq!(parsed.render, Some(set(&[B, toc])));
+    assert!(parsed.tree.contains_key(A), "the whole tree, not the diff");
+}

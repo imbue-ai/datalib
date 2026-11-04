@@ -201,8 +201,8 @@ other than one fails the render (`document_row` in
 `etl/render/src/grid_index.rs`), so the flag is declared, never
 inferred. A Browse of a source opens on these rows (`is:document`).
 Several sources have more than one document kind: Claude's `Chat` and
-`Project`, Notion's `Notion Page` and `Notion Comment Thread`,
-LinkedIn's `Contact` and `LinkedIn Chat`.
+`Project`, Notion's `Notion Page`, `Notion Comment Thread` and `Notion
+Table of Contents`, LinkedIn's `Contact` and `LinkedIn Chat`.
 
 ### `created_at`, `modified_at` and `touched_at`
 
@@ -355,6 +355,7 @@ Two nullable measurements. What each one measures is decided per
 | todoist.Todoist Project | — | its tasks, open and completed, and its comments; each task or comment row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 | lightroom.Photo, lightroom.Video | — | 1 |
+| notion.Notion Table of Contents | — | 0: a list of the source's pages adds nothing to its count |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
 render that rewrote the row** — see "Storage rows" below for why that
