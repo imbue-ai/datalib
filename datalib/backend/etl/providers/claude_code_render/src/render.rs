@@ -27,7 +27,7 @@ use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
     clamp, details, fenced, item, json_block, project_of, render_paged, str_of, PagedOutcome,
-    SessionRender,
+    ReadClock, SessionRender,
 };
 
 use crate::ids;
@@ -111,19 +111,30 @@ impl SessionRender for ClaudeCode<'_> {
         chat_uuid_of(self.source_id, transcript_id)
     }
 
-    async fn load_records(&self, pool: &SqlitePool, ids: &str) -> Result<Vec<(String, Value)>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT id, json(payload) FROM records \
-             WHERE transcript_id IN (SELECT value FROM json_each(?1)) AND payload IS NOT NULL",
-        )
-        .bind(ids)
-        .fetch_all(pool)
-        .await
-        .context("select a page of records")?;
-        rows.into_iter()
-            .map(|(id, payload)| Ok((id, serde_json::from_str(&payload)?)))
-            .collect::<Result<_>>()
-            .context("read a page of records")
+    async fn load_records(
+        &self,
+        pool: &SqlitePool,
+        ids: &str,
+        clock: &ReadClock,
+    ) -> Result<Vec<(String, Value)>> {
+        let rows: Vec<(String, String)> = clock
+            .load(
+                sqlx::query_as(
+                    "SELECT id, json(payload) FROM records \
+                     WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
+                     AND payload IS NOT NULL",
+                )
+                .bind(ids)
+                .fetch_all(pool),
+            )
+            .await
+            .context("select a page of records")?;
+        clock.parse(|| {
+            rows.into_iter()
+                .map(|(id, payload)| Ok((id, serde_json::from_str(&payload)?)))
+                .collect::<Result<_>>()
+                .context("read a page of records")
+        })
     }
 
     fn build_chats(

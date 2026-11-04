@@ -12,7 +12,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::{is_terminal, runs_path, LiveState, Retention, INDEXES, SCHEMA_VERSION};
 use app_schema::runs::{
-    LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow, StorePart,
+    LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
+    StorePart,
 };
 
 /// How often the writer thread flushes. 200ms is under the threshold
@@ -358,13 +359,22 @@ async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 /// The rungs from an older version: the statements that bring a store at
 /// the version named to the next one, in place. Every rung is one
 /// transaction, under the open lock [`open_or_recreate`] holds.
-const UPGRADES: &[(i32, &[&str])] = &[(
-    10,
-    &[
-        "ALTER TABLE processes ADD COLUMN applet VARCHAR(255)",
-        "ALTER TABLE processes ADD COLUMN peak_rss_bytes BIGINT",
-    ],
-)];
+const UPGRADES: &[(i32, &[&str])] = &[
+    (
+        10,
+        &[
+            "ALTER TABLE processes ADD COLUMN applet VARCHAR(255)",
+            "ALTER TABLE processes ADD COLUMN peak_rss_bytes BIGINT",
+        ],
+    ),
+    (
+        11,
+        &[
+            "ALTER TABLE runs ADD COLUMN kind VARCHAR(16)",
+            "ALTER TABLE runs ADD COLUMN reason TEXT",
+        ],
+    ),
+];
 
 /// `true` when the file carries this build's schema, climbing the
 /// [`UPGRADES`] to it first where there are rungs; `false` for a version
@@ -449,6 +459,8 @@ pub struct Snapshot {
     pub started_at_utc: Option<String>,
     pub finished_at_utc: Option<String>,
     pub tz_offset: Option<String>,
+    pub kind: Option<String>,
+    pub reason: Option<String>,
     pub steps: Vec<StepRunRow>,
     pub metrics: Vec<MetricRow>,
     /// `warn` and `error` log rows per step — the E of USE.
@@ -552,7 +564,8 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
         return Vec::new();
     };
     let rows = sqlx::query(
-        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset FROM runs r \
+        "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset, r.kind, r.reason \
+         FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
          ORDER BY r.started_at_utc DESC LIMIT ?",
@@ -570,6 +583,8 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
             started_at_utc: r.get("started_at_utc"),
             finished_at_utc: r.get("finished_at_utc"),
             tz_offset: r.get("tz_offset"),
+            kind: r.get("kind"),
+            reason: r.get("reason"),
         })
         .collect()
 }
@@ -680,7 +695,7 @@ pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Ve
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let Some(run) = sqlx::query(
-        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
+        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs \
          WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
     )
     .bind(run_id)
@@ -789,6 +804,8 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         started_at_utc: run.get("started_at_utc"),
         finished_at_utc: run.get("finished_at_utc"),
         tz_offset: run.get("tz_offset"),
+        kind: run.get("kind"),
+        reason: run.get("reason"),
         steps,
         metrics,
         errors,
@@ -1231,6 +1248,18 @@ impl RunWriter {
         git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
+        Self::start_because(data_root, run_id, started_at_utc, git_hash, retention, None)
+    }
+
+    /// [`Self::start`], recording why the run started.
+    pub fn start_because(
+        data_root: &Path,
+        run_id: &str,
+        started_at_utc: &str,
+        git_hash: Option<String>,
+        retention: Retention,
+        started: Option<RunStart>,
+    ) -> Option<Self> {
         // The start stamp arrives as the runner wrote it, offset and
         // all; the store keeps UTC and the offset apart. The runner's
         // process starts when its run does.
@@ -1248,6 +1277,7 @@ impl RunWriter {
             run_id: run_id.to_string(),
             started_at_utc,
             tz_offset,
+            started,
         };
         Writer::start(
             data_root,
@@ -1394,6 +1424,7 @@ struct RunInfo {
     run_id: String,
     started_at_utc: String,
     tz_offset: Option<String>,
+    started: Option<RunStart>,
 }
 
 /// What a writer thread is writing on behalf of: always a process, and
@@ -1622,13 +1653,17 @@ async fn begin_run(
     retention: Retention,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO runs (run_id, started_at_utc, tz_offset) VALUES (?, ?, ?) \
+        "INSERT INTO runs (run_id, started_at_utc, tz_offset, kind, reason) \
+         VALUES (?, ?, ?, ?, ?) \
          ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
-           tz_offset = excluded.tz_offset, finished_at_utc = NULL",
+           tz_offset = excluded.tz_offset, finished_at_utc = NULL, \
+           kind = excluded.kind, reason = excluded.reason",
     )
     .bind(&run.run_id)
     .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
+    .bind(run.started.as_ref().map(|s| s.kind.as_str()))
+    .bind(run.started.as_ref().map(|s| s.reason.as_str()))
     .execute(&mut **tx)
     .await?;
     let cutoff = age_cutoff(retention, &run.started_at_utc);

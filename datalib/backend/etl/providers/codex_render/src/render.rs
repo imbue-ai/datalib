@@ -30,7 +30,7 @@ use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
     clamp, details, fenced, item, json_block, project_of, render_paged, str_of, PagedOutcome,
-    SessionRender,
+    ReadClock, SessionRender,
 };
 
 use crate::ids;
@@ -108,20 +108,30 @@ impl SessionRender for Codex<'_> {
         ids::thread(self.source_id, transcript_id).uuid
     }
 
-    async fn load_records(&self, pool: &SqlitePool, ids: &str) -> Result<Vec<RecordRow>> {
-        let rows: Vec<(String, String, i64, String)> = sqlx::query_as(
-            "SELECT id, transcript_id, line_no, json(payload) FROM records \
-             WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
-             ORDER BY transcript_id, line_no",
-        )
-        .bind(ids)
-        .fetch_all(pool)
-        .await
-        .context("select a page of records")?;
-        rows.into_iter()
-            .map(|(id, tid, n, p)| Ok((id, tid, n, serde_json::from_str(&p)?)))
-            .collect::<Result<_>>()
-            .context("read a page of records")
+    async fn load_records(
+        &self,
+        pool: &SqlitePool,
+        ids: &str,
+        clock: &ReadClock,
+    ) -> Result<Vec<RecordRow>> {
+        let rows: Vec<(String, String, i64, String)> = clock
+            .load(
+                sqlx::query_as(
+                    "SELECT id, transcript_id, line_no, json(payload) FROM records \
+                     WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
+                     ORDER BY transcript_id, line_no",
+                )
+                .bind(ids)
+                .fetch_all(pool),
+            )
+            .await
+            .context("select a page of records")?;
+        clock.parse(|| {
+            rows.into_iter()
+                .map(|(id, tid, n, p)| Ok((id, tid, n, serde_json::from_str(&p)?)))
+                .collect::<Result<_>>()
+                .context("read a page of records")
+        })
     }
 
     fn build_chats(

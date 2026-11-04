@@ -17,7 +17,7 @@ use crate::source::StepEnv;
 pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
     match env.function {
-        Function::Ingest => migrate_raw_store(env, &tree).await,
+        Function::Ingest => migrate_raw_store(env, &tree, emitter).await,
         // A derived store is a function of another; one in another shape is
         // rebuilt by running the step, never migrated in place.
         Function::RenderMarkdown => {
@@ -70,13 +70,22 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     }
 }
 
-async fn migrate_raw_store(env: &StepEnv, tree: &Path) -> Result<Vec<OutputClaim>> {
+async fn migrate_raw_store(
+    env: &StepEnv,
+    tree: &Path,
+    emitter: &Emitter,
+) -> Result<Vec<OutputClaim>> {
     // A source that has never downloaded is created at this build's shape
     // by its first download; opening it here would only make it empty.
     if !entities_db(tree).exists() {
         tracing::info!(step = %env.step, "migrate: no raw store yet");
         return Ok(Vec::new());
     }
+    // This step's name says download; its log has to say otherwise from
+    // the start, or a long migration reads as one.
+    const UPDATING: &str = "updating the raw store for this build; nothing is downloaded";
+    tracing::info!(step = %env.step, "migrate: {UPDATING}");
+    emitter.progress().set_message(UPDATING);
     crate::dispatch::migrate(env.source_type()?, tree).await?;
     tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
     Ok(crate::ingest::raw_store_version(tree)

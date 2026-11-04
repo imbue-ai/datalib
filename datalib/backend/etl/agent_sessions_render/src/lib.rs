@@ -5,7 +5,7 @@
 
 mod paged;
 
-pub use paged::{render_paged, titles, PagedOutcome, SessionRender};
+pub use paged::{render_paged, titles, PagedOutcome, ReadClock, SessionRender};
 
 use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{AuthorKind, ItemKind, NormalizedChatItem, UpstreamRef};

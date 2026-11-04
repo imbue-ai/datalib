@@ -13,22 +13,67 @@
 //!
 //! A request a `root` frame caused carries that frame's chain; the line
 //! stores it, and a chain long enough to be a loop is warned about here
-//! (`loop_guard`). Such a request is a live refetch: while a sync runs
-//! the Manage rows alone are one a second, so one that succeeded is a
-//! `debug` line, kept for the loop guard and out of the card's default
-//! `min_level:info` view.
+//! (`loop_guard`).
+//!
+//! These are requests the app's own pages make of this server, not ones
+//! that leave the machine (`http.outbound` is those). A page reading what
+//! it draws is a `debug` line, whatever made it ask: only what changes
+//! something, or what went wrong, is in the card's default view
+//! ([`worth`]).
 
 use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{header, StatusCode};
+use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 
 /// The tracing target every request line carries; `target:http.request`
 /// in the log panel's search bar is the request log.
 pub const TARGET: &str = "http.request";
+
+/// POSTs that change nothing a person asked to change: a page asking what
+/// to draw, or reporting what it did.
+const ROUTINE_POSTS: [&str; 8] = [
+    "/api/config/check",
+    "/api/entities",
+    "/api/manage/rows/refresh",
+    "/api/pipeline/storage/refresh",
+    "/api/remote_media/check",
+    "/api/ui/events",
+    "/applet/unified_document_index/people",
+    "/applet/unified_document_index/qmd_state",
+];
+
+/// Where a page keeps its own layout: written on every drag.
+const UI_STATE: &str = "/api/ui/state/";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Worth {
+    Debug,
+    Info,
+    Warn,
+}
+
+/// The level of a request's line, which is the one thing that decides
+/// whether a person reading the log at `info` sees it.
+fn worth(method: &Method, path: &str, status: StatusCode, live_refetch: bool) -> Worth {
+    if status.is_server_error() {
+        return Worth::Warn;
+    }
+    if !(status.is_success() || status.is_redirection()) {
+        return Worth::Info;
+    }
+    let reads = matches!(*method, Method::GET | Method::HEAD);
+    let routine = (*method == Method::POST && ROUTINE_POSTS.contains(&path))
+        || (*method == Method::PUT && path.starts_with(UI_STATE));
+    if reads || routine || live_refetch {
+        Worth::Debug
+    } else {
+        Worth::Info
+    }
+}
 
 pub async fn record(req: Request<Body>, next: Next) -> Response {
     let method = req.method().clone();
@@ -68,27 +113,25 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
              each caused by the frame the one before it caused"
         );
     }
-    if status.is_server_error() {
-        tracing::warn!(
+    match worth(&method, &path, status, live_refetch) {
+        Worth::Warn => tracing::warn!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
             page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
-        );
-    } else if live_refetch && status.is_success() {
-        tracing::debug!(
+        ),
+        Worth::Debug => tracing::debug!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
             page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
-        );
-    } else {
-        tracing::info!(
+        ),
+        Worth::Info => tracing::info!(
             target: TARGET,
             method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
             page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
             "{method} {path} {code} {ms}ms"
-        );
+        ),
     }
     resp
 }
@@ -127,6 +170,38 @@ fn is_cached_asset(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guards the log that misled a reader: `POST /api/entities`, three
+    /// hundred lines in nine minutes, read as traffic in the default view,
+    /// and `GET /api/config` flipped level with what triggered it.
+    #[test]
+    fn only_a_change_or_a_failure_is_above_debug() {
+        let ok = StatusCode::OK;
+        let at = |m: Method, path: &str, status, live| worth(&m, path, status, live);
+        assert_eq!(at(Method::GET, "/api/config", ok, false), Worth::Debug);
+        assert_eq!(at(Method::GET, "/api/config", ok, true), Worth::Debug);
+        assert_eq!(at(Method::POST, "/api/entities", ok, false), Worth::Debug);
+        assert_eq!(
+            at(Method::PUT, "/api/ui/state/layout", ok, false),
+            Worth::Debug
+        );
+
+        assert_eq!(at(Method::POST, "/api/requests", ok, false), Worth::Info);
+        assert_eq!(at(Method::POST, "/api/reset", ok, false), Worth::Info);
+        assert_eq!(
+            at(Method::PUT, "/api/config", StatusCode::NO_CONTENT, false),
+            Worth::Info
+        );
+        assert_eq!(
+            at(Method::POST, "/applet/datalib_contacts/link", ok, false),
+            Worth::Info
+        );
+
+        let refused = StatusCode::UNAUTHORIZED;
+        assert_eq!(at(Method::GET, "/api/config", refused, true), Worth::Info);
+        let broke = StatusCode::INTERNAL_SERVER_ERROR;
+        assert_eq!(at(Method::GET, "/api/config", broke, true), Worth::Warn);
+    }
 
     #[test]
     fn the_logs_own_reads_are_not_logged() {

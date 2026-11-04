@@ -11,6 +11,12 @@ export type DagRunState =
   | "failed"
   | "stopped";
 
+/** `RunKind in datalib/backend/app_schema/src/runs/run.rs`. */
+export type RunKind =
+  | "sync"
+  | "migrate"
+  | "shrink";
+
 /** `ColumnType in datalib/backend/columns/src/lib.rs`. */
 export type ColumnType =
   | "text"

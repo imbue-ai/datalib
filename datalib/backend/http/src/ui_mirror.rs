@@ -31,6 +31,10 @@ mod tests {
                 "DagRunState",
                 "RunState in datalib/backend/dag/src/run_state.rs",
             ),
+            union::<datalib_runs::RunKind>(
+                "RunKind",
+                "RunKind in datalib/backend/app_schema/src/runs/run.rs",
+            ),
             union::<datalib_columns::ColumnType>(
                 "ColumnType",
                 "ColumnType in datalib/backend/columns/src/lib.rs",

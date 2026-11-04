@@ -7,6 +7,7 @@ import type {
   ConnectPhase,
   ConnectState,
   DagRunState,
+  RunKind,
 } from "./generated/enums";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
@@ -1548,6 +1549,10 @@ export type RunInfo = {
   started_at_utc: string;
   finished_at_utc: string | null;
   tz_offset: string | null;
+  // What the run is for, and why it started; null for a run an older build
+  // recorded.
+  kind: RunKind | null;
+  reason: string | null;
 };
 
 // One process the store holds: a run of the runner, one attempt of one

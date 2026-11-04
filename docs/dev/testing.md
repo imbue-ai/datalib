@@ -649,11 +649,14 @@ at, and where:
 | how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
 | did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `'the keyword index is done'`: `N new … N removed` means every path moved, and a high `updated` on a quiet day means content churned. |
 | did an incremental pass stay small | render's `reverse lookup from the changed rows to the buckets`: `stale_buckets` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
+| who a step reached | `target = 'http.outbound'` at `info`: per host, at the first request, each minute and in all |
+| why a run started | `runs.kind` and `runs.reason`, and the run's first line |
+| where a render's time went | `msg LIKE 'where the render%'` (`load_ms`, `parse_ms`, `render_ms`, `write_ms`; each page at `debug`), and `msg LIKE 'the render took%'` for any source |
 | where a step's time went | `event = 'http_request'` (debug), one line per request with its `url` (without the query), `status` and `duration_ms`, from every source that reaches a web service. Summed per ten minutes, a sum close to the wall time means one request at a time. A Slack download also logs each batch of threads and of files with its `elapsed_ms`. A keyword index or an embed logs its phases (`open_ms` …) with its last line. |
 | what rate limits cost | `msg LIKE 'HTTP 429%'`, with its `retry_after_ms` |
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
-| what is slow to read | `msg LIKE 'slow statement%'` (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
+| what is slow to read | `msg LIKE '% slow statements took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
 | what was left behind | files under each `render_markdown/` against its documents; qmd's `documents` with `active = 0`; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

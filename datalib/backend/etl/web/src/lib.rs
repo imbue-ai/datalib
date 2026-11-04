@@ -8,6 +8,7 @@ pub mod download_params;
 pub mod http;
 pub mod interrupt;
 pub mod latchkey;
+pub mod outbound;
 pub mod owed;
 pub mod playback;
 pub mod retry;

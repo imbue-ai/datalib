@@ -8,10 +8,15 @@
 /// question about a sync is easier to answer with more than with less.
 pub const DEFAULT_LEVEL: &str = "trace";
 
+/// The target of every line about a request that left the machine, from
+/// whichever process made it; `target:http.outbound` in the log card lists
+/// them. `http.request` is the opposite: a page asking this server.
+pub const OUTBOUND_TARGET: &str = "http.outbound";
+
 /// Every first-party crate is `datalib_*`, plus the two standalone
-/// binaries whose crate is named for the tool, plus the server's
-/// hand-named targets (`http.request`, `http.loop`), which no crate's
-/// module path can collide with. A directive matches a target by prefix.
+/// binaries whose crate is named for the tool, plus the hand-named targets
+/// (`http.request`, `http.loop`, `http.outbound`), which no crate's module
+/// path can collide with. A directive matches a target by prefix.
 const OUR_TARGETS: [&str; 4] = ["datalib", "file_inventory", "dirtree_diff", "http."];
 
 /// The libraries that would talk over us, kept to warnings whatever

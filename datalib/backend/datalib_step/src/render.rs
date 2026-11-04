@@ -259,6 +259,8 @@ pub fn render_source(
         raw_db,
         progress,
     } = source;
+    let render_started = std::time::Instant::now();
+    let writing_micros = std::sync::atomic::AtomicU64::new(0);
     let declared = declared_render_versions(processors);
     let declared_params = declared_render_params(processors);
     let declared_params_text = declared_params.to_string();
@@ -332,6 +334,7 @@ pub fn render_source(
     // value `grid_index::apply_one` consumes.
     store.begin_batch()?;
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
+        let write_started = std::time::Instant::now();
         // Every emitted document is written. One that came out the same
         // writes the same rows, and doltlite's content-addressed tables
         // then carry no diff for it — nothing here decides "unchanged".
@@ -369,6 +372,10 @@ pub fn render_source(
             report_holdings(&progress, store.holdings(storage_uuid.as_deref())?);
             store.begin_batch()?;
         }
+        writing_micros.fetch_add(
+            write_started.elapsed().as_micros() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Ok(())
     };
     // How each bucket the run looked at ended, decided at the seal. The
@@ -613,6 +620,17 @@ pub fn render_source(
     let head = store.content_version()?;
     store.close();
     every_stored_version_must_be_declared(&name, &rendered_root, &versions, declared.as_ref())?;
+    let total = render_started.elapsed();
+    let written = std::time::Duration::from_micros(writing_micros.into_inner());
+    tracing::info!(
+        source = %name,
+        docs,
+        total_ms = total.as_millis() as u64,
+        write_ms = written.as_millis() as u64,
+        "the render took {:.1}s, {:.1}s of it writing documents to the store",
+        total.as_secs_f64(),
+        written.as_secs_f64(),
+    );
     Ok(RenderReport {
         docs,
         removed,

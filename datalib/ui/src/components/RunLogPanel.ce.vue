@@ -613,7 +613,9 @@ function shortRunId(id: string): string {
 /// still going — the id itself is in the header for whoever needs it.
 function runLabel(r: RunInfo): string {
   const when = pickerWhen(r.started_at_utc);
-  return r.finished_at_utc == null ? `${when} · running` : when;
+  const kind =
+    r.kind === "migrate" ? "Updating data · " : r.kind === "shrink" ? "Giving back disk · " : "";
+  return `${kind}${r.finished_at_utc == null ? `${when} · running` : when}`;
 }
 
 function levelClass(line: RunLogLine | undefined): string {
