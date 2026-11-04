@@ -14,8 +14,8 @@ use datalib_etl::download_problems::{RunProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
-use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
@@ -47,7 +47,7 @@ pub struct VoiceSummary {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &file_changes_scan::Scan,
     include_spam: bool,
     progress: &Progress,
     found: &RunProblems,
@@ -59,25 +59,26 @@ pub async fn ingest(
     let changes = scan.changes_since(&prev);
     // Records are keyed by what they say, not by file, so only a read of
     // every Voice file says which records left the input.
-    let voice_files: Vec<&fsscan::ScannedFile> = scan
+    let voice_files: Vec<&file_changes_scan::ScannedFile> = scan
         .files
         .iter()
-        .filter(|f| fsscan::is_under(&f.rel, "Voice"))
+        .filter(|f| file_changes_scan::is_under(&f.rel, "Voice"))
         .collect();
     let read_all = changes.may_have_dropped_records()
         || changes.needs_reading_under("Voice").count() == voice_files.len();
-    let changed: Vec<&fsscan::ScannedFile> = if read_all {
+    let changed: Vec<&file_changes_scan::ScannedFile> = if read_all {
         voice_files
     } else {
         changes.needs_reading_under("Voice").collect()
     };
-    let under =
-        |f: &fsscan::ScannedFile, dir: &str| fsscan::is_under(&f.rel, &format!("Voice/{dir}"));
+    let under = |f: &file_changes_scan::ScannedFile, dir: &str| {
+        file_changes_scan::is_under(&f.rel, &format!("Voice/{dir}"))
+    };
     // A file that would not read, or one an attachment of which would
     // not, is left unstamped, so the next run reads it again and its row
     // is re-reported until it reads.
     let mut skipped: Vec<SkippedRecord> = Vec::new();
-    let mut unread = |f: &fsscan::ScannedFile, reason: Reason, detail: String| {
+    let mut unread = |f: &file_changes_scan::ScannedFile, reason: Reason, detail: String| {
         skipped.push(SkippedRecord {
             entry: f.rel.clone(),
             problem: Problem::record(
@@ -89,14 +90,14 @@ pub async fn ingest(
     // Files that would not read at all; their records are unknown.
     let mut failed = 0usize;
     // Files that read, but an attachment of which did not.
-    let mut incomplete: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut incomplete: Vec<&file_changes_scan::ScannedFile> = Vec::new();
 
     let mut message_rows: Vec<VoiceMessageRow> = Vec::new();
     let mut bill_rows: Vec<VoiceBillRow> = Vec::new();
     // Each with the ref its bytes went into the accumulator under, which
     // names the key the flush gives them.
     let mut greetings: Vec<(String, VoiceGreetingRow)> = Vec::new();
-    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut done: Vec<&file_changes_scan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments = 0usize;
 
@@ -218,7 +219,7 @@ pub async fn ingest(
     let unread_voice = scan
         .present_unread
         .iter()
-        .filter(|rel| fsscan::is_under(rel, "Voice"))
+        .filter(|rel| file_changes_scan::is_under(rel, "Voice"))
         .count();
     let deletes = read_all
         && changes.walk_errors == 0
@@ -228,7 +229,8 @@ pub async fn ingest(
     // A rewritten file keeps its old stamp on a run that deleted nothing,
     // so the next run still sees it rewritten and reads every file again.
     let rewritten: HashSet<&str> = changes.modified.iter().map(|f| f.rel.as_str()).collect();
-    let stamp = |f: &&&fsscan::ScannedFile| deletes || !rewritten.contains(f.rel.as_str());
+    let stamp =
+        |f: &&&file_changes_scan::ScannedFile| deletes || !rewritten.contains(f.rel.as_str());
 
     // The attachments land before the files that name them are stamped:
     // a flush that fails leaves the files to be read again.
@@ -297,7 +299,9 @@ pub async fn ingest(
             file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
         }
     } else if failed + unread_voice > 0 && changes.may_have_dropped_records() {
-        summary.held_back = Some(fsscan::Scan::deletions_held_back(failed + unread_voice));
+        summary.held_back = Some(file_changes_scan::Scan::deletions_held_back(
+            failed + unread_voice,
+        ));
     }
     tx.commit().await.context("commit google_voice tx")?;
     found.skipped("google_voice", skipped);

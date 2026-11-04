@@ -9,9 +9,9 @@ use anyhow::{bail, Context, Result};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason};
 use tracing::warn;
 
@@ -48,10 +48,10 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     })
     .await?;
 
-    let scan = fsscan::list(
+    let scan = file_changes_scan::list(
         &opts.cache,
         &opts.input_path,
-        &fsscan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions::default(),
         |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("ics")),
     )
     .await?;

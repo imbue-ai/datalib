@@ -1,5 +1,5 @@
 //! What macOS's FSEvents history does and does not vouch for, one test per
-//! fact, measured so a fast path for `fsscan` can be designed around them.
+//! fact, measured so a fast path for `file_changes_scan` can be designed around them.
 //! Nothing in datalib uses FSEvents yet.
 //!
 //! The question each test asks is the one a sync would: "what changed under
@@ -307,7 +307,7 @@ fn a_file_held_open_is_not_reported_until_it_closes() {
     wait_for(&t.root, since, &file);
 }
 
-/// `fsscan` follows a symlink to a file, and the file it reads can be
+/// `file_changes_scan` follows a symlink to a file, and the file it reads can be
 /// anywhere: an edit there is no event under the root.
 #[test]
 fn a_symlinks_target_outside_the_root_is_not_reported() {

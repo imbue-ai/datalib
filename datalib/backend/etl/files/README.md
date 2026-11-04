@@ -2,7 +2,7 @@
 
 A source that reads local files asks this crate what changed rather than
 walking a folder or re-reading an input itself: `fswalk.rs` walks a tree,
-`fingerprint_cache.rs` remembers each file's hash per host, `fsscan.rs`
+`fingerprint_cache.rs` remembers each file's hash per host, `file_changes_scan.rs`
 answers "what is there now and what changed", `file_checkpoint.rs` keeps
 what one feed already ingested, and `export_files.rs` finds the files of
 an unpacked export (Facebook, LinkedIn). It sits on `datalib_etl`, whose
@@ -49,7 +49,7 @@ inside the data root it builds.
 
 ## Answering "did it change?" for a file-backed source
 
-`fsscan` walks a tree and stats it, reading no file; `file_checkpoint` stores
+`file_changes_scan` walks a tree and stats it, reading no file; `file_checkpoint` stores
 what one feed already ingested. The split between the cache and the cursor is
 the point:
 
@@ -64,7 +64,7 @@ close: it is shared, so another consumer's scan moves it. The question is only
 well-posed relative to a particular looker.
 
 ```text
-let listing = fsscan::list(cache, root, opts, accept).await?;
+let listing = file_changes_scan::list(cache, root, opts, accept).await?;
 let prev    = load_cursor(pool, SCOPE).await?;
 let changes = listing.changes_since(&prev, |rel| this_feed_reads(rel));
 for &f in changes.to_read() {
@@ -87,7 +87,7 @@ read, and a file it named and did not read holds back every deletion, since a
 vanished file may have gone there. `agent_sessions`, `calendar`, `contacts`,
 `airvisual`, `pdf`, `whatsapp` and Takeout's feeds read this way.
 
-**A source that needs hashes before it reads calls `fsscan::scan`**, which is
+**A source that needs hashes before it reads calls `file_changes_scan::scan`**, which is
 `list` then `Listing::hashed`, hashing on every core. Three reasons to: it never
 reads the whole file (`media` reads headers, `email` streams an mbox, `lightroom`,
 `chatgpt` and a Takeout archive are zips), the hash is the question (`ReadStamp`,

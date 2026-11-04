@@ -21,9 +21,9 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan::{self, ListedFile, ScannedFile};
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, ListedFile, ScannedFile};
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_problems::{Outcome, Problem, Reason};
@@ -224,11 +224,16 @@ async fn fetch_device(
     let scope = cursor_scope(&who.id);
     let identified_ms = started.elapsed().as_millis();
 
-    let scan = match fsscan::list(cache, &root, &fsscan::ScanOptions::default(), |p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
-    })
+    let scan = match file_changes_scan::list(
+        cache,
+        &root,
+        &file_changes_scan::ScanOptions::default(),
+        |p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
+        },
+    )
     .await
     {
         Ok(scan) => scan,
@@ -422,7 +427,10 @@ enum Unread {
 }
 
 /// Parse one file's bytes. An `Err` costs that file and nothing else.
-fn read_one(bytes: &fsscan::ReadFile, read_ms: u128) -> std::result::Result<ReadFile, Unread> {
+fn read_one(
+    bytes: &file_changes_scan::ReadFile,
+    read_ms: u128,
+) -> std::result::Result<ReadFile, Unread> {
     let f = &bytes.file;
     let t = std::time::Instant::now();
     let body = std::str::from_utf8(&bytes.bytes)

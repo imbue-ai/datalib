@@ -2,7 +2,7 @@
 //!
 //! No file is ever opened, so nothing here reads content or computes a
 //! digest. That is what makes it cheap enough for the usage monitor to run
-//! every few seconds while a sync is in flight. `datalib_etl`'s `fsscan`
+//! every few seconds while a sync is in flight. `datalib_etl`'s `file_changes_scan`
 //! also walks trees, but it walks them to *hash* them and keeps a cursor
 //! of what a consumer has ingested; the two answer different questions.
 //!

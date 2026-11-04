@@ -1,5 +1,5 @@
 //! A folder of Lightroom backups: which entries are backups, and which
-//! the store does not hold yet. Pure over an `fsscan` of the folder and
+//! the store does not hold yet. Pure over an `file_changes_scan` of the folder and
 //! the ledger; `sync` acts on it.
 
 use std::collections::BTreeMap;
@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use chrono::{NaiveDateTime, TimeZone};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl_files::fsscan::{self, ScannedFile};
+use datalib_etl_files::file_changes_scan::{self, ScannedFile};
 
 use super::unpack::{is_catalog, is_zip};
 
@@ -106,7 +106,7 @@ pub fn plan(entries: Vec<Entry>, ledger: &[Held]) -> Plan {
         .found
         .iter()
         .filter(|b| {
-            let hash = fsscan::hex(&b.file.blake3);
+            let hash = file_changes_scan::hex(&b.file.blake3);
             !ledger.iter().any(|h| h.blake3 == hash)
         })
         .cloned()
@@ -242,7 +242,7 @@ mod tests {
     }
 
     fn hash(content: &str) -> String {
-        fsscan::hex(&digest(content))
+        file_changes_scan::hex(&digest(content))
     }
 
     fn held(snapshot: &str, t: &str, content: &str) -> Held {
@@ -262,7 +262,7 @@ mod tests {
     }
 
     /// The layout of a real backups folder, which a person has partly
-    /// unpacked and annotated by hand, as `fsscan` reports it: catalog
+    /// unpacked and annotated by hand, as `file_changes_scan` reports it: catalog
     /// files only, `-wal`/`-shm` and `.DS_Store` filtered out.
     fn lightroom_folder() -> Vec<ScannedFile> {
         vec![

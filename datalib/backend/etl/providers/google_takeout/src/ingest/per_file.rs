@@ -9,7 +9,7 @@ use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl_files::{file_checkpoint, fsscan};
+use datalib_etl_files::{file_changes_scan, file_checkpoint};
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 
@@ -45,18 +45,18 @@ pub struct Counts {
 /// next run reads it again; the rest of the feed lands.
 pub async fn ingest<T: FromFile>(
     db: &RawDb,
-    scan: &fsscan::Listing,
+    scan: &file_changes_scan::Listing,
     feed: &Feed,
     found: &RunProblems,
-    parse: impl Fn(&fsscan::ScannedFile, &[u8]) -> Result<Vec<T>>,
+    parse: impl Fn(&file_changes_scan::ScannedFile, &[u8]) -> Result<Vec<T>>,
 ) -> Result<Counts> {
     let scope = feed.scope();
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
     let changes = scan.changes_since(&prev, |rel| {
-        fsscan::is_under(rel, feed.dir) && (feed.reads)(rel)
+        file_changes_scan::is_under(rel, feed.dir) && (feed.reads)(rel)
     });
     let mut rows: Vec<T> = Vec::new();
-    let mut read: Vec<fsscan::ScannedFile> = Vec::new();
+    let mut read: Vec<file_changes_scan::ScannedFile> = Vec::new();
     let mut skipped: Vec<SkippedRecord> = Vec::new();
     for &f in changes.to_read() {
         let file = match changes.read_if_changed_by_path(f).await {
@@ -110,7 +110,7 @@ pub async fn ingest<T: FromFile>(
     let read_rels: BTreeSet<&str> = read.iter().map(|f| f.rel.as_str()).collect();
     if scan.any_under(feed.dir) {
         for rel in changes.gone_by_path(&read_rels) {
-            if !fsscan::is_under(rel, feed.dir) || !(feed.reads)(rel) {
+            if !file_changes_scan::is_under(rel, feed.dir) || !(feed.reads)(rel) {
                 continue;
             }
             counts.removed +=

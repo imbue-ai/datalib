@@ -15,9 +15,9 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, BulkUpsertable};
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
 /// one row per session file, and `records`, one per line it keeps from
@@ -226,9 +226,12 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
             missing.push(tree);
             continue;
         }
-        let listing = fsscan::list(cache, &tree.root, &fsscan::ScanOptions::default(), |p| {
-            p.extension().is_some_and(|e| e == "jsonl")
-        })
+        let listing = file_changes_scan::list(
+            cache,
+            &tree.root,
+            &file_changes_scan::ScanOptions::default(),
+            |p| p.extension().is_some_and(|e| e == "jsonl"),
+        )
         .await?;
         listing.report_problems(found, &tree.scope);
         if !listing.errors.is_empty() {

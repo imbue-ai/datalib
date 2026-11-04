@@ -2,7 +2,7 @@
 
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::run_problems::RunProblems;
-use datalib_etl_files::fsscan;
+use datalib_etl_files::file_changes_scan;
 use datalib_problems::{Problem, Reason};
 
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ const SCOPE: &str = "google_takeout/maps_reviews";
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Listing,
+    scan: &file_changes_scan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<SnapshotCounts> {

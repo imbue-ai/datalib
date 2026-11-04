@@ -15,8 +15,8 @@ use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, RenderTarget};
@@ -116,10 +116,10 @@ async fn scan_tree(
     // because a `media` or `fsindex` scan of the same tree paid for it or
     // because nothing has touched it, is known by its hash. The rest are read
     // below, once, for both their hash and their classification.
-    let scan = fsscan::list(
+    let scan = file_changes_scan::list(
         &opts.cache,
         &opts.root,
-        &fsscan::ScanOptions {
+        &file_changes_scan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
             ..Default::default()

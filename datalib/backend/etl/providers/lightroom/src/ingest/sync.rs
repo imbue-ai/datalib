@@ -15,8 +15,8 @@ use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::file_changes_scan::{self, ScanOptions};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, ScanOptions};
 use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
 
 use super::backups::{self, Backup, Held, Plan, LEDGER, LEDGER_DDL};
@@ -121,7 +121,7 @@ async fn mirror_inputs(
                 progress: progress.clone(),
                 ..ScanOptions::default()
             };
-            let scan = fsscan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
+            let scan = file_changes_scan::scan(cache, dir, &opts, |p| is_zip(p) || is_catalog(p))
                 .await
                 .with_context(|| format!("scan the backups folder {}", dir.display()))?;
             scan.report_problems(found, "backups");
@@ -159,7 +159,7 @@ async fn mirror_inputs(
             continue;
         };
         options.gc = false;
-        let hash = fsscan::hex(&backup.file.blake3);
+        let hash = file_changes_scan::hex(&backup.file.blake3);
         backups::record(pool, &backup.name, backup.taken_at, &backup.file.rel, &hash).await?;
         let msg = format!(
             "download {label}: backup {}\n\n{}",
@@ -250,7 +250,7 @@ fn newest<'a>(plan: &'a Plan, ledger: &[Held], failed: &[&str]) -> Newest<'a> {
     let on_disk: HashSet<String> = plan
         .found
         .iter()
-        .map(|b| fsscan::hex(&b.file.blake3))
+        .map(|b| file_changes_scan::hex(&b.file.blake3))
         .collect();
     let gone = ledger
         .iter()

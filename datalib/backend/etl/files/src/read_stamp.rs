@@ -6,8 +6,8 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
+use crate::file_changes_scan::{FileScanCursor, Scan, ScannedFile};
 use crate::file_checkpoint;
-use crate::fsscan::{FileScanCursor, Scan, ScannedFile};
 
 /// The settings' row. No scanned file has an empty `rel`.
 const SETTINGS_REL: &str = "";
@@ -67,8 +67,8 @@ impl ReadStamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_changes_scan::{self, ScanOptions};
     use crate::fingerprint_cache::FingerprintCache;
-    use crate::fsscan::{self, ScanOptions};
     use std::path::Path;
 
     const SCOPE: &str = "test/read";
@@ -92,7 +92,7 @@ mod tests {
     }
 
     async fn stamp(cache: &FingerprintCache, input: &Path, settings: &str) -> ReadStamp {
-        let scan = fsscan::scan(cache, input, &ScanOptions::default(), |_| true)
+        let scan = file_changes_scan::scan(cache, input, &ScanOptions::default(), |_| true)
             .await
             .unwrap();
         ReadStamp::of(SCOPE, &scan, settings).unwrap()

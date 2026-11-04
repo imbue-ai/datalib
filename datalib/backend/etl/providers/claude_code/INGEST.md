@@ -78,7 +78,7 @@ line that is not JSON is counted as `malformed` and stepped over.
 
 ## Incrementality
 
-`fsscan` over the root for `*.jsonl`, with `file_checkpoint` holding
+`file_changes_scan` over the root for `*.jsonl`, with `file_checkpoint` holding
 each file's hash under the `claude_code/sessions` scope. A file whose
 hash moved is re-read whole and every row upserted; a row whose payload
 did not change is no change to doltlite
