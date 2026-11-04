@@ -229,7 +229,10 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
         let listing = file_changes_scan::list(
             cache,
             &tree.root,
-            &file_changes_scan::ScanOptions::default(),
+            &file_changes_scan::ScanOptions {
+                progress: progress.clone(),
+                ..Default::default()
+            },
             |p| p.extension().is_some_and(|e| e == "jsonl"),
         )
         .await?;

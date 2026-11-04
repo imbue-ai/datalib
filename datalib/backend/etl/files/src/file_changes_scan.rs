@@ -128,7 +128,7 @@ pub struct ScanOptions {
     /// How deep to walk. `Some(1)` is the root's own files, and no
     /// folder beneath it is opened.
     pub max_depth: Option<usize>,
-    /// Where to say which file is being hashed and how much is left.
+    /// Where to say what the walk and the hashing are on and how much is left.
     /// Only ever a message, never a bar: a step has one bar, and the
     /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
     pub progress: datalib_etl::progress::Progress,
@@ -564,10 +564,16 @@ where
         ..ScanStats::default()
     };
 
+    let listing_progress = ListProgress::new(&opts.progress, &root);
     let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
-        only.as_ref()
+        let accepted = only
+            .as_ref()
             .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
-            && accept(p)
+            && accept(p);
+        if accepted {
+            listing_progress.found_one();
+        }
+        accepted
     })
     .with_context(|| format!("walk {}", root.display()))?;
 
@@ -605,6 +611,16 @@ where
         });
     }
 
+    let unvouched = || files.iter().filter(|f| f.known.is_none());
+    if unvouched().next().is_some() {
+        tracing::info!(
+            "file_changes_scan_listed: {} files, {} the cache cannot vouch for, {}",
+            files.len(),
+            unvouched().count(),
+            human_bytes(unvouched().map(|f| f.size as u64).sum())
+        );
+    }
+
     Ok(Listing {
         walked: Scan {
             root,
@@ -619,6 +635,8 @@ where
         cache: cache.clone(),
         progress: opts.progress.clone(),
         unwritten: Mutex::new(Vec::new()),
+        files_read: AtomicUsize::new(0),
+        bytes_read: AtomicU64::new(0),
     })
 }
 
@@ -632,6 +650,8 @@ pub struct Listing {
     /// Hashes read and not yet in the cache: one write per file would be a
     /// rollback journal per file.
     unwritten: Mutex<Vec<Fingerprint>>,
+    files_read: AtomicUsize,
+    bytes_read: AtomicU64,
 }
 
 impl std::ops::Deref for Listing {
@@ -659,8 +679,25 @@ impl Listing {
     /// the listing took *before* this read, so a write landing during it
     /// moves the stat, and the next scan looks again.
     pub async fn read(&self, f: &ListedFile) -> Result<ReadFile> {
+        let loud = (f.size as u64 >= LOUD_BYTES).then(|| {
+            let name = file_name(&f.path);
+            let size = human_bytes(f.size as u64);
+            tracing::info!(path = %f.path.display(), "file_changes_scan_reading_file: {name}, {size}");
+            self.progress.set_message(&format!("reading {name}: {size}"));
+            (name, std::time::Instant::now())
+        });
         let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
         let blake3 = fswalk::hash_bytes(&bytes);
+        if let Some((name, started)) = loud {
+            tracing::info!(
+                path = %f.path.display(),
+                "file_changes_scan_read_file: {name} in {:.1}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        self.files_read.fetch_add(1, Ordering::Relaxed);
+        self.bytes_read
+            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         let batch = {
             let mut unwritten = self.unwritten.lock().expect("no panic holds this lock");
             unwritten.push(self.print(&f.rel, &f.stat, blake3));
@@ -685,6 +722,14 @@ impl Listing {
     /// Write the hashes the reads left. Call when the reading is done: one
     /// left behind costs its file a read next scan.
     pub async fn finish(&self) -> Result<()> {
+        let files = self.files_read.swap(0, Ordering::Relaxed);
+        let bytes = self.bytes_read.swap(0, Ordering::Relaxed);
+        if files > 0 {
+            tracing::info!(
+                "file_changes_scan_read: {files} files, {}",
+                human_bytes(bytes)
+            );
+        }
         let batch = std::mem::take(&mut *self.unwritten.lock().expect("no panic holds this lock"));
         self.cache.store(&batch).await
     }
@@ -1003,6 +1048,45 @@ fn batches_of_bytes<'a>(files: &'a [&'a ListedFile], limit: u64) -> Vec<&'a [&'a
     batches
 }
 
+/// Says through `Progress::set_message` what the walk is on, since a slow
+/// tree can take a while. A count of the files the caller accepted, as the
+/// walk finds them on every core.
+struct ListProgress<'a> {
+    progress: &'a datalib_etl::progress::Progress,
+    name: String,
+    found: AtomicUsize,
+    last_message: Mutex<std::time::Instant>,
+}
+
+impl<'a> ListProgress<'a> {
+    fn new(progress: &'a datalib_etl::progress::Progress, root: &Path) -> Self {
+        let name = file_name(root);
+        progress.set_message(&format!("listing {name}"));
+        Self {
+            progress,
+            name,
+            found: AtomicUsize::new(0),
+            last_message: Mutex::new(std::time::Instant::now()),
+        }
+    }
+
+    fn found_one(&self) {
+        let found = self.found.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut last = self.last_message.lock().expect("no panic holds this lock");
+        if last.elapsed() >= MESSAGE_EVERY {
+            *last = std::time::Instant::now();
+            self.progress
+                .set_message(&format!("listing {}: {found} files so far", self.name));
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// Hashed bytes between writes of the fingerprint cache.
 const FLUSH_BYTES: u64 = 512 * 1024 * 1024;
 /// Files read whole between writes of the fingerprint cache.
@@ -1047,10 +1131,7 @@ impl<'a> HashProgress<'a> {
     }
 
     fn file(&self, path: &Path, size: u64) -> Result<Blake3> {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = file_name(path);
         let started = std::time::Instant::now();
         if size >= LOUD_BYTES {
             tracing::info!(path = %path.display(), "file_changes_scan_hashing_file: {name}, {}", human_bytes(size));
@@ -1721,5 +1802,127 @@ mod tests {
             "never hashed"
         );
         assert!(next.file("voice/a.txt").unwrap().known.is_some());
+    }
+
+    // ── what a scan says while it runs ────────────────────────────────
+
+    #[derive(Default)]
+    struct Said(Mutex<Vec<String>>);
+
+    impl datalib_etl::progress::ProgressSink for Said {
+        fn set_message(&self, msg: &str) {
+            self.0.lock().unwrap().push(msg.to_string());
+        }
+    }
+
+    fn saying() -> (std::sync::Arc<Said>, ScanOptions) {
+        let said = std::sync::Arc::new(Said::default());
+        let opts = ScanOptions {
+            progress: datalib_etl::progress::Progress::new(said.clone()),
+            ..ScanOptions::default()
+        };
+        (said, opts)
+    }
+
+    /// A step's row said nothing while a cold scan hashed a tree, however
+    /// long that took, for every source that left this out of its options.
+    #[tokio::test]
+    async fn a_scan_says_what_it_is_walking_and_hashing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "a.txt", b"aaa");
+        let cache = fresh_cache(tmp.path()).await;
+        let (said, opts) = saying();
+
+        scan(&cache, &root, &opts, all).await.unwrap();
+
+        let said = said.0.lock().unwrap();
+        assert_eq!(said[0], "listing tree", "{said:?}");
+        assert!(
+            said.iter()
+                .any(|m| m.starts_with("hashing a.txt (file 1 of 1)")),
+            "{said:?}"
+        );
+    }
+
+    /// Nothing to hash, nothing said about hashing.
+    #[tokio::test]
+    async fn a_warm_scan_says_nothing_about_hashing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        write(&root, "a.txt", b"aaa");
+        let cache = fresh_cache(tmp.path()).await;
+        scan_all(&cache, &root).await;
+        let (said, opts) = saying();
+
+        scan(&cache, &root, &opts, all).await.unwrap();
+
+        let said = said.0.lock().unwrap();
+        assert!(!said.iter().any(|m| m.contains("hashing")), "{said:?}");
+    }
+
+    /// Reading a huge file through a listing is one long call with nothing to
+    /// report partway, so it says so before it starts.
+    #[tokio::test]
+    async fn a_large_read_says_what_it_is_on() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("tree");
+        std::fs::create_dir_all(&root).unwrap();
+        let big = std::fs::File::create(root.join("big.bin")).unwrap();
+        big.set_len(LOUD_BYTES).unwrap();
+        write(&root, "small.txt", b"s");
+        let cache = fresh_cache(tmp.path()).await;
+        let (said, opts) = saying();
+        let listing = list(&cache, &root, &opts, all).await.unwrap();
+
+        listing
+            .read(listing.file("small.txt").unwrap())
+            .await
+            .unwrap();
+        assert!(!said
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|m| m.starts_with("reading")));
+
+        listing
+            .read(listing.file("big.bin").unwrap())
+            .await
+            .unwrap();
+        listing.finish().await.unwrap();
+        let said = said.0.lock().unwrap();
+        assert_eq!(said.last().unwrap(), "reading big.bin: 67.1 MB", "{said:?}");
+    }
+
+    /// Files hash on every core and report as they go: the counts have to come
+    /// out true whatever order the threads ran in, chunked files included.
+    #[test]
+    fn hash_progress_counts_every_file_and_byte_across_threads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut files = Vec::new();
+        for i in 0..200u64 {
+            let path = tmp.path().join(format!("f{i}"));
+            std::fs::write(&path, vec![0u8; i as usize]).unwrap();
+            files.push((path, i));
+        }
+        // Past the size that reads in chunks and reports each one.
+        let chunked = tmp.path().join("chunked");
+        std::fs::File::create(&chunked)
+            .unwrap()
+            .set_len(40_000_000)
+            .unwrap();
+        files.push((chunked, 40_000_000));
+        let total: u64 = files.iter().map(|(_, size)| size).sum();
+        let (said, opts) = saying();
+        let progress = HashProgress::new(&opts.progress, files.len(), total);
+
+        files.par_iter().for_each(|(path, size)| {
+            progress.file(path, *size).unwrap();
+        });
+
+        assert_eq!(progress.files_done.load(Ordering::Relaxed), files.len());
+        assert_eq!(progress.bytes_done.load(Ordering::Relaxed), total);
+        assert!(!said.0.lock().unwrap().is_empty());
     }
 }

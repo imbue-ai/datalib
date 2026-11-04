@@ -261,7 +261,10 @@ async fn read_tree(
     let walked = file_changes_scan::list(
         &opts.cache,
         root,
-        &file_changes_scan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions {
+            progress: opts.progress.clone(),
+            ..Default::default()
+        },
         |_| true,
     )
     .await?;

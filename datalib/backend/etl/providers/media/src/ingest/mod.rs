@@ -160,6 +160,7 @@ async fn scan_tree(
         &file_changes_scan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
+            progress: opts.progress.clone(),
             ..Default::default()
         },
         kind::accept,

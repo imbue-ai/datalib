@@ -150,6 +150,7 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         opts.cache.as_ref(),
         &opts.input_path,
         &input,
+        &opts.progress,
         READ_SCOPE,
         &settings,
     )
@@ -447,7 +448,15 @@ pub async fn seed(s: Seed<'_>, found: &RunProblems) -> Result<SeedSummary> {
         "account_id": s.account_id,
         "only_labels": s.only_labels,
     });
-    let stamp = read_stamp(s.cache, &s.input_path, &input, SEED_SCOPE, &settings).await?;
+    let stamp = read_stamp(
+        s.cache,
+        &s.input_path,
+        &input,
+        &s.progress,
+        SEED_SCOPE,
+        &settings,
+    )
+    .await?;
     if let Some(stamp) = &stamp {
         if stamp.is_current(s.db.pool()).await? {
             tracing::info!(
@@ -625,6 +634,7 @@ async fn read_stamp(
     cache: Option<&FingerprintCache>,
     path: &Path,
     input: &Input,
+    progress: &Progress,
     scope: &'static str,
     settings: &serde_json::Value,
 ) -> Result<Option<ReadStamp>> {
@@ -633,13 +643,18 @@ async fn read_stamp(
     };
     let scan = match input {
         Input::Files(_) => {
-            file_changes_scan::scan(cache, path, &ScanOptions::default(), is_mbox).await?
+            let opts = ScanOptions {
+                progress: progress.clone(),
+                ..ScanOptions::default()
+            };
+            file_changes_scan::scan(cache, path, &opts, is_mbox).await?
         }
         Input::Parts(parts) => {
             let names: BTreeSet<&std::ffi::OsStr> =
                 parts.iter().filter_map(|p| p.file_name()).collect();
             let opts = ScanOptions {
                 max_depth: Some(1),
+                progress: progress.clone(),
                 ..ScanOptions::default()
             };
             file_changes_scan::scan(cache, path, &opts, |p| {

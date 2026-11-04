@@ -227,7 +227,10 @@ async fn fetch_device(
     let scan = match file_changes_scan::list(
         cache,
         &root,
-        &file_changes_scan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions {
+            progress: progress.clone(),
+            ..Default::default()
+        },
         |p| {
             p.file_name()
                 .and_then(|n| n.to_str())
