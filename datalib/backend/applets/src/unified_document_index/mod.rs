@@ -18,6 +18,7 @@ use axum::{
 pub(crate) mod columns;
 mod grouping;
 mod map;
+mod models;
 mod problems;
 #[cfg(test)]
 mod qmd_search_tests;
@@ -75,14 +76,21 @@ struct Index {
 
 impl Index {
     /// `deadline` is how long one search may wait on qmd's embedder.
-    async fn open(root: PathBuf, deadline: std::time::Duration) -> Result<Index> {
+    async fn open(
+        root: PathBuf,
+        models: models::ModelGate,
+        deadline: std::time::Duration,
+    ) -> Result<Index> {
         let root = Arc::new(root);
         let repo = datalib_unified_document_index::dolt_repo::DoltRepo::open(root.clone())
             .await
             .with_context(|| format!("open the grid index under {}", root.display()))?;
         Ok(Index {
             embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
-                &root, None, deadline,
+                &root,
+                None,
+                Arc::new(models),
+                deadline,
             )),
             qmd_index: Arc::default(),
             qmd_summary: Arc::new(SummaryCache::default()),
@@ -111,15 +119,17 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
         .build()
         .context("build tokio runtime")?;
     rt.block_on(async move {
-        // Nothing warms the models for a one-off search, so one that
-        // embeds its text waits for them here rather than letting qmd
-        // fetch unpinned copies itself.
-        if let Some(models) = link_models(&root) {
-            if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
-                provision_models(&models);
-            }
+        // Nothing warms the model for a one-off search, so one that
+        // embeds its text waits for it here, however long a first
+        // download takes, rather than at the embedder's deadline.
+        let models = models::ModelGate::new(&root);
+        if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
+            let models = models.clone();
+            tokio::task::spawn_blocking(move || models.provision_now())
+                .await
+                .context("provision qmd's embedding model")?;
         }
-        let s = Index::open(root, ONE_SEARCH_DEADLINE).await?;
+        let s = Index::open(root, models, ONE_SEARCH_DEADLINE).await?;
         Ok(answer_search(&s, p).await)
     })
 }
@@ -156,10 +166,9 @@ pub fn serve(port: u16) -> Result<()> {
     rt.block_on(async move {
         // Warm the shared model cache before the first search rather
         // than during it.
-        if let Some(models) = link_models(&root) {
-            std::thread::spawn(move || provision_models(&models));
-        }
-        let state = Index::open(root, EMBED_DEADLINE).await?;
+        let models = models::ModelGate::new(&root);
+        models.warm();
+        let state = Index::open(root, models, EMBED_DEADLINE).await?;
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -218,63 +227,6 @@ pub(crate) async fn require_gateway(
             r#"{"error":"this port answers only to the datalib gateway"}"#,
         ))
         .unwrap_or_else(|_| Response::new(Body::empty()))
-}
-
-/// Points the root's qmd state at the shared model cache, and answers the
-/// directory the pinned models belong in. None when there is nothing to
-/// point: no index means no sync has run, and no search to warm.
-fn link_models(root: &std::path::Path) -> Option<PathBuf> {
-    // The first sync creates the directory and the indexer links it;
-    // this call is the belt for a root the indexer has not touched in
-    // this incarnation.
-    if !datalib_unified_document_index::qmd::qmd_index_path(root).exists() {
-        tracing::info!(
-            "no qmd index yet; free-text search finds nothing until the first sync builds one"
-        );
-        return None;
-    }
-    let qmd_dir = datalib_unified_document_index::qmd::qmd_state_dir(root);
-    let models_dir = datalib_qmd_indexer::default_models_dir();
-    if let Err(e) = std::fs::create_dir_all(&models_dir)
-        .map_err(anyhow::Error::from)
-        .and_then(|()| datalib_qmd_indexer::ensure_models_symlink(&qmd_dir, &models_dir))
-    {
-        tracing::warn!(
-            error = %format!("{e:#}"),
-            models = %qmd_dir.join("models").display(),
-            "could not ensure the models symlink; continuing with the models dir as it is"
-        );
-        return None;
-    }
-    Some(datalib_qmd_models::effective_models_dir(
-        &qmd_dir,
-        &models_dir,
-    ))
-}
-
-/// Verifies, and on a cold cache fetches, the pinned models: a 2 GB
-/// download the server keeps off the request path, and without which qmd
-/// would pull unpinned copies itself on the first semantic query.
-fn provision_models(dir: &std::path::Path) {
-    let models = datalib_qmd_models::PINNED_MODELS;
-    match datalib_qmd_models::ensure_models(dir, models, datalib_qmd_models::Fetch::from_env()) {
-        Ok(outcomes) => {
-            let missing = datalib_qmd_models::missing(models, &outcomes);
-            if !missing.is_empty() {
-                tracing::warn!(
-                    missing = %missing.join(","),
-                    dir = %dir.display(),
-                    switch = datalib_qmd_models::NO_FETCH_ENV,
-                    "not fetching qmd's models because fetching is switched off; whatever needs them will fail"
-                );
-            }
-        }
-        Err(e) => tracing::error!(
-            dir = %dir.display(),
-            error = %format!("{e:#}"),
-            "could not provision qmd's models; semantic search will fail until `datalib-step pull-models` succeeds"
-        ),
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2508,9 +2460,13 @@ mod tests {
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        Index::open(root.to_path_buf(), EMBED_DEADLINE)
-            .await
-            .unwrap()
+        Index::open(
+            root.to_path_buf(),
+            models::ModelGate::new(root),
+            EMBED_DEADLINE,
+        )
+        .await
+        .unwrap()
     }
 
     pub(super) async fn search(

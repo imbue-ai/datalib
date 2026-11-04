@@ -89,6 +89,12 @@ impl PinnedModel {
         format!("hf_{owner}_{}", self.file)
     }
 
+    /// The name qmd asks for this model by, and records beside every
+    /// vector it embeds with it (`hf:<repo>/<file>`, `third-party/qmd/src/llm.ts`).
+    pub fn qmd_uri(&self) -> String {
+        format!("hf:{}/{}", self.repo, self.file)
+    }
+
     pub fn url(&self) -> String {
         format!(
             "https://huggingface.co/{}/resolve/{}/{}",
@@ -122,6 +128,10 @@ pub const PINNED_MODELS: &[PinnedModel] = &[
     },
 ];
 
+/// The embedding model alone, first in [`PINNED_MODELS`]: all an embed or
+/// a query loads.
+pub const EMBED_MODELS: &[PinnedModel] = PINNED_MODELS.split_at(1).0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +158,10 @@ mod tests {
                 "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
                 "hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf",
             ]
+        );
+        assert_eq!(
+            EMBED_MODELS[0].qmd_uri(),
+            "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf"
         );
         assert_eq!(
             PINNED_MODELS[0].url(),

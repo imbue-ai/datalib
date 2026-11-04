@@ -1,0 +1,12 @@
+# Versions forced past what @tobilu/qmd 2.8.3 and its node-llama-cpp
+# 3.20.0 declare, each to close an advisory `pnpm audit --prod` reports
+# (CI runs it). Each is at least 7 days old (docs/dev/first_time_dev.md
+# § "Version policy"). Drop an entry once a qmd bump brings it in.
+#
+# simple-git crosses a major (3 → 4): node-llama-cpp uses it only to
+# clone llama.cpp for a build from source, which qmd_sdk.mjs turns off.
+# @modelcontextprotocol/server stays within its major (qmd pins 2.0.0).
+overrides:
+  simple-git: 4.0.2
+  '@modelcontextprotocol/server': 2.3.1
+  zod: 4.6.7

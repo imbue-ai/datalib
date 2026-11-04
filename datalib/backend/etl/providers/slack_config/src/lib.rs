@@ -86,8 +86,8 @@ pub struct SlackApiSync {
     /// instant, or an offset from the run's start (`-30d`, `-2w`). This
     /// is the knob that decides how far back the mirror goes. An offset
     /// slides forward each run; a message it leaves behind stays in the
-    /// mirror. Unset defaults to 2024-01-01 (the provider's
-    /// `DEFAULT_SINCE`). A date before 1970 asks for everything.
+    /// mirror. Unset asks for the whole history, as does any date before
+    /// 1970; a first sync of a big workspace then takes hours.
     #[serde(default)]
     pub since: Option<String>,
     /// Also mirror channels the account can see but isn't a member of.

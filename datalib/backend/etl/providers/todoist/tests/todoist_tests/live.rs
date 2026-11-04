@@ -36,10 +36,10 @@ async fn run(store: &std::path::Path, sync: &TodoistSync) -> FetchSummary {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_sync_then_a_second_run_that_reads_almost_nothing() {
     // A month of completed tasks keeps the first run short.
-    let since = std::env::var("TODOIST_TEST_COMPLETED_SINCE").ok();
+    let since = std::env::var("TODOIST_TEST_SINCE").ok();
     let sync = TodoistSync {
         completed: true,
-        completed_since: since,
+        since,
     };
     let store = tempfile::TempDir::with_prefix("todoist-live-")
         .unwrap()

@@ -132,6 +132,8 @@ pub enum Retired {
     TimeSeriesEmbed,
     /// A step of datalib's own with no `command` (`step_commands.rs`).
     ImplicitStepCommand,
+    /// A Todoist ingest's window named `completed_since` (`todoist_since.rs`).
+    TodoistCompletedSince,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

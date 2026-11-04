@@ -4,8 +4,8 @@
 //! kind of work it has: a search of two pages, a body with an
 //! attachment, a truncated body with a follow-up, a body that answers
 //! 404, comments on the page and on a block, a user Notion has and one
-//! it has not, and a page inside a block, which roots mode places by
-//! asking for the block. Run from an empty store and from the store an earlier
+//! it has not, and a page inside a toggle, which roots mode finds by
+//! walking down from the root through the toggle's children. Run from an empty store and from the store an earlier
 //! run left, against a workspace that has moved since; in search mode
 //! and from a root.
 
@@ -120,11 +120,7 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
     let signed = format!("{SLOT}?X-Amz-Signature=abc");
     // The bridge: an attachment, links to the other two pages, a comment
     // on the page and one on a block, two users.
-    serve(
-        &t,
-        &format!("{BASE}/pages/{BRIDGE}"),
-        authored(BRIDGE, bridge_edited, PICARD),
-    );
+    serve_page_object(&t, authored(BRIDGE, bridge_edited, PICARD));
     let mut bridge_body = format!(
         "Captain's log.\n![warp]({signed})\n{}\n{}\n",
         link(SICKBAY),
@@ -175,11 +171,7 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
 
     // Sickbay: a truncated body whose subtree is fetched as a follow-up,
     // and comments Notion answers 404 for.
-    serve(
-        &t,
-        &format!("{BASE}/pages/{SICKBAY}"),
-        authored(SICKBAY, T2, RIKER),
-    );
+    serve_page_object(&t, authored(SICKBAY, T2, RIKER));
     let marker = format!(
         "<unknown url=\"https://www.notion.so/x#{}\"/>",
         HOLE.replace('-', "")
@@ -197,19 +189,15 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
     // body does not link.
     let mut ready_room = page(READY_ROOM, T2);
     ready_room["parent"] = json!({"type": "block_id", "block_id": TOGGLE});
-    serve(
-        &t,
-        &format!("{BASE}/pages/{READY_ROOM}"),
-        ready_room.clone(),
-    );
+    serve_page_object(&t, ready_room.clone());
     serve_body(&t, READY_ROOM, "Tea, Earl Grey, hot.\n", false);
     serve_comments(&t, READY_ROOM);
-    serve(
-        &t,
-        &format!("{BASE}/blocks/{TOGGLE}"),
-        json!({"object": "block", "id": TOGGLE, "type": "toggle",
-               "parent": {"type": "page_id", "page_id": BRIDGE}}),
-    );
+    let toggle = json!({"object": "block", "id": TOGGLE, "type": "toggle", "has_children": true,
+                        "toggle": {"rich_text": []},
+                        "parent": {"type": "page_id", "page_id": BRIDGE}});
+    serve(&t, &format!("{BASE}/blocks/{TOGGLE}"), toggle.clone());
+    serve_children(&t, BRIDGE, json!([toggle]));
+    serve_children(&t, TOGGLE, json!([as_block(&ready_room)]));
 
     match edition {
         Edition::Before => {

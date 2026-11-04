@@ -310,12 +310,15 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   by row, what the `.md` files and `grid_rows` beside them already
 ///   show.
 ///
-/// Notion's `tree` and `listed_pages` are the first kind: a roots-mode
-/// source lists the whole workspace to learn where each page sits, so
-/// those two tables hold the id, title and parent of every object the
-/// credential can see — tens of thousands of them — however few pages
-/// the roots select. They are also the one entry here that keeps real
-/// data out of the repo rather than merely keeping the dump small.
+/// Notion's `tree` and `listed_pages` are the first kind, and the one
+/// pair here that is also a tripwire. A roots source walks down from its
+/// roots, so they hold what sits under them and nothing more; a source
+/// mirroring a whole workspace, or a store an older build left, holds
+/// the id, title and parent of every object the credential can see.
+/// Counting them means a run that goes back to listing a whole workspace
+/// reads as one number jumping from a handful to tens of thousands,
+/// rather than as a hundred thousand new lines of somebody's workspace
+/// committed to this repo.
 const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels"),
     ("tiny-slack", "channels_bookkeeping"),

@@ -73,3 +73,49 @@ async fn notion_live_single_page_snapshot() {
         assert_json_snapshot!("notion_live_single_page_snapshot", view);
     });
 }
+
+/// A roots source's first sync listed the whole workspace to find what
+/// sat under its roots: ~530 requests and ten minutes for one page on a
+/// large workspace. It walks down from the root now, so its cost is
+/// what is under the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn notion_live_a_first_roots_sync_walks_down_from_the_root() {
+    let root = std::env::var("NOTION_TEST_PAGE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_TARGET_PAGE.to_string());
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let db = notion::RawDb::open(&notion::db_path_for(tmp.path()))
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let r = notion::fetch(FetchOptions {
+        subtree_pages: vec![root.clone()],
+        comments: false,
+        attachments: false,
+        ..FetchOptions::new(db.clone())
+    })
+    .await;
+    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    let s = r.expect("notion fetch failed");
+    eprintln!(
+        "[test] {root}: {} requests, {} pages placed, {} mirrored, {:.1}s",
+        s.official_requests,
+        s.placed,
+        s.new_pages,
+        started.elapsed().as_secs_f64()
+    );
+    assert!(
+        !problems.iter().any(|k| k.starts_with("listing:")),
+        "{problems:?}"
+    );
+    assert!(s.new_pages >= 1, "the root itself");
+    assert!(
+        s.official_requests < 20 * (s.placed as u64 + 1),
+        "about a request or two per page under the root, not one per hundred in the workspace"
+    );
+}

@@ -202,9 +202,11 @@ every one reads the same grammar, `datalib_time::TimeBound`
 | `2026-09-01T09:00:00-07:00` | that instant (RFC 3339, offset required); where a day is wanted, its date in its own offset |
 | `-30d`, `+21d`, `-12h`, `-2w` | that far from the run's `now` (`DATALIB_DAG_NOW`), sign required, in hours, days or weeks |
 
-A day or an offset is resolved once, at the start of each run, by the
-source's processor, which hands its download an absolute value; so a
-relative window slides forward run by run. A config's `validate` reads
+A day or an offset is resolved once per run, against the run's `now`,
+and the download is handed an absolute value; so a relative window
+slides forward run by run. A day before 1970 reaches back past
+anything a source holds: Slack and Gmail, whose services count seconds
+from 1970, ask from 1970 itself rather than from a negative time. A config's `validate` reads
 every bound and refuses an `until` before its `since` wherever neither
 the run's clock nor its offset is needed to tell, so `datalib-dag
 --check` names the key; a day against an offset or an instant is
@@ -212,11 +214,16 @@ checked when a run resolves them. A method that cannot
 honor `until` has no such key, and naming one is refused as an unknown
 field.
 
+Leaving `since` out means everything, except where the table below
+says otherwise; Garmin's year is there because it costs one request per
+metric per day.
+
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|
-| slack `api` | `since`: 2024-01-01 | a message's time | stays |
+| slack `api` | `since`: everything | a message's time | stays |
 | claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
+| todoist `api` | `since`: the day the account joined | a task's completion time | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
 | calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
 
@@ -490,7 +497,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Six rewrites are made without asking,
+well enough to name the tool. Seven rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -538,13 +545,16 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   five that is meant to take an entry out; it still refuses a result
+   seven that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
    shape from before every step named its program. The rewrite writes
    `command = "datalib-step"` on the line after its `function`. The
    loader still reads a step without one the same way.
+7. Todoist's window (`upgrade_todoist_since`, `todoist_since.rs`): a
+   Todoist ingest's `api.completed_since` becomes `api.since`, its value
+   as it was. The loader refuses the old key.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

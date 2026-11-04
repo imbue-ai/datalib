@@ -33,9 +33,7 @@ roots = [
 refresh_window_days = 7  # whole-workspace mirror: re-list this many days of edits before
                          # the newest seen, so a page shared late is caught; default 0
 max_pages = 5000         # stop after mirroring this many pages, a guard against a
-                         # mis-scoped run; unset is no limit (0 is refused). With
-                         # `roots` it does not shorten the first run's listing,
-                         # which reads the whole workspace either way.
+                         # mis-scoped run; unset is no limit (0 is refused)
 comments = true          # comment threads; default true
 attachments = true       # files attached to pages; default true
 

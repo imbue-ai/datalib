@@ -18,7 +18,8 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, tree_rows_of_pages_sql, NotionAttachmentRow, TreeKind, ATTACHMENTS, COMMENTS, LADDER,
-    PAGES, PAGE_MARKDOWN, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_UPDATE,
+    PAGES, PAGE_MARKDOWN, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_ROW_OF_PLACED_PAGE_SQL,
+    TREE_UPDATE,
 };
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
@@ -100,17 +101,15 @@ impl TreeUpsert {
         )
     }
 
-    /// A block object, from `GET /v1/blocks/{id}`. A child page or a
-    /// child database carries its title; any other block, none.
+    /// A block object, from `GET /v1/blocks/{id}` or a children listing.
+    /// A child database is the database; any other block carries no
+    /// title, and the path walks through it without showing it.
     pub fn from_block(id: &str, block: &Value) -> Self {
-        let title = block
-            .get("type")
-            .and_then(Value::as_str)
-            .and_then(|t| block.get(t))
-            .and_then(|b| b.get("title"))
-            .and_then(Value::as_str)
-            .map(String::from);
-        Self::with_parent(id, TreeKind::Block, title, block.get("parent"))
+        let kind = match block.get("type").and_then(Value::as_str) {
+            Some("child_database") => TreeKind::Database,
+            _ => TreeKind::Block,
+        };
+        Self::with_parent(id, kind, block_title(block), block.get("parent"))
     }
 
     /// One Notion would not show: kept so it is not asked for again.
@@ -133,6 +132,65 @@ impl TreeUpsert {
                 .and_then(Value::as_str)
                 .map(String::from),
             parent_id: parent.and_then(parent_id_of),
+        }
+    }
+}
+
+/// The title a child page or child database block carries.
+fn block_title(block: &Value) -> Option<String> {
+    block
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(|t| block.get(t))
+        .and_then(|b| b.get("title"))
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// A page seen as a block: a `child_page` in its parent's children, or
+/// any page asked for by `GET /v1/blocks/{id}`. A page's block carries
+/// the page's own `last_edited_time` (measured equal on the five pages
+/// tried, a database row and a page at the top of the workspace among
+/// them), so it is listed at that stamp, as search lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedPage {
+    pub id: String,
+    pub title: Option<String>,
+    pub parent_type: Option<String>,
+    pub parent_id: Option<String>,
+    pub created_time: Option<String>,
+    pub last_edited_time: Option<String>,
+}
+
+/// Where one block places something in `tree`: a page, listed at its
+/// stamp, or a database or a block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placed {
+    Page(PlacedPage),
+    Other(TreeUpsert),
+}
+
+impl Placed {
+    pub fn from_block(id: &str, block: &Value) -> Self {
+        if block.get("type").and_then(Value::as_str) != Some("child_page") {
+            return Placed::Other(TreeUpsert::from_block(id, block));
+        }
+        let text = |key: &str| block.get(key).and_then(Value::as_str).map(String::from);
+        let tree = TreeUpsert::with_parent(id, TreeKind::Block, None, block.get("parent"));
+        Placed::Page(PlacedPage {
+            id: id.to_string(),
+            title: block_title(block),
+            parent_type: tree.parent_type,
+            parent_id: tree.parent_id,
+            created_time: text("created_time"),
+            last_edited_time: text("last_edited_time"),
+        })
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Placed::Page(p) => &p.id,
+            Placed::Other(t) => &t.id,
         }
     }
 }
@@ -569,8 +627,9 @@ impl RawDb {
         Ok(())
     }
 
-    /// Pages roots mode's search listed: each one's place in `tree`, and
-    /// the stamp it was listed at in `listed_pages`.
+    /// Page objects roots mode listed, from the search or a database's
+    /// rows: each one's place in `tree`, and the stamp it was listed at
+    /// in `listed_pages`.
     pub async fn store_listed_pages(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
@@ -587,15 +646,7 @@ impl RawDb {
                 .await
                 .with_context(|| format!("place listed page {} in the tree", r.id))?;
             owed::hold(tx, TREE, &r.id, None).await?;
-            sqlx::query(
-                "INSERT INTO listed_pages (id, last_edited_time) VALUES (?, ?) \
-                 ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time",
-            )
-            .bind(&r.id)
-            .bind(&r.last_edited_time)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list page {}", r.id))?;
+            list_stamp(tx, &r.id, r.last_edited_time.as_deref()).await?;
         }
         Ok(())
     }
@@ -623,6 +674,38 @@ impl RawDb {
             owed::hold(tx, TREE, &r.id, None).await?;
         }
         Ok(())
+    }
+
+    /// What blocks placed: each page an `unmirrored_page`, unless the
+    /// store holds it, listed at its stamp; each database and block as
+    /// [`Self::store_tree`] writes it.
+    pub async fn store_placed(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        placed: &[Placed],
+    ) -> Result<()> {
+        let mut others: Vec<TreeUpsert> = Vec::new();
+        for p in placed {
+            let p = match p {
+                Placed::Page(p) => p,
+                Placed::Other(t) => {
+                    others.push(t.clone());
+                    continue;
+                }
+            };
+            sqlx::query(TREE_ROW_OF_PLACED_PAGE_SQL)
+                .bind(&p.id)
+                .bind(&p.title)
+                .bind(&p.parent_type)
+                .bind(&p.parent_id)
+                .bind(&p.created_time)
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("place page {} in the tree", p.id))?;
+            owed::hold(tx, TREE, &p.id, None).await?;
+            list_stamp(tx, &p.id, p.last_edited_time.as_deref()).await?;
+        }
+        self.store_tree(tx, &others).await
     }
 
     /// A body, and the attachment edges for the slots it names: an edge
@@ -962,6 +1045,24 @@ impl RawDb {
             })
             .collect())
     }
+}
+
+/// The stamp a listing saw page `id` at, in `listed_pages`.
+async fn list_stamp(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: &str,
+    last_edited_time: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO listed_pages (id, last_edited_time) VALUES (?, ?) \
+         ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time",
+    )
+    .bind(id)
+    .bind(last_edited_time)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("list page {id}"))?;
+    Ok(())
 }
 
 async fn upsert_comments_in_tx(

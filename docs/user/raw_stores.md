@@ -553,8 +553,8 @@ Slack listed in it is stored.
   characters (`001712345678.123456`), so they sort as times do. Both
   ends are inside the stretch.
 
-A conversation's history reaches back to the source's `since` (2024-01-01
-unless the config says otherwise) and up to the newest message the
+A conversation's history reaches back to the source's `since` (to its
+first message when the config sets none) and up to the newest message the
 last walk saw. With `scope = "involves_me"`, a channel's reaches back
 only to `context_before` ahead of the oldest message that involves the
 account, and a channel where nothing does is not walked at all. A conversation walked and found empty has one row with

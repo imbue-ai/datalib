@@ -18,7 +18,8 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use super::db::{
-    CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, PageUpsert, TreeUpsert,
+    CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, PageUpsert, Placed,
+    TreeUpsert,
 };
 use super::official::NotionOfficialError;
 use super::schema_raw::{split_edge_key, TreeKind};
@@ -663,8 +664,8 @@ pub(crate) struct Ancestors<'a> {
 }
 
 #[async_trait]
-impl Fetcher<TreeUpsert> for Ancestors<'_> {
-    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<TreeUpsert>>, BatchError> {
+impl Fetcher<Placed> for Ancestors<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<Placed>>, BatchError> {
         let mut out = Vec::with_capacity(batch.len());
         for listed in batch {
             let id = listed.key.as_str();
@@ -673,14 +674,14 @@ impl Fetcher<TreeUpsert> for Ancestors<'_> {
                     .client
                     .get_database(id)
                     .await
-                    .map(|db| TreeUpsert::from_database(id, &db))
+                    .map(|db| Placed::Other(TreeUpsert::from_database(id, &db)))
                     .or_else(|e| unseen(e, id, TreeKind::Database))
             } else {
                 self.ctx
                     .client
                     .get_block(id)
                     .await
-                    .map(|b| TreeUpsert::from_block(id, &b))
+                    .map(|b| Placed::from_block(id, &b))
                     .or_else(|e| unseen(e, id, TreeKind::Block))
             };
             out.push(Fetched {
@@ -695,16 +696,16 @@ impl Fetcher<TreeUpsert> for Ancestors<'_> {
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
-        batch: &[Fetched<TreeUpsert>],
+        batch: &[Fetched<Placed>],
     ) -> Result<()> {
-        let rows: Vec<TreeUpsert> = batch
+        let rows: Vec<Placed> = batch
             .iter()
             .filter_map(|f| match &f.outcome {
                 Outcome::Got(row) | Outcome::Unusable(row, ..) => Some(row.clone()),
                 _ => None,
             })
             .collect();
-        self.ctx.db.store_tree(tx, &rows).await?;
+        self.ctx.db.store_placed(tx, &rows).await?;
         self.ctx
             .counts
             .ancestors_resolved
@@ -715,14 +716,10 @@ impl Fetcher<TreeUpsert> for Ancestors<'_> {
 
 /// A parent this credential may not see is the top of what it can: a
 /// page shared on its own has a parent that answers 404 or 403.
-fn unseen(
-    e: NotionOfficialError,
-    id: &str,
-    kind: TreeKind,
-) -> Result<TreeUpsert, NotionOfficialError> {
+fn unseen(e: NotionOfficialError, id: &str, kind: TreeKind) -> Result<Placed, NotionOfficialError> {
     match e {
         NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_) => {
-            Ok(TreeUpsert::unknown(id, kind))
+            Ok(Placed::Other(TreeUpsert::unknown(id, kind)))
         }
         e => Err(e),
     }

@@ -18,6 +18,7 @@ pub mod official;
 pub mod schema_raw;
 pub mod scope;
 pub mod slots;
+mod walk;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,6 +47,7 @@ use listing::Listing;
 use schema_raw::{
     TreeKind, ATTACHMENTS, COMMENT_ANCHORS, PAGES, PAGE_COMMENTS, PAGE_MARKDOWN, TREE, USERS,
 };
+use walk::Walked;
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -110,7 +112,8 @@ pub struct FetchSummary {
     /// Page objects the listing read this run; in roots mode, the pages
     /// the roots reach.
     pub listed: usize,
-    /// In roots mode, the pages the search placed in the tree.
+    /// In roots mode, the pages the walk down and the search placed in
+    /// the tree.
     pub placed: usize,
     pub new_pages: usize,
     pub upd_pages: usize,
@@ -406,17 +409,45 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// The pages under the roots, and the pages a root's body links: the
-    /// search placing every page and database in the tree, the blocks
-    /// and hidden parents placed after it, the objects of the pages under
-    /// a root, their bodies; then the pages the roots' bodies link, and
-    /// theirs. A root the tree does not have is asked for as a page, so
-    /// one Notion has not got is a `config:` row.
-    async fn roots_mirror(&self, roots: &[String], s: &mut FetchSummary) -> Result<()> {
-        self.search_walk(Listing::Roots, s).await?;
+    /// What sits under the roots: with roots configured, the pages they
+    /// reach and the pages a root's body links; with none, every page
+    /// the search finds from the top of the workspace, where the
+    /// listing is the content.
+    ///
+    /// The first sync of configured roots walks down from them, so it
+    /// costs what is under them rather than what is in the workspace;
+    /// from then on the search's newest edits keep either kind current.
+    async fn mirror(&self, roots: &Roots, s: &mut FetchSummary) -> Result<()> {
+        let ids = match roots {
+            Roots::Workspace => {
+                self.search_walk(Listing::Workspace, s).await?;
+                self.ancestors().await?;
+                return self.bodies(s).await;
+            }
+            Roots::Pages(ids) => ids,
+        };
+        let held = datalib_etl_web::coverage::held(self.db.pool(), listing::ROOTS_SCOPE).await?;
+        if listing::walks_down(&held, self.opts.full_sync) {
+            let top = self.newest_edit().await?;
+            match self.walk_down(ids, s).await? {
+                Walked::Whole => {
+                    if let Some(top) = &top {
+                        self.cover_walked(top).await?;
+                    }
+                    self.search_walk(Listing::Roots, s).await?;
+                }
+                // Nothing covers the beginning, so this search lists the
+                // whole workspace; the walk's row says why.
+                Walked::Capped => self.search_walk(Listing::Roots, s).await?,
+                // The next run walks down again.
+                Walked::Short => {}
+            }
+        } else {
+            self.search_walk(Listing::Roots, s).await?;
+        }
         self.ancestors().await?;
         let tree = self.db.load_tree().await?;
-        let database_roots: Vec<&str> = roots
+        let database_roots: Vec<&str> = ids
             .iter()
             .filter(|r| {
                 tree.get(*r)
@@ -425,9 +456,9 @@ impl Ctx<'_> {
             .map(String::as_str)
             .collect();
         self.db.forget_failed_pages(&database_roots).await?;
-        let root_set: HashSet<String> = roots.iter().cloned().collect();
+        let root_set: HashSet<String> = ids.iter().cloned().collect();
         let under = scope::pages_under(&tree, &root_set);
-        let unplaced: Vec<String> = roots
+        let unplaced: Vec<String> = ids
             .iter()
             .filter(|r| !tree.contains_key(*r))
             .cloned()
@@ -445,10 +476,17 @@ impl Ctx<'_> {
         }
         let linked: Vec<String> = self
             .db
-            .pages_linked_from(roots)
+            .pages_linked_from(ids)
             .await?
             .into_iter()
             .filter(|id| !root_set.contains(id) && !under.contains(id))
+            .collect();
+        // A link to a page outside the roots is placed by asking for it
+        // as a block, once: the walk down never saw it.
+        self.place_unplaced(&linked, &tree).await?;
+        let tree = self.db.load_tree().await?;
+        let linked: Vec<String> = linked
+            .into_iter()
             .filter(|id| tree.get(id).is_some_and(scope::is_page))
             .collect();
         if linked.is_empty() {
@@ -457,6 +495,32 @@ impl Ctx<'_> {
         let linked = self.db.listed_stamps(&linked).await?;
         self.objects(linked, s).await?;
         self.bodies(s).await
+    }
+
+    /// `GET /v1/blocks/{id}` for each of `ids` the tree has no row for,
+    /// through the ancestry loop's fetcher: a page is placed and listed
+    /// at its stamp, and one Notion will not show is kept so it is not
+    /// asked for again.
+    async fn place_unplaced(
+        &self,
+        ids: &[String],
+        tree: &HashMap<String, db::TreeRow>,
+    ) -> Result<()> {
+        let listed: Vec<Listed> = ids
+            .iter()
+            .filter(|id| !tree.contains_key(*id))
+            .map(|id| Listed::new(id.clone(), None::<String>))
+            .collect();
+        let owed = owed::owed(self.db.pool(), TREE, listed).await?;
+        if owed.is_empty() {
+            return Ok(());
+        }
+        let f = Ancestors {
+            ctx: self,
+            databases: HashSet::new(),
+        };
+        self.drain(TREE, owed, &f, 50, 0).await?;
+        Ok(())
     }
 
     /// The objects of the pages `listed` names, each at the stamp the
@@ -505,6 +569,13 @@ impl Ctx<'_> {
         self.roots_round(&[id], s).await?;
         self.bodies(s).await
     }
+}
+
+/// Where a mirror starts: the pages and databases the config names, or,
+/// with none named, the top of the workspace as the search finds it.
+enum Roots {
+    Workspace,
+    Pages(Vec<String>),
 }
 
 /// Runs one phase unless the run has already ended: an error that ends
@@ -610,10 +681,6 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         let id = format_uuid(single);
         phase(&mut ended, ctx.single_page(id, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
-    } else if opts.subtree_pages.is_empty() {
-        phase(&mut ended, ctx.search_walk(Listing::Workspace, s)).await?;
-        phase(&mut ended, ctx.ancestors()).await?;
-        phase(&mut ended, ctx.bodies(s)).await?;
     } else {
         let mut ids: Vec<String> = Vec::new();
         for raw in &opts.subtree_pages {
@@ -623,7 +690,11 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
                 ids.push(id);
             }
         }
-        phase(&mut ended, ctx.roots_mirror(&ids, s)).await?;
+        let scope = match ids.is_empty() {
+            true => Roots::Workspace,
+            false => Roots::Pages(ids),
+        };
+        phase(&mut ended, ctx.mirror(&scope, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
     }
     if opts.attachments {
@@ -636,7 +707,8 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     phase(&mut ended, ctx.users()).await?;
 
     if let Some(e) = &ended {
-        if e.unauthorized && s.listed == 0 {
+        // Nothing listed or placed: the credential never worked.
+        if e.unauthorized && s.listed == 0 && s.placed == 0 {
             return Err(anyhow::Error::new(Upstream::CredentialRefused)
                 .context(format!("notion: {}", e.reason)));
         }

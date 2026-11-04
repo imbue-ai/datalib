@@ -43,10 +43,17 @@ transaction that wrote the content; what is owed is the difference,
 asked of the store each run and never stored. Nothing is marked done
 (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
-**Listing.** Two modes.
+**Listing.** A mirror is what sits under its roots. With `api.roots`
+set, the roots are the pages and databases it names; with it empty —
+the default — they are the top of the workspace, which only search can
+name, so the mirror is everything search finds. Both keep current the
+same way: the search, newest edit first, reads what changed since the
+last run. Where they differ is the first sync: under configured roots
+it walks down from them; across the whole workspace the search walk is
+the first sync, since its results are the content.
 
-With `api.roots` empty — the default — the mirror is the whole
-workspace, listed through `POST /v1/search` sorted `last_edited_time`
+With `api.roots` empty, the mirror is the whole workspace, listed
+through `POST /v1/search` sorted `last_edited_time`
 descending, 100 at a time. Page objects come back complete, properties
 included, so a search result *is* the page: it is stored held at its
 `last_edited_time`, and for a database row with no body that single
@@ -89,21 +96,57 @@ which page *within* one walk and do not survive it.
 
 With `api.roots` set — each a page or a database, by id or pasted link —
 the mirror is what sits under each root, and the pages a root's body
-links. The same search, walked the same way under its own `coverage`
-scope, `roots`, places every page and database in `tree` ("Where a
-page sits"): a page the store does not mirror as an `unmirrored_page`.
-It also lists each page's stamp in `listed_pages`, which is what a page
-under a root is owed against. Then the `tree` loop below places the
-blocks and hidden parents search does not, and a page is under a root
-when its chain of parents reaches the root (`ingest::scope`): a child
-page at any depth, whether or not the root's body links it; a
-database's rows and what hangs off them; a database inside a page, and
-its rows; a page inside a toggle or a column.
+links. The first sync **walks down from the roots** (`ingest::walk`):
+`GET /v1/blocks/{id}` tells a root page from a root database; a page,
+and a block with children (a toggle, a column), lists its children
+with `GET /v1/blocks/{id}/children`; a database lists the rows of each
+of its data sources with `POST /v1/data_sources/{id}/query`. A table's
+children are its cells, and are not listed. Everything the walk finds
+goes into `tree` ("Where a page sits"), a page the store does not
+mirror as an `unmirrored_page`, and each page's stamp into
+`listed_pages`, which is what a page under a root is owed against. A
+child page's block carries the page's own `last_edited_time` (measured
+equal on the five pages tried, a database row and a page at the top of
+the workspace among them); a database's rows are complete page objects. So
+the first sync costs about one request per page and per nesting block
+under the roots, however large the workspace.
+
+Before it walks, the run reads one page of search results for the
+newest edit in the workspace, by Notion's clock. A walk that listed
+everything covers the whole stretch up to that edit under the
+`coverage` scope `roots`: every page under a root edited at or before it
+has been seen, and anything edited after is the search's. The search
+then reads, under the same scope, what was edited since — on the first
+sync, little more than the one page of results it began with. From
+then on a run is that search alone: it places every page it lists in
+`tree` and lists its stamp, wherever in the workspace it sits, since
+whether a page is under a root is known only once its parents are
+placed. A walk that a listing interrupted — one that would not come, or
+a stopped run — covers nothing, leaves a `listing:roots` row for the
+first, and the next run walks down again; the search is not walked in
+its place. The one thing the walk cannot list is a database past
+Notion's cap of 10,000 results on a query: when one reaches it, the run
+says so in a `listing:roots` row and lists the whole workspace through
+the search instead, as an earlier build's first sync did, which covers
+the beginning so the next run does not walk again. `full_sync` walks
+down again.
+
+Then the `tree` loop below places the blocks and parents not yet
+placed, and a page is under a root when its chain of parents reaches
+the root (`ingest::scope`): a child page at any depth, whether or not
+the root's body links it; a database's rows and what hangs off them; a
+database inside a page, and its rows; a page inside a toggle or a
+column. A page the search lists from outside the roots sends that loop
+up its own chain of parents, once each, to the top of the workspace —
+the cost of placing it, which the steady state pays per page edited.
 
 One hop more: every page a root's body links, as a child (`<page>`) or
 a mention (`<mention-page>`), is mirrored too, but not what sits under
-it, and not what it links. A link the tree places as a block or a
-database, or does not place at all, is not followed: Notion refuses
+it, and not what it links. A link the tree has no row for, which the
+walk down never sees when it points outside the roots, is asked for
+once with `GET /v1/blocks/{id}`, which places it. A link the tree
+places as a block or a database, or Notion will not show, is not
+followed: Notion refuses
 either as a page, and 8 of the links in 5 real hub pages were such. A mention is how a person points at a page
 that lives elsewhere, and following mentions further reaches most of a
 workspace in a few hops.
@@ -112,26 +155,24 @@ Only those pages enter `pages`, each with `GET /v1/pages/{id}`, owed at
 the stamp `listed_pages` holds, so a page whose stamp has not moved
 costs nothing and a steady-state run reads one page of search results.
 A page that leaves the roots — moved elsewhere, or its root taken out of
-the config — stays as it was, as a deleted one does. A root the search
-does not place is asked for as a page, so one Notion has not got, or
+the config — stays as it was, as a deleted one does. A root nothing
+placed is asked for as a page, so one Notion has not got, or
 will not show, is a `config:` row. A root the tree places as a database
 is never asked for as a page, and a `pages:<root>` error an earlier
 build left from asking is cleared.
 
-The first run of a roots source lists the whole workspace: one request
-per hundred objects, about nine minutes for 53,000 pages, against the
-hours their bodies and comments would take. That pass is the same length
-whether the roots select two pages or two thousand, and `max_pages` does
-not shorten it: the cap is on the pages mirrored, and the listing is
-what tells the run which pages those are. Later runs read one page of
-search results, because the walk has its own `coverage` scope.
+A store an earlier build filled already covers the beginning, so it
+never walks down: the workspace-sized `tree` that build's first search
+left stays, and the search keeps adding to it.
 
 **Loops.** One request per record, in this order, each over the whole
 store:
 
 1. `GET /v1/databases/{id}` or `GET /v1/blocks/{id}` for every parent a
    `tree` row names that has no row of its own, round by round until
-   the top of what the credential can see (see "Where a page sits").
+   the top of what the credential can see (see "Where a page sits"). A
+   parent that is a page is listed at its block's stamp too, so one
+   under a root is owed against it like any other.
 2. `GET /v1/pages/{id}/markdown` for every page whose body is not held
    at the page's `last_edited_time`: pages that are not database rows
    first, then rows, each newest first. A workspace's rows are mostly
@@ -156,7 +197,9 @@ held at, and seals through the step's sealer, so a run killed anywhere
 leaves a store a later run finishes.
 
 **Progress.** The run's one bar counts requests the run can see waiting:
-each page object roots mode asks for, and each record a loop owes.
+each page object roots mode asks for, and each record a loop owes. The
+walk down is not counted, since what it will find is unknown until it
+finds it; it names how many pages it has placed.
 A page the listing stores at a new stamp announces its body, and its
 comment listing, as it is stored, so the queue grows with the search
 walk and the ETA covers the loops ahead. A page of search results is
@@ -268,6 +311,8 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | a user, other than with a 403 or a 404 | `users:<id>` | the user fetching |
 | a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
 | a search page after the first, or `max_pages` cutting the listing short | `listing:search` | a search that reaches what the store covers |
+| a listing in the walk down from the roots that would not come; the walk is not covered, and the next run walks again | `listing:roots` | a walk down that lists everything |
+| a database whose rows reach Notion's 10,000-result cap on a query, so the run listed the whole workspace through the search instead | `listing:roots` | the next run, once that search covered the beginning |
 | twenty-five requests of one loop failing in a row | `phase:<table>` | the loop running its course |
 
 Each of those clears only by being tried again, and a run tries them on
@@ -321,8 +366,8 @@ one as the end of a listing would silently truncate.
 | `comment_anchors` | the text a block-anchored comment hangs off | read once |
 | `users` | display names: from a people property, `GET /v1/users/{id}`, or a comment's name for its author | read once |
 | `notion_attachments` | CAS edge, `ref_id` = the slot, written with the body | its bytes, once |
-| `tree` | each page, database and block a page sits under: kind, title, parent; in roots mode every page search lists | read once; a page's with the page, a database's again when search lists it |
-| `listed_pages` | roots mode only: each page search listed, at its `last_edited_time` | — |
+| `tree` | each page, database and block a page sits under: kind, title, parent; in roots mode every page the walk down or the search lists | read once; a page's with the page, a database's again when search lists it |
+| `listed_pages` | roots mode only: each page the walk down or the search listed, at its `last_edited_time` | — |
 | `coverage` | the stretch of edit times the search has read, scope `search` (`roots` in roots mode) | — |
 
 `page_markdown` is its own table so `dolt_diff_page_markdown` means
@@ -359,16 +404,18 @@ Where each row comes from:
   its `title`-typed property.
 - **A page roots mode places and does not mirror**: an
   `unmirrored_page`, from the search result, its title read the same
-  way. Fetching the page makes it a `page`, and the search never makes a
+  way, or from its block — in its parent's children, or asked for by
+  id — with the title the block carries. Fetching the page makes it a `page`, and the search never makes a
   held page's row anything else. It is what lets a root's sub-pages be
   found by parent, and a page above a root be named in the path.
 - **A database**: from the data-source object search returns for it,
   when the search walk reads one; otherwise `GET /v1/databases/{id}`,
   once. A database renamed is seen again only when search lists it.
 - **Anything else** — a column or a toggle a page sits in, a page this
-  credential cannot list: `GET /v1/blocks/{id}`, once. A child page or
-  child database block carries its title; any other block, none, and
-  the path walks through it without showing it.
+  credential cannot list: from the walk down's children listing, or
+  `GET /v1/blocks/{id}`, once. A child page block is a page and a child
+  database block a database, each with its title; any other block has
+  none, and the path walks through it without showing it.
 
 A database row's `parent_id` is its database's id, though Notion names
 its data source too; the path names the database.

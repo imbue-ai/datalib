@@ -37,10 +37,9 @@ impl TodoistConfig {
         self.latchkey_settings
             .validate()
             .map_err(anyhow::Error::msg)?;
-        if let Some(since) = self.api.as_ref().and_then(|a| a.completed_since.as_deref()) {
-            chrono::NaiveDate::parse_from_str(since, "%Y-%m-%d").map_err(|e| {
-                anyhow::anyhow!("`api.completed_since` is {since:?}, not a YYYY-MM-DD date: {e}")
-            })?;
+        if let Some(api) = &self.api {
+            datalib_time::TimeWindow::check("api", api.since.as_deref(), None)
+                .map_err(anyhow::Error::msg)?;
         }
         Ok(())
     }
@@ -52,14 +51,15 @@ impl TodoistConfig {
 pub struct TodoistSync {
     /// Copy the tasks you have completed, too. Todoist keeps them apart
     /// from the open ones and answers for at most three months at a
-    /// time, so the first run reads back to `completed_since` a quarter
-    /// at a time; later runs read only what was completed since.
+    /// time, so the first run reads back to `since` a quarter at a time;
+    /// later runs read only what was completed since.
     #[serde(default = "yes")]
     pub completed: bool,
-    /// How far back to read completed tasks, as `YYYY-MM-DD`. Omit it to
-    /// read back to the day the account joined Todoist.
+    /// How far back to read completed tasks: a day (`2024-01-01`), an
+    /// RFC 3339 instant, or an offset from the run's start (`-90d`). Omit
+    /// it to read back to the day the account joined Todoist.
     #[serde(default)]
-    pub completed_since: Option<String>,
+    pub since: Option<String>,
 }
 
 fn yes() -> bool {
@@ -70,7 +70,7 @@ impl Default for TodoistSync {
     fn default() -> Self {
         Self {
             completed: true,
-            completed_since: None,
+            since: None,
         }
     }
 }
@@ -96,25 +96,35 @@ mod tests {
         assert!(cfg.validate().is_ok());
         let api = cfg.api.unwrap();
         assert!(api.completed);
-        assert_eq!(api.completed_since, None);
+        assert_eq!(api.since, None);
         let default = TodoistSync::default();
         assert_eq!(default.completed, api.completed);
-        assert_eq!(default.completed_since, api.completed_since);
+        assert_eq!(default.since, api.since);
     }
 
+    /// `api.since` takes the window grammar every source shares, so an
+    /// offset loads, and a typo is refused at load naming the key.
     #[test]
-    fn completed_since_must_be_a_date() {
-        let ok: TodoistConfig =
-            serde_json::from_str(r#"{"api":{"completed_since":"2364-01-01"}}"#).unwrap();
-        assert!(ok.validate().is_ok());
-        let bad: TodoistConfig =
-            serde_json::from_str(r#"{"api":{"completed_since":"stardate 41153.7"}}"#).unwrap();
-        let e = bad.validate().unwrap_err().to_string();
-        assert!(e.contains("completed_since"), "{e}");
+    fn since_takes_the_shared_window_grammar() {
+        let since = |s: &str| {
+            let cfg: TodoistConfig =
+                serde_json::from_str(&format!(r#"{{"api":{{"since":"{s}"}}}}"#)).unwrap();
+            cfg.validate()
+        };
+        for ok in ["2364-01-01", "2364-01-01T09:00:00Z", "1900-01-01", "-90d"] {
+            since(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        }
+        let e = since("stardate 41153.7").unwrap_err().to_string();
+        assert!(e.contains("`api.since`"), "{e}");
     }
 
+    /// The window's old name is refused, so a config `datalib-http` has
+    /// not yet brought forward (`upgrade_todoist_since`) fails loudly
+    /// rather than reading back to the day the account joined.
     #[test]
     fn an_unknown_key_is_refused() {
         assert!(serde_json::from_str::<TodoistConfig>(r#"{"api":{"projects":["x"]}}"#).is_err());
+        let old = r#"{"api":{"completed_since":"2364-01-01"}}"#;
+        assert!(serde_json::from_str::<TodoistConfig>(old).is_err());
     }
 }

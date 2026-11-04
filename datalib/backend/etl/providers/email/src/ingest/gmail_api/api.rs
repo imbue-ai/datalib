@@ -392,6 +392,9 @@ fn messages_list_url(
         url.push_str(&percent_encode(id));
     }
     if let Some(secs) = after {
+        // A `since` before 1970 is negative seconds, which Slack answered
+        // with nothing (#1048). No mail is older than the epoch.
+        let secs = secs.max(0);
         url.push_str("&q=");
         url.push_str(&percent_encode(&format!("after:{secs}")));
     }
@@ -665,6 +668,14 @@ mod tests {
             "{url}"
         );
         assert!(!messages_list_url("me", None, 500, None, None).contains("q="));
+    }
+
+    /// A `since` before 1970 asks from the epoch, as Slack's does, rather
+    /// than sending a negative `after:`.
+    #[test]
+    fn a_window_from_before_the_epoch_asks_from_the_epoch() {
+        let url = messages_list_url("me", None, 500, None, Some(-2_208_988_800));
+        assert!(url.ends_with("&q=after%3A0"), "{url}");
     }
 
     #[test]

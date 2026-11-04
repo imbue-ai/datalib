@@ -2048,9 +2048,7 @@ roots = [
 refresh_window_days = 7  # whole-workspace mirror: re-list this many days of edits before
                          # the newest seen, so a page shared late is caught; default 0
 max_pages = 5000         # stop after mirroring this many pages, a guard against a
-                         # mis-scoped run; unset is no limit (0 is refused). With
-                         # `roots` it does not shorten the first run's listing,
-                         # which reads the whole workspace either way.
+                         # mis-scoped run; unset is no limit (0 is refused)
 comments = true          # comment threads; default true
 attachments = true       # files attached to pages; default true
 
@@ -2267,11 +2265,10 @@ enabled = false
 account = "enterprise"
 
 [steps.params.api]
-since = "2025-01-01"           # oldest message; default 2024-01-01. A day ("2025-01-01"),
-                               # an RFC 3339 instant ("2025-01-01T09:00:00-08:00"), or an
-                               # offset back from each sync ("-30d", "-2w": a rolling window).
-                               # Any day before 1970 ("1900-01-01") asks for the whole history;
-                               # a first sync of a big workspace then takes hours
+since = "2025-01-01"           # oldest message: a day ("2025-01-01"), an RFC 3339 instant
+                               # ("2025-01-01T09:00:00-08:00"), or an offset back from each
+                               # sync ("-30d", "-2w": a rolling window). Omit it for the whole
+                               # history; a first sync of a big workspace then takes hours
 channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
 all_channels = false           # also channels you can see but are not in (ignored with `channels`)
 archived = false               # also archived channels, each read once; meant with
@@ -2391,11 +2388,12 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard@enterprise.test"
 
 # Open tasks always come. Completed ones come too unless `completed` is
-# false; `completed_since` stops the first run's read of them at a date
-# rather than at the day the account joined Todoist.
+# false; `since` stops the first run's read of them at a day ("2024-01-01"),
+# an RFC 3339 instant, or an offset back from each sync ("-90d"), rather
+# than at the day the account joined Todoist.
 [steps.params.api]
 completed = true
-completed_since = "2024-01-01"
+since = "2024-01-01"
 
 # One document per project: its sections, its tasks and their comments,
 # completed tasks folded under each section. No options.

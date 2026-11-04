@@ -19,11 +19,13 @@
 //! a source with time series gets its `render_time_series` step and the
 //! config its time-series index; then `time_series_embeds.rs`: a
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
-//! step of datalib's own names `datalib-step` as its `command`. Those
-//! last six rewrites are also the ones `datalib-http` makes by itself
-//! (`upgrade_lowercase_ids`, `upgrade_qmd_steps`, `upgrade_document_index`,
-//! `upgrade_time_series_steps`, `upgrade_time_series_embeds`,
-//! `upgrade_step_commands`).
+//! step of datalib's own names `datalib-step` as its `command`; then
+//! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
+//! `since`. Those last seven rewrites are also the ones `datalib-http`
+//! makes by itself (`upgrade_lowercase_ids`, `upgrade_qmd_steps`,
+//! `upgrade_document_index`, `upgrade_time_series_steps`,
+//! `upgrade_time_series_embeds`, `upgrade_step_commands`,
+//! `upgrade_todoist_since`).
 
 pub mod convert;
 pub mod document_index;
@@ -32,6 +34,7 @@ pub mod qmd_steps;
 pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
+pub mod todoist_since;
 
 use std::path::{Path, PathBuf};
 
@@ -70,6 +73,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if step_commands::is_retired(text)? {
         return Ok(LegacyFormat::ImplicitStepCommand);
     }
+    if todoist_since::is_retired(text)? {
+        return Ok(LegacyFormat::TodoistCompletedSince);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -80,7 +86,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::UnifiedIndex
         | LegacyFormat::NoTimeSeries
         | LegacyFormat::TimeSeriesEmbed
-        | LegacyFormat::ImplicitStepCommand => text.to_string(),
+        | LegacyFormat::ImplicitStepCommand
+        | LegacyFormat::TodoistCompletedSince => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -93,6 +100,7 @@ pub fn convert(text: &str) -> Result<String> {
     };
     let out = time_series_embeds::rewrite(&out)?;
     let out = step_commands::rewrite(&out)?;
+    let out = todoist_since::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -184,6 +192,18 @@ pub fn upgrade_step_commands(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = step_commands::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Rename a Todoist ingest's `completed_since` to `since`
+/// (`todoist_since.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
+/// result would not load every entry the original did.
+pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
+    if !todoist_since::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = todoist_since::rewrite(text)?;
     refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
@@ -797,6 +817,25 @@ inputs = ["mail/render_markdown"]
         let err = upgrade_qmd_steps(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
         assert!(err.contains(&format!("step {extra}")), "{err}");
+    }
+
+    /// A Todoist source written with `completed_since` is renamed by the
+    /// server, every entry still loading, and then has nothing left to do.
+    /// `datalib-step` refuses the old key (`todoist_config`'s tests).
+    #[test]
+    fn a_todoist_source_with_completed_since_is_upgraded_to_since() {
+        let before = "[[groups]]\nid = \"tasks\"\ntype = \"todoist\"\n\n[[steps]]\n\
+                      group = \"tasks\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
+                      [steps.params.api]\ncompleted_since = \"2364-01-01\"\n";
+        let loads = |text: &str| {
+            let check = datalib_dag::config::check_text(text);
+            check.cfg.steps.iter().any(|s| s.id == "tasks/ingest")
+        };
+        let out = upgrade_todoist_since(before).unwrap().unwrap();
+        assert!(out.contains("\nsince = \"2364-01-01\"\n"), "{out}");
+        assert!(loads(&out), "{out}");
+        assert_eq!(upgrade_todoist_since(&out).unwrap(), None);
+        assert_eq!(convert(before).unwrap(), out);
     }
 
     /// The server runs the unattended rewrites in turn; each one after the

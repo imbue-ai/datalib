@@ -277,7 +277,7 @@ starting at its floor, so the next run walks down to `since`.
 
 `since` — and only `since`. It is the oldest message any pass will ask
 for (a day, an RFC 3339 instant or an offset from the run's start,
-default `DEFAULT_SINCE` = 2024-01-01), so "mirror just the last week"
+unset: the whole history, `DEFAULT_SINCE` = 1970-01-01), so "mirror just the last week"
 is `since = "-7d"`. The processor resolves an offset against the run's
 `now` and hands the download an instant, so the window slides; what it
 slides past stays stored.

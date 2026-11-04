@@ -624,7 +624,7 @@ user list, claude's orgs and project docs).
 | slack | channels, threads (by `latest_reply`), file edges, the authors of stored messages | `messages`, `threads`, `slack_attachments`, `users` sidecars | each channel's history; each conversation's searched reply time |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
-| notion | search results are the `pages` rows; in roots mode, `listed_pages`, and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the search's `last_edited_time` |
+| notion | search results are the `pages` rows; in roots mode, `listed_pages` (written by the walk down from the roots on a first sync, by the search after), and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the page's `last_edited_time`, as the search or the walk lists it |
 | linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
 | todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from the account's `joined_at` |
 | garmin | days, activities, files | each table's sidecar | activity dates |

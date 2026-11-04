@@ -19,6 +19,12 @@ reference behind them.
 - `cargo deny` — a RustSec and license scan of both Cargo lockfiles
   (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
   runner, with no bazel in it.
+- `pnpm audit` — `pnpm audit --prod --audit-level high` over the three
+  npm trees a release ships (`datalib/ui`, `third-party/qmd/runtime`,
+  `third-party/latchkey/runtime`), also on the bare runner. An advisory
+  is fixed by a bump or a pnpm `overrides` entry in that tree's
+  `pnpm-workspace.yaml`, held to the 7-day burn-in
+  ([`first_time_dev.md`](first_time_dev.md) § "Version policy").
 - `bazel test //...` — the repo hygiene lint, then
   `bazel test -c opt --config=release --config=ci --nostamp --jobs=16 -- //... -//datalib/ui:e2e_test`,
   then the "No crate built a second time for a tool" check (below), then

@@ -51,7 +51,9 @@ use shapes::{
     M_USERS, M_USER_INFO,
 };
 
-pub const DEFAULT_SINCE: &str = "2024-01-01";
+/// What a source with no `since` asks for: the whole history, since no
+/// message is older than the epoch.
+pub const DEFAULT_SINCE: &str = "1970-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 /// How long after a conversation's refresh window was last re-read
 /// whole before a run reads it again.
@@ -84,6 +86,8 @@ const AT_ONCE: usize = 3;
 const TRANSACTION_BYTES: usize = 32 << 20;
 
 // Per-method drivers.
+
+const EPOCH_TS: &str = "0.000000";
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
     // Slack answers a negative `oldest` with an empty page, and a
@@ -929,9 +933,14 @@ fn archived_read_key(channel_id: &str) -> String {
 }
 
 /// Whether a stretch a conversation `owes` reaches down to its newest
-/// message, `latest`.
+/// message, `latest`. Slack's `latest` for a conversation that has never
+/// held a message is the epoch, which a `since` at the epoch would
+/// otherwise reach.
 fn shows_activity(latest: &str, owes: &[Stretch]) -> bool {
     let latest = ts_key(latest);
+    if latest == ts_key(EPOCH_TS) {
+        return false;
+    }
     owes.iter()
         .filter(|s| !s.reread)
         .any(|s| s.span.lo < latest || (s.inclusive && s.span.lo == latest))
@@ -2579,6 +2588,16 @@ mod tests {
         assert!(!walks(&[], Some("0000000000.000000")));
         assert!(walks(&[], Some(SINCE)));
         assert!(walks(&[], Some("1735689600.000100")));
+    }
+
+    /// With no `since`, a walk starts at the epoch, which is also the
+    /// `latest` Slack gives a conversation that never held a message:
+    /// that one walked on every sync.
+    #[test]
+    fn a_dm_that_never_held_a_message_is_idle_with_since_at_the_epoch() {
+        let from_epoch = |newest| to_walk(&from_since(&ts_key(EPOCH_TS)), None, &[], newest);
+        assert!(from_epoch(Newest::At("0000000000.000000")).is_empty());
+        assert!(!from_epoch(Newest::At("1735689600.000100")).is_empty());
     }
 
     #[test]

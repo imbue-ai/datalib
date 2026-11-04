@@ -99,7 +99,7 @@ channels = ["project-data-liberation"]
                          # narrows them to particular conversations, by
                          # Slack id or pasted link — a separate list
                          # from `channels`, since a DM has no channel name.
-# since = "2025-01-01"   # oldest message to mirror (default 2024-01-01).
+# since = "2025-01-01"   # oldest message to mirror (unset: everything).
                          # This — not `refresh_window_days` — is how you
                          # bound how far back the mirror goes.
 
