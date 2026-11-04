@@ -179,6 +179,13 @@ async fn scan_tree(
                 Err(e) => {
                     summary.errors += 1;
                     found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
+                    // Still there, so it keeps the path row the last scan wrote.
+                    if let Some(hash) = prev.paths.get(&f.rel) {
+                        path_batch.push(PdfPathRow {
+                            id: f.rel.clone(),
+                            blake3: hash.clone(),
+                        });
+                    }
                     continue;
                 }
             };
@@ -394,6 +401,45 @@ mod tests {
         assert!(column(&db, "SELECT scope_key FROM problems")
             .await
             .is_empty());
+        db.pool().close().await;
+    }
+
+    /// A PDF that will not open is still there: truncating `pdf_paths` lost
+    /// its path, and the prune then lost its document, until it opened again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_that_will_not_open_keeps_its_path_and_document() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (root, raw) = (dir.path().join("logs"), dir.path().join("raw"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&raw).unwrap();
+        for (name, body) in [("bridge.pdf", "warp core"), ("sickbay.pdf", "tricorder")] {
+            std::fs::write(root.join(name), doc(body, name, "01", None)).unwrap();
+        }
+        let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+        scan(&root, &raw, &db, identify).await;
+
+        let locked = root.join("sickbay.pdf");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&locked).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+            db.pool().close().await;
+            return;
+        }
+        let summary = scan(&root, &raw, &db, identify).await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(summary.errors, 1);
+        assert_eq!(
+            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            ["bridge.pdf", "sickbay.pdf"]
+        );
+        assert_eq!(
+            column(&db, "SELECT blake3 FROM pdf_documents").await.len(),
+            2
+        );
         db.pool().close().await;
     }
 
