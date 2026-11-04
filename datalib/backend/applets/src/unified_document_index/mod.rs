@@ -119,19 +119,33 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
         .build()
         .context("build tokio runtime")?;
     rt.block_on(async move {
-        // Nothing warms the model for a one-off search, so one that
-        // embeds its text waits for it here, however long a first
-        // download takes, rather than at the embedder's deadline.
-        let models = models::ModelGate::new(&root);
-        if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
-            let models = models.clone();
-            tokio::task::spawn_blocking(move || models.provision_now())
-                .await
-                .context("provision qmd's embedding model")?;
-        }
-        let s = Index::open(root, models, ONE_SEARCH_DEADLINE).await?;
+        let s = if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
+            open_with_models_verified(root).await?
+        } else {
+            let models = models::ModelGate::new(&root);
+            Index::open(root, models, ONE_SEARCH_DEADLINE).await?
+        };
         Ok(answer_search(&s, p).await)
     })
+}
+
+/// An [`Index`] for a caller with no server warming its models: the
+/// embedding model verified first, on a thread of its own, and qmd given
+/// a cold start's budget rather than a served request's.
+///
+/// Nothing warms the model for a one-off search, so one that embeds its
+/// text waits for it here, however long a first download takes, rather
+/// than at the embedder's deadline. The tests open this way too, so they
+/// cannot drift from what the applet does: before this they built the
+/// gate themselves and left it `Idle`, which made their *first search*
+/// the thing that verified a 300 MB model inside `EMBED_DEADLINE`.
+async fn open_with_models_verified(root: PathBuf) -> Result<Index> {
+    let models = models::ModelGate::new(&root);
+    let gate = models.clone();
+    tokio::task::spawn_blocking(move || gate.provision_now())
+        .await
+        .context("provision qmd's embedding model")?;
+    Index::open(root, models, ONE_SEARCH_DEADLINE).await
 }
 
 /// How long a served search waits on qmd to embed its text: under the
@@ -2459,14 +2473,14 @@ mod tests {
         assert_eq!(offered[0].label.as_deref(), Some("Captain"));
     }
 
+    /// The index `datalib-applet search` answers from, opened by the
+    /// applet's own [`open_with_models_verified`] rather than by
+    /// repeating it here. A test is a caller with no server warming its
+    /// models, which is exactly what that function is for.
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        Index::open(
-            root.to_path_buf(),
-            models::ModelGate::new(root),
-            EMBED_DEADLINE,
-        )
-        .await
-        .unwrap()
+        open_with_models_verified(root.to_path_buf())
+            .await
+            .expect("open an index with qmd's embedding model verified")
     }
 
     pub(super) async fn search(
