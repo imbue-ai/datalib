@@ -910,8 +910,10 @@ impl IndexedMarkdownStore {
                 .execute(&mut **conn)
                 .await
                 .with_context(|| format!("insert problem {}", p.problem_uuid))?;
+            if stamped.is_news(seen.get(&p.problem_uuid)) {
+                datalib_schema::problems::note_recorded([&stamped]);
+            }
         }
-        datalib_schema::problems::note_recorded(problems);
         Ok(())
     }
 

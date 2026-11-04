@@ -134,7 +134,7 @@ pub async fn run(
     progress.metric(METRIC, &[Severity::Error.metric_label()], errors);
     progress.metric(METRIC, &[Severity::Warning.metric_label()], warnings);
     if errors + warnings > 0 {
-        tracing::warn!(
+        tracing::debug!(
             source = %name,
             errors,
             warnings,

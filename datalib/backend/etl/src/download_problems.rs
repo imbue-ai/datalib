@@ -558,7 +558,7 @@ pub(crate) async fn apply(
             .context("clear the rows this run has a verdict on")?;
     }
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let mut stored = Vec::with_capacity(rows.len());
+    let mut news = Vec::new();
     for (key, outcome, problem) in &rows {
         let row = ProblemRow::new(
             "",
@@ -577,10 +577,12 @@ pub(crate) async fn apply(
             .execute(&mut *tx)
             .await
             .with_context(|| format!("record {key}"))?;
-        stored.push(row);
+        if row.is_news(earlier.get(key)) {
+            news.push(row);
+        }
     }
     tx.commit().await.context("commit")?;
-    datalib_problems::note_recorded(&stored);
+    datalib_problems::note_recorded(&news);
     Ok(())
 }
 
