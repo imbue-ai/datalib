@@ -173,7 +173,16 @@ async fn read_backup(
     };
     drop(tmp);
 
-    mirror_beside_msgstore(backup_dir, root_key, db, cache, &mut summary, &found).await?;
+    mirror_beside_msgstore(
+        backup_dir,
+        root_key,
+        db,
+        cache,
+        progress,
+        &mut summary,
+        &found,
+    )
+    .await?;
     tracing::info!(summary = %summary.summary(), "whatsapp::ingest done");
     Ok(summary)
 }
@@ -186,6 +195,7 @@ async fn mirror_beside_msgstore(
     root_key: &[u8; 32],
     db: &RawDb,
     cache: &FingerprintCache,
+    progress: &Progress,
     summary: &mut IngestSummary,
     found: &RunProblems,
 ) -> Result<()> {
@@ -207,7 +217,16 @@ async fn mirror_beside_msgstore(
 
     let media_root = backup_dir.join(MEDIA_DIR);
     if media_root.is_dir() {
-        mirror_media_files(db.pool(), db.cas(), &media_root, cache, summary, found).await?;
+        mirror_media_files(
+            db.pool(),
+            db.cas(),
+            &media_root,
+            cache,
+            progress,
+            summary,
+            found,
+        )
+        .await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -328,6 +347,7 @@ async fn mirror_media_files(
     cas: &BlobCas,
     media_root: &Path,
     cache: &FingerprintCache,
+    progress: &Progress,
     summary: &mut IngestSummary,
     found: &RunProblems,
 ) -> Result<()> {
@@ -336,6 +356,7 @@ async fn mirror_media_files(
         media_root,
         &file_changes_scan::ScanOptions {
             ignore: vec![".*".to_string()],
+            progress: progress.clone(),
             ..Default::default()
         },
         |_| true,
@@ -567,6 +588,7 @@ mod tests {
             db.cas(),
             &media_root,
             &cache,
+            &Progress::noop(),
             &mut summary,
             &found,
         )
@@ -595,7 +617,16 @@ mod tests {
         summary: &mut IngestSummary,
     ) -> Result<()> {
         run_problems::collecting(db.pool(), &StopFlag::new(), |found| async move {
-            super::mirror_beside_msgstore(backup_dir, root_key, db, cache, summary, &found).await
+            super::mirror_beside_msgstore(
+                backup_dir,
+                root_key,
+                db,
+                cache,
+                &Progress::noop(),
+                summary,
+                &found,
+            )
+            .await
         })
         .await
     }

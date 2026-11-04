@@ -133,7 +133,10 @@ async fn changes_since_last_read(opts: &IngestOptions) -> Result<(Scan, Changes)
     let scan = file_changes_scan::scan(
         &opts.cache,
         &opts.input_path,
-        &ScanOptions::default(),
+        &ScanOptions {
+            progress: opts.progress.clone(),
+            ..ScanOptions::default()
+        },
         |_| true,
     )
     .await?;

@@ -14,3 +14,4 @@ mod offline;
 mod probe;
 mod reset;
 mod runtime_fetch;
+mod scan_progress;

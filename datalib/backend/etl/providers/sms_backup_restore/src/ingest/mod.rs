@@ -82,7 +82,10 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let scan = file_changes_scan::scan(
         &opts.cache,
         &opts.input_path,
-        &file_changes_scan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions {
+            progress: opts.progress.clone(),
+            ..Default::default()
+        },
         |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml")),
     )
     .await?;
