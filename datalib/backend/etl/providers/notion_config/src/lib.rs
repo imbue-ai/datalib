@@ -71,7 +71,8 @@ pub struct NotionSync {
     #[serde(default)]
     pub roots: Vec<String>,
     /// Stop after this many pages. A guard against a mis-scoped run,
-    /// not a tuning knob.
+    /// not a tuning knob. It caps the pages *mirrored*; a roots run's
+    /// listing is bounded by what sits under the roots, not by this.
     #[serde(default)]
     pub max_pages: Option<u32>,
     #[serde(default = "default_true")]

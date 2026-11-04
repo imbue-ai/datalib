@@ -279,14 +279,18 @@ const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
 /// lists one a line and `occurrences_vs_service` checks against the
 /// service, so their stores are counted too.
 ///
-/// Keyed by stanza (the group id in dag.toml), which is also what names
-/// the snapshot directory. A store not listed is dumped in full.
-const ROW_COUNT_ONLY_STANZAS: &[&str] = &[
-    "apple_photos",
-    "lightroom",
-    "whatsapp",
-    "google_calendar_primary",
-    "fastmail_calendar_team",
+/// Keyed by `(stanza, step)` — the group id in dag.toml, which is also
+/// what names the snapshot directory, and the step whose tree the store
+/// sits in; `"*"` is every step of that stanza. A store not listed is
+/// dumped in full. Lightroom names only its `ingest`, because its render
+/// store is not a mirror of anything: it is the grid row per photo that
+/// this golden is here to show.
+const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
+    ("apple_photos", "*"),
+    ("lightroom", "ingest"),
+    ("whatsapp", "*"),
+    ("google_calendar_primary", "*"),
+    ("fastmail_calendar_team", "*"),
 ];
 
 /// Tables dumped as a row count inside an otherwise full dump, as
@@ -305,6 +309,16 @@ const ROW_COUNT_ONLY_STANZAS: &[&str] = &[
 /// - `render_inputs` and the agent transcripts' `records` repeat, row
 ///   by row, what the `.md` files and `grid_rows` beside them already
 ///   show.
+///
+/// Notion's `tree` and `listed_pages` are the first kind, and the one
+/// pair here that is also a tripwire. A roots source walks down from its
+/// roots, so they hold what sits under them and nothing more; a source
+/// mirroring a whole workspace, or a store an older build left, holds
+/// the id, title and parent of every object the credential can see.
+/// Counting them means a run that goes back to listing a whole workspace
+/// reads as one number jumping from a handful to tens of thousands,
+/// rather than as a hundred thousand new lines of somebody's workspace
+/// committed to this repo.
 const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("tiny-slack", "channels"),
     ("tiny-slack", "channels_bookkeeping"),
@@ -325,10 +339,19 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
+    ("notion-api", "tree"),
+    ("notion-api", "tree_bookkeeping"),
+    ("notion-api", "listed_pages"),
     ("claude_code", "records"),
     ("codex", "records"),
     ("*", "render_inputs"),
 ];
+
+/// The step a store sits in: the `<sub>` of
+/// `<data_root>/<stanza>/<sub>/<file>`.
+fn step_of(path: &Path) -> Option<String> {
+    Some(path.parent()?.file_name()?.to_string_lossy().into_owned())
+}
 
 /// The stanza a store belongs to: `<data_root>/<stanza>/<sub>/<file>`.
 fn stanza_of(path: &Path) -> Option<String> {
@@ -1846,15 +1869,15 @@ enum SnapValue {
 
 /// File → snapshot payload. JSONL and JSON are parsed, sorted and stripped of
 /// volatile fields; markdown is text with frontmatter redactions; a store —
-/// `.doltlite_db`, or a plain `.sqlite` like the blob CAS — is dumped as
-/// `{table: [rows]}` so the goldens carry the actual raw payloads. Anything
-/// else becomes a size marker.
+/// `.doltlite_db`, or a plain `.sqlite` like the blob CAS — is dumped a row a
+/// line by [`store_as_jsonl`] so the goldens carry the actual raw payloads.
+/// Anything else becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     if name.ends_with(".doltlite_db") || name.ends_with(".sqlite") {
         let mut v = dump_store(path);
         strip_volatile(&mut v);
-        return SnapValue::Json(v);
+        return SnapValue::Text(store_as_jsonl(&v));
     }
     if name.ends_with(".jsonl") {
         let text = std::fs::read_to_string(path).unwrap_or_default();
@@ -2030,7 +2053,10 @@ async fn dump_store_async(path: &Path) -> Value {
         .collect();
 
     let stanza = stanza_of(path).unwrap_or_default();
-    let store_counts_only = ROW_COUNT_ONLY_STANZAS.contains(&stanza.as_str());
+    let step = step_of(path).unwrap_or_default();
+    let store_counts_only = ROW_COUNT_ONLY_STEPS
+        .iter()
+        .any(|(s, st)| *s == stanza && (*st == "*" || *st == step));
     let table_counts_only = |t: &str| {
         ROW_COUNT_ONLY_TABLES
             .iter()
@@ -2164,6 +2190,97 @@ async fn dump_store_async(path: &Path) -> Value {
         out.insert(t, Value::Array(row_vals));
     }
     Value::Object(out)
+}
+
+/// A row whose one-line form is longer than this is indented instead. Two
+/// of this golden's 45,631 rows are whole Claude conversations, and a
+/// 4.5 MB line is one no diff viewer will render; at this width 23 rows
+/// spill and nothing else is touched.
+const SPILL_WIDTH: usize = 64 * 1024;
+
+/// A store dump as text: a `# <table>: N rows` header, then one row a line.
+///
+/// Not JSON indented one line per column, because that made the line count
+/// the product of rows and columns: four columns arriving on `grid_rows`
+/// added 13,044 lines to one source's snapshot without a byte of its raw
+/// store changing. A row a line also makes a changed row read as one
+/// changed line.
+///
+/// Read a changed row with `git diff --word-diff`, which is why the
+/// separators carry a space: a compact object is a single word to git's
+/// tokenizer, so a one-field change would read as a whole-line rewrite.
+fn store_as_jsonl(dump: &Value) -> String {
+    let Value::Object(tables) = dump else {
+        return format!("{dump}\n");
+    };
+    let mut out = String::new();
+    for (table, value) in tables {
+        match value {
+            Value::Array(rows) => {
+                out.push_str(&format!("# {table}: {} rows\n", rows.len()));
+                for row in rows {
+                    let line = spaced_json(row);
+                    if line.len() <= SPILL_WIDTH {
+                        out.push_str(&line);
+                    } else {
+                        out.push_str(&serde_json::to_string_pretty(row).expect("pretty row"));
+                    }
+                    out.push('\n');
+                }
+            }
+            // A table the `ROW_COUNT_ONLY_*` lists keep to a count: the
+            // count is the whole dump, and it is already `"<n> rows"`.
+            other => {
+                let said = other
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| other.to_string());
+                out.push_str(&format!("# {table}: {said}\n"));
+            }
+        }
+    }
+    out
+}
+
+/// Compact JSON with a space after every `,` and `:` — see
+/// [`store_as_jsonl`] on why the spaces are load-bearing.
+fn spaced_json(v: &Value) -> String {
+    use serde::Serialize;
+    struct Spaced;
+    impl serde_json::ser::Formatter for Spaced {
+        fn begin_array_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
+        }
+        fn begin_object_key<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+            first: bool,
+        ) -> std::io::Result<()> {
+            if first {
+                Ok(())
+            } else {
+                w.write_all(b", ")
+            }
+        }
+        fn begin_object_value<W: ?Sized + std::io::Write>(
+            &mut self,
+            w: &mut W,
+        ) -> std::io::Result<()> {
+            w.write_all(b": ")
+        }
+    }
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, Spaced);
+    v.serialize(&mut ser).expect("serialize row");
+    String::from_utf8(buf).expect("row is utf-8")
 }
 
 /// One cell as JSON, typed by the cell's own storage class. The
@@ -2305,5 +2422,58 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // out of the preserved per-source `stats` line.
         Value::String(s) => *s = scrub_commit(&normalize_str(s)),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod store_dump_tests {
+    use super::*;
+
+    /// A table's rows go one a line, with a header naming the count, and
+    /// the separators carry a space so `git diff --word-diff` can tell a
+    /// one-field change from a rewritten row.
+    #[test]
+    fn a_table_dumps_one_row_a_line_with_spaced_separators() {
+        let dump = serde_json::json!({
+            "grid_rows": [
+                {"uuid": "a", "h3": null, "kind": "Photo"},
+                {"uuid": "b", "h3": 644, "kind": "Photo"},
+            ],
+            "tree": "53988 rows",
+        });
+        assert_eq!(
+            store_as_jsonl(&dump),
+            "# grid_rows: 2 rows\n\
+             {\"h3\": null, \"kind\": \"Photo\", \"uuid\": \"a\"}\n\
+             {\"h3\": 644, \"kind\": \"Photo\", \"uuid\": \"b\"}\n\
+             # tree: 53988 rows\n"
+        );
+    }
+
+    /// A row too wide for one line is indented instead, so a store holding
+    /// whole conversations cannot put a multi-megabyte line in the golden.
+    #[test]
+    fn a_row_wider_than_the_spill_width_is_indented() {
+        let wide = "x".repeat(SPILL_WIDTH + 1);
+        let dump = serde_json::json!({"conversations": [{"payload": wide}]});
+        let out = store_as_jsonl(&dump);
+        assert!(
+            out.starts_with("# conversations: 1 rows\n{\n  \"payload\": \""),
+            "{}",
+            &out[..40]
+        );
+        assert!(
+            out.lines().all(|l| l.len() <= SPILL_WIDTH + 16),
+            "a spilled row still produced a line of {}",
+            out.lines().map(str::len).max().unwrap_or(0)
+        );
+    }
+
+    /// An empty table still says so: a table that lost its rows has to read
+    /// as a change, not as an absence.
+    #[test]
+    fn an_empty_table_keeps_its_header() {
+        let dump = serde_json::json!({"edges": []});
+        assert_eq!(store_as_jsonl(&dump), "# edges: 0 rows\n");
     }
 }
