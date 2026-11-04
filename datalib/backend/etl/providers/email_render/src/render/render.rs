@@ -25,6 +25,7 @@ use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 
@@ -143,6 +144,9 @@ fn profile() -> RenderProfile {
 /// The render params recorded alongside the cursor. Both knobs change
 /// what the tree should contain for documents the upstream diff would
 /// never surface, so a change to either re-renders everything.
+/// The config key the render's label filter is written under.
+const K_ONLY_RENDER_LABELS: &str = "only_render_labels";
+
 pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> serde_json::Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = only_labels.iter().map(String::as_str).collect();
@@ -183,8 +187,60 @@ struct Lookups {
     label_allow: Option<HashSet<String>>,
 }
 
+/// The configured label paths against the mailbox tree the chips use.
+/// Resolution and exact-match semantics are shared with the download
+/// filter via [`datalib_etl_email::mailbox_labels`], so a given label
+/// means the same thing at both phases and across JMAP / mbox sources.
+fn resolve_labels(
+    shared: &Shared,
+    only_labels: &[String],
+) -> datalib_etl_email::mailbox_labels::Resolved {
+    let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
+        .mailboxes
+        .iter()
+        .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+        .collect();
+    datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels)
+}
+
+/// Each configured label no mailbox has. It selects no thread, and if
+/// every label is misspelled the source renders nothing, so a person has
+/// to hear of it. Keyed under `config:`, as a download's configured
+/// entries are, and reported whole every run, so correcting the config
+/// clears it.
+pub fn unmatched_label_rows(
+    shared: &Shared,
+    source_id: &str,
+    only_labels: &[String],
+    render_version: u32,
+) -> Vec<ProblemRow> {
+    resolve_labels(shared, only_labels)
+        .unmatched
+        .iter()
+        .map(|label| {
+            ProblemRow::new(
+                source_id,
+                Stage::Render,
+                Scope::Entity(&format!("config:{K_ONLY_RENDER_LABELS}:{label}")),
+                None,
+                Outcome::Dropped,
+                Problem::explained(
+                    Reason::NotFound,
+                    Some(K_ONLY_RENDER_LABELS.to_string()),
+                    &format!(
+                        "{label:?}: no mailbox with this label path, so it selects no thread; \
+                         check spelling / parent path"
+                    ),
+                )
+                .severity(Severity::Warning),
+                Some(render_version),
+            )
+        })
+        .collect()
+}
+
 impl Lookups {
-    fn new(shared: &Shared, source_id: &str, only_labels: &[String]) -> Self {
+    fn new(shared: &Shared, only_labels: &[String]) -> Self {
         // mailbox id → the name its label chip shows, empty for none.
         let mailbox_name = shared
             .mailboxes
@@ -199,28 +255,8 @@ impl Lookups {
             .iter()
             .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
             .collect();
-        // Resolve the configured label paths to mailbox ids against the
-        // same tree (`parentId`) the chips use, before any thread is read.
-        // Resolution and exact-match semantics are shared with the
-        // download filter via [`datalib_etl_email::mailbox_labels`], so a
-        // given label means the same thing at both phases and across JMAP
-        // / mbox sources.
-        let label_allow = (!only_labels.is_empty()).then(|| {
-            let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
-                .mailboxes
-                .iter()
-                .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
-                .collect();
-            let resolved = datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels);
-            if !resolved.unmatched.is_empty() {
-                tracing::warn!(
-                    source = source_id,
-                    unmatched = %resolved.unmatched.join(", "),
-                    "only_render_labels matched no mailbox; check spelling / parent path",
-                );
-            }
-            resolved.ids
-        });
+        let label_allow =
+            (!only_labels.is_empty()).then(|| resolve_labels(shared, only_labels).ids);
         Lookups {
             mailbox_name,
             account_label,
@@ -266,7 +302,7 @@ pub fn render_store(
         cold_start = store.scan.render.is_none(),
         "[render] email dolt_diff scan"
     );
-    let lookups = Lookups::new(&store.shared, source_id, only_labels);
+    let lookups = Lookups::new(&store.shared, only_labels);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -316,7 +352,7 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Rendered> {
-    let lookups = Lookups::new(shared, source_id, only_labels);
+    let lookups = Lookups::new(shared, only_labels);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -1037,6 +1073,31 @@ fn autolink_bare_urls(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A misspelled `only_render_labels` entry could render nothing, and
+    /// only the log said why. The label a mailbox has is not reported, and
+    /// a path resolves through its parent, as the download filter's does.
+    #[test]
+    fn a_label_no_mailbox_has_is_a_warning_naming_it() {
+        let shared = Shared {
+            accounts: Vec::new(),
+            mailboxes: vec![
+                serde_json::json!({"id": "M1", "name": "Bridge"}),
+                serde_json::json!({"id": "M2", "name": "Logs", "parentId": "M1"}),
+            ],
+        };
+        let labels = ["Bridge/Logs".to_string(), "Holodek".to_string()];
+        let rows = unmatched_label_rows(&shared, "mail", &labels, 9);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let row = &rows[0];
+        assert_eq!(row.scope_key, "config:only_render_labels:Holodek");
+        assert_eq!(row.reason, Reason::NotFound);
+        assert_eq!(row.severity, Severity::Warning);
+        assert_eq!(row.stage, Stage::Render);
+        assert_eq!(row.field.as_deref(), Some("only_render_labels"));
+        assert!(row.sample.contains("\"Holodek\""), "{}", row.sample);
+        assert_eq!(unmatched_label_rows(&shared, "mail", &[], 9), vec![]);
+    }
 
     /// A `text/plain` email is what the sender typed: a `<b>` in it is
     /// those three characters, not bold, and a URL in it is still a link.
