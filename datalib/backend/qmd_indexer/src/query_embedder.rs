@@ -127,7 +127,8 @@ impl QueryEmbedder {
         let script = SdkScript::write()?;
         let cache_home = datalib_runtime::qmd::qmd_cache_home(&self.root);
         let mut cmd = std::process::Command::new(&qmd.node);
-        crate::set_qmd_env(&mut cmd, &cache_home);
+        // A search embeds one query at a time, so it has no use for more.
+        crate::set_qmd_env(&mut cmd, &cache_home, crate::DEFAULT_EMBED_CONTEXTS);
         let mut child = cmd
             // No node flags before the script: see the script's header.
             .arg(&script.0)

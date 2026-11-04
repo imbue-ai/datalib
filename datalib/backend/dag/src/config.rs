@@ -83,6 +83,11 @@ pub struct DagConfig {
     /// defaults.
     #[serde(default)]
     pub render_pages: Option<RenderPages>,
+    /// How many embedding contexts an embed step gives qmd. Omitted means
+    /// `datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS`. A plain number the
+    /// runner forwards, as for [`RenderPages`]: the step owns what it means.
+    #[serde(default)]
+    pub embed_contexts: Option<u32>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -1002,6 +1007,8 @@ struct RawConfig {
     disk_space: Option<DiskFloor>,
     #[serde(default)]
     render_pages: Option<RenderPages>,
+    #[serde(default)]
+    embed_contexts: Option<u32>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -2310,6 +2317,7 @@ fn entries_of(text: &str) -> Entries {
             log_level: raw.log_level,
             disk_space: raw.disk_space,
             render_pages: raw.render_pages,
+            embed_contexts: raw.embed_contexts,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2448,6 +2456,7 @@ impl DagConfig {
             log_level: None,
             disk_space: None,
             render_pages: None,
+            embed_contexts: None,
         }
     }
 }

@@ -13,7 +13,9 @@ use tokio::sync::watch;
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID};
+use crate::subprocess::{
+    ENV_CHECKPOINT_CADENCE, ENV_EMBED_CONTEXTS, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID,
+};
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -143,6 +145,9 @@ pub fn step_env(
     }
     if let Some(pages) = cfg.render_pages {
         vars.insert(ENV_RENDER_PAGES.into(), pages.encode());
+    }
+    if let Some(contexts) = cfg.embed_contexts {
+        vars.insert(ENV_EMBED_CONTEXTS.into(), contexts.to_string());
     }
     // A `RUST_LOG` already in the environment is a person's choice and
     // wins; else the config's level.
@@ -470,6 +475,19 @@ mod tests {
         let without = crate::config::parse("").unwrap();
         let env = step_env(&without, None, &[], "now", "run").unwrap();
         assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
+    }
+
+    /// `embed_contexts` reaches a step, and a config that leaves it out
+    /// says nothing, so the step's own default stands.
+    #[test]
+    fn the_configs_embed_contexts_reach_every_step() {
+        let with = crate::config::parse("embed_contexts = 4\n").unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        assert_eq!(env.vars[ENV_EMBED_CONTEXTS], "4");
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_EMBED_CONTEXTS));
     }
 
     /// A config's `[render_pages]` reaches every step the same way.
