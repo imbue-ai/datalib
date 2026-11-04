@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
 use datalib_runs::{
-    canonical_labels, LiveState, LogRow, MetricRow, Process, ProcessRow, Retention, RunWriter,
-    StepRunRow,
+    canonical_labels, LiveState, LogRow, MetricRow, Process, ProcessRow, Retention, RunStart,
+    RunWriter, StepRunRow,
 };
 
 use crate::events::{Event, EventSink, LogLevel};
 use crate::run_state::RunState;
+use crate::slow_statements::{is_slow_statement, SlowStatements};
 use crate::step::StepId;
 
 /// What we know about one step right now.
@@ -44,6 +45,8 @@ struct Acc {
     /// This attempt's last value of each running total (`name`, labels),
     /// and whether it has already been caught going down.
     counters: HashMap<(String, String), (i64, bool)>,
+    /// What sqlx warned of, not yet summed up in a line.
+    slow: SlowStatements,
 }
 
 /// The attempt's process row with its peak raised to `bytes`, to write
@@ -128,15 +131,31 @@ impl RunStoreSink {
         started_at_utc: &str,
         git_hash: Option<String>,
         retention: Retention,
+        started: Option<RunStart>,
     ) -> Option<Self> {
+        let writer = RunWriter::start_because(
+            data_root,
+            run_id,
+            started_at_utc,
+            git_hash.clone(),
+            retention,
+            started.clone(),
+        )?;
+        // The run's first line, so a log read from its top opens on why.
+        if let Some(RunStart { kind, reason }) = started {
+            let (ts_utc, tz_offset) = now();
+            writer.log(LogRow {
+                ts_utc,
+                tz_offset,
+                level: LogLevel::Info.as_str().into(),
+                target: Some(RUNNER_TARGET.into()),
+                msg: format!("why this run started: {reason}"),
+                fields: Some(serde_json::json!({ "run_kind": kind.as_str() }).to_string()),
+                ..Default::default()
+            });
+        }
         Some(Self {
-            writer: Arc::new(RunWriter::start(
-                data_root,
-                run_id,
-                started_at_utc,
-                git_hash.clone(),
-                retention,
-            )?),
+            writer: Arc::new(writer),
             steps: Mutex::new(HashMap::new()),
             git_hash,
         })
@@ -270,6 +289,36 @@ impl RunStoreSink {
             .unwrap_or_default()
     }
 
+    /// What the attempt's slow statements came to, once, under the attempt
+    /// and the process that ran them.
+    fn say_slow_statements(&self, step: &StepId) {
+        let (summary, process_id) = {
+            let mut steps = self.steps.lock().expect("run store sink mutex");
+            let Some(acc) = steps.get_mut(step) else {
+                return;
+            };
+            let process_id = acc.process.as_ref().map(|p| p.process_id.clone());
+            (std::mem::take(&mut acc.slow).summary(), process_id)
+        };
+        let Some((msg, fields)) = summary else {
+            return;
+        };
+        let (ts_utc, tz_offset) = now();
+        self.writer.log(LogRow {
+            step: Some(step.clone()),
+            group_id: self.group_of(step),
+            attempt: self.attempt_of(step),
+            process_id: process_id.unwrap_or_default(),
+            ts_utc,
+            tz_offset,
+            level: LogLevel::Info.as_str().into(),
+            target: Some(RUNNER_TARGET.into()),
+            msg,
+            fields: Some(fields.to_string()),
+            ..Default::default()
+        });
+    }
+
     /// A pass that failed, at error level, as the runner's line about the
     /// step: which pass, and why — the error carries the exit status and
     /// the end of the pass's stderr.
@@ -352,6 +401,8 @@ impl EventSink for RunStoreSink {
                 attempt,
                 builtin,
             } => {
+                // A retry goes straight to its next start.
+                self.say_slow_statements(step);
                 let (started_at_utc, tz_offset) = now();
                 let process = ProcessRow {
                     process_id: datalib_runs::new_process_id(),
@@ -392,6 +443,7 @@ impl EventSink for RunStoreSink {
                 exit_code,
                 signal,
             } => {
+                self.say_slow_statements(step);
                 let finished_at_utc = now().0;
                 let mut ended = None;
                 let mut queued = BTreeSet::new();
@@ -456,6 +508,7 @@ impl EventSink for RunStoreSink {
                 exit_code,
                 signal,
             } => {
+                self.say_slow_statements(step);
                 if *status == RunState::Failed {
                     self.log_failed_pass(step, error.as_deref(), *exit_code, *signal);
                 }
@@ -552,6 +605,18 @@ impl EventSink for RunStoreSink {
                     Some(_) => self.process_of(step),
                     None => String::new(),
                 };
+                let level = if is_slow_statement(*level, target.as_deref()) {
+                    self.steps
+                        .lock()
+                        .expect("run store sink mutex")
+                        .entry(step.clone())
+                        .or_default()
+                        .slow
+                        .note(fields.as_ref());
+                    LogLevel::Debug
+                } else {
+                    *level
+                };
                 self.writer.log(LogRow {
                     step: Some(step.clone()),
                     group_id: self.group_of(step),
@@ -613,6 +678,7 @@ mod tests {
                 "2026-09-11T10:00:00+01:00",
                 Some("ae2d52f0".into()),
                 Retention::default(),
+                None,
             )
             .expect("start the store");
             for e in events {
@@ -639,6 +705,56 @@ mod tests {
 
     /// The sugar. The stream carries increments; the store must carry a
     /// position, or coalescing would drop work.
+    /// Guards the render that wrote 21 `warn` lines and counted them as
+    /// the step's errors: each stays, at `debug`, and the attempt's end
+    /// says what they came to, under the attempt that ran them.
+    #[tokio::test]
+    async fn slow_statements_are_kept_quiet_and_summed_at_the_attempts_end() {
+        let slow = |secs: f64| Event::Log {
+            step: "slack/render_markdown".into(),
+            level: LogLevel::Warn,
+            msg: "slow statement: execution time exceeded alert threshold".into(),
+            ts: None,
+            stream: Some(Stream::Stderr),
+            target: Some("sqlx::query".into()),
+            thread: None,
+            fields: serde_json::json!({
+                "db.statement": "SELECT id FROM records",
+                "elapsed_secs": secs,
+            })
+            .as_object()
+            .cloned(),
+        };
+        let (td, snap) = run(&[
+            Event::StepStart {
+                step: "slack/render_markdown".into(),
+                attempt: 1,
+                builtin: true,
+            },
+            slow(2.0),
+            slow(3.0),
+            Event::StepFinish {
+                step: "slack/render_markdown".into(),
+                status: RunState::Succeeded,
+                error: None,
+                exit_code: Some(0),
+                signal: None,
+            },
+        ])
+        .await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
+        assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
+        assert_eq!(
+            lines[2].msg,
+            "2 slow statements took 5.0s in all; 2 of them, 5.0s, were: SELECT id FROM records"
+        );
+        assert_eq!(lines[2].step.as_deref(), Some("slack/render_markdown"));
+        assert_eq!(lines[2].attempt, 1);
+        assert_eq!(lines[2].process.as_deref(), Some("step"));
+        assert_eq!(snap.errors.get("slack/render_markdown"), None);
+    }
+
     /// The runner is a process the run points at, and every line the
     /// run stores reads the runner's commit through it.
     #[tokio::test]
@@ -1042,6 +1158,7 @@ mod tests {
                 "2026-09-11T10:00:00+01:00",
                 None,
                 Retention::default(),
+                None,
             )
             .expect("start the store");
             for e in &events {
@@ -1280,6 +1397,7 @@ mod tests {
             "2026-09-11T10:00:00+01:00",
             None,
             Retention::default(),
+            None,
         )
         .expect("start the store");
         sink.emit(&plan(&["slack/raw", "slack/rendered_md"]));

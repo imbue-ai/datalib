@@ -489,8 +489,9 @@ test("a line landing before a scroll up is heard leaves the reader there", async
     el.scrollTop = 0;
   });
   const before = await lineCount(page);
-  // A request is a line in this server's log.
-  expect((await request.get("/api/health")).ok()).toBe(true);
+  // A request that was refused is a line in this view of the log; one that
+  // only read is `debug`, under it.
+  expect((await request.get("/api/no-such-route")).status()).toBe(404);
   await expect.poll(() => lineCount(page)).toBeGreaterThan(before);
   await viewport.evaluate((el) => {
     el.parentElement!.removeEventListener(

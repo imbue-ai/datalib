@@ -324,7 +324,15 @@ async fn main() -> Result<()> {
     // fact.
     let code = {
         let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
-        match host::start_record(&data_root, &cfg, &run_id, &now) {
+        let started = datalib_runs::RunStart {
+            kind: if shrink.is_some() {
+                datalib_runs::RunKind::Shrink
+            } else {
+                datalib_runs::RunKind::Sync
+            },
+            reason: "datalib-dag, from the command line".to_string(),
+        };
+        match host::start_record(&data_root, &cfg, &run_id, &now, started) {
             Some(store) => {
                 // The runner's own `tracing` lines go to the store too,
                 // as the run's lines with no step — and only there:

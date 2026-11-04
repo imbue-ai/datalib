@@ -10,8 +10,8 @@ pub mod store;
 pub mod tracing_layer;
 
 pub use app_schema::runs::{
-    LogLevel, LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, StepRunRow,
-    StorePart, Stream,
+    LogLevel, LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunKind, RunRow, RunStart,
+    StepRunRow, StorePart, Stream,
 };
 pub use datalib_runtime::build_id::{
     git_hash, git_hash_and_origin, GitHashOrigin, GIT_HASH_ENV, NO_GIT_HASH_ADVICE,
@@ -106,7 +106,7 @@ impl Default for Retention {
 /// Bumped whenever the tables change shape. A store at an older version
 /// climbs the rungs in `store.rs`'s `UPGRADES` in place; one at a version
 /// with no rung, newer ones included, is emptied and remade.
-pub const SCHEMA_VERSION: i32 = 11;
+pub const SCHEMA_VERSION: i32 = 12;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;

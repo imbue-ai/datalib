@@ -5,10 +5,12 @@
 //! and not the store (`docs/dev/data_architecture_parse_and_render.md`
 //! §"Memory: a page at a time").
 
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::ops::Range;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -30,6 +32,75 @@ use crate::TRANSCRIPT_BUCKETS_SQL;
 /// index answers without reading one.
 const RECORD_BYTES: u64 = 4 * 1024;
 
+/// The two parts of reading a page that only its provider can tell apart:
+/// the store's answer, and turning that answer into values.
+#[derive(Debug, Default)]
+pub struct ReadClock {
+    load: Cell<Duration>,
+    parse: Cell<Duration>,
+}
+
+impl ReadClock {
+    /// `query`'s time goes down as the store's.
+    pub async fn load<T>(&self, query: impl Future<Output = T>) -> T {
+        let started = Instant::now();
+        let answer = query.await;
+        self.load.set(self.load.get() + started.elapsed());
+        answer
+    }
+
+    /// `parse`'s time goes down as turning the answer into values.
+    pub fn parse<T>(&self, parse: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let values = parse();
+        self.parse.set(self.parse.get() + started.elapsed());
+        values
+    }
+}
+
+/// Where a page's time went.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PageTimes {
+    load: Duration,
+    parse: Duration,
+    /// All the page's time the other three do not account for.
+    render: Duration,
+    write: Duration,
+}
+
+impl PageTimes {
+    fn split(wall: Duration, load: Duration, parse: Duration, write: Duration) -> Self {
+        Self {
+            load,
+            parse,
+            render: wall.saturating_sub(load + parse + write),
+            write,
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.load += other.load;
+        self.parse += other.parse;
+        self.render += other.render;
+        self.write += other.write;
+    }
+
+    fn sentence(&self) -> String {
+        format!(
+            "where the render's time went: {:.1}s loading records, {:.1}s parsing them, \
+             {:.1}s rendering, {:.1}s writing",
+            self.load.as_secs_f64(),
+            self.parse.as_secs_f64(),
+            self.render.as_secs_f64(),
+            self.write.as_secs_f64(),
+        )
+    }
+}
+
+fn ms(d: Duration) -> u64 {
+    d.as_millis() as u64
+}
+
 /// One agent-session source's part of a paged render: how its records
 /// load and how a page of them becomes chats.
 pub trait SessionRender {
@@ -41,11 +112,12 @@ pub trait SessionRender {
     fn chat_uuid(&self, transcript_id: &str) -> String;
 
     /// The records of the transcripts named in `ids`, a JSON array to
-    /// bind as one value.
+    /// bind as one value, with its parts timed on `clock`.
     fn load_records(
         &self,
         pool: &SqlitePool,
         ids: &str,
+        clock: &ReadClock,
     ) -> impl Future<Output = Result<Vec<Self::Record>>>;
 
     /// One chat per transcript in `page`, from `records`. `titles` is
@@ -145,13 +217,23 @@ fn render_open<S: SessionRender>(
     on_buckets(&plan.gone)?;
 
     let profile = source.profile();
+    // Writing happens inside rendering, in the callback, so its time is
+    // counted where it happens and taken out of the render's.
+    let writing = Cell::new(Duration::ZERO);
+    let on_doc_complete = target.on_doc_complete;
+    let mut timed_doc = |doc| {
+        let started = Instant::now();
+        let written = on_doc_complete(doc);
+        writing.set(writing.get() + started.elapsed());
+        written
+    };
     let mut renderer = ChatRenderer::new(
         &profile,
         target.out_root,
         target.source_id,
         plan.render.len(),
         target.progress,
-        target.on_doc_complete,
+        &mut timed_doc,
     );
     let weights: Vec<u64> = plan
         .render
@@ -159,16 +241,49 @@ fn render_open<S: SessionRender>(
         .map(|(id, _)| counts.get(id).copied().unwrap_or(0))
         .collect();
     let no_blobs = BlobBundle::default();
-    for page in pages(&weights, size) {
+    let reading = ReadClock::default();
+    let mut total = PageTimes::default();
+    for (n, page) in pages(&weights, size).into_iter().enumerate() {
         let page = &plan.render[page];
         let ids: Vec<&str> = page.iter().map(|(id, _)| id.as_str()).collect();
         let ids = serde_json::to_string(&ids)?;
-        let records = block_on(source.load_records(pool, &ids))?;
+        let started = Instant::now();
+        let (load_before, parse_before, write_before) =
+            (reading.load.get(), reading.parse.get(), writing.get());
+        let records = block_on(source.load_records(pool, &ids, &reading))?;
         for chat in source.build_chats(page, &records, &titles) {
             renderer.render_chat(&chat, &no_blobs)?;
         }
+        let declaring = Instant::now();
         on_buckets(&renderer.take_buckets())?;
+        writing.set(writing.get() + declaring.elapsed());
+        let times = PageTimes::split(
+            started.elapsed(),
+            reading.load.get() - load_before,
+            reading.parse.get() - parse_before,
+            writing.get() - write_before,
+        );
+        tracing::debug!(
+            page = n,
+            transcripts = page.len(),
+            records = records.len(),
+            load_ms = ms(times.load),
+            parse_ms = ms(times.parse),
+            render_ms = ms(times.render),
+            write_ms = ms(times.write),
+            "a page of the render"
+        );
+        total.add(times);
     }
+    tracing::info!(
+        transcripts = plan.render.len(),
+        load_ms = ms(total.load),
+        parse_ms = ms(total.parse),
+        render_ms = ms(total.render),
+        write_ms = ms(total.write),
+        "{}",
+        total.sentence()
+    );
     Ok(PagedOutcome {
         rendered: renderer.finish().docs_rendered,
         skipped: plan.skipped,
@@ -319,6 +434,26 @@ mod tests {
         assert_eq!(ids(&plan), ["a", "b"]);
         assert_eq!(plan.skipped, 0);
         assert!(plan.gone.is_empty());
+    }
+
+    #[test]
+    fn a_pages_time_is_split_with_the_render_as_what_is_left() {
+        let s = Duration::from_secs;
+        let times = PageTimes::split(s(10), s(5), s(1), s(2));
+        assert_eq!(times.render, s(2));
+        let mut total = PageTimes::default();
+        total.add(times);
+        total.add(times);
+        assert_eq!(
+            total.sentence(),
+            "where the render's time went: 10.0s loading records, 2.0s parsing them, \
+             4.0s rendering, 4.0s writing"
+        );
+        assert_eq!(
+            PageTimes::split(s(1), s(5), s(0), s(0)).render,
+            s(0),
+            "a clock that runs ahead of the wall leaves nothing, not a panic"
+        );
     }
 
     #[test]

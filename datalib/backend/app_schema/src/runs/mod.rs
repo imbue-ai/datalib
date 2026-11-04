@@ -44,7 +44,7 @@ pub use log::{LogLevel, LogRow, Process, Stream};
 pub use metric_samples::MetricSampleRow;
 pub use metrics::MetricRow;
 pub use process::ProcessRow;
-pub use run::RunRow;
+pub use run::{RunKind, RunRow, RunStart};
 pub use step_runs::StepRunRow;
 pub use store_changes::{StoreChangeRow, StorePart};
 

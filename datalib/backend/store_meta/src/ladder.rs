@@ -95,6 +95,16 @@ impl std::error::Error for AheadOfLadder {}
 /// The owner commits after, so a crash between the two leaves the
 /// working set for the next open to discard and the rung to run again.
 pub async fn apply(pool: &SqlitePool, m: &Migration, ladder: Ladder) -> Result<()> {
+    // A rung can take as long as the store is big, and says nothing until
+    // it is done.
+    tracing::info!(
+        version = m.version,
+        name = m.name,
+        ladder = ladder.key(),
+        "migrating the store: {}",
+        m.name
+    );
+    let started = std::time::Instant::now();
     let mut tx = pool
         .begin()
         .await
@@ -123,6 +133,7 @@ pub async fn apply(pool: &SqlitePool, m: &Migration, ladder: Ladder) -> Result<(
         version = m.version,
         name = m.name,
         ladder = ladder.key(),
+        ms = started.elapsed().as_millis() as u64,
         "migrated"
     );
     Ok(())

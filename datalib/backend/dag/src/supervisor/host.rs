@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use datalib_runs::{RunKind, RunStart};
 use tokio::sync::watch;
 
 use crate::config::DagConfig;
@@ -15,7 +16,7 @@ use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID};
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
-use crate::supervisor::store::{RequestOutcome, Store};
+use crate::supervisor::store::{RequestOutcome, RequestRow, Store};
 
 /// What an idle host does at each turn of [`run_idle`].
 pub trait Periods {
@@ -159,10 +160,57 @@ pub fn start_record(
     cfg: &DagConfig,
     run_id: &str,
     now: &str,
+    started: RunStart,
 ) -> Option<RunStoreSink> {
     let retention = cfg.run_history.map(|h| h.retention()).unwrap_or_default();
     let commit = datalib_runs::git_hash_and_origin().map(|(hash, _)| hash);
-    RunStoreSink::start(data_root, run_id, now, commit, retention)
+    RunStoreSink::start(data_root, run_id, now, commit, retention, Some(started))
+}
+
+/// How many steps a run's reason names before it only counts the rest.
+const REASON_NAMES: usize = 3;
+
+/// Why a busy period started, from the requests open as it did.
+pub fn sync_start(requests: &[RequestRow]) -> RunStart {
+    let reason = if requests.is_empty() {
+        "the loop found work with no sync request open".to_string()
+    } else {
+        let mut by: Vec<&str> = requests.iter().map(|r| r.opened_by.as_str()).collect();
+        by.sort_unstable();
+        by.dedup();
+        let roots: Vec<&str> = requests
+            .iter()
+            .flat_map(|r| r.roots.iter().map(String::as_str))
+            .collect();
+        let named = roots
+            .iter()
+            .take(REASON_NAMES)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rest = roots.len().saturating_sub(REASON_NAMES);
+        let more = if rest > 0 {
+            format!(" and {rest} more")
+        } else {
+            String::new()
+        };
+        format!("a sync asked for by {}: {named}{more}", by.join(", "))
+    };
+    RunStart {
+        kind: RunKind::Sync,
+        reason,
+    }
+}
+
+/// Why the launch's pass over the steps is running.
+pub fn migrate_start(build: &str) -> RunStart {
+    RunStart {
+        kind: RunKind::Migrate,
+        reason: format!(
+            "the first launch of build {build}: each step updates what it stored, \
+             and nothing is downloaded"
+        ),
+    }
 }
 
 /// What [`take_over`] found to put right.
@@ -208,6 +256,36 @@ mod tests {
     use super::*;
     use crate::supervisor::record::InvocationRow;
     use crate::supervisor::record::{CurrentRun, Record};
+
+    /// Guards reading a run's cause off a server log line and the absence
+    /// of a request: a sync names who asked and for what.
+    #[test]
+    fn a_syncs_reason_names_who_asked_and_for_what() {
+        let request = |by: &str, roots: &[&str]| RequestRow {
+            id: "r".into(),
+            roots: roots.iter().map(|r| r.to_string()).collect(),
+            opened_by: by.into(),
+            stop_requested_by: None,
+            closed: None,
+            failed_step: None,
+        };
+        let one = sync_start(&[request("ui", &["gmail/ingest"])]);
+        assert_eq!(one.kind, RunKind::Sync);
+        assert_eq!(one.reason, "a sync asked for by ui: gmail/ingest");
+        let many = sync_start(&[
+            request("ui", &["a/ingest", "b/ingest"]),
+            request("upgrade", &["c/render_markdown", "d/render_markdown"]),
+            request("ui", &["e/ingest"]),
+        ]);
+        assert_eq!(
+            many.reason,
+            "a sync asked for by ui, upgrade: a/ingest, b/ingest, c/render_markdown and 2 more"
+        );
+        assert_eq!(
+            sync_start(&[]).reason,
+            "the loop found work with no sync request open"
+        );
+    }
 
     /// The next call to be `want`, past any settle that is not it: a
     /// settle repeated is harmless, and how many a burst of wakes makes is

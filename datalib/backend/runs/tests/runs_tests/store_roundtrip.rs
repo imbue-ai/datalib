@@ -5,7 +5,7 @@
 use datalib_runs::{
     log_after, log_query, log_values, process_log_after, processes, runs, snapshot, versions,
     LogCursor, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention,
-    RunWriter, StepRunRow, StorePart,
+    RunKind, RunStart, RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -665,10 +665,12 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without the two columns 11 added.
+    // Version 10's shape is this one without what 11 and 12 added.
     sqlx::raw_sql(
         "ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
+         ALTER TABLE runs DROP COLUMN kind; \
+         ALTER TABLE runs DROP COLUMN reason; \
          PRAGMA user_version = 10",
     )
     .execute(&pool)
@@ -707,6 +709,52 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
         })
         .count();
     assert_eq!(set_aside, 0, "nothing was set aside");
+}
+
+/// Guards the migration that read like a sync: a run says what it is for
+/// and why, and a run an older build recorded keeps its lines and says
+/// nothing rather than something made up.
+#[tokio::test]
+async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
+    let td = tempfile::tempdir().unwrap();
+    {
+        let _old = start(td.path(), "2026-01-01T00:00:00+00:00");
+    }
+    let path = datalib_runs::runs_path(td.path());
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    sqlx::raw_sql(
+        "ALTER TABLE runs DROP COLUMN kind; \
+         ALTER TABLE runs DROP COLUMN reason; \
+         PRAGMA user_version = 11",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    {
+        let _new = RunWriter::start_because(
+            td.path(),
+            "2026-01-02T00:00:00+00:00",
+            "2026-01-02T00:00:00+00:00",
+            None,
+            Retention::default(),
+            Some(RunStart {
+                kind: RunKind::Migrate,
+                reason: "the first launch of a build".into(),
+            }),
+        )
+        .expect("the upgraded store opens");
+    }
+
+    let runs = datalib_runs::runs(td.path(), None, 10).await;
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    assert_eq!(runs[0].kind.as_deref(), Some("migrate"));
+    assert_eq!(
+        runs[0].reason.as_deref(),
+        Some("the first launch of a build")
+    );
+    assert_eq!(runs[1].kind, None);
+    assert_eq!(runs[1].reason, None);
 }
 
 /// A process another one reports is written again as its peak rises and

@@ -17,7 +17,7 @@ for the life of the server. The tables:
 | table | one row per |
 |---|---|
 | `processes` | a process that took part (below) |
-| `runs` | a run of the runner |
+| `runs` | a run of the runner: what it is for (`kind`: a sync, a migration on a build's first launch, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
 | `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
@@ -159,7 +159,8 @@ has the server's, since the bundle is embedded in the binary.
 | Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
-| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran); `debug` for a live refetch that succeeded (below), `info` otherwise |
+| the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran). These are pages asking this server, not traffic off the machine. `debug` when it succeeded and only read (below), `info` for what changes something or was refused, `warn` for a 5xx |
+| Rust that reaches a web service | nothing: every request goes through `datalib_etl_web::http`, which says so | `target:http.outbound`, whose lines start `outbound:`. One `debug` line per request, with its `url` (no query), `status` and `duration_ms`; and at `info`, per host, a line at the first request, one a minute while it goes on, and the whole at the step's end (`etl/web/src/outbound.rs`). A remote image the server fetches is an `info` line naming its host alone. A request played back from a test's tape is not outbound |
 | the UI | `track("name", { …fields }, { level, msg })` from [`ui/src/telemetry.ts`](../../datalib/ui/src/telemetry.ts) | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
 
 Adding a UI event is one word in the `PageEventName` union and the
@@ -196,14 +197,37 @@ there when asked for and not otherwise. Little emits `trace` today:
 the few `trace!` lines in the tree are a step's progress ticks
 (`etl/src/progress.rs`), so a log with none is the normal case, not a
 sign the level is lost. The server's `debug` lines in ordinary
-service are a live refetch — a request a page made on a `root` frame,
-which while a sync runs is about one a second for each Manage card on
-screen — and the disk walk (`usage: walked the data root`, with how
-long it queued and walked), every five seconds while a sync runs.
+service are a page reading what it draws — any `GET`, the few `POST`s
+that only ask (`ROUTINE_POSTS` in `http/src/request_log.rs`, chiefly
+`/api/entities`), a layout saved under `/api/ui/state/`, and a refetch
+on a `root` frame — and the disk walk (`usage: walked the data root`,
+with how long it queued and walked), every five seconds while a sync
+runs. So the card's default view of a request is one that changed
+something, went wrong or left the machine.
 A `GET /api/manage/rows` that takes a second or more also writes an
 `info` line, "the Manage rows were slow to assemble", splitting its
 time between the walk, the loop's record, the run store and the join,
 since the request line has only the total.
+
+**A slow statement is `debug`, and the attempt's end sums them.** sqlx
+warns of every statement over a second, and a render over a big store
+is one such read per page. The runner keeps each at `debug`, out of the
+step's count of warnings, and writes one `info` line as the attempt
+ends: how many, how long in all, and the statement most of the time
+went to, in `top_statement` (`dag/src/slow_statements.rs`). The server
+and its applets, which never end, keep sqlx's own `warn`.
+
+**A migration says so from its start.** A step asked to migrate first
+says `migrate: updating the raw store for this build; nothing is
+downloaded`, as a line and as its status, and each rung says `migrating
+the store: <its name>` before it runs and `migrated`, with its `ms`,
+after.
+
+**A render says where its time went.** Every render ends with one line
+of its `total_ms` and `write_ms`. A Claude Code or Codex render also
+says `where the render's time went`, in `load_ms` (the store's answer),
+`parse_ms` (that answer into values), `render_ms` (all the rest) and
+`write_ms`, with a `debug` line for each page.
 
 ## What is not a log line
 

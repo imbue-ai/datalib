@@ -2040,6 +2040,8 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
             finished_at_utc: snap.finished_at_utc,
             tz_offset: snap.tz_offset,
+            kind: snap.kind,
+            reason: snap.reason,
         }),
         steps,
     })

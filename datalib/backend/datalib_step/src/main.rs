@@ -595,6 +595,7 @@ struct LogRecordedProblems;
 impl Drop for LogRecordedProblems {
     fn drop(&mut self) {
         datalib_schema::problems::log_recorded();
+        datalib_etl_web::outbound::say_totals();
     }
 }
 

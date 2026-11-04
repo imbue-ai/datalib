@@ -265,6 +265,15 @@ pub async fn fetch(raw: &str, policy: &RemotePolicy) -> Result<Fetched, Refusal>
             .await
             .map_err(|e| Refusal::Transport(e.to_string()))?;
         let status = resp.status();
+        // The host alone: the rest of an image's URL can be a sender's
+        // tracking token.
+        tracing::info!(
+            target: datalib_log_filter::OUTBOUND_TARGET,
+            host = %host,
+            status = status.as_u16(),
+            "outbound: a remote image from {host}, {}",
+            status.as_u16()
+        );
         if status.is_redirection() {
             let next = resp
                 .headers()

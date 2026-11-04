@@ -730,7 +730,9 @@ where
         datalib_etl::download_metrics::record_api_request();
         let in_flight = datalib_etl::download_metrics::request_in_flight();
         let started = std::time::Instant::now();
-        let outcome = match crate::playback::current() {
+        let playback = crate::playback::current();
+        let left_the_machine = playback.is_none();
+        let outcome = match playback {
             None => live::send(req).await,
             Some(playback) => playback.answer(req, guard.stop()).await,
         };
@@ -739,7 +741,7 @@ where
             Err(e) => Err(e),
         };
         drop((slot, in_flight));
-        log_attempt(req, &outcome, started.elapsed());
+        log_attempt(req, &outcome, started.elapsed(), left_the_machine);
 
         // Decide whether this attempt is retryable. `None` = accept (success
         // or a definitive response/error → hand back to the caller as-is);
@@ -846,8 +848,16 @@ pub(crate) fn too_large(req: &HttpRequest, max_bytes: u64) -> HttpError {
 }
 
 /// One debug line per attempt, so a slow step's log says which calls
-/// its time went to.
-fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, took: Duration) {
+/// its time went to. A request played back from a test's tape left nothing
+/// behind it, so it is not counted or called outbound. The `info` lines
+/// are the counts ([`crate::outbound`]), which cannot be read off these:
+/// a root logging at `info` never makes them.
+fn log_attempt(
+    req: &HttpRequest,
+    outcome: &Result<HttpResponse, HttpError>,
+    took: Duration,
+    left_the_machine: bool,
+) {
     let (status, bytes) = match outcome {
         Ok(resp) => (resp.status.to_string(), resp.body.len()),
         Err(HttpError::Timeout { .. }) => ("timeout".to_string(), 0),
@@ -858,7 +868,23 @@ fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, too
     };
     let url = ShownUrl::of(req);
     let url = url.as_str();
+    if !left_the_machine {
+        tracing::debug!(
+            event = "http_request",
+            service = %req.service,
+            method = req.method.as_str(),
+            url,
+            status,
+            bytes,
+            duration_ms = took.as_millis() as u64,
+            "played back {} {url} {status} in {}ms",
+            req.method.as_str(),
+            took.as_millis(),
+        );
+        return;
+    }
     tracing::debug!(
+        target: datalib_log_filter::OUTBOUND_TARGET,
         event = "http_request",
         service = %req.service,
         method = req.method.as_str(),
@@ -866,9 +892,18 @@ fn log_attempt(req: &HttpRequest, outcome: &Result<HttpResponse, HttpError>, too
         status,
         bytes,
         duration_ms = took.as_millis() as u64,
-        "{} {url} {status} in {}ms",
+        "outbound: {} {url} {status} in {}ms",
         req.method.as_str(),
         took.as_millis(),
+    );
+    let failed = !matches!(outcome, Ok(resp) if resp.status < 400);
+    crate::outbound::record(
+        crate::outbound::host_of(url),
+        crate::outbound::Attempt {
+            failed,
+            bytes: bytes as u64,
+            took,
+        },
     );
 }
 
@@ -1576,6 +1611,67 @@ mod tests {
             default_retryability(&mk(503, None)),
             Retryability::Retry { retry_after: None }
         );
+    }
+
+    /// What the lines come to is only true if a root logging at `info` sees
+    /// them: it never makes the per-request `debug` line, and the count must
+    /// not hang off it. A played-back request left nothing to count.
+    #[test]
+    fn a_root_at_info_still_hears_who_a_step_reached() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::filter::LevelFilter;
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        #[derive(Clone, Default)]
+        struct Lines(Arc<Mutex<Vec<(String, String)>>>);
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Lines {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                let mut message = Message(String::new());
+                event.record(&mut message);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((event.metadata().target().to_string(), message.0));
+            }
+        }
+
+        let lines = Lines::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(LevelFilter::INFO)
+            .with(lines.clone());
+        let req = HttpRequest::get(
+            HttpService::Slack,
+            "https://outbound-test.example/api?token=secret",
+        );
+        let answer: Result<HttpResponse, HttpError> = Ok(HttpResponse {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: b"hello".to_vec(),
+            duration_ms: 5,
+        });
+        tracing::subscriber::with_default(subscriber, || {
+            log_attempt(&req, &answer, Duration::from_millis(5), false);
+            log_attempt(&req, &answer, Duration::from_millis(5), true);
+        });
+
+        let lines = lines.0.lock().unwrap();
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        assert_eq!(lines[0].0, "http.outbound");
+        assert!(
+            lines[0]
+                .1
+                .starts_with("outbound: 1 request to outbound-test.example: 0 failed"),
+            "{lines:#?}"
+        );
+        assert!(!lines[0].1.contains("secret"), "{lines:#?}");
     }
 
     /// A playback fixture that always returns 429 should be retried until

@@ -354,11 +354,12 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
         &run_id,
     )
     .map(|env| {
-        let sink: Arc<dyn EventSink> = match host::start_record(&root, &checked.cfg, &run_id, &now)
-        {
-            Some(record) => Arc::new(record),
-            None => Arc::new(datalib_dag::events::NoopSink),
-        };
+        let started = host::migrate_start(&build);
+        let sink: Arc<dyn EventSink> =
+            match host::start_record(&root, &checked.cfg, &run_id, &now, started) {
+                Some(record) => Arc::new(record),
+                None => Arc::new(datalib_dag::events::NoopSink),
+            };
         Runner::new(root.as_path()).sink(sink).child_env(env.vars)
     });
     for (i, step) in asked.iter().enumerate() {
@@ -508,7 +509,15 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
         Ok(env) => env,
         Err(e) => return fail_open_requests(store, &format!("{e:#}")).await,
     };
-    let sink: Arc<dyn EventSink> = match host::start_record(&root, &checked.cfg, &run_id, &now) {
+    let open = store.open_requests().await.unwrap_or_default();
+    let started = host::sync_start(&open);
+    let sink: Arc<dyn EventSink> = match host::start_record(
+        &root,
+        &checked.cfg,
+        &run_id,
+        &now,
+        started,
+    ) {
         Some(record) => Arc::new(record),
         None => {
             tracing::warn!(run = %run_id, "supervisor: run store unavailable; nothing recorded this run");

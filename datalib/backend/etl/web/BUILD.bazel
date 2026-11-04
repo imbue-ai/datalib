@@ -20,6 +20,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/env:datalib_env",
+        "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
@@ -46,4 +47,5 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_web",
     edition = "2021",
+    deps = ["@datalib_crates//:tracing-subscriber"],
 )

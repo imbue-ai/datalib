@@ -641,7 +641,9 @@ step decides, and answers in its outcome line:
 ```
 
 Only `datalib-step`'s own steps take the verb today (the loader sets
-`StepSpec::migrates` for a step whose program is `datalib-step`). An ingest step opens
+`StepSpec::migrates` for a step whose program is `datalib-step`). An ingest step
+first says it is updating the store and downloading nothing, as a line
+and as its status, because its name reads as a download. It then opens
 its raw store with the provider's migration ladder and closes it: every
 rung, the additive DDL and an old blob store's conversion run, and each
 is sealed to `main`. A render step and the grid index compare their

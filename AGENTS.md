@@ -734,6 +734,7 @@ upstream (block types, MIME types), free-form display text
 | vocabulary | type | home |
 |---|---|---|
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
+| what a run is for | `RunKind` | `app_schema/src/runs/run.rs` |
 | why a step failed | `FailureKind` | `dag/src/step.rs` |
 | what the run store names | `LiveState` | `runs/src/lib.rs` |
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |

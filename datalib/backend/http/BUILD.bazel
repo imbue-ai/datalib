@@ -109,6 +109,7 @@ rust_library(
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/blob_store:datalib_blob_store",
         "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/parent_watch:datalib_parent_watch",

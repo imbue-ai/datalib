@@ -87,7 +87,7 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     let (status, _) = send(root, "/dactal/index.html", false).await;
     assert_eq!(status, StatusCode::OK);
     // A live refetch: what a page fetches on a frame, several a second
-    // during a sync. Kept, but under `info`; one that failed is not.
+    // during a sync. Under `info` as any read is; one that failed is not.
     let (status, _) = send_with(root, "/api/health", true, &[(CAUSE, "0")]).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = send_with(root, "/api/config", false, &[(CAUSE, "0")]).await;
@@ -128,7 +128,7 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     assert!(health["ms"].is_u64(), "{health}");
     assert!(health.get("query").is_none(), "{health}");
     assert!(health.get("card").is_none(), "{health}");
-    assert_eq!(lines[0]["level"], "info");
+    assert_eq!(lines[0]["level"], "debug");
     assert_eq!(lines[0]["process"], "http");
     assert!(lines[0]["msg"]
         .as_str()
@@ -142,6 +142,7 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
 
     let refused = fields(&lines[2]);
     assert_eq!(refused["status"], 401);
+    assert_eq!(lines[2]["level"], "info", "{:#?}", lines[2]);
 
     let missing = fields(&lines[3]);
     assert_eq!(missing["status"], 404);
