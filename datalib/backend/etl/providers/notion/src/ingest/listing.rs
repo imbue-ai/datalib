@@ -1,13 +1,15 @@
 //! The listings. `POST /v1/search`, newest edit first, lists the
 //! workspace, and the stretch of edit times a walk has read is a
 //! `coverage` span. In whole-workspace mode a result is the whole page
-//! object, so the listing's rows are the content. In roots mode the same
-//! walk places every page and database in `tree` and lists each page's
-//! stamp in `listed_pages`; the pages under a root are then fetched one
+//! object, so the listing's rows are the content. In roots mode the
+//! first sync walks down from the roots instead (`walk`) and covers
+//! everything up to the newest edit it began at; from then on the same
+//! search places each newer edit in `tree` and lists its stamp in
+//! `listed_pages`. The pages under a root are then fetched one
 //! `GET /v1/pages/{id}` at a time (the objects loop in `mod.rs`, and
-//! `roots_round` for a root the search does not list). Either way a page
-//! object lands held at its `last_edited_time`, and that stamp is what
-//! its body and its comments are owed against.
+//! `roots_round` for a root nothing placed). Either way a page object
+//! lands held at its `last_edited_time`, and that stamp is what its body
+//! and its comments are owed against.
 
 use std::collections::HashMap;
 
@@ -75,6 +77,16 @@ pub fn search_stops_at(held: &[Span], full: bool, refresh_floor: Option<&str>) -
         Some(floor) if floor < at => floor.to_string(),
         _ => at.to_string(),
     })
+}
+
+/// Whether a roots run walks down from its roots before the search:
+/// when what the store has covered does not reach the beginning, which
+/// is a first sync, a reset, a walk that did not finish, or `full`.
+/// Otherwise the search alone lists what changed.
+pub fn walks_down(held: &[Span], full: bool) -> bool {
+    full || coverage::gaps(&Span::new(START_OF_TIME, END_OF_TIME), held)
+        .first()
+        .is_some_and(|gap| gap.lo == START_OF_TIME)
 }
 
 /// `days` before the newest edit the store has looked at, as a Notion
@@ -248,6 +260,35 @@ impl Ctx<'_> {
         Ok(())
     }
 
+    /// The newest edit in the workspace, by Notion's clock: the first
+    /// result of the search. Read before a walk down, every edit after
+    /// it is the search's to list. `None` for an empty workspace. Fails
+    /// as the first page of a search walk does.
+    pub async fn newest_edit(&self) -> Result<Option<String>> {
+        let resp = match self.client.search(None, false).await {
+            Ok(resp) => resp,
+            Err(e) if e.ends_the_run() => return Err(run_over(e)),
+            Err(e) => return Err(anyhow::Error::new(e).context("notion search")),
+        };
+        Ok(resp
+            .get("results")
+            .and_then(Value::as_array)
+            .and_then(|r| r.first())
+            .and_then(|r| r.get("last_edited_time"))
+            .and_then(Value::as_str)
+            .map(String::from))
+    }
+
+    /// A walk down that listed everything under the roots has seen every
+    /// page under them edited at or before `top`.
+    pub async fn cover_walked(&self, top: &str) -> Result<()> {
+        let mut tx = self.db.pool().begin().await?;
+        coverage::cover(&mut tx, ROOTS_SCOPE, Span::new(START_OF_TIME, top)).await?;
+        tx.commit().await?;
+        self.wrote(1).await;
+        Ok(())
+    }
+
     /// Walks the search newest-first down to where what `listing` holds
     /// begins, storing each page of results as it comes. Fails only when
     /// the first page of results does; a later page that fails ends the
@@ -258,7 +299,10 @@ impl Ctx<'_> {
             0 => None,
             days => refresh_floor(&held, days),
         };
-        let stop_at = search_stops_at(&held, self.opts.full_sync, floor.as_deref());
+        // In roots mode a full sync is a walk down from the roots again,
+        // which covers what the search would have re-read.
+        let full = self.opts.full_sync && listing == Listing::Workspace;
+        let stop_at = search_stops_at(&held, full, floor.as_deref());
         let cap = match listing {
             Listing::Workspace => self.opts.max_pages,
             Listing::Roots => None,
@@ -442,6 +486,20 @@ mod tests {
             "a walk cut short above left a gap below it"
         );
         assert_eq!(search_stops_at(&[s("", T2)], true, None), None);
+    }
+
+    /// A roots store walks down until a walk has covered the stretch
+    /// from the beginning; after that the search alone keeps it current.
+    #[test]
+    fn a_roots_run_walks_down_until_the_beginning_is_covered() {
+        assert!(walks_down(&[], false), "a first sync");
+        assert!(
+            walks_down(&[s(T2, T3)], false),
+            "a walk that did not finish"
+        );
+        assert!(!walks_down(&[s("", T2)], false));
+        assert!(!walks_down(&[s("", T1), s(T2, T3)], false));
+        assert!(walks_down(&[s("", T2)], true), "full_sync walks again");
     }
 
     /// The refresh window reaches below what is held, never above it.

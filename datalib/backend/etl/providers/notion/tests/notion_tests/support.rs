@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_notion::ingest::official::{search_body, BASE, PAGE_SIZE};
+use datalib_etl_notion::ingest::official::{query_body, search_body, BASE, PAGE_SIZE};
 use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
@@ -34,8 +34,54 @@ pub fn page(id: &str, edited: &str) -> Value {
     })
 }
 
+/// A page as the walk down from a root sees it: its object, and the
+/// same page as a block with nothing under it.
 pub fn serve_object(tape: &Path, id: &str, edited: &str) {
-    serve(tape, &format!("{BASE}/pages/{id}"), page(id, edited));
+    serve_page_object(tape, page(id, edited));
+}
+
+pub fn serve_page_object(tape: &Path, obj: Value) {
+    let id = obj["id"].as_str().unwrap();
+    serve(tape, &format!("{BASE}/pages/{id}"), obj.clone());
+    serve(tape, &format!("{BASE}/blocks/{id}"), as_block(&obj));
+    serve_children(tape, id, json!([]));
+}
+
+/// A page object as `GET /v1/blocks/{id}` answers for it.
+pub fn as_block(obj: &Value) -> Value {
+    json!({
+        "object": "block",
+        "id": obj["id"],
+        "type": "child_page",
+        "child_page": {"title": ""},
+        "has_children": false,
+        "last_edited_time": obj["last_edited_time"],
+        "parent": obj["parent"],
+    })
+}
+
+pub fn children_url(id: &str) -> String {
+    format!("{BASE}/blocks/{id}/children?page_size={PAGE_SIZE}")
+}
+
+pub fn serve_children(tape: &Path, id: &str, results: Value) {
+    serve(
+        tape,
+        &children_url(id),
+        json!({"object": "list", "results": results, "has_more": false, "next_cursor": null}),
+    );
+}
+
+/// One page of a data source's rows.
+pub fn serve_rows(tape: &Path, data_source: &str, rows: Value) {
+    let req = HttpRequest::post_json(
+        HttpService::Notion,
+        format!("{BASE}/data_sources/{data_source}/query"),
+        query_body(None).to_string().into_bytes(),
+    )
+    .header("Accept", "application/json");
+    let resp = json!({"object": "list", "results": rows, "has_more": false, "next_cursor": null});
+    write_fixture(tape, &req, &json_response(&resp)).unwrap();
 }
 
 pub fn serve_body(tape: &Path, id: &str, markdown: &str, truncated: bool) {

@@ -233,8 +233,18 @@ pub const TREE_ROW_OF_LISTED_PAGE_SQL: &str = "INSERT INTO tree \
         title = excluded.title, parent_type = excluded.parent_type, \
         parent_id = excluded.parent_id, created_time = excluded.created_time";
 
-/// `listed_pages` — every page roots mode's search listed, at the
-/// `last_edited_time` it was listed at: what a page under a root is owed
+/// Writes the `tree` row of a page seen as a block, its title bound:
+/// an `unmirrored_page`, unless the store holds the page.
+pub const TREE_ROW_OF_PLACED_PAGE_SQL: &str = "INSERT INTO tree \
+        (id, kind, title, parent_type, parent_id, created_time) \
+     VALUES (?, 'unmirrored_page', ?, ?, ?, ?) \
+     ON CONFLICT(id) DO UPDATE SET \
+        kind = CASE WHEN tree.kind = 'page' THEN 'page' ELSE excluded.kind END, \
+        title = excluded.title, parent_type = excluded.parent_type, \
+        parent_id = excluded.parent_id, created_time = excluded.created_time";
+
+/// `listed_pages` — every page roots mode listed, by the walk down from
+/// the roots or by the search, at the `last_edited_time` it was listed at: what a page under a root is owed
 /// against. Its own table, not a `tree` column, because `tree` changes
 /// only when a title or a parent does, and render reads it for every
 /// page under a parent.

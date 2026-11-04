@@ -77,7 +77,11 @@ async fn search_places_a_row_under_its_database_and_the_pages_above() {
     assert_eq!(
         tree(&store).await,
         [
-            (BRIDGE.into(), Some(TreeKind::Block), Some("Bridge".into())),
+            (
+                BRIDGE.into(),
+                Some(TreeKind::UnmirroredPage),
+                Some("Bridge".into())
+            ),
             (SICKBAY.into(), Some(TreeKind::Page), None),
             (COLUMN.into(), Some(TreeKind::Block), None),
             (
@@ -97,11 +101,7 @@ async fn a_database_is_fetched_once_and_a_hidden_parent_is_asked_once() {
     let (tape, store) = (d.path().join("tape"), d.path().join("s.doltlite_db"));
     // The search lists the row, not its database's data source.
     serve_search(&tape, None, json!([crew_row(SICKBAY, EDITED)]), None);
-    serve(
-        &tape,
-        &format!("{BASE}/pages/{SICKBAY}"),
-        crew_row(SICKBAY, EDITED),
-    );
+    serve_page_object(&tape, crew_row(SICKBAY, EDITED));
     serve_body(&tape, SICKBAY, "", false);
     serve_comments(&tape, SICKBAY);
     serve(

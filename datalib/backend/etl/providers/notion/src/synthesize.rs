@@ -37,6 +37,47 @@ fn key_id(r: &Value) -> String {
         .to_string()
 }
 
+/// The page or block a recorded page sits directly in.
+fn parent_block(page: &Value) -> Option<String> {
+    let parent = page.get("parent")?;
+    ["page_id", "block_id"]
+        .iter()
+        .find_map(|k| parent.get(*k).and_then(Value::as_str))
+        .map(String::from)
+}
+
+/// A page object as `GET /v1/blocks/{id}` answers for it.
+fn page_as_block(page: &Value) -> Value {
+    let title: String = page
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|props| props.values())
+        .filter(|p| p.get("type").and_then(Value::as_str) == Some("title"))
+        .flat_map(|p| {
+            p.get("title")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|t| {
+            t.get("plain_text")
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+        .collect();
+    json!({
+        "object": "block",
+        "id": key_id(page),
+        "type": "child_page",
+        "child_page": {"title": title},
+        "has_children": false,
+        "created_time": page.get("created_time"),
+        "last_edited_time": page.get("last_edited_time"),
+        "parent": page.get("parent"),
+    })
+}
+
 impl Synthesizer for NotionSynth {
     fn name(&self) -> &'static str {
         "notion"
@@ -70,6 +111,41 @@ impl Synthesizer for NotionSynth {
             count += 1;
         }
         page_ids.sort();
+
+        // /blocks/{id} and /blocks/{id}/children — each page as the block
+        // it is, and a page's sub-pages as its children, so a roots walk
+        // down finds what a recorded page's parent says sits under it.
+        let raws: Vec<Value> = pages
+            .iter()
+            .filter(|(id, _)| !id.is_empty())
+            .filter_map(|(_, rec)| rec.get("raw").cloned())
+            .collect();
+        for raw in &raws {
+            let id = key_id(raw);
+            write_fixture(
+                out_root,
+                &req_get(&format!("{BASE}/blocks/{id}")),
+                &json_response(&page_as_block(raw)),
+            )?;
+            let children: Vec<Value> = raws
+                .iter()
+                .filter(|c| parent_block(c).as_deref() == Some(id.as_str()))
+                .map(page_as_block)
+                .collect();
+            write_fixture(
+                out_root,
+                &req_get(&format!(
+                    "{BASE}/blocks/{id}/children?page_size={PAGE_SIZE}"
+                )),
+                &json_response(&json!({
+                    "object": "list",
+                    "results": children,
+                    "has_more": false,
+                    "next_cursor": Value::Null,
+                })),
+            )?;
+            count += 2;
+        }
 
         // POST /search — every page in one page of results, newest edit
         // first, as the whole-workspace mirror and roots mode
@@ -172,8 +248,7 @@ impl Synthesizer for NotionSynth {
             count += 1;
         }
 
-        // /v1/blocks/{id} — only for blocks a comment hangs off, which
-        // is the sole reason this provider reads a block at all.
+        // /v1/blocks/{id} — the blocks a comment hangs off.
         for (id, rec) in &anchors {
             if id.is_empty() {
                 continue;
@@ -246,8 +321,8 @@ mod tests {
         let out = d.path().join("fixtures");
         let report = NotionSynth::new(&api).synthesize(&out).unwrap();
         assert_eq!(
-            report.fixtures_written, 4,
-            "page + search + markdown + comments"
+            report.fixtures_written, 6,
+            "page + its block + its children + search + markdown + comments"
         );
 
         for url in [
