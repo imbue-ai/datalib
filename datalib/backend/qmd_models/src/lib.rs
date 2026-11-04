@@ -222,6 +222,30 @@ mod tests {
         assert!(!verified(&path, HELLO_SHA).unwrap());
     }
 
+    /// What spares an applet start from re-reading 2 GB: a stamp matching
+    /// the file's size and mtime is trusted without hashing, so other
+    /// bytes under that size and mtime pass. Moving the mtime alone is
+    /// enough to send the file back to the hash.
+    #[test]
+    fn a_matching_stamp_skips_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.gguf");
+        fs::write(&path, b"hello").unwrap();
+        assert!(verified(&path, HELLO_SHA).unwrap());
+        let stamped_mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let set_mtime = |mtime| {
+            let file = fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(mtime).unwrap();
+        };
+        fs::write(&path, b"jello").unwrap();
+        set_mtime(stamped_mtime);
+        assert!(verified(&path, HELLO_SHA).unwrap());
+
+        set_mtime(stamped_mtime + std::time::Duration::from_secs(2));
+        assert!(!verified(&path, HELLO_SHA).unwrap());
+    }
+
     /// A stamp for one digest must not vouch for another.
     #[test]
     fn stamp_is_bound_to_the_digest() {
