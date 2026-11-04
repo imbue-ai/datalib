@@ -647,7 +647,7 @@ impl Drop for Listing {
         if lost > 0 {
             tracing::warn!(
                 files = lost,
-                "fsscan_unwritten_hashes: a listing was dropped without finish(); the next \
+                "file_changes_scan_unwritten_hashes: a listing was dropped without finish(); the next \
                  scan reads these files again"
             );
         }
@@ -747,7 +747,7 @@ impl Listing {
                     Err(e) => {
                         // There, and unreadable now: kept as present, so
                         // nothing reads it as deleted, and a problem of its own.
-                        tracing::warn!(path = %f.path.display(), error = %e, "fsscan_hash_failed");
+                        tracing::warn!(path = %f.path.display(), error = %e, "file_changes_scan_hash_failed");
                         unreadable.push(UnreadableFile {
                             rel: f.rel.clone(),
                             error: format!("could not open to hash: {}", e.root_cause()),
@@ -1032,7 +1032,7 @@ impl<'a> HashProgress<'a> {
             tracing::info!(
                 files = files_total,
                 bytes = bytes_total,
-                "fsscan_hashing: {files_total} files, {} to read",
+                "file_changes_scan_hashing: {files_total} files, {} to read",
                 human_bytes(bytes_total)
             );
         }
@@ -1053,7 +1053,7 @@ impl<'a> HashProgress<'a> {
             .unwrap_or_default();
         let started = std::time::Instant::now();
         if size >= LOUD_BYTES {
-            tracing::info!(path = %path.display(), "fsscan_hashing_file: {name}, {}", human_bytes(size));
+            tracing::info!(path = %path.display(), "file_changes_scan_hashing_file: {name}, {}", human_bytes(size));
         }
         let mut counted = 0;
         let hash = fswalk::hash_file_reporting(path, size, |in_file| {
@@ -1068,7 +1068,7 @@ impl<'a> HashProgress<'a> {
         if size >= LOUD_BYTES {
             tracing::info!(
                 path = %path.display(),
-                "fsscan_hashed_file: {name} in {:.1}s",
+                "file_changes_scan_hashed_file: {name} in {:.1}s",
                 started.elapsed().as_secs_f64()
             );
         }
@@ -1092,7 +1092,7 @@ impl<'a> HashProgress<'a> {
     fn finish(&self) {
         if self.files_total > 0 {
             tracing::info!(
-                "fsscan_hashed: {} files, {}",
+                "file_changes_scan_hashed: {} files, {}",
                 self.files_done.load(Ordering::Relaxed),
                 human_bytes(self.bytes_done.load(Ordering::Relaxed))
             );

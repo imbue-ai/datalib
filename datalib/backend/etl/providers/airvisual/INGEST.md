@@ -127,7 +127,7 @@ appends.
 
 ## Incrementality
 
-`fsscan` + `file_checkpoint`, the same pair `contacts`' `.vcf` mode and
+`file_changes_scan` + `file_checkpoint`, the same pair `contacts`' `.vcf` mode and
 `google_takeout` use: the host-wide fingerprint cache decides which
 files to re-hash (`(mtime, size, ctime, inode, dev)` unchanged → reuse the
 hash), and `ingested_files` decides which to re-parse (hash unchanged →

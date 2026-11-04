@@ -16,9 +16,9 @@ use datalib_etl::blob_cas::{CasEdgeRow as _, CasInsert};
 use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan::{self, Changes, Scan, ScanOptions};
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, Changes, Scan, ScanOptions};
 use datalib_etl_web::owed::{self, Listed};
 use serde::Serialize;
 use serde_json::Value;
@@ -130,7 +130,7 @@ async fn read_export(opts: IngestOptions, found: RunProblems) -> Result<IngestSu
 }
 
 async fn changes_since_last_read(opts: &IngestOptions) -> Result<(Scan, Changes)> {
-    let scan = fsscan::scan(
+    let scan = file_changes_scan::scan(
         &opts.cache,
         &opts.input_path,
         &ScanOptions::default(),

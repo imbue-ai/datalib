@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_files::archive;
-use datalib_etl_files::fsscan::{self, FileScanCursor, ScannedFile};
+use datalib_etl_files::file_changes_scan::{self, FileScanCursor, ScannedFile};
 
 use super::SyncFlags;
 
@@ -100,7 +100,7 @@ fn feeds_on(sync: &SyncFlags) -> impl Iterator<Item = &'static Feed> + '_ {
 pub fn admits(sync: &SyncFlags, rel: &str) -> bool {
     let holding: Vec<&Feed> = FEEDS
         .iter()
-        .filter(|f| fsscan::is_under(rel, f.dir))
+        .filter(|f| file_changes_scan::is_under(rel, f.dir))
         .collect();
     let Some(deepest) = holding.iter().map(|f| f.dir.len()).max() else {
         return false;

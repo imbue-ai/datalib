@@ -24,8 +24,8 @@ use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
@@ -331,10 +331,10 @@ async fn mirror_media_files(
     summary: &mut IngestSummary,
     found: &RunProblems,
 ) -> Result<()> {
-    let scan = fsscan::list(
+    let scan = file_changes_scan::list(
         cache,
         media_root,
-        &fsscan::ScanOptions {
+        &file_changes_scan::ScanOptions {
             ignore: vec![".*".to_string()],
             ..Default::default()
         },
@@ -367,7 +367,7 @@ async fn mirror_media_files(
     let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
     let mut pending_bytes: u64 = 0;
     for f in &scan.files {
-        let cached = f.known.map(|hash| fsscan::hex(&hash));
+        let cached = f.known.map(|hash| file_changes_scan::hex(&hash));
         if let Some(hex) = &cached {
             if known.contains(hex) || staged.contains_key(hex) {
                 hashes.insert(&f.rel, hex.clone());
@@ -389,7 +389,7 @@ async fn mirror_media_files(
                 continue;
             }
         };
-        let hex = fsscan::hex(&file.file.blake3);
+        let hex = file_changes_scan::hex(&file.file.blake3);
         hashes.insert(&f.rel, hex.clone());
         if known.contains(&hex) || staged.contains_key(&hex) {
             continue;

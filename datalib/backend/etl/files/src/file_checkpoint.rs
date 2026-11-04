@@ -1,7 +1,7 @@
 //! Where a file-backed source got to: its resume cursor, per feed.
 //!
 //! The persistent half of "which files changed since this feed last finished
-//! with them?" — [`crate::fsscan`] is the other half, and the crate README
+//! with them?" — [`crate::file_changes_scan`] is the other half, and the crate README
 //! explains why they live apart, why the cursor is a content hash rather than
 //! a stat pair, and what that does not fix.
 //!
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use crate::fsscan::{FileScanCursor, Listing, ScannedFile};
+use crate::file_changes_scan::{FileScanCursor, Listing, ScannedFile};
 
 /// The cursor table. One row per `(scope, root-relative path)`.
 ///
@@ -64,7 +64,7 @@ pub async fn ensure_schema(pool: &SqlitePool) -> Result<()> {
 /// This scope's cursor: what each file hashed to when this feed last
 /// finished with it.
 ///
-/// Feed it straight to [`crate::fsscan::Scan::changes_since`] — that
+/// Feed it straight to [`crate::file_changes_scan::Scan::changes_since`] — that
 /// pair is the whole "what changed since I last looked?" question.
 pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCursor> {
     ensure_schema(pool).await?;
@@ -77,7 +77,7 @@ pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCurso
     .with_context(|| format!("load ingested_files scope={scope}"))?;
     Ok(rows
         .into_iter()
-        .filter_map(|(rel, hex)| crate::fsscan::from_hex(&hex).map(|h| (rel, h)))
+        .filter_map(|(rel, hex)| crate::file_changes_scan::from_hex(&hex).map(|h| (rel, h)))
         .collect())
 }
 
@@ -124,7 +124,7 @@ pub async fn record_file_with_problem(
     )
     .bind(scope)
     .bind(&file.rel)
-    .bind(crate::fsscan::hex(&file.blake3))
+    .bind(crate::file_changes_scan::hex(&file.blake3))
     .bind(file.size)
     .bind(&now)
     .bind(&tz_offset)
@@ -334,8 +334,8 @@ async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_changes_scan;
     use crate::fingerprint_cache::FingerprintCache;
-    use crate::fsscan;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::path::Path;
     use std::str::FromStr;
@@ -398,11 +398,11 @@ mod tests {
     }
 
     impl Env {
-        async fn scan(&self) -> fsscan::Scan {
-            fsscan::scan(
+        async fn scan(&self) -> file_changes_scan::Scan {
+            file_changes_scan::scan(
                 &self.cache,
                 &self.tree,
-                &fsscan::ScanOptions::default(),
+                &file_changes_scan::ScanOptions::default(),
                 |_| true,
             )
             .await

@@ -215,7 +215,7 @@ datalib/
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
     etl/files/     `datalib_etl_files`: what changed on disk for a
-                   source that reads local files (fsscan, the
+                   source that reads local files (file_changes_scan, the
                    fingerprint cache, the per-feed file checkpoint).
                    Only those sources link it.
     etl/web/       `datalib_etl_web`: what a source that reaches a web
@@ -232,7 +232,7 @@ datalib/
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
-                   etl/files/src/fsscan.rs (claude_code and codex by way
+                   etl/files/src/file_changes_scan.rs (claude_code and codex by way
                    of etl/agent_sessions/; fsindex has its own walker
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
@@ -670,10 +670,10 @@ Everything that identifies, filters or joins uses the id, and the field
 is `source_id` everywhere. The search filter is `source:` (`source_id:`
 still works) and the column a person sees is "Source".
 
-## A local file or folder: ask `fsscan` what changed
+## A local file or folder: ask `file_changes_scan` what changed
 
 **Don't walk a folder or re-read an input yourself to learn whether it
-changed; ask `datalib_etl_files::fsscan`.** A listing reads no file: a shared
+changed; ask `datalib_etl_files::file_changes_scan`.** A listing reads no file: a shared
 fingerprint cache vouches for each file's hash per host, so an unchanged input
 costs a `stat`, and a source that reads a changed file gets its hash with its
 bytes rather than reading it twice. `file_checkpoint` keeps this source's

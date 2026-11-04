@@ -74,7 +74,7 @@ impl RawDb {
     /// Only the caller's half: which path held which content. The stat
     /// cursor is host state and lives in the shared
     /// [`datalib_etl_files::fingerprint_cache`], which
-    /// [`datalib_etl_files::fsscan`] consults on our behalf.
+    /// [`datalib_etl_files::file_changes_scan`] consults on our behalf.
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 

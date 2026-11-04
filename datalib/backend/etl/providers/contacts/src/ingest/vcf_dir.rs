@@ -9,9 +9,9 @@ use tracing::warn;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
@@ -73,10 +73,10 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     // One listing answers both questions at once: which `.vcf` files are
     // there, and which may have changed since this source last finished
     // with them.
-    let scan = fsscan::list(
+    let scan = file_changes_scan::list(
         &opts.cache,
         &opts.input_path,
-        &fsscan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions::default(),
         |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vcf")),
     )
     .await?;

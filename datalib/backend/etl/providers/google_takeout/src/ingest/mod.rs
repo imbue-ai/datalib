@@ -25,7 +25,7 @@ pub use db::{db_path_for, RawDb};
 
 use datalib_etl::download_problems::RunProblemKind;
 use datalib_etl_files::fingerprint_cache::{abs_key, canonical_root, FingerprintCache};
-use datalib_etl_files::{file_checkpoint, fsscan};
+use datalib_etl_files::{file_changes_scan, file_checkpoint};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -163,12 +163,12 @@ async fn read_archives(
     found: &RunProblems,
 ) -> Result<FetchSummary> {
     let names: BTreeSet<&str> = parts.iter().map(String::as_str).collect();
-    let scan_opts = fsscan::ScanOptions {
+    let scan_opts = file_changes_scan::ScanOptions {
         max_depth: Some(1),
         progress: opts.progress.clone(),
         ..Default::default()
     };
-    let hashed = fsscan::scan(&opts.cache, &opts.input_path, &scan_opts, |p| {
+    let hashed = file_changes_scan::scan(&opts.cache, &opts.input_path, &scan_opts, |p| {
         p.file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| names.contains(n))
@@ -249,7 +249,7 @@ async fn read_tree(
     opts: &FetchOptions,
     root: &Path,
     found: &RunProblems,
-) -> Result<(FetchSummary, fsscan::Listing)> {
+) -> Result<(FetchSummary, file_changes_scan::Listing)> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
@@ -258,7 +258,13 @@ async fn read_tree(
     // than nine times in nine slightly different shapes. Nothing is hashed
     // here: this folder is new every time, so each feed reads and hashes only
     // the files that are its own.
-    let walked = fsscan::list(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
+    let walked = file_changes_scan::list(
+        &opts.cache,
+        root,
+        &file_changes_scan::ScanOptions::default(),
+        |_| true,
+    )
+    .await?;
     for e in &walked.errors {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
@@ -362,7 +368,7 @@ async fn read_tree(
         // Records here are keyed by what they say, so this feed needs every
         // Voice file's hash before it can decide which to read.
         let voice_files = scan
-            .hashed_where(|f| fsscan::is_under(&f.rel, "Voice"))
+            .hashed_where(|f| file_changes_scan::is_under(&f.rel, "Voice"))
             .await?;
         voice_files.report_unreadable(found, "files");
         let voice = google_voice::ingest(

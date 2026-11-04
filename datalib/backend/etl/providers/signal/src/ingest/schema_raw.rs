@@ -132,10 +132,10 @@ pub async fn snapshot_fingerprint(
     use anyhow::Context;
     const PARTS: [&str; 3] = ["metadata", "main", "files"];
 
-    let scan = datalib_etl_files::fsscan::scan(
+    let scan = datalib_etl_files::file_changes_scan::scan(
         cache,
         snapshot_dir,
-        &datalib_etl_files::fsscan::ScanOptions::default(),
+        &datalib_etl_files::file_changes_scan::ScanOptions::default(),
         |p| {
             p.file_name()
                 .and_then(|n| n.to_str())

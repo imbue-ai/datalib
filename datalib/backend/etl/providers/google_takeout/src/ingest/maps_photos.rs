@@ -11,8 +11,8 @@ use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
-use datalib_etl_files::fsscan;
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
@@ -56,7 +56,7 @@ struct Photo {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Listing,
+    scan: &file_changes_scan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<MapsPhotosSummary> {
@@ -66,7 +66,7 @@ pub async fn ingest(
     let mut complete: Vec<MapsPhotoRow> = Vec::new();
     let mut without_media: Vec<(MapsPhotoRow, MediaProblem)> = Vec::new();
     let mut cas_inserts_owned: Vec<PendingCas> = Vec::new();
-    let mut done: Vec<fsscan::ScannedFile> = Vec::new();
+    let mut done: Vec<file_changes_scan::ScannedFile> = Vec::new();
     let mut skipped: Vec<SkippedRecord> = Vec::new();
     for &f in changes.to_read() {
         let file = match changes.read_if_changed(f).await {
@@ -179,7 +179,7 @@ pub async fn ingest(
 }
 
 fn is_sidecar(rel: &str) -> bool {
-    fsscan::is_under(rel, DIR_REL) && rel.ends_with(".json")
+    file_changes_scan::is_under(rel, DIR_REL) && rel.ends_with(".json")
 }
 
 fn stem(rel: &str) -> Option<&str> {

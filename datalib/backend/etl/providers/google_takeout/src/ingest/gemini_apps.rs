@@ -1,7 +1,7 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
 
 use datalib_etl::prune;
-use datalib_etl_files::fsscan;
+use datalib_etl_files::file_changes_scan;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -37,7 +37,7 @@ pub struct GeminiSummary {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Listing,
+    scan: &file_changes_scan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<GeminiSummary> {
