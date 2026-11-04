@@ -502,12 +502,23 @@ impl Index {
             .arg(self.qmd_dir.join("index.sqlite"))
             .arg(verb)
             .arg(args.to_string());
-        cmd.env("XDG_CACHE_HOME", &self.cache_home);
-        cmd.env("XDG_CONFIG_HOME", &self.cache_home);
-        cmd.env("NO_COLOR", "1");
+        set_qmd_env(&mut cmd, &self.cache_home);
         cmd.stdout(std::process::Stdio::piped());
         read_events(&mut cmd, on_progress, &*self.stop.0).with_context(|| format!("qmd {verb}"))
     }
+}
+
+/// The variable qmd reads for how many embedding contexts to open. Left to
+/// itself it opens up to eight, each about 520 MiB once used, for almost no
+/// more speed (`docs/dev/qmd_behaviour.md`, finding 16).
+pub const EMBED_PARALLELISM_VAR: &str = "QMD_EMBED_PARALLELISM";
+
+/// What every process running qmd is started with.
+pub(crate) fn set_qmd_env(cmd: &mut std::process::Command, cache_home: &Path) {
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
+    cmd.env("NO_COLOR", "1");
+    cmd.env(EMBED_PARALLELISM_VAR, "1");
 }
 
 /// Ensure `<qmd_dir>/models` is a symlink to `models_dir` (the shared
@@ -820,6 +831,19 @@ mod tests {
                 && QMD_SDK_MJS.contains("maxDurationMs: 0"),
             "the embed must go through generateEmbeddings with the cap off"
         );
+    }
+
+    /// Guards the embed that held 4.6 GB for the speed of one holding 1 GB:
+    /// qmd is held to one embedding context.
+    #[test]
+    fn qmd_is_started_with_one_embedding_context() {
+        let mut cmd = std::process::Command::new("node");
+        set_qmd_env(&mut cmd, Path::new("/cache"));
+        let set = cmd
+            .get_envs()
+            .find(|(name, _)| *name == std::ffi::OsStr::new(EMBED_PARALLELISM_VAR))
+            .and_then(|(_, value)| value);
+        assert_eq!(set, Some(std::ffi::OsStr::new("1")));
     }
 
     /// **No node flags before the script path.** node passes its own
