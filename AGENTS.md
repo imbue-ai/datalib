@@ -145,8 +145,8 @@ fail while the bug is there: assert a precondition rather than skipping
 on one, and give a synthesized fixture a live test that sends its
 request. **Set a test's subject up by calling what production calls, not
 by repeating it**: a helper that reassembles production's setup drifts
-from it, and the test then checks something nobody runs — while
-production code in a test's *precondition* makes it circular instead.
+from it, and the test then checks something nobody runs. Call it to
+*arrange*; never to decide what to expect or whether to check at all.
 
 ## Write plainspoken
 
