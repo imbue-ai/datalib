@@ -6,6 +6,7 @@
 //! every few minutes and is re-read whole each run; the rest cost a
 //! `stat`.
 
+pub mod clock;
 pub mod parse;
 pub mod schema_raw;
 
@@ -36,6 +37,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 const HISTORY_SUFFIX: &str = "_AirVisual_values.txt";
 const LATEST_JSON: &str = "latest_config_measurements.json";
+const CLOCK_HISTORY: &str = "history.txt";
 
 datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
 
@@ -179,6 +181,53 @@ async fn read_devices(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         !read.contains(serial) && (unread.contains(serial) || any_unread)
     });
     Ok(s)
+}
+
+/// Store what `history.txt` says about the device's clock, and say what
+/// is wrong with it. A file that will not read leaves the changes held.
+async fn read_clock(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    device: &str,
+    root: &Path,
+    scan: &file_changes_scan::Listing,
+) -> Result<Vec<String>> {
+    let mut trouble = Vec::new();
+    match std::fs::read_to_string(root.join(CLOCK_HISTORY)) {
+        Ok(text) => {
+            let (changes, bad) = clock::parse_history(&text);
+            trouble.extend(bad);
+            schema_raw::replace_clock_changes(tx, device, &changes).await?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            schema_raw::replace_clock_changes(tx, device, &[]).await?;
+        }
+        Err(e) => trouble.push(format!("read {CLOCK_HISTORY}: {e}")),
+    }
+    let changes = schema_raw::load_clock_changes(&mut **tx, device).await?;
+    let timezone: Option<String> =
+        sqlx::query_scalar("SELECT timezone FROM airvisual_devices WHERE id = ?")
+            .bind(device)
+            .fetch_optional(&mut **tx)
+            .await?
+            .flatten();
+    let (model, doubts) = clock::clock_model(&changes, timezone.as_deref());
+    trouble.extend(doubts);
+    trouble.extend(model.unplaced_archives(scan.files.iter().map(|f| f.rel.as_str())));
+    let newest: Option<(i64, String)> = sqlx::query_as(
+        "SELECT ts_ms, source_file FROM airvisual_samples WHERE device_id = ? \
+         ORDER BY ts_ms DESC LIMIT 1",
+    )
+    .bind(device)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some((wall_ms, source_file)) = newest {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        trouble.extend(clock::ahead_of_now(
+            model.real_ms(&source_file, wall_ms),
+            now_ms,
+        ));
+    }
+    Ok(trouble)
 }
 
 /// What is wrong with a device's folder when there is nothing in it to
@@ -377,7 +426,12 @@ async fn fetch_device(
     .bind(&who.id)
     .execute(&mut *tx)
     .await?;
+    let clock_trouble = read_clock(&mut tx, &who.id, &root, &scan).await?;
     tx.commit().await?;
+    if !clock_trouble.is_empty() {
+        s.errors += 1;
+        found.listing(&format!("clock {}", who.id), clock_trouble.join("; "));
+    }
     s.files_skipped += changes.unchanged();
     scan.finish().await?;
     progress.inc(1);
@@ -590,6 +644,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("airvisual");
         std::fs::create_dir_all(root.join("archive1")).unwrap();
+        write_clock(&root);
         let db = RawDb::open(&dir.path().join("av.doltlite_db"))
             .await
             .unwrap();
@@ -599,6 +654,16 @@ mod tests {
             cache: test_cache().await,
             _dir: dir,
         }
+    }
+
+    /// One jump, from before the stamps these tests use, so a folder's
+    /// clock has nothing wrong with it.
+    fn write_clock(root: &Path) {
+        std::fs::write(
+            root.join(CLOCK_HISTORY),
+            r#"{"archive":1,"previous_t":"1730000000","after_t":"1730003600","after_timezone":"America/Los_Angeles"}"#,
+        )
+        .unwrap();
     }
 
     fn device(path: &Path, serial: Option<&str>, name: Option<&str>) -> AirvisualDevice {
@@ -656,8 +721,8 @@ mod tests {
             format!("{HEADER}{}", line(1736185260, "3.0", "500")),
         )
         .unwrap();
-        // Not a history file: never read.
-        std::fs::write(e.root.join("history.txt"), "{}").unwrap();
+        // Not a values file: never read as one.
+        write_clock(&e.root);
 
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!(
@@ -817,6 +882,7 @@ mod tests {
         let e = env().await;
         let b = e.root.parent().unwrap().join("second");
         std::fs::create_dir_all(&b).unwrap();
+        write_clock(&b);
         std::fs::write(
             e.root.join("202609_AirVisual_values.txt"),
             format!("{HEADER}{}", line(1788220836, "1.0", "425")),
@@ -928,6 +994,42 @@ mod tests {
         e.db.close().await;
     }
 
+    /// Guards a clock nobody checked: a device's times were wrong for years
+    /// and no row said so. What is doubtful is one row, and it goes when
+    /// the file is put right.
+    #[tokio::test]
+    async fn a_clock_that_cannot_be_trusted_is_a_row_until_it_can() {
+        let e = env().await;
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert!(problems(e.db.pool()).await.is_empty());
+        assert_eq!(
+            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_clock_changes").await,
+            1
+        );
+
+        std::fs::write(
+            e.root.join(CLOCK_HISTORY),
+            r#"{"archive":1,"previous_t":"1730000000","after_t":"1730003600","after_timezone":"Earth/Vulcan"}"#,
+        )
+        .unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(s.errors, 1);
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(keys(&rows), ["listing:clock KITCHEN01"]);
+        assert!(rows[0].1.contains("Earth/Vulcan"), "{rows:?}");
+
+        write_clock(&e.root);
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(s.errors, 0);
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
     /// Guards the share that came unmounted: its row blamed a missing
     /// `serial`, and with a serial configured there was no row at all.
     #[tokio::test]
@@ -958,6 +1060,7 @@ mod tests {
             assert!(!rows[0].1.contains("serial"), "{rows:?}");
         }
 
+        write_clock(&mount);
         std::fs::write(
             mount.join("202609_AirVisual_values.txt"),
             format!("{HEADER}{}", line(1788220836, "1.0", "425")),
@@ -968,6 +1071,24 @@ mod tests {
             .unwrap();
         assert_eq!((s.errors, s.samples), (0, 1), "mounted again");
         assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// A reading that lands in the future is kept, and said to be impossible.
+    #[tokio::test]
+    async fn a_reading_in_the_future_is_a_row() {
+        let e = env().await;
+        let now_s = chrono::Utc::now().timestamp();
+        std::fs::write(
+            e.root.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(now_s, "1.0", "425")),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
+        assert_eq!(s.samples, 1, "the reading is kept");
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(keys(&rows), ["listing:clock KITCHEN01"]);
+        assert!(rows[0].1.contains("in the future"), "{rows:?}");
         e.db.close().await;
     }
 

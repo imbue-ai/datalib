@@ -30,7 +30,7 @@
             "custom_mode_interval": 3,
             "mode": 1
         },
-        "timezone": "Earth/San_Francisco"
+        "timezone": "America/Denver"
     },
     "status": {
         "app_version": "1.1937",

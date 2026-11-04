@@ -7,6 +7,7 @@ own history files into one doltlite raw store:
 <data_root>/<group>/ingest/entities.doltlite_db
   airvisual_devices            one row per device: serial (the id), name, model, firmware, timezone, last sample
   airvisual_samples            one row per logged line: (device_id, ts_ms) plus a REAL column per measurement
+  airvisual_clock_changes      one row per clock jump in history.txt: says what a reading's time means
   airvisual_unplaced_samples   lines logged before the clock was set
   ingested_files               which history files have been read, by content hash, per device
 ```
@@ -86,6 +87,42 @@ each DST change and the move between time zones, on this unit — and
 `history.txt` records the before/after. The files inside are the same
 shape as the ones at the root; the step reads them all.
 
+## A device's clock
+
+**A device's `Timestamp` is its local clock read as if it were UTC.** Take
+the two sides of a line: `2024/11/03;03:46:10;1730605570` decodes to
+03:46:10 UTC, when the device was on UTC−8 and it was 11:46:10 UTC. The value
+jumps whenever the local clock does, which a real epoch never does. It was
+checked against the wall-clock column on every line of two Pros over more
+than three years, across each DST change and a move between time zones.
+
+So the raw store's `ts_ms` is what the device wrote, kept as it wrote it, and
+it is wrong by the device's offset. **The render is what turns it into real
+time** (`ingest/clock.rs`), so reading a raw store directly means converting
+too; `airvisual_devices.last_ts_ms` is the same count.
+
+**One offset per stretch between clock jumps, not the zone's rule for each
+moment.** `history.txt` logs each jump with the time zone after it, stored in
+`airvisual_clock_changes`. A Pro applies a zone's rule late: by hours, or by a
+day. Until it does, its clock means the old offset, and the zone's rule for
+that moment is an hour wrong. So the offset after a jump comes from the zone at
+the moment after it, and the offset before comes from that minus the jump. A
+reading's stretch is the folder its file is in: `archive<N>/` holds what came
+before jump N, and the top of the folder what came after the last one. That
+also settles the hour the clocks go back through twice. A real time that comes
+out twice, as in a `corrupt_` / `restored_` pair, keeps one reading.
+
+A device with no jump on record has only the time zone it says it is in, and
+that zone's rule for each reading.
+
+What makes this doubtful is one row, `listing:clock <serial>`: a jump no time
+zone explains, a jump its neighbours disagree with, an unknown time zone or none
+at all, a line of `history.txt` or an `archive<N>/` it has no line for, and a
+newest reading more than fifteen minutes in the future. Where it cannot say,
+the reading stays as the device wrote it.
+
+## What a line holds
+
 **A line is `;`-separated and ends in a `;`.** Two header variants:
 
 ```
@@ -93,8 +130,8 @@ Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM1(ug/m3);Outdoor 
 Date;Time;Timestamp;PM2_5(ug/m3);PM10(ug/m3);PM1(ug/m3);Temperature(C);CO2(ppm);          restored_* only
 ```
 
-`Timestamp` is epoch seconds and is the only time the parser uses:
-`Date`/`Time` are local to whatever zone the device was in and change
+`Timestamp` is the only time the parser uses, and it is **not a real epoch**
+(§ "A device's clock"). `Date`/`Time` say the same moment and change
 format between files (`2026/09/01` at the root, `9/1/2025` in a
 `restored_` file). A blank cell is the sensor being off — the
 `corrupt_` files are ~95% blank-sensor lines carrying only the followed
@@ -180,6 +217,7 @@ that failed, and is a row in the store's `problems` table:
 | what | key | when it clears |
 | --- | --- | --- |
 | a device folder that is missing or empty, usually a share that is not mounted; one that could not be read at all; one with no serial | `listing:device <name or path>` | the next run that reads it |
+| a clock that cannot be trusted (§ "A device's clock") | `listing:clock <serial>` | the next run that finds nothing wrong with it |
 | entries the walk of a folder could not read | `listing:files <serial>` | the next run whose walk is clean |
 | a history file that would not read, or a `latest_config_measurements.json` that would not read or parse | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
 | a history file that would not parse, or lines in one that could not be used | `file:airvisual/export/<serial>:<path>` | the file changes and is read again |
@@ -203,6 +241,10 @@ layout — *Ten Forward* (a reception fills the lounge with CO₂) and
 *Sickbay* (a plasma-coolant leak spikes the particulates) — carrying
 every quirk above: an `archive1/` per device, a `197001_` file, a
 `corrupt_`/`restored_` pair sharing a timestamp, a `-1` line, and a
-live month ending in NULs. `airvisual_fixture_e2e` ingests and renders
+live month ending in NULs. Its clocks behave like a real device's: every
+`Timestamp` is the line's local time read as UTC, *Sickbay* moves a time zone,
+and *Ten Forward* moves one and then takes a clock change hours late, so its
+two stretches overlap in its own count. A test holds it to that shape, so
+change the fixture's dates with it in mind. `airvisual_fixture_e2e` ingests and renders
 it; the central fixture pipeline (`//tests/fixtures:ingested_tng`)
 carries it as the `ship-air` source, so it reaches the grid golden.

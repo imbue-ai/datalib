@@ -311,3 +311,73 @@ async fn samples_are_time_series_per_device_and_column() {
         .iter()
         .all(|s| s.about_name.as_deref() == Some("Kitchen")));
 }
+
+/// Guards charts an hour in the future: a device's `Timestamp` is its local
+/// clock read as UTC. What the raw store holds stays as written, and what
+/// the render reads is real time, in real order across the clocks going
+/// back, where the device's own count runs backwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reading_is_at_its_real_time_and_in_real_order() {
+    use datalib_etl_airvisual::ingest::clock::ClockChange;
+    use datalib_etl_airvisual::ingest::schema_raw::replace_clock_changes;
+
+    const HOUR_MS: i64 = 3_600_000;
+    let td = tempfile::tempdir().unwrap();
+    let raw_path = td.path().join(STANZA).join("raw");
+    std::fs::create_dir_all(&raw_path).unwrap();
+    let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
+
+    // The clocks go back an hour in Paris, from the device's 06:22 on the
+    // morning of the change: UTC+2 before it, UTC+1 after.
+    let (previous_wall_s, after_wall_s) = (1_730_010_171, 1_730_006_568);
+    let before_wall_ms = (previous_wall_s - 60) * 1000;
+    let after_wall_ms = (after_wall_s + 60) * 1000;
+    assert!(
+        after_wall_ms < before_wall_ms,
+        "the device's count went back"
+    );
+
+    seed(
+        db.pool(),
+        &[("PARIS", after_wall_ms, Some(2.0), None, None)],
+        &[("PARIS", "Paris")],
+    )
+    .await;
+    let mut tx = db.pool().begin().await.unwrap();
+    let mut before = sample("PARIS", before_wall_ms, Some(1.0), None, None);
+    before.source_file = "archive1/202610_AirVisual_values.txt".into();
+    upsert_samples(&mut tx, &[before]).await.unwrap();
+    replace_clock_changes(
+        &mut tx,
+        "PARIS",
+        &[ClockChange {
+            archive: 1,
+            previous_wall_s,
+            after_wall_s,
+            after_timezone: Some("Europe/Paris".into()),
+        }],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "the clocks go back")
+        .await
+        .unwrap();
+    db.close().await;
+
+    let parsed = parse(&raw_path, RawRange::cold()).unwrap();
+    let pm25 = parsed
+        .series
+        .iter()
+        .find(|s| s.metric == "pm25_ugm3")
+        .unwrap();
+    let real_before = before_wall_ms - 2 * HOUR_MS;
+    let real_after = after_wall_ms - HOUR_MS;
+    assert_eq!(pm25.ts_ms, [real_before, real_after]);
+    assert_eq!(pm25.values, [1.0, 2.0]);
+    assert_eq!(parsed.devices[0].last_ts_ms, Some(real_after));
+    assert!(
+        real_after - real_before < 3 * 60 * 1000,
+        "real time runs straight through the change"
+    );
+}

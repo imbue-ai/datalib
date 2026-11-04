@@ -61,11 +61,11 @@ async fn the_tng_fixture_ingests_and_renders() {
     };
 
     let s = fetch(opts()).await.unwrap();
-    assert_eq!((s.devices, s.files, s.errors, s.bad_lines), (2, 7, 0, 0));
+    assert_eq!((s.devices, s.files, s.errors, s.bad_lines), (2, 9, 0, 0));
     assert_eq!(s.clock_unset, 2, "the 1970 file's two lines");
-    // ten-forward: 20 + 12 placeable lines; sickbay: 24 + 10 + 4 + 6,
+    // ten-forward: 20 + 12 + 3 + 3 placeable lines; sickbay: 24 + 10 + 4 + 6,
     // of which the corrupt/restored pair share one timestamp.
-    assert_eq!(s.lines, 2 + 20 + 12 + 24 + 10 + 4 + 6);
+    assert_eq!(s.lines, 2 + 20 + 12 + 3 + 3 + 24 + 10 + 4 + 6);
     assert_eq!(s.samples, s.lines - 2);
     let pool = db.pool();
     assert_eq!(
@@ -74,7 +74,7 @@ async fn the_tng_fixture_ingests_and_renders() {
             "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'TENFWD10X'"
         )
         .await,
-        32
+        38
     );
     assert_eq!(
         count(
@@ -133,7 +133,7 @@ async fn the_tng_fixture_ingests_and_renders() {
 
     // A second pass reads nothing.
     let again = fetch(opts()).await.unwrap();
-    assert_eq!((again.files, again.files_skipped, again.samples), (7, 7, 0));
+    assert_eq!((again.files, again.files_skipped, again.samples), (9, 9, 0));
 
     // Commit, so the render has a HEAD to pin.
     datalib_etl::doltlite_raw::commit_run(pool, "fixture ingest")
@@ -145,11 +145,35 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert!(parsed.head.is_some(), "a committed store pins a commit");
     assert_eq!(
         inputs().len(),
-        3,
-        "the page declares the devices, samples and files tables whole"
+        4,
+        "the page declares the devices, samples, clock changes and files tables whole"
     );
     assert_eq!(parsed.devices.len(), 2);
-    assert_eq!(parsed.sample_count, 75);
+    assert_eq!(parsed.sample_count, 81);
+    // Ten Forward's clock went back late: its count of the two stretches
+    // interleaves, and real time puts one after the other, at UTC-7 and then
+    // UTC-8. CO2 climbs through both, so the order shows.
+    let co2 = parsed
+        .series
+        .iter()
+        .find(|s| s.device == "TENFWD10X" && s.metric == "co2_ppm")
+        .unwrap();
+    let last = co2.ts_ms.len() - 6;
+    assert_eq!(
+        co2.values[last..],
+        [610.0, 620.0, 630.0, 640.0, 650.0, 660.0]
+    );
+    let at = |s: &str| {
+        chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+    };
+    assert_eq!(co2.ts_ms[last], at("2024-11-03 09:30:10"));
+    assert_eq!(co2.ts_ms[last + 2], at("2024-11-03 10:30:10"));
+    assert_eq!(co2.ts_ms[last + 3], at("2024-11-03 10:45:09"));
+    let tenfwd = parsed.devices.iter().find(|d| d.id == "TENFWD10X").unwrap();
+    assert_eq!(tenfwd.last_ts_ms, Some(at("2024-11-03 11:45:09")));
     let mut emitted = Vec::new();
     let mut on_doc = |md: RenderedMarkdown| {
         emitted.push(md);
@@ -183,4 +207,68 @@ async fn the_tng_fixture_ingests_and_renders() {
         named.iter().all(|n| n == "Ten Forward"),
         "a device is named, not its serial: {named:?}"
     );
+}
+
+/// The fixture stands in for a real device, so it has a real device's clock:
+/// every `Timestamp` is its `Date` and `Time` read as UTC, each file lies
+/// within the stretch its folder says, and `history.txt` holds nothing a time
+/// zone cannot explain. A fixture that drifted from this would test a device
+/// that does not exist, which is how the clock went wrong unnoticed.
+#[test]
+fn the_tng_fixture_has_the_clock_of_a_real_device() {
+    use datalib_etl_airvisual::ingest::clock::{clock_model, parse_history};
+
+    let wall = |date: &str, time: &str| {
+        let date = chrono::NaiveDate::parse_from_str(date, "%Y/%m/%d")
+            .or_else(|_| chrono::NaiveDate::parse_from_str(date, "%m/%d/%Y"))
+            .unwrap();
+        let time = chrono::NaiveTime::parse_from_str(time, "%H:%M:%S").unwrap();
+        date.and_time(time).and_utc().timestamp()
+    };
+    for device in ["sickbay", "ten-forward"] {
+        let dir = fixture_dir().join(device);
+        let (changes, bad) =
+            parse_history(&std::fs::read_to_string(dir.join("history.txt")).unwrap());
+        assert_eq!(bad, Vec::<String>::new());
+        let (model, trouble) = clock_model(&changes, None);
+        assert_eq!(trouble, Vec::<String>::new(), "{device}");
+
+        let mut folders = vec![(dir.clone(), None, changes.last().map(|c| c.after_wall_s))];
+        for (i, c) in changes.iter().enumerate() {
+            let from = i.checked_sub(1).map(|p| changes[p].after_wall_s);
+            folders.push((
+                dir.join(format!("archive{}", c.archive)),
+                Some(c.previous_wall_s),
+                from,
+            ));
+        }
+        let mut seen = 0;
+        for (folder, until, from) in folders {
+            for file in std::fs::read_dir(&folder).unwrap() {
+                let file = file.unwrap().path();
+                let name = file.file_name().unwrap().to_string_lossy().into_owned();
+                if !name.ends_with("_AirVisual_values.txt") || name.starts_with("1970") {
+                    continue;
+                }
+                let text = String::from_utf8(std::fs::read(&file).unwrap()).unwrap();
+                for line in text.lines().skip(1) {
+                    let line = line.trim_matches(char::from(0));
+                    let cells: Vec<&str> = line.split(';').collect();
+                    if cells.len() < 3 {
+                        continue;
+                    }
+                    let stamp: i64 = cells[2].parse().unwrap();
+                    assert_eq!(stamp, wall(cells[0], cells[1]), "{device}/{name}: {line}");
+                    assert!(until.is_none_or(|u| stamp <= u), "{device}/{name}: {line}");
+                    assert!(from.is_none_or(|f| stamp >= f), "{device}/{name}: {line}");
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 30, "{device}: {seen} lines is not the fixture");
+        assert!(
+            model.real_ms("x.txt", 0) != 0,
+            "{device}: the last stretch has an offset"
+        );
+    }
 }

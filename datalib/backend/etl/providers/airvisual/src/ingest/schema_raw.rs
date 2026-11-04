@@ -70,6 +70,73 @@ pub const AIRVISUAL_SAMPLES_DDL: &str = "CREATE TABLE IF NOT EXISTS airvisual_sa
     PRIMARY KEY (device_id, ts_ms)
 )";
 
+/// One row per line of a device's `history.txt`, the record of its clock
+/// jumping, which is what says when each reading really happened
+/// (`clock.rs`). Replaced whole each run, so an unchanged file writes
+/// nothing. Both times are as the device counts them.
+pub const AIRVISUAL_CLOCK_CHANGES_DDL: &str = "CREATE TABLE IF NOT EXISTS airvisual_clock_changes (
+    device_id       TEXT NOT NULL,
+    archive         INTEGER NOT NULL,
+    previous_wall_s INTEGER NOT NULL,
+    after_wall_s    INTEGER NOT NULL,
+    after_timezone  TEXT NULL,
+    PRIMARY KEY (device_id, archive)
+)";
+
+pub async fn replace_clock_changes(
+    tx: &mut Transaction<'_, Sqlite>,
+    device: &str,
+    changes: &[super::clock::ClockChange],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM airvisual_clock_changes WHERE device_id = ?")
+        .bind(device)
+        .execute(&mut **tx)
+        .await?;
+    for c in changes {
+        sqlx::query(
+            "INSERT OR REPLACE INTO airvisual_clock_changes \
+             (device_id, archive, previous_wall_s, after_wall_s, after_timezone) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(device)
+        .bind(c.archive)
+        .bind(c.previous_wall_s)
+        .bind(c.after_wall_s)
+        .bind(&c.after_timezone)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// A device's clock changes, oldest first.
+pub async fn load_clock_changes<'e, E>(
+    db: E,
+    device: &str,
+) -> anyhow::Result<Vec<super::clock::ClockChange>>
+where
+    E: sqlx::Executor<'e, Database = Sqlite>,
+{
+    let rows: Vec<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT archive, previous_wall_s, after_wall_s, after_timezone \
+         FROM airvisual_clock_changes WHERE device_id = ? ORDER BY archive",
+    )
+    .bind(device)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(archive, previous_wall_s, after_wall_s, after_timezone)| super::clock::ClockChange {
+                archive,
+                previous_wall_s,
+                after_wall_s,
+                after_timezone,
+            },
+        )
+        .collect())
+}
+
 /// The measurement columns, in DDL order — the render's metric table
 /// is checked against this list.
 pub const SAMPLE_MEASUREMENTS: &[&str] = &[
@@ -170,6 +237,7 @@ pub fn full_ddl() -> Vec<String> {
     vec![
         AirvisualDeviceRow::ddl(),
         AIRVISUAL_SAMPLES_DDL.to_string(),
+        AIRVISUAL_CLOCK_CHANGES_DDL.to_string(),
         AirvisualUnplacedSampleRow::ddl(),
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ]
