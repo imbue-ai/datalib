@@ -138,12 +138,15 @@ grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 **Test-quality claims are the highest-risk category**, because a false
 one is self-concealing. Treat "now covered by a test" as unverified
 until you have read the assertion *and* watched it fail against the
-broken behaviour. A **tautological** test — one whose fixture,
-precondition or skip condition came from the code it checks — reads
-perfectly well and cannot fail while the bug is there: assert a
-precondition rather than skipping on one, and give a synthesized
-fixture a live test that sends its request. Where the broken behaviour
-cannot be staged, say so in the PR.
+broken behaviour; where that failure cannot be staged, say so in the PR.
+A **tautological** test — one whose fixture, precondition or skip
+condition came from the code it checks — reads perfectly well and cannot
+fail while the bug is there: assert a precondition rather than skipping
+on one, and give a synthesized fixture a live test that sends its
+request. **Set a test's subject up by calling what production calls, not
+by repeating it**: a helper that reassembles production's setup drifts
+from it, and the test then checks something nobody runs — while
+production code in a test's *precondition* makes it circular instead.
 
 ## Write plainspoken
 
