@@ -115,8 +115,8 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
             datalib_etl_email::ingest::schema_raw::full_ddl(),
         ),
         (
-            "fsindex/raw",
-            datalib_etl_fsindex::ingest::schema_raw::full_ddl(),
+            "file_inventory/raw",
+            datalib_etl_file_inventory::ingest::schema_raw::full_ddl(),
         ),
         (
             "github/raw",

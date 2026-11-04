@@ -78,7 +78,7 @@ The binaries a release ships:
   (see "Reading the mirrored data" below).
 - `datalib-migrate-config` — rewrites a `config.toml` from a retired
   shape (see below).
-- `datalib-fsindex` — the directory-tree scanner, also reachable as a
+- `datalib-file-inventory` — the directory-tree scanner, also reachable as a
   step.
 - `latchkey-curl-router` and `curl-impersonate` — Cloudflare-safe HTTP
   for the downloaders.

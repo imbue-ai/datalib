@@ -401,7 +401,7 @@ therefore what it can see:
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
 | `calendar` (Google) | `events.list` `cancelled` items; a whole listing on a first sync, after a `410`, and every run for a window; the account's calendar list | events a whole listing does not name. Nothing when that listing held an event with no `id`, which could be any stored one. A calendar the list no longer names, with its events; nothing when the list held a calendar with no `id`, and a list reply with no `items` fails the run |
 | `media` | the scan; a file evicted to the cloud, over `max_bytes` or that will not open is present (`Scan::present_unread`) | path rows of files the scan did not find; then the items no path names, with their audio and visual rows. Nothing after a walk that reported errors |
-| `fsindex` | every run's walk | rows the walk did not write. An entry it found and could not read (a folder that will not list, a file that will not hash) keeps its rows and its subtree's |
+| `file_inventory` | every run's walk | rows the walk did not write. An entry it found and could not read (a folder that will not list, a file that will not hash) keeps its rows and its subtree's |
 | `pdf` | the scan; a file over `max_bytes` is present | path rows of files the scan did not find, then documents no path names. Nothing after a walk that reported errors |
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
@@ -446,7 +446,7 @@ section) and "we noticed and the grid still shows it" (that one) look
 identical from the UI.
 
 Every provider that records deltas can also detect a deletion, and
-`media` / `fsindex` / `pdf` detect by set difference while recording none;
+`media` / `file_inventory` / `pdf` detect by set difference while recording none;
 the one mismatch is that the structural detectors write no `sync_runs`
 row.
 
@@ -461,7 +461,7 @@ spurious "your provider changed this" wastes trust.
 
 Nothing reads `summary.deltas` back — nothing in `datalib/backend/http`
 or `datalib/ui` does. The only place any of it reaches a human is
-`fsindex`'s standalone CLI printing `vs last scan: N added, M modified,
+`file_inventory`'s standalone CLI printing `vs last scan: N added, M modified,
 K removed, U unchanged`, which is one provider's local convenience
 rather than a product surface. `sync_runs` also records no commit
 hashes (its columns are `run_id`, `started_at_utc`, `finished_at_utc`,

@@ -164,7 +164,7 @@ its own `path`. There is no global vocabulary — each provider's
 | lightroom | `catalog`, `backups` |
 | airvisual, facebook, google_takeout, linkedin | `export` |
 | signal, sms_backup_restore, whatsapp | `backup` |
-| fsindex, media, pdf | `fswalk` |
+| file_inventory, media, pdf | `fswalk` |
 | beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to

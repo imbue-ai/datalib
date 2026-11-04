@@ -12,7 +12,7 @@ pub const PROGRAMS: &[&str] = &[
     "datalib-applet",
     "datalib-migrate-config",
     "datalib-doltlite",
-    "datalib-fsindex",
+    "datalib-file-inventory",
     "datalib-dirtree-diff",
 ];
 

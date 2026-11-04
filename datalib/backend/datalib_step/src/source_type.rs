@@ -71,7 +71,7 @@ pub enum SourceType {
     /// A "Download your information" export, unpacked. The JSON flavour;
     /// the HTML one is not read.
     Facebook,
-    Fsindex,
+    FileInventory,
     /// Garmin Connect, over the API the Connect phone app uses.
     Garmin,
     Github,
@@ -155,7 +155,7 @@ impl SourceType {
     /// for a type whose documents count their own items.
     pub const fn item_table(self) -> Option<&'static str> {
         match self {
-            SourceType::Fsindex => Some("files"),
+            SourceType::FileInventory => Some("files"),
             SourceType::Media => Some("media_files"),
             SourceType::ApplePhotos => Some("ZASSET"),
             SourceType::Linear => Some("issues"),
@@ -253,7 +253,7 @@ mod tests {
             let download_only = matches!(
                 t,
                 SourceType::ApplePhotos
-                    | SourceType::Fsindex
+                    | SourceType::FileInventory
                     | SourceType::Linear
                     | SourceType::Media
             );

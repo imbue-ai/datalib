@@ -119,7 +119,7 @@ command = "datalib-applet unified_document_index"
   it("still shows an entry the defaults don't know by its id", () => {
     const custom = `[[groups]]
 id = "notes"
-type = "fsindex"
+type = "file_inventory"
 
 [[steps]]
 group = "notes"

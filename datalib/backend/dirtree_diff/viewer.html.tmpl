@@ -461,7 +461,7 @@ document.getElementById("expandAll").onclick = () => setAll(true);
 document.getElementById("collapseAll").onclick = () => setAll(false);
 document.getElementById("foot").textContent =
   "Moves are found by matching blake3 digests across the removed/added rows of a doltlite prolly-tree diff. " +
-  "A directory keeps its digest when it moves, because fsindex hashes a directory over its children — so a whole " +
+  "A directory keeps its digest when it moves, because file_inventory hashes a directory over its children — so a whole " +
   "subtree move collapses to one row.";
 </script>
 </body>

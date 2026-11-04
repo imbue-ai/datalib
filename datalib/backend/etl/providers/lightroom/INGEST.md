@@ -647,5 +647,5 @@ and the crate's `src/read.rs`. Render reads only the mirror; the
 previews are read by the applet, live, from the `Previews.lrdata` beside
 the catalog, since their file names change on every edit.
 
-**`fsindex` as a companion**, if you want to know whether the files the
+**`file_inventory` as a companion**, if you want to know whether the files the
 catalog points at are still there.

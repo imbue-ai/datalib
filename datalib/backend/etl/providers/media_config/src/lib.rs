@@ -106,7 +106,7 @@ impl MediaConfig {
 /// Params for the render step. `media` is download-only, so this is the
 /// shared bare envelope and the provider's `plan_render` returns no
 /// processors — "download-only" is structural (a missing processor),
-/// not a flag. Same shape as `fsindex`.
+/// not a flag. Same shape as `file_inventory`.
 pub type MediaRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for MediaConfig {

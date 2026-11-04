@@ -12,7 +12,7 @@ use rayon::prelude::*;
 /// The raw 32-byte blake3 digest. Stored as a BLOB; rendered as hex
 /// only for human-facing output (test snapshots, ad-hoc `hex(blake3)`
 /// queries). Hex would double the per-row hash bytes both in the table
-/// and in its index, which is a real cost at fsindex's design scale.
+/// and in its index, which is a real cost at file_inventory's design scale.
 pub type Blake3 = [u8; 32];
 
 /// Render a digest as lowercase hex. For human-facing surfaces and for

@@ -76,7 +76,7 @@ if [ -d datalib/backend ]; then
 
     # Guard: every rust_library must have a rust_test(crate=...) target,
     # else its inline #[cfg(test)] tests silently never run under
-    # `bazel test //...`. Catches the gap that left fsindex's stamp.rs /
+    # `bazel test //...`. Catches the gap that left file_inventory's stamp.rs /
     # hash.rs tests dormant.
     echo "[rust] unit-test target coverage"
     "$REPO_ROOT/tools/check_rust_unit_tests.sh"

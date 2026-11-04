@@ -41,7 +41,7 @@ rust_library(
 # Inline `#[cfg(test)]` unit tests in the library sources (plan.rs's DDL
 # synthesis, mirror.rs's key selection and column filtering). Without
 # this `crate = ":..."` target they are silently never executed — see the
-# note in fsindex's BUILD.bazel.
+# note in file_inventory's BUILD.bazel.
 rust_test(
     name = "sqlite_mirror_unittests",
     size = "small",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build two directory trees that differ in every way the viewer knows
-# how to report, scan both with the real fsindex, and render the page.
+# how to report, scan both with the real file_inventory, and render the page.
 #
 #   ./demo.sh [outdir]
 #
@@ -13,13 +13,13 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../../.." && pwd)"
 out="${1:-/tmp/dirtree_diff_demo}"
 
-fsindex="$repo/bazel-bin/datalib/backend/etl/providers/fsindex/fsindex"
+file_inventory="$repo/bazel-bin/datalib/backend/etl/providers/file_inventory/file_inventory"
 doltlite="$repo/bazel-bin/third-party/doltlite/doltlite"
 dirtree_diff="$repo/bazel-bin/datalib/backend/dirtree_diff/dirtree_diff"
-if [[ ! -x "$fsindex" || ! -x "$doltlite" || ! -x "$dirtree_diff" ]]; then
+if [[ ! -x "$file_inventory" || ! -x "$doltlite" || ! -x "$dirtree_diff" ]]; then
     echo "building the scanner, the viewer and the doltlite shell…" >&2
     (cd "$repo" && bazelisk build \
-        //datalib/backend/etl/providers/fsindex:fsindex \
+        //datalib/backend/etl/providers/file_inventory:file_inventory \
         //datalib/backend/dirtree_diff:dirtree_diff \
         //third-party/doltlite:doltlite)
 fi
@@ -63,8 +63,8 @@ cp after/media/pic.bin after/media/pic_backup.bin
 cp -R after/themes/dark after/themes/dark_backup
 
 echo "scanning…" >&2
-"$fsindex" --db before.doltlite_db --root before --no-stamp >/dev/null 2>&1
-"$fsindex" --db after.doltlite_db  --root after  --no-stamp >/dev/null 2>&1
+"$file_inventory" --db before.doltlite_db --root before --no-stamp >/dev/null 2>&1
+"$file_inventory" --db after.doltlite_db  --root after  --no-stamp >/dev/null 2>&1
 
 # Case 1: two independent files, unified through file:// remotes.
 "$dirtree_diff" \
@@ -75,11 +75,11 @@ echo "scanning…" >&2
     -o "$out/diff_two_files.html"
 
 # Case 2: the same two roots as two branches of ONE file, scanned
-# straight into it with `fsindex --branch`, then diffed directly — no
+# straight into it with `file_inventory --branch`, then diffed directly — no
 # unification needed, because both commits already share a chunk store.
 rm -f branched.doltlite_db
-"$fsindex" --db branched.doltlite_db --root before --branch before --no-stamp >/dev/null 2>&1
-"$fsindex" --db branched.doltlite_db --root after --branch after --no-stamp >/dev/null 2>&1
+"$file_inventory" --db branched.doltlite_db --root before --branch before --no-stamp >/dev/null 2>&1
+"$file_inventory" --db branched.doltlite_db --root after --branch after --no-stamp >/dev/null 2>&1
 
 "$dirtree_diff" \
     --left "$out/branched.doltlite_db#before" \
