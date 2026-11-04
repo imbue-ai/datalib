@@ -518,6 +518,8 @@ pub(crate) fn set_qmd_env(cmd: &mut std::process::Command, cache_home: &Path) {
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     cmd.env("NO_COLOR", "1");
+    // Measured only on an Apple Silicon mac. A discrete GPU may gain from
+    // more contexts, and then this belongs in `config.toml`.
     cmd.env(EMBED_PARALLELISM_VAR, "1");
 }
 

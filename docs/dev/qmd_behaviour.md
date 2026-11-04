@@ -244,6 +244,11 @@ does not carry over to `createStore()` without being re-measured.
     RSS at a 4.5 GB footprint. Read the footprint with `vmmap -summary
     <pid>`; each context adds about seven `VM_ALLOCATE` regions.
 
+    All of this is one Apple Silicon mac, where the GPU shares the
+    machine's memory. A machine with a discrete GPU has not been measured
+    and may well gain from more contexts. If it does, the limit should
+    become a setting in `config.toml` rather than stay fixed at one.
+
 ## What the shipped steps do with these
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
