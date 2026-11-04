@@ -27,6 +27,10 @@ One latchkey service: `github` (Bearer token, e.g. a fine-grained PAT
 with read access to pull requests on the target repos). Latchkey injects
 the `Authorization` header; this crate doesn't touch credentials.
 
+The wizard's connection check is `datalib-step probe github`: one
+`GET /user`, which names the account by its name and login and stores
+nothing (`src/probe.rs`).
+
 ## Discovery scopes
 
 Each `--scope` (default: `author:@me`, `commenter:@me`, `mentions:@me`)
