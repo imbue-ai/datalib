@@ -1,7 +1,7 @@
 //! The render wave for the email source: its planner and the
 //! [`RenderProcessor`] it plans.
 
-use crate::render::render::OutlinkFormat;
+use crate::render::render::{unmatched_label_rows, OutlinkFormat};
 use anyhow::Result;
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
@@ -85,6 +85,15 @@ impl SourceRender for EmailRender {
             &store.unparsed,
             Some(self.render_version()),
         )?;
+        ctx.report_entity_problems(
+            &ReadScope::Whole(vec!["config"]),
+            &unmatched_label_rows(
+                &store.shared,
+                ctx.name,
+                &self.only_render_labels,
+                self.render_version(),
+            ),
+        )?;
         ctx.declare_empty(store.scan.gone.iter().map(String::as_str))?;
         // Each page is declared before the next is read. A stale thread
         // no email still belongs to builds no chat: declared with
@@ -123,5 +132,69 @@ fn outlink_format(f: EmailOutlink) -> OutlinkFormat {
     match f {
         EmailOutlink::Gmail => OutlinkFormat::Gmail,
         EmailOutlink::Fastmail => OutlinkFormat::Fastmail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datalib_etl::doltlite_raw::commit_run;
+    use datalib_etl::progress::Progress;
+    use datalib_etl_email::ingest::db::RawDb;
+    use datalib_etl_render::processor::BucketEnd;
+    use datalib_schema::problems::ProblemRow;
+
+    /// What one render reports under each scope, against a store that
+    /// holds no mailboxes.
+    async fn reports(raw: &Path, only_render_labels: &[&str]) -> Vec<(ReadScope, Vec<ProblemRow>)> {
+        let render = EmailRender {
+            outlink: None,
+            only_render_labels: only_render_labels.iter().map(|l| l.to_string()).collect(),
+        };
+        let out = tempfile::tempdir().unwrap();
+        let progress = Progress::noop();
+        let mut reported = Vec::new();
+        let mut on_doc = |_| Ok(());
+        let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
+        let mut on_problems = |scope: &ReadScope, rows: &[ProblemRow]| {
+            reported.push((scope.clone(), rows.to_vec()));
+            Ok(())
+        };
+        let ctx = RenderCtx::new(
+            "mail",
+            out.path(),
+            "2364-01-01T00:00:00+00:00",
+            &progress,
+            None,
+            None,
+            None,
+            &mut on_doc,
+            &mut on_declare,
+            &mut on_problems,
+        );
+        render.run(raw, &ctx).await.unwrap();
+        drop(ctx);
+        reported
+    }
+
+    /// The label check reaches the problems table on a real run, and a run
+    /// whose config is corrected reports the `config:` scope with nothing
+    /// in it, which is what clears the row.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_run_reports_an_unmatched_label_and_a_corrected_run_clears_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&ingest::db_path_for(dir.path())).await.unwrap();
+        commit_run(db.pool(), "sync").await.unwrap();
+        db.close().await;
+
+        let config = ReadScope::Whole(vec!["config"]);
+        let typo = reports(dir.path(), &["Holodek"]).await;
+        let rows = &typo.iter().find(|(s, _)| *s == config).unwrap().1;
+        assert_eq!(rows.len(), 1, "{typo:?}");
+        assert_eq!(rows[0].scope_key, "config:only_render_labels:Holodek");
+
+        let corrected = reports(dir.path(), &[]).await;
+        let rows = &corrected.iter().find(|(s, _)| *s == config).unwrap().1;
+        assert_eq!(rows, &Vec::<ProblemRow>::new());
     }
 }

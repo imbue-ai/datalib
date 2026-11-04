@@ -63,7 +63,9 @@ UTF-8 run:
 else `0x82` and four. `typedstream.rs` reads exactly that and nothing
 else; the attribute runs after it (message parts, mentions, the
 attachment's transfer guid) are not needed. A message that is only an
-attachment has the body `U+FFFC`, which render drops.
+attachment has the body `U+FFFC`, which render drops. A body that is not
+such an archive renders as a message with no text, and a problem on that
+message says so, with the size of the body and none of its bytes.
 
 ## Timestamps
 

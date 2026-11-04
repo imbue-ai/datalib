@@ -28,6 +28,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
 use datalib_id::{composite_key, entity_id_str, IdNamespace};
+use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 use sqlx::sqlite::SqlitePool;
@@ -40,7 +41,8 @@ use crate::typedstream::attributed_body_text;
 /// v4: the author span carries the author's handle as `data-handle`.
 /// v5: a `+1` number without ten digits after the 1 has no handle.
 /// v6: a message someone else sent is to the account (`to:me`).
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a body that cannot be decoded is a problem on its message.
+pub const RENDER_VERSION: u32 = 7;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -350,13 +352,15 @@ async fn load(
             (None, false) => ItemKind::Attachment,
             (None, true) => ItemKind::Text,
         };
+        let mut problems = Vec::new();
+        let text = body_text(r.get("text"), r.get("attributedBody"), &mut problems);
         chat.items.push(NormalizedChatItem {
             message_uuid: message_uuid(source_id, &guid, date_ms),
             author_handle,
             author_kind,
             author_display,
             date_ms,
-            text: body_text(r.get("text"), r.get("attributedBody"), &guid),
+            text,
             kind,
             attachments,
             reactions: Vec::new(),
@@ -374,7 +378,7 @@ async fn load(
                 .into_iter()
                 .collect(),
             mentions: Vec::new(),
-            problems: Vec::new(),
+            problems,
         });
     }
 
@@ -530,17 +534,21 @@ fn apple_date_ms(date: Option<i64>) -> Option<i64> {
 
 /// The body: `text` where the row still has one, else the string inside
 /// `attributedBody`. An attachment's placeholder character is not text.
-fn body_text(text: Option<String>, body: Option<Vec<u8>>, guid: &str) -> Option<String> {
+fn body_text(
+    text: Option<String>,
+    body: Option<Vec<u8>>,
+    problems: &mut Vec<Problem>,
+) -> Option<String> {
     let raw = match text.filter(|t| !t.is_empty()) {
         Some(t) => t,
         None => {
             let body = body?;
             attributed_body_text(&body).or_else(|| {
-                tracing::warn!(
-                    guid,
-                    bytes = body.len(),
-                    "attributedBody: not a typedstream archive"
-                );
+                problems.push(Problem::field(
+                    "attributedBody",
+                    Reason::CoercionFailed,
+                    &format!("{} bytes, not a typedstream archive", body.len()),
+                ));
                 None
             })?
         }
@@ -606,11 +614,35 @@ mod tests {
 
     #[test]
     fn a_placeholder_only_body_is_no_text() {
-        assert_eq!(body_text(Some("\u{fffc}".into()), None, "g"), None);
+        let mut problems = Vec::new();
         assert_eq!(
-            body_text(Some(" hi ".into()), None, "g").as_deref(),
+            body_text(Some("\u{fffc}".into()), None, &mut problems),
+            None
+        );
+        assert_eq!(
+            body_text(Some(" hi ".into()), None, &mut problems).as_deref(),
             Some("hi")
         );
-        assert_eq!(body_text(None, None, "g"), None);
+        assert_eq!(body_text(None, None, &mut problems), None);
+        assert_eq!(problems, vec![], "none of these lost anything");
+    }
+
+    /// A body that cannot be decoded rendered as a message with no text,
+    /// and only the log said why. Its size is reported, not its bytes.
+    #[test]
+    fn a_body_that_cannot_be_decoded_is_a_problem_on_its_message() {
+        let mut problems = Vec::new();
+        assert_eq!(
+            body_text(None, Some(b"not an archive".to_vec()), &mut problems),
+            None
+        );
+        assert_eq!(
+            problems,
+            vec![Problem::field(
+                "attributedBody",
+                Reason::CoercionFailed,
+                "14 bytes, not a typedstream archive",
+            )]
+        );
     }
 }
