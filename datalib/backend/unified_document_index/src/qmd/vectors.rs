@@ -210,6 +210,14 @@ pub struct VectorCache {
     held: tokio::sync::Mutex<HeldVectors>,
 }
 
+impl VectorCache {
+    /// How many contents' vectors are held, and how many contents' messages.
+    pub async fn held(&self) -> (usize, usize) {
+        let held = self.held.lock().await;
+        (held.by_hash.len(), held.sections.len())
+    }
+}
+
 #[derive(Default)]
 struct HeldVectors {
     /// The connection's `data_version` the documents were read at.

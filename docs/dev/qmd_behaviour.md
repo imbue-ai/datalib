@@ -19,7 +19,9 @@ Finding 6 is why the embed step calls past `store.embed()`. Findings 1
 and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
 which drives the real qmd through `Index`. Search reads qmd's index
 itself (its keyword table and stored vectors) and asks qmd only to
-embed a query, so nothing here is about qmd's own search.
+embed a query, so nothing here is about qmd's own search. The search
+applet reads the vectors into memory at launch and again after a sync
+moves them (`applets/src/unified_document_index/warm.rs`).
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,

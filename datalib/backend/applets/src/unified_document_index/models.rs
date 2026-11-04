@@ -48,6 +48,18 @@ impl ModelGate {
         }
     }
 
+    /// Until the embedding model is in place or has failed. Nothing has
+    /// to be under way: this returns at once when nothing is.
+    pub(super) fn wait_while_provisioning(&self) {
+        let state = self.0.lock();
+        drop(
+            self.0
+                .changed
+                .wait_while(state, |s| matches!(s, State::Provisioning))
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+    }
+
     /// The embedding model alone, on this thread: a one-off search waits
     /// for it here.
     pub(super) fn provision_now(&self) {
