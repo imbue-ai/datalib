@@ -7,6 +7,7 @@ import { CATALOG, type CatalogEntry } from "./catalog";
 import {
   answerIsEmpty,
   applyAnswer,
+  buildSource,
   chosenAnswer,
   layoutOf,
   seedFieldValues,
@@ -86,6 +87,40 @@ describe("layoutOf", () => {
       layoutOf(entry("gmail"), renders).advanced.map((r) => r.heading);
     expect(headings(true)).toContain("Render only these labels");
     expect(headings(false)).not.toContain("Render only these labels");
+  });
+});
+
+describe("GitHub's form", () => {
+  const github = entry("github");
+  const answers = row(github, "Which pull requests?").answers!;
+
+  /// Adding with nothing touched has to select the API with no limits:
+  /// `api` is the only way in, and a group without it is refused.
+  it("adds with every default as a search for your own pull requests", () => {
+    const out = buildSource({
+      entry: github,
+      group: "github",
+      name: "",
+      values: seedFieldValues(github),
+      withGroup: true,
+    });
+    expect(out.stepsBody).toMatch(/\[steps\.params\]\s+api = \{\}/);
+    expect(out.stepsBody).not.toContain("pull_requests");
+  });
+
+  it("reads a list of pull requests back as the second answer", () => {
+    const values = seedFieldValues(github);
+    expect(chosenAnswer(answers, values)).toBe(0);
+    expect(chosenAnswer(answers, { ...values, "api.pull_requests": ["o/r#1"] })).toBe(1);
+  });
+
+  it("keeps tuning in Advanced options", () => {
+    const { basic, advanced } = layoutOf(github, true);
+    expect(basic.map((r) => r.heading)).toEqual(["Which pull requests?"]);
+    expect(advanced.map((r) => r.heading)).toEqual([
+      "Search back (days)",
+      "Pull requests per sync",
+    ]);
   });
 });
 

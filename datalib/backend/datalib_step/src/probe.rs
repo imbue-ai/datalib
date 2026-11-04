@@ -141,10 +141,17 @@ pub async fn run(
             let report = datalib_etl_todoist::probe::probe(&config, ask).await?;
             Ok(serde_json::to_value(report)?)
         }
+        SourceType::Github => {
+            let config: datalib_etl_github_config::GithubConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse the params as a github download config")?;
+            let report = datalib_etl_github::probe::probe(&config, ask).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
              account can reach; only `calendar`, `contacts`, `email`, `claude`, `chatgpt`, \
-             `garmin`, `linear`, `notion`, `slack` and `todoist` implement it so far."
+             `garmin`, `github`, `linear`, `notion`, `slack` and `todoist` implement it so far."
         ),
     }
 }
