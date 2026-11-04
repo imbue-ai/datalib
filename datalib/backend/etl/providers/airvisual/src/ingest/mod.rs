@@ -953,7 +953,7 @@ mod tests {
         assert_eq!((s.errors, s.samples), (1, 1), "{s:?}");
         let rows = problems(e.db.pool()).await;
         assert_eq!(keys(&rows), ["listing:files KITCHEN01"]);
-        assert!(rows[0].1.starts_with(".: "), "{rows:?}");
+        assert!(rows[0].1.starts_with("archive1: "), "{rows:?}");
 
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!((s.errors, s.samples), (0, 1));
