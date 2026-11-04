@@ -248,8 +248,8 @@ does not carry over to `createStore()` without being re-measured.
 
     All of this is one Apple Silicon mac, where the GPU shares the
     machine's memory. A machine with a discrete GPU has not been measured
-    and may well gain from more contexts. If it does, the limit should
-    become a setting in `config.toml` rather than stay fixed at one.
+    and may well gain from more contexts, which is what `embed_contexts`
+    in `config.toml` is for.
 
 ## What the shipped steps do with these
 
@@ -262,9 +262,10 @@ one-slot `qmd_keyword` and `qmd_embed` locks
 (`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
 own process, so each pays finding 8's model load; that is the price of
 per-source steps over one loop calling `embed({collection})`. Every
-process running qmd is started with `QMD_EMBED_PARALLELISM=1` (finding 16,
-`set_qmd_env` in `qmd_indexer/src/lib.rs`), taking about 10% off the
-embedding rate for about 3.6 GB less memory.
+embed is started with `QMD_EMBED_PARALLELISM` set from the config's
+`embed_contexts`, 1 when it does not say (finding 16, `set_qmd_env` in
+`qmd_indexer/src/lib.rs`). One takes about 10% off the embedding rate for
+about 3.6 GB less memory. A search's query embedder always gets one.
 
 Finding 14 is why `update` calls `reindexCollection` itself rather than
 `store.update()`, which skips the count. `requireRegistered` reads the

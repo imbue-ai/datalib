@@ -7,7 +7,6 @@ use anyhow::Result;
 use serde_json::Value;
 use tracing::instrument;
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
@@ -166,8 +165,6 @@ pub async fn call_slack(
     let t0 = std::time::Instant::now();
     let response = call_slack_once(method, params, latchkey).await?;
     let duration_ms = t0.elapsed().as_millis() as u64;
-    let bytes = response.to_string().len() as u64;
-    events::item_fetched(&format!("slack.api/{}", method), bytes, duration_ms);
     Ok(SlackCall {
         response,
         duration_ms,

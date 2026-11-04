@@ -13,7 +13,6 @@ use serde_json::Value;
 use tokio::sync::OnceCell;
 use tracing::{info, instrument};
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     latchkey_curl, HttpError, HttpRequest, HttpResponse, HttpService, LatchkeySettings,
@@ -167,14 +166,7 @@ impl ChatGPTClient {
             }
         }
         match (json_body(path, &resp)?, renewal_failed) {
-            (Some(value), _) => {
-                events::item_fetched(
-                    &format!("{BASE}{path}"),
-                    resp.body.len() as u64,
-                    resp.duration_ms,
-                );
-                Ok(value)
-            }
+            (Some(value), _) => Ok(value),
             (None, why) => {
                 let body_preview: String = resp.body_str().chars().take(300).collect();
                 let mut message = format!(

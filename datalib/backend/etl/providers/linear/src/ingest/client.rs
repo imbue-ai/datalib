@@ -10,7 +10,6 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use datalib_etl::events;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
 use super::fields;
@@ -223,7 +222,6 @@ impl LinearClient {
                 )));
             }
         }
-        events::item_fetched(URL, resp.body.len() as u64, resp.duration_ms);
         parsed
             .and_then(|mut v| v.get_mut("data").map(Value::take))
             .ok_or_else(|| LinearError::Permanent("HTTP 200 with no `data`".into()))

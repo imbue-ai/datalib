@@ -438,8 +438,24 @@ async fn record_unreadable_store(
     .execute(&mut **conn)
     .await
     .with_context(|| format!("record that {}'s render store is unreadable", row.source_id))?;
-    datalib_schema::problems::note_recorded([row]);
+    // A fan-in comes here once per producer checkpoint, for as long as the
+    // store stays this way; the row says so meanwhile.
+    if is_news(earlier.as_ref(), row) {
+        tracing::warn!(
+            source = %row.source_id,
+            why = %row.sample,
+            "this source's render store cannot be indexed; indexing the others \
+             and leaving it as it was until that changes"
+        );
+        datalib_schema::problems::note_recorded([row]);
+    }
     Ok(())
+}
+
+/// Whether a stamped row says something the one before it did not: a row's
+/// `changed_at_utc` moves only when what it says does.
+fn is_news(earlier: Option<&ProblemRow>, row: &ProblemRow) -> bool {
+    earlier.is_none_or(|e| e.changed_at_utc != row.changed_at_utc)
 }
 
 pub fn schema_hash() -> String {
@@ -1102,7 +1118,7 @@ pub async fn build_grid_index_for(
     if summary.seals > 0 {
         refresh_people(&write_lock).await?;
     }
-    tracing::info!(
+    tracing::debug!(
         sources = sources.len(),
         not_yet_rendered = pass.not_yet_rendered,
         read_whole = pass.read_whole,
@@ -1156,7 +1172,7 @@ async fn retire_source(
         .await
         .with_context(|| format!("commit the transaction retiring {source}"))?;
     let removed = documents.map_or(0, HashSet::len);
-    tracing::info!(
+    tracing::debug!(
         source,
         generation,
         counts = %SealCounts { read: 0, loaded: 0, removed, rows: 0 }.message(source),
@@ -1282,11 +1298,9 @@ fn read_open_store(
         .in_this_shape()
         .with_context(|| format!("read the shape of {stanza}'s render store"))?
     {
-        tracing::warn!(
+        tracing::debug!(
             source = %stanza,
-            "this render store is in a shape this build does not read; \
-             indexing the other sources and leaving this one as it was \
-             until it re-renders"
+            "this render store is in a shape this build does not read"
         );
         return Ok(SourceRead::Unreadable);
     }
@@ -1518,7 +1532,7 @@ async fn apply_source(
             if let Some(generation) = generation {
                 summary.seals += 1;
                 let counts = SealCounts::of(summary).since(&before).message(stanza);
-                tracing::info!(source = %stanza, generation, %counts, "sealed the index");
+                tracing::debug!(source = %stanza, generation, %counts, "sealed the index");
             }
             Ok(true)
         }
@@ -2122,6 +2136,25 @@ pub(crate) async fn assert_searched_by_index(pool: &SqlitePool, statements: &[&'
 #[cfg(test)]
 mod open_index_tests {
     use super::*;
+
+    /// Guards the two warnings per pass, 88 in one sync, about a source
+    /// that was turned off and so could not change: one that stays
+    /// unreadable is said once.
+    #[test]
+    fn an_unreadable_store_is_news_once() {
+        use datalib_schema::problems::Severity;
+        let row = || unreadable_store_problem("s", OLDER_SHAPE, Severity::Warning);
+        let first = row().stamped(None, "2026-11-04T10:00:00Z", None);
+        assert!(is_news(None, &first));
+        let again = row().stamped(Some(&first), "2026-11-04T10:05:00Z", None);
+        assert!(!is_news(Some(&first), &again), "nothing it says changed");
+        let other = unreadable_store_problem("s", "it will not open", Severity::Warning).stamped(
+            Some(&first),
+            "2026-11-04T10:10:00Z",
+            None,
+        );
+        assert!(is_news(Some(&first), &other), "it says something else now");
+    }
 
     /// Replacing a document looks its old rows up by index. Without one,
     /// each document's delete scanned the whole table, and a full render
