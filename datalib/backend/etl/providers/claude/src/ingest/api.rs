@@ -9,7 +9,6 @@ use std::time::Duration;
 use serde_json::Value;
 use tracing::instrument;
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
@@ -124,7 +123,6 @@ impl ClaudeClient {
                 "GET {path}: invalid JSON: {e}; body[:200]={preview:?}"
             ))
         })?;
-        events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
         Ok(value)
     }
 

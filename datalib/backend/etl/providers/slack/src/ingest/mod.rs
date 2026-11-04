@@ -22,7 +22,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::stream::{FuturesOrdered, StreamExt};
 use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
-use tracing::{info, info_span, instrument, warn, Instrument};
+use tracing::{debug, info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
 use async_trait::async_trait;
@@ -1260,7 +1260,7 @@ impl Mirror<'_> {
             .and_then(|v| v.as_array())
             .map(|a| a.to_vec())
             .unwrap_or_default();
-        info!(
+        debug!(
             event = "slack_history_page",
             channel = %channel_id,
             oldest = params.get("oldest").map(String::as_str).unwrap_or("-"),
@@ -2164,7 +2164,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                             bar.expect(files_found);
                         }
                     }
-                    info!(
+                    debug!(
                         event = "slack_thread_read",
                         replies,
                         files_found,
@@ -2191,7 +2191,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                     for (outcome, n) in &outcomes {
                         *totals.media.entry(outcome.to_string()).or_insert(0) += n;
                     }
-                    info!(
+                    debug!(
                         event = "slack_files_fetched",
                         files = asked,
                         outcomes = ?outcomes,
@@ -2240,7 +2240,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         }
                     }
                     if !frontier.walking(target) {
-                        info!(
+                        debug!(
                             event = "slack_channel_done",
                             channel = %name,
                             messages = messages_in[target],

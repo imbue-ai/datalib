@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{
     default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpMethod,
@@ -116,7 +115,6 @@ pub async fn send(req: HttpRequest, latchkey: &LatchkeySettings) -> Result<Value
     if !(200..300).contains(&resp.status) {
         return Err(status_error(&req.url, &resp));
     }
-    events::item_fetched(&req.url, resp.body.len() as u64, resp.duration_ms);
     serde_json::from_slice(&resp.body)
         .map_err(|e| TodoistError::Permanent(format!("{}: the answer is not JSON: {e}", req.url)))
 }
