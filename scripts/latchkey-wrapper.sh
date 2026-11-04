@@ -27,14 +27,24 @@ while [ -L "$self" ]; do
     esac
 done
 here="$(cd -- "$(dirname -- "$self")" && pwd -P)"
+
+# The tree this release's manifest names in the cache, filed under the
+# first twelve digits of the asset's sha256. Only that one: after an
+# upgrade the cache still holds the previous release's, until something
+# fetches this one.
+fetched_runtime() {
+    [ -f "$here/runtime.manifest" ] || return 0
+    while read -r kind _ sha _; do
+        if [ "$kind" = cpu ]; then
+            printf '%s/datalib/runtime/%.12s\n' "${XDG_CACHE_HOME:-$HOME/.cache}" "$sha"
+        fi
+    done < "$here/runtime.manifest"
+}
+
 runtime="${DATALIB_RUNTIME_DIR:-}"
 if [ -z "$runtime" ]; then
-    # The fetched tree last: the cache holds one release's runtime at a
-    # time (the fetcher prunes the rest), so the glob matches at most
-    # one directory.
-    for candidate in "$here/runtime" "$here/../runtime" \
-            "${XDG_CACHE_HOME:-$HOME/.cache}"/datalib/runtime/*; do
-        if [ -x "$candidate/node/bin/node" ]; then
+    for candidate in "$here/runtime" "$here/../runtime" "$(fetched_runtime)"; do
+        if [ -n "$candidate" ] && [ -x "$candidate/node/bin/node" ]; then
             runtime="$candidate"
             break
         fi
@@ -45,7 +55,7 @@ node="$runtime/node/bin/node"
 
 if [ ! -x "$node" ]; then
     if [ -f "$here/runtime.manifest" ]; then
-        echo "latchkey: the Node runtime has not been fetched yet — run \`datalib-step pull-runtime\` (a sync does it on its own)" >&2
+        echo "latchkey: this release's Node runtime has not been fetched yet — run \`datalib-step pull-runtime\` (a sync does it on its own)" >&2
     else
         echo "latchkey: bundled node not found at $node (scripts/stage_runtime.sh builds the runtime tree)" >&2
     fi

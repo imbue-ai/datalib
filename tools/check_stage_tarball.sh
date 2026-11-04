@@ -124,6 +124,17 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
     else
         ! grep -q '^cuda ' "$manifest" || { echo "ERROR: manifest has a cuda line for $triple" >&2; cat "$manifest" >&2; exit 1; }
     fi
+
+    # The launcher finds the tree from the manifest the release wrote.
+    local cache="$PWD/cache-$triple"
+    local fetched="$cache/datalib/runtime/$(sha_of "$cpu" | cut -c1-12)"
+    mkdir -p "$fetched/node/bin" "$fetched/latchkey/0.0.0/node_modules/latchkey/dist/src"
+    printf '#!/bin/sh\necho found-this-release\n' > "$fetched/node/bin/node"
+    chmod +x "$fetched/node/bin/node"
+    touch "$fetched/latchkey/0.0.0/node_modules/latchkey/dist/src/cli.js"
+    local found
+    found="$(XDG_CACHE_HOME="$cache" "$dir/latchkey" --version 2>&1)" || true
+    [[ "$found" == found-this-release ]] || { echo "ERROR: the launcher did not find the tree the manifest names: $found" >&2; exit 1; }
     echo ">>> $triple: ok"
 }
 

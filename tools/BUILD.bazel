@@ -102,6 +102,14 @@ sh_test(
 )
 
 sh_test(
+    name = "latchkey_launcher_test",
+    size = "small",
+    srcs = ["check_latchkey_launcher.sh"],
+    data = ["//:scripts/latchkey-wrapper.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
     name = "check_binaries_test",
     srcs = ["check_binaries_test.sh"],
     data = ["//:scripts/release/check_binaries.sh"],
