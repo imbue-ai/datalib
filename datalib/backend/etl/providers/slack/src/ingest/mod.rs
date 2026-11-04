@@ -1733,20 +1733,11 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             &user_labels,
             self_user_id.as_deref(),
         );
-        // The detail says what the reader can act on and nothing that
-        // moves on its own: a workspace-wide count here rewrote this row
-        // every time anybody created a channel, and a problem recorded
-        // again unchanged is supposed to keep its stamps.
-        let listing_is = if opts.members_only {
-            "the channels this account is a member of; `members_only = false` lists the              workspace's other public channels too"
-        } else {
-            "the workspace's channel listing"
-        };
         for spec in &plan.unmatched {
             grand.problems.push(DownloadProblem::not_found(
                 "channels",
                 spec,
-                format!("no channel by that name among {listing_is}"),
+                unmatched_channel_detail(opts.members_only),
             ));
         }
         for spec in &plan.unmatched_dms {
@@ -2362,6 +2353,23 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     Ok(t.inner().with_timezone(&Utc))
 }
 
+/// Why a configured channel name matched nothing, for its `problems` row.
+///
+/// It says what the reader can act on and nothing that moves on its own: a
+/// workspace-wide count here rewrote the row every time anybody created a
+/// channel, and a problem recorded again unchanged is supposed to keep its
+/// stamps. `include_archived` is forced on whenever `channels` names entries,
+/// so `members_only` is the one setting that can still hide a named channel.
+fn unmatched_channel_detail(members_only: bool) -> String {
+    let listing = if members_only {
+        "the channels this account is a member of; `members_only = false` lists the \
+         workspace's other public channels too"
+    } else {
+        "the workspace's channel listing"
+    };
+    format!("no channel by that name among {listing}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2955,5 +2963,30 @@ mod tests {
         );
         // `auth.test` without a `user_id` must not drop anyone.
         assert_eq!(schema_raw::dm_counterparts(&members, None), members);
+    }
+
+    /// Both wordings, because the live golden only ever exercises the
+    /// second: its slack source does not set `members_only`, so a typo in
+    /// the first branch reached a PR unnoticed. Neither may carry a count
+    /// or anything else that moves on its own.
+    #[test]
+    fn an_unmatched_channel_says_what_could_have_hidden_it() {
+        assert_eq!(
+            unmatched_channel_detail(false),
+            "no channel by that name among the workspace's channel listing"
+        );
+        assert_eq!(
+            unmatched_channel_detail(true),
+            "no channel by that name among the channels this account is a member of; \
+             `members_only = false` lists the workspace's other public channels too"
+        );
+        for members_only in [true, false] {
+            let d = unmatched_channel_detail(members_only);
+            assert!(!d.contains("  "), "a run of spaces in the detail: {d:?}");
+            assert!(
+                !d.chars().any(|c| c.is_ascii_digit()),
+                "the detail carries a number, which will move on its own: {d:?}"
+            );
+        }
     }
 }
