@@ -2547,6 +2547,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 f"{len(debug_formatted)} field(s) carry a Debug rendering or a "
                 "bridged log.* duplicate",
             )
+            # One per request or per pass: hundreds at `info` on a real sync,
+            # though the fixture has too few to reach the ceiling below.
+            per_call = con.execute(
+                "SELECT step, msg, count(*) FROM log "
+                "WHERE level IN ('info', 'warn', 'error') AND msg IN ("
+                "'fetched one page of history', 'read a thread', "
+                "'fetched a batch of files', \"walked one channel's history\", "
+                "'sealed the index', 'read the render stores', "
+                "'the render stores the graph names') GROUP BY 1, 2"
+            ).fetchall()
+            self.assertEqual(
+                per_call, [], "a per-request or per-pass line is above debug"
+            )
+            seen = con.execute(
+                "SELECT count(*) FROM log WHERE msg = 'read a thread'"
+            ).fetchone()[0]
+            self.assertGreater(
+                seen, 0, "the fixture no longer reads a thread, so this checks nothing"
+            )
             spam = con.execute(
                 "SELECT run_id, step, attempt, target, msg, count(*) n FROM log "
                 "WHERE level IN ('info', 'warn', 'error') "

@@ -653,20 +653,70 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
 
-  // GitHub and GitLab are listed for completeness; no form yet.
   {
     type: "github",
     method: "api",
     label: "GitHub",
     blurb: "Copy pull requests and their review threads.",
-    keywords: ["github", "pr", "code", "review"],
+    keywords: ["github", "pr", "pull request", "code", "review"],
     kind: "api",
     icon: "github",
     defaultName: "github",
     nameHint: "Work GitHub",
-    wizard: false,
+    wizard: true,
+    intro:
+      "Each pull request becomes a document you can read and search, with its comments and " +
+      "reviews. Issues and code are not copied.",
     credentialService: "github",
+    // What latchkey's GitHub login does: it ticks nearly every scope on
+    // GitHub's token form and leaves the expiry at the form's 30 days
+    // (`services/github.js` in latchkey).
+    credentialConnectWarning:
+      "Signing in creates a token on your GitHub account that can also change and delete " +
+      "things, and that expires in 30 days. Copying only reads.",
+    credentialPaste: {
+      help:
+        "Make a token at github.com/settings/tokens. A classic token with the repo scope reads " +
+        "every repository you can. A fine-grained one reads only the repositories you pick, " +
+        "and needs read access to their pull requests.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which pull requests?",
+        answers: [
+          {
+            label: "Every one I'm part of",
+            help: "The ones you opened, commented on or were mentioned in, in any repository.",
+          },
+          { label: "Only the pull requests I choose", fields: ["api.pull_requests"] },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "string_list",
+        target: "api.pull_requests",
+        label: "Pull requests",
+        help: "Paste a pull request's link, or write it as owner/repo#123.",
+      },
+      {
+        kind: "int",
+        target: "api.refresh_window_days",
+        label: "Search back (days)",
+        help:
+          "Each sync searches only the stretch of time no earlier search covered, back this " +
+          "many days. Empty or 0 is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.max_prs",
+        label: "Pull requests per sync",
+        help: "Fetch at most this many in one sync; the rest wait for the next. Empty is no cap.",
+      },
+    ],
   },
+  // GitLab is listed for completeness; no form yet.
   {
     type: "gitlab",
     method: "api",

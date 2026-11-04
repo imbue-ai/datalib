@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
@@ -172,7 +171,6 @@ impl NotionOfficialClient {
             if let Some(obj) = value.as_object_mut() {
                 obj.remove("request_id");
             }
-            events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
             tracing::Span::current().record("total_ms", req_start.elapsed().as_millis() as u64);
             return Ok(value);
         }

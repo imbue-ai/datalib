@@ -333,6 +333,7 @@ pub struct Index {
     qmd_dir: PathBuf,
     qmd: Qmd,
     stop: StopWhen,
+    embed_contexts: u32,
 }
 
 /// Whether the caller has been asked to stop; a pass under way ends
@@ -362,7 +363,16 @@ impl Index {
             root,
             qmd,
             stop: StopWhen(Arc::new(|| false)),
+            embed_contexts: DEFAULT_EMBED_CONTEXTS,
         })
+    }
+
+    /// Give qmd this many embedding contexts rather than the default.
+    pub fn embed_contexts(self, embed_contexts: u32) -> Self {
+        Self {
+            embed_contexts,
+            ..self
+        }
     }
 
     /// End any pass under way, as a failure, once `stopped` says so.
@@ -514,7 +524,7 @@ impl Index {
             .arg(self.qmd_dir.join("index.sqlite"))
             .arg(verb)
             .arg(args.to_string());
-        set_qmd_env(&mut cmd, &self.cache_home);
+        set_qmd_env(&mut cmd, &self.cache_home, self.embed_contexts);
         cmd.stdout(std::process::Stdio::piped());
         read_events(&mut cmd, on_progress, &*self.stop.0).with_context(|| format!("qmd {verb}"))
     }
@@ -522,17 +532,20 @@ impl Index {
 
 /// The variable qmd reads for how many embedding contexts to open. Left to
 /// itself it opens up to eight, each about 520 MiB once used, for almost no
-/// more speed (`docs/dev/qmd_behaviour.md`, finding 16).
+/// more speed on an Apple Silicon mac (`docs/dev/qmd_behaviour.md`, finding
+/// 16).
 pub const EMBED_PARALLELISM_VAR: &str = "QMD_EMBED_PARALLELISM";
 
+/// How many embedding contexts qmd gets when a config's `embed_contexts`
+/// does not say.
+pub const DEFAULT_EMBED_CONTEXTS: u32 = 1;
+
 /// What every process running qmd is started with.
-pub(crate) fn set_qmd_env(cmd: &mut std::process::Command, cache_home: &Path) {
+pub(crate) fn set_qmd_env(cmd: &mut std::process::Command, cache_home: &Path, embed_contexts: u32) {
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     cmd.env("NO_COLOR", "1");
-    // Measured only on an Apple Silicon mac. A discrete GPU may gain from
-    // more contexts, and then this belongs in `config.toml`.
-    cmd.env(EMBED_PARALLELISM_VAR, "1");
+    cmd.env(EMBED_PARALLELISM_VAR, embed_contexts.to_string());
 }
 
 /// Ensure `<qmd_dir>/models` is a symlink to `models_dir` (the shared
@@ -848,16 +861,23 @@ mod tests {
     }
 
     /// Guards the embed that held 4.6 GB for the speed of one holding 1 GB:
-    /// qmd is held to one embedding context.
+    /// an index holds qmd to one embedding context unless it is told
+    /// otherwise, and what it is told is what qmd is started with.
     #[test]
-    fn qmd_is_started_with_one_embedding_context() {
+    fn qmd_gets_one_embedding_context_unless_told_otherwise() {
+        let root = tempfile::tempdir().unwrap();
+        let index = Index::open(root.path(), Qmd::new("node", "pkg")).unwrap();
+        assert_eq!(index.embed_contexts, 1);
+        let index = index.embed_contexts(4);
+        assert_eq!(index.embed_contexts, 4);
+
         let mut cmd = std::process::Command::new("node");
-        set_qmd_env(&mut cmd, Path::new("/cache"));
+        set_qmd_env(&mut cmd, Path::new("/cache"), index.embed_contexts);
         let set = cmd
             .get_envs()
             .find(|(name, _)| *name == std::ffi::OsStr::new(EMBED_PARALLELISM_VAR))
             .and_then(|(_, value)| value);
-        assert_eq!(set, Some(std::ffi::OsStr::new("1")));
+        assert_eq!(set, Some(std::ffi::OsStr::new("4")));
     }
 
     /// **No node flags before the script path.** node passes its own

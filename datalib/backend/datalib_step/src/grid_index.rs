@@ -48,7 +48,7 @@ pub async fn run(
     // the same rule the qmd step follows, so the two indexes agree on
     // what a source is.
     let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
-    tracing::info!(sources = %sources.join(", "), "the render stores the graph names");
+    tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
     let summary = build_grid_index_for(
         &pool,

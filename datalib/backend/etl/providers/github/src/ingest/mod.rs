@@ -18,8 +18,8 @@ use chrono::Utc;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl_forge_ingest_common::{
-    get_change_request, sync, walk_children, Answer, Bounds, Forge, ForgeClient, Listed, Search,
-    SyncOptions,
+    get_change_request, sync, walk_children, Answer, Bounds, Forge, ForgeClient, ForgeError,
+    Listed, Search, SyncOptions,
 };
 use datalib_etl_web::http::{
     default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
@@ -388,20 +388,30 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     .await
 }
 
+/// Who the credential signs in as: `/user`, the one request a run cannot
+/// do without.
+pub async fn signed_in_user(latchkey: &LatchkeySettings) -> Result<Value, ForgeError> {
+    let client = ForgeClient::new(HttpService::Github, github_retryability, latchkey.clone());
+    let (me, _) = client.get(&format!("{BASE}/user")).await?;
+    Ok(me)
+}
+
 pub fn parse_pr_ref(s: &str) -> Result<(String, u32)> {
-    if let Some((repo, num)) = s.split_once('#') {
-        let n: u32 = num
-            .parse()
-            .with_context(|| format!("bad PR number {num:?}"))?;
-        return Ok((repo.to_string(), n));
-    }
+    // A link copied from a comment ends `#issuecomment-…`, so a URL is
+    // recognized before `#` is read as the number's sigil.
     if let Some(rest) = s.strip_prefix("https://github.com/") {
-        let parts: Vec<&str> = rest.split('/').collect();
+        let path = rest.split(['#', '?']).next().unwrap_or(rest);
+        let parts: Vec<&str> = path.split('/').collect();
         if parts.len() >= 4 && (parts[2] == "pull" || parts[2] == "pulls") {
             let repo = format!("{}/{}", parts[0], parts[1]);
             let n: u32 = parts[3].parse().context("bad PR number in URL")?;
             return Ok((repo, n));
         }
+    } else if let Some((repo, num)) = s.split_once('#') {
+        let n: u32 = num
+            .parse()
+            .with_context(|| format!("bad PR number {num:?}"))?;
+        return Ok((repo.to_string(), n));
     }
     anyhow::bail!("expected owner/repo#NUM or a github.com PR URL, got {s:?}")
 }
@@ -429,6 +439,27 @@ mod tests {
         let (r, n) = parse_pr_ref("https://github.com/imbue-ai/mngr/pull/1650").unwrap();
         assert_eq!(r, "imbue-ai/mngr");
         assert_eq!(n, 1650);
+    }
+
+    /// The wizard says to paste a link, and a link copied from a browser
+    /// can point inside the PR. The fragment used to be read as the PR
+    /// number, which failed the whole sync.
+    #[test]
+    fn a_pasted_link_may_point_inside_the_pr() {
+        for link in [
+            "https://github.com/enterprise/warp-core/pull/42#issuecomment-1701",
+            "https://github.com/enterprise/warp-core/pull/42?notification_referrer_id=NT",
+            "https://github.com/enterprise/warp-core/pull/42/files#diff-abc",
+            "https://github.com/enterprise/warp-core/pull/42/",
+        ] {
+            assert_eq!(
+                parse_pr_ref(link).unwrap(),
+                ("enterprise/warp-core".to_string(), 42),
+                "{link}"
+            );
+        }
+        assert!(parse_pr_ref("https://github.com/enterprise/warp-core#42").is_err());
+        assert!(parse_pr_ref("https://github.com/enterprise/warp-core/issues/42").is_err());
     }
 
     /// A bound is a date, either end; the run's now is spelled as the

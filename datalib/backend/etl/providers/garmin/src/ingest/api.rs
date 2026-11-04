@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
-use datalib_etl::events;
 use datalib_etl::upstream::Upstream;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 
@@ -88,7 +87,6 @@ impl GarminClient {
             .await
             .map_err(|e| transport_error(e, path))?;
         self.requests.fetch_add(1, Ordering::Relaxed);
-        events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
         Ok((resp.status, resp.body))
     }
 

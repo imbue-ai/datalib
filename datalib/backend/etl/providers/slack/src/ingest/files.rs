@@ -14,7 +14,6 @@ use sqlx::{Sqlite, Transaction};
 use tracing::debug;
 
 use datalib_etl::blob_cas::CasInsert;
-use datalib_etl::events;
 use datalib_etl::progress::RunBar;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
@@ -230,7 +229,6 @@ impl FileFetcher<'_> {
         };
         let bytes = resp.body;
         let len = bytes.len() as u64;
-        events::item_fetched(url, len, resp.duration_ms);
         debug!(
             event = "slack_media_downloaded",
             file_id = file_id,

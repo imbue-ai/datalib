@@ -181,6 +181,22 @@ async fn read_devices(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     Ok(s)
 }
 
+/// What is wrong with a device's folder when there is nothing in it to
+/// read: `None` for a folder holding anything, or one that failed some
+/// other way, which the reads after this report. macOS leaves its own
+/// dotfiles in an unmounted mount point, so those do not count.
+fn bare_folder(path: &Path, listing: std::io::Result<Vec<String>>) -> Option<String> {
+    let state = match listing {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "is missing",
+        Ok(names) if names.iter().all(|n| n.starts_with('.')) => "is empty",
+        _ => return None,
+    };
+    Some(format!(
+        "airvisual: {} {state}; if it is a network share, check that it is mounted",
+        path.display()
+    ))
+}
+
 /// One device's folder. A folder that cannot be read costs that device
 /// and leaves a `listing:device <name>` row; only the store failing is
 /// an `Err`.
@@ -205,6 +221,19 @@ async fn fetch_device(
         found.listing(&label, detail);
     };
     let started = std::time::Instant::now();
+    // Before anything else, since an unmounted share has no serial to find
+    // and, with one configured, would otherwise read as a device with no
+    // files. Its rows stay for when it is back.
+    let listing = std::fs::read_dir(&root).and_then(|entries| {
+        entries
+            .map(|e| e.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect()
+    });
+    if let Some(detail) = bare_folder(&dev.path, listing) {
+        device_failed(s, detail);
+        reached.unidentified = true;
+        return Ok(());
+    }
     let (info, info_error) = match read_device_info(&root) {
         Ok(info) => (info, None),
         Err(e) => (DeviceInfo::default(), Some(e)),
@@ -895,6 +924,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((s.errors, s.samples), (0, 1));
+        assert!(problems(e.db.pool()).await.is_empty());
+        e.db.close().await;
+    }
+
+    /// Guards the share that came unmounted: its row blamed a missing
+    /// `serial`, and with a serial configured there was no row at all.
+    #[tokio::test]
+    async fn a_share_that_is_not_mounted_says_so() {
+        let e = env().await;
+        let mount = e.root.join("mnt");
+        std::fs::create_dir(&mount).unwrap();
+        std::fs::write(mount.join(".DS_Store"), "").unwrap();
+        let gone = e.root.join("gone");
+        for (path, serial, says) in [
+            (&mount, None, "is empty"),
+            (&mount, Some("KITCHEN01"), "is empty"),
+            (&gone, None, "is missing"),
+            (&gone, Some("KITCHEN01"), "is missing"),
+        ] {
+            let s = fetch(opts(&e, vec![device(path, serial, None)]))
+                .await
+                .unwrap();
+            assert_eq!((s.errors, s.samples), (1, 0), "{path:?} {serial:?}");
+            let rows = problems(e.db.pool()).await;
+            assert_eq!(
+                keys(&rows),
+                [format!("listing:device {}", path.display())],
+                "{path:?} {serial:?}"
+            );
+            assert!(rows[0].1.contains(says), "{rows:?}");
+            assert!(rows[0].1.contains("mounted"), "{rows:?}");
+            assert!(!rows[0].1.contains("serial"), "{rows:?}");
+        }
+
+        std::fs::write(
+            mount.join("202609_AirVisual_values.txt"),
+            format!("{HEADER}{}", line(1788220836, "1.0", "425")),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, vec![device(&mount, Some("KITCHEN01"), None)]))
+            .await
+            .unwrap();
+        assert_eq!((s.errors, s.samples), (0, 1), "mounted again");
         assert!(problems(e.db.pool()).await.is_empty());
         e.db.close().await;
     }

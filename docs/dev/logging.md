@@ -214,8 +214,9 @@ warns of every statement over a second, and a render over a big store
 is one such read per page. The runner keeps each at `debug`, out of the
 step's count of warnings, and writes one `info` line as the attempt
 ends: how many, how long in all, and the statement most of the time
-went to, in `top_statement` (`dag/src/slow_statements.rs`). The server
-and its applets, which never end, keep sqlx's own `warn`.
+went to, in `top_statement` (`dag/src/slow_statements.rs`). Under five
+seconds in all, that line is `debug` too. The server and its applets,
+which never end, keep sqlx's own `warn`.
 
 **A migration says so from its start.** A step asked to migrate first
 says `migrate: updating the raw store for this build; nothing is
@@ -408,6 +409,12 @@ producer), never a record's contents. Log lines do not go out this way.
   fails on a `Some(`, a `None`, a `Struct { .. }` or a `["…"]`, on a
   line with no target, on a step process with no end, and on one
   message repeating past a ceiling in one attempt at `info` or above.
+- **One request or one record is `debug`.** A line per page, thread or
+  batch is hundreds at `info` on a real sync, and the card's default view
+  is then that. Say what it came to, once, at the end.
+- **Say a standing fact once.** What is still true on the next pass is a
+  `problems` row, which a person sees as long as it holds; the log says
+  when it became true. `is_news` in `etl/render/src/grid_index.rs` is how.
 - **Say what happened, not who is saying it.** The `target` column
   already names the module; `"opening the store"`, not
   `"doltlite_raw::open: opening {store}"`. A fan-in that runs once per

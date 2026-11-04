@@ -212,8 +212,9 @@ See datalib/backend/etl/providers/slack/INGEST.md for details."
             "\
 github PAT expired or missing.
 
-  1. Create a fine-grained PAT at https://github.com/settings/tokens
-     with `repo` + `read:user` scopes; copy it to the clipboard.
+  1. Create a PAT at https://github.com/settings/tokens: classic with the
+     `repo` scope, or fine-grained with read access to pull requests on the
+     repositories to copy. Copy it to the clipboard.
   2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
        {LK} auth set github -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:

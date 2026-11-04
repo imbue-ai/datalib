@@ -477,11 +477,23 @@ while; later syncs re-read only the trailing week.
 `type = "github"` — web API through latchkey (`api`). Mirrors pull
 requests and their review threads.
 
-GitHub is built into latchkey; the browser flow creates a personal
-access token during login:
+The app's Add Data Source wizard has a form for it, or sign in from a
+terminal. GitHub is built into latchkey; the browser flow creates a
+personal access token during login:
 
 ```sh
 latchkey auth browser github
+```
+
+That token can change and delete things as well as read them, and it
+expires after 30 days, when you sign in again. For a narrower one, make
+a token at <https://github.com/settings/tokens> and paste it into the
+wizard's **Paste a key**: a classic token with the `repo` scope, or a
+fine-grained one with read access to pull requests on the repositories
+you want. In a terminal that is:
+
+```sh
+latchkey auth set github -H "Authorization: Bearer $(pbpaste)"
 ```
 
 ## GitLab

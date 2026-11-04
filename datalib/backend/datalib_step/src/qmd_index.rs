@@ -51,7 +51,27 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 
 fn open_index(root: &Path, stop: &StopFlag) -> Result<Index> {
     let stop = stop.clone();
-    Ok(Index::open(root, Qmd::pinned()?)?.stop_when(move || stop.requested()))
+    let raw = std::env::var(datalib_dag::subprocess::ENV_EMBED_CONTEXTS).ok();
+    let contexts = embed_contexts(raw.as_deref()).unwrap_or_else(|| {
+        tracing::warn!(
+            raw,
+            default = datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS,
+            "embed_contexts is not a number above zero; using the default"
+        );
+        datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS
+    });
+    Ok(Index::open(root, Qmd::pinned()?)?
+        .stop_when(move || stop.requested())
+        .embed_contexts(contexts))
+}
+
+/// The contexts a config's `embed_contexts` asks for, the default when it
+/// says nothing, or `None` for a value this build cannot use.
+fn embed_contexts(raw: Option<&str>) -> Option<u32> {
+    match raw {
+        None => Some(datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS),
+        Some(raw) => raw.trim().parse().ok().filter(|n| *n > 0),
+    }
 }
 
 /// One call on a [`Progress`] handle. Named so the translation below can
@@ -320,6 +340,17 @@ fn version_of_reads(reads: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a config's `embed_contexts` becomes: its number, the default
+    /// when it says nothing, and `None`, which the caller warns of and
+    /// falls back from, for what qmd could not use.
+    #[test]
+    fn embed_contexts_read_from_the_config() {
+        assert_eq!(embed_contexts(None), Some(1));
+        assert_eq!(embed_contexts(Some("4")), Some(4));
+        assert_eq!(embed_contexts(Some("0")), None);
+        assert_eq!(embed_contexts(Some("many")), None);
+    }
 
     /// A per-source step's version follows what it read, and nothing
     /// else: a run with nothing from the runner claims none.

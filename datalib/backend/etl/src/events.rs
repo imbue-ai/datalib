@@ -3,19 +3,6 @@
 //! dashboards see the same shape. Keep this list short — every event
 //! added here becomes a long-term commitment to downstream consumers.
 
-/// One HTTP-ish call to the upstream provider completed. Emitted at
-/// `debug` because progress bars carry the cumulative counters; the
-/// per-call detail is only interesting when something looks wrong.
-pub fn item_fetched(url: &str, bytes: u64, duration_ms: u64) {
-    tracing::debug!(
-        event = "item_fetched",
-        url = url,
-        bytes = bytes,
-        duration_ms = duration_ms,
-        "fetched one item"
-    );
-}
-
 pub fn indexed_batch(entity: &str, count: usize, duration_ms: u64) {
     tracing::info!(
         event = "indexed_batch",
