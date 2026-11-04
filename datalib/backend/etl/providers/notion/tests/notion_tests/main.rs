@@ -11,5 +11,6 @@ mod roots;
 mod run_problems;
 mod support;
 mod sync_state;
+mod trash;
 mod tree;
 mod upgrade;

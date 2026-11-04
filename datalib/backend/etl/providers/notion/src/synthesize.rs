@@ -180,6 +180,25 @@ impl Synthesizer for NotionSynth {
         )?;
         count += 1;
 
+        // POST /search for the trash: nothing recorded is in it.
+        let trash = HttpRequest::post_json(
+            HttpService::Notion,
+            format!("{BASE}/search"),
+            search_body(None, true).to_string().into_bytes(),
+        )
+        .header("Accept", "application/json");
+        write_fixture(
+            out_root,
+            &trash,
+            &json_response(&json!({
+                "object": "list",
+                "results": [],
+                "has_more": false,
+                "next_cursor": Value::Null,
+            })),
+        )?;
+        count += 1;
+
         // /pages/{id}/markdown — one per page. A page with no recorded
         // body still gets a fixture with empty markdown, which is the
         // common shape for a database row.
@@ -321,8 +340,8 @@ mod tests {
         let out = d.path().join("fixtures");
         let report = NotionSynth::new(&api).synthesize(&out).unwrap();
         assert_eq!(
-            report.fixtures_written, 6,
-            "page + its block + its children + search + markdown + comments"
+            report.fixtures_written, 7,
+            "page + its block + its children + search + trash + markdown + comments"
         );
 
         for url in [

@@ -44,6 +44,10 @@ pub const DATA_TABLES: &[&str] = &[
 /// other table is owed against: a body, a comments listing and the
 /// users a page names are all owed by the page's `last_edited_time`.
 ///
+/// `in_trash` is whether Notion's trash holds the page now, as the trash
+/// pass last found. The payload's `in_trash` is the object as last
+/// returned, so a page deleted for good reads 0 here and true there.
+///
 /// PK choice: upstream Notion page UUID, dashed.
 pub const PAGES_DDL: &str = "CREATE TABLE IF NOT EXISTS pages (
     id TEXT PRIMARY KEY,

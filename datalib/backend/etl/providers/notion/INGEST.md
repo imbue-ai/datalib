@@ -33,8 +33,9 @@ tells you.
 
 ## What a run does
 
-A run is a **listing** and six **loops**. The listing stores page
-objects; each loop then fetches what the store lists and does not yet
+A run is a **listing**, a **trash pass** and six **loops**. The listing
+stores page objects; the trash pass says which of them are in Notion's
+trash; each loop then fetches what the store lists and does not yet
 hold, through `datalib_etl_web::owed`: the databases and blocks a page
 sits under, a page's body, an attachment's bytes, a page's comments, a
 commented block, a user. What a table holds
@@ -153,7 +154,8 @@ workspace in a few hops.
 
 Only those pages enter `pages`, each with `GET /v1/pages/{id}`, owed at
 the stamp `listed_pages` holds, so a page whose stamp has not moved
-costs nothing and a steady-state run reads one page of search results.
+costs nothing and a steady-state run reads one page of search results
+and the trash listing.
 A page that leaves the roots — moved elsewhere, or its root taken out of
 the config — stays as it was, as a deleted one does. A root nothing
 placed is asked for as a page, so one Notion has not got, or
@@ -164,6 +166,10 @@ build left from asking is cleared.
 A store an earlier build filled already covers the beginning, so it
 never walks down: the workspace-sized `tree` that build's first search
 left stays, and the search keeps adding to it.
+
+**Trash pass.** After the listing, in either mode, the run reads Notion's
+whole trash with the same `POST /v1/search`, `filter: {in_trash: true}`,
+and brings `pages.in_trash` into line with it. See "The trash".
 
 **Loops.** One request per record, in this order, each over the whole
 store:
@@ -203,8 +209,9 @@ finds it; it names how many pages it has placed.
 A page the listing stores at a new stamp announces its body, and its
 comment listing, as it is stored, so the queue grows with the search
 walk and the ETA covers the loops ahead. A page of search results is
-not counted, since its size is unknown until it arrives. Attachments,
-anchors and users join the queue when their loop starts.
+not counted, since its size is unknown until it arrives, and neither is
+a page of the trash listing. Attachments, anchors and users join the
+queue when their loop starts.
 
 **The block tree is not mirrored.** There is no `blocks` table and no
 block renderer. Notion renders the page; we store what it returns.
@@ -310,6 +317,8 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | a database or block a page sits under | `tree:<id>` | the parent fetching |
 | a user, other than with a 403 or a 404 | `users:<id>` | the user fetching |
 | a configured root Notion has not got (404) or will not show (403) | `config:roots:<value>` | the root fetching, or leaving the config |
+| a page in the trash a complete listing left out, that did not answer when asked for | `pages:<id>`, a warning; it stays marked as in the trash | the page answering |
+| a page of the trash listing that would not come, or that it could not follow; no mark clears on what it read | `listing:trash` | a trash listing read whole |
 | a search page after the first, or `max_pages` cutting the listing short | `listing:search` | a search that reaches what the store covers |
 | a listing in the walk down from the roots that would not come; the walk is not covered, and the next run walks again | `listing:roots` | a walk down that lists everything |
 | a database whose rows reach Notion's 10,000-result cap on a query, so the run listed the whole workspace through the search instead | `listing:roots` | the next run, once that search covered the beginning |
@@ -516,13 +525,68 @@ on that reading would destroy a live document.
 
 The ingest never deletes a page: search by edit time never reports a
 deletion, so a page deleted or trashed in Notion stays in the mirror.
-`pages.in_trash` is stored when a trashed page is seen, and render then
-says so under the page's title and on its line in the table of contents.
-Search does not report a page going into the trash, so a page trashed
-after it was last fetched reads as an ordinary page. A trash pass
-(`filter: {in_trash: true}`) is not built, nor is a data-source schema. A page's comments are listed whole, so a
+A page Notion deleted without the trash pass ever seeing it in the trash
+reads as an ordinary page: 9 of 52,726 in a measured store, each now
+answering 404. No data-source schema is built. A page's comments are listed whole, so a
 comment the listing no longer returns is deleted with that listing, and
 an attachment a complete body no longer links loses its edge.
+
+## The trash
+
+Search does not list a page in the trash, and does not report one going
+in: of 53,766 objects in a measured workspace's search, none was in its
+trash. The same `POST /v1/search` with `filter: {in_trash: true}` lists
+the trash and nothing else, for a personal access token at
+`Notion-Version: 2026-03-11`. Asking any other way is a 400: `in_trash` at
+the top of the body, or as the filter's `property`. It came to 473 objects
+in 5 requests: 453 pages, each a complete object, and 20 data sources,
+which the pass does not read. 385 of the 473 had a parent also in the
+listing, so what sits under a trashed page is listed with it.
+
+**Going in.** The pass reads the whole trash every run. It keeps no
+position, because its results' stamps reach back six years: a page edited
+long ago can go into the trash today, so no stretch of edit times is
+known to be read. A steady-state run pays for that in the requests above.
+A page the store holds, and does not have in the trash at that stamp, is
+written from the object the listing carries, which sets `pages.in_trash`
+and the payload's `in_trash`. Render reads the payload: the page's
+document renders again with a note under its title and on its line in
+the table of contents. A page the store never held is not mirrored for
+being in the trash; none of the 473 was in the 52,726 of a measured store.
+
+Whether going in moves `last_edited_time` has not been measured, since
+that takes a write to a real workspace, so neither answer is assumed. If
+it stays, the page costs nothing more. If it moves, its body and comments
+are owed at the new stamp as for any edit, and Notion answers both for a
+page in the trash (15 of 15 sampled, with the object's stamp equal to the
+listing's).
+
+**Coming out.** A page the store has in the trash that a complete listing
+leaves out has either been restored or been deleted for good, and only
+its own object can say which, so it is asked for with `GET /v1/pages/{id}`:
+
+| the answer | what it means | what happens |
+|---|---|---|
+| the object, not in the trash | restored | written, which clears both flags and removes the note |
+| the object, in the trash at the stamp held | the listing has not caught up | nothing written; asked again next run |
+| the object, in the trash at a new stamp | the same, and it moved | written |
+| 404 or 403 | deleted for good, or no longer shared | `pages.in_trash` clears, so it is not asked again |
+
+Asking is also what stops a listing that lags from clearing a flag that
+is true, since search is not promised to be up to date. A page restored
+at a new stamp reaches the search first, which clears its flag the
+ordinary way, and costs no request here.
+
+So `pages.in_trash` says whether the trash holds the page now, and the
+payload's `in_trash` is the object as Notion last returned it. They differ
+for a page deleted for good, whose document keeps its note and its body:
+the last thing known of it is that it was in the trash, and it is not a
+live page. Only a complete listing clears anything: one cut short leaves
+every flag as it was, with a `listing:trash` row.
+
+Roots mode also moves the page's stamp in `listed_pages`, or the page
+would be owed against the old one on the next run. A run of one page
+reads no listing, this one included.
 
 Every number above was measured against a live workspace, not read off
 Notion's documentation.
