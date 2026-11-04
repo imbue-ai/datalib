@@ -4,6 +4,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use ignore::gitignore::Gitignore;
+use ignore::overrides::{Override, OverrideBuilder};
+use ignore::Match;
+use rayon::prelude::*;
 
 /// The raw 32-byte blake3 digest. Stored as a BLOB; rendered as hex
 /// only for human-facing output (test snapshots, ad-hoc `hex(blake3)`
@@ -64,6 +68,17 @@ pub fn hash_file_reporting(
         }
     }
     Ok(*hasher.finalize().as_bytes())
+}
+
+/// The hash of bytes already in hand, the same one [`hash_file`] gives.
+pub fn hash_bytes(bytes: &[u8]) -> Blake3 {
+    let mut hasher = blake3::Hasher::new();
+    if bytes.len() as u64 >= PARALLEL_THRESHOLD {
+        hasher.update_rayon(bytes);
+    } else {
+        hasher.update(bytes);
+    }
+    *hasher.finalize().as_bytes()
 }
 
 pub fn hash_symlink_target(target: &[u8]) -> Blake3 {
@@ -206,7 +221,10 @@ pub struct WalkedFile {
     /// stable id callers key rows on — absolute paths move when the
     /// data root moves.
     pub rel: String,
-    pub meta: std::fs::Metadata,
+    pub stat: FreshStat,
+    /// The file has no blocks allocated here, which is how a cloud placeholder
+    /// looks from a stat. Says nothing about a file with no bytes to hold.
+    pub no_blocks: bool,
 }
 
 /// One entry we could not read. Surfaced rather than swallowed so the
@@ -218,8 +236,202 @@ pub struct WalkError {
     pub error: String,
 }
 
+/// What a folder's entry is, as far as listing it says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryKind {
+    Dir,
+    File,
+    /// A symlink, or something a listing does not name, which a stat of the
+    /// path settles.
+    Other,
+}
+
+struct ListedEntry {
+    name: std::ffi::OsString,
+    kind: EntryKind,
+    /// The file's stat, from the listing where the platform hands it over.
+    stat: Option<(FreshStat, bool)>,
+}
+
+/// The ignore files in force at one folder, each link one folder's own.
+struct IgnoreRules {
+    parent: Option<std::sync::Arc<IgnoreRules>>,
+    dot_ignore: Gitignore,
+    git_ignore: Gitignore,
+    /// The folder holds a `.git`: `.gitignore` files count only inside a
+    /// repository, and rules above the repository's top do not reach into it.
+    has_git: bool,
+}
+
+impl IgnoreRules {
+    fn chain(&self) -> impl Iterator<Item = &IgnoreRules> {
+        std::iter::successors(Some(self), |r| r.parent.as_deref())
+    }
+
+    fn ignores(&self, path: &Path, is_dir: bool) -> bool {
+        let any_git = self.chain().any(|r| r.has_git);
+        let (mut dot, mut git) = (Match::None, Match::None);
+        let mut saw_git = false;
+        for rules in self.chain() {
+            if dot.is_none() {
+                dot = rules.dot_ignore.matched(path, is_dir).map(|_| ());
+            }
+            if any_git && !saw_git && git.is_none() {
+                git = rules.git_ignore.matched(path, is_dir).map(|_| ());
+            }
+            saw_git |= rules.has_git;
+        }
+        if dot.is_none() { git } else { dot }.is_ignore()
+    }
+
+    fn beneath(
+        parent: Option<std::sync::Arc<IgnoreRules>>,
+        dir: &Path,
+        entries: &[ListedEntry],
+    ) -> std::sync::Arc<IgnoreRules> {
+        let named = |name: &str| entries.iter().any(|e| e.name == name);
+        let (git_ignore, dot_ignore, has_git) =
+            (named(".gitignore"), named(".ignore"), named(".git"));
+        match parent {
+            Some(parent) if !git_ignore && !dot_ignore && !has_git => parent,
+            parent => {
+                let rules = |present: bool, name: &str| {
+                    if !present {
+                        return Gitignore::empty();
+                    }
+                    Gitignore::new(dir.join(name)).0
+                };
+                std::sync::Arc::new(IgnoreRules {
+                    parent,
+                    dot_ignore: rules(dot_ignore, ".ignore"),
+                    git_ignore: rules(git_ignore, ".gitignore"),
+                    has_git,
+                })
+            }
+        }
+    }
+}
+
+struct Walker<'a, F> {
+    root: &'a Path,
+    max_depth: Option<usize>,
+    overrides: Override,
+    accept: F,
+}
+
+#[derive(Default)]
+struct Found {
+    files: Vec<WalkedFile>,
+    errors: Vec<WalkError>,
+}
+
+impl Found {
+    fn merge(mut self, other: Found) -> Found {
+        self.files.extend(other.files);
+        self.errors.extend(other.errors);
+        self
+    }
+}
+
+impl<F: Fn(&Path) -> bool + Sync> Walker<'_, F> {
+    fn walk(&self, dir: &Path, depth: usize, parent: Option<std::sync::Arc<IgnoreRules>>) -> Found {
+        let entries = match list_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                return Found {
+                    files: Vec::new(),
+                    errors: vec![WalkError {
+                        path: dir.to_path_buf(),
+                        error: e.to_string(),
+                    }],
+                }
+            }
+        };
+        let rules = IgnoreRules::beneath(parent, dir, &entries);
+        let (dirs, files): (Vec<_>, Vec<_>) =
+            entries.into_iter().partition(|e| e.kind == EntryKind::Dir);
+        let found = files
+            .par_iter()
+            .with_min_len(STATS_PER_TASK)
+            .fold(Found::default, |mut found, entry| {
+                self.visit_file(dir, entry, &rules, &mut found);
+                found
+            })
+            .reduce(Found::default, Found::merge);
+        if self.max_depth.is_some_and(|max| depth + 1 >= max) {
+            return found;
+        }
+        dirs.par_iter()
+            .map(|entry| {
+                let path = dir.join(&entry.name);
+                if self.skips(&path, true, &rules) {
+                    return Found::default();
+                }
+                self.walk(&path, depth + 1, Some(rules.clone()))
+            })
+            .reduce(Found::default, Found::merge)
+            .merge(found)
+    }
+
+    fn skips(&self, path: &Path, is_dir: bool, rules: &IgnoreRules) -> bool {
+        match self.overrides.matched(path, is_dir) {
+            Match::Ignore(_) => true,
+            Match::Whitelist(_) => false,
+            Match::None => rules.ignores(path, is_dir),
+        }
+    }
+
+    fn visit_file(&self, dir: &Path, entry: &ListedEntry, rules: &IgnoreRules, found: &mut Found) {
+        let path = dir.join(&entry.name);
+        if self.skips(&path, false, rules) || !(self.accept)(&path) {
+            return;
+        }
+        // Not traversing the link would hand over the link's own stat, so a
+        // symlink is resolved here. A dangling link, or one pointing at a
+        // directory, is not a file we can hash.
+        let (stat, no_blocks) = match entry.stat {
+            Some(stat) => stat,
+            None => match std::fs::metadata(&path) {
+                Ok(m) if m.is_file() => (fresh_stat(&m), has_no_blocks(&m)),
+                Ok(_) => return,
+                Err(e) => {
+                    found.errors.push(WalkError {
+                        path,
+                        error: e.to_string(),
+                    });
+                    return;
+                }
+            },
+        };
+        let rel = path
+            .strip_prefix(self.root)
+            .unwrap_or(&path)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        found.files.push(WalkedFile {
+            path,
+            rel,
+            stat,
+            no_blocks,
+        });
+    }
+}
+
+/// Files a task stats between handing work to another core: below this the
+/// hand-off costs more than the stats.
+const STATS_PER_TASK: usize = 64;
+
 /// `max_depth: Some(1)` walks `root`'s own entries and opens no folder
-/// beneath it.
+/// beneath it. Every folder is listed on every core, and a file's stat comes
+/// with its folder's listing where the platform can do that (macOS).
+///
+/// Follows what a person's `.gitignore` and `.ignore` files say, as git would:
+/// a `.gitignore` counts only inside a repository. Dotfiles are walked, since a
+/// corpus can legitimately live in one. `extra_ignores` are gitignore-shaped
+/// and win over those files. A symlink to a file is that file; a symlink to a
+/// folder is not followed.
 pub fn walk_files<F>(
     root: &Path,
     extra_ignores: &[String],
@@ -227,85 +439,226 @@ pub fn walk_files<F>(
     accept: F,
 ) -> Result<(Vec<WalkedFile>, Vec<WalkError>)>
 where
-    F: Fn(&Path) -> bool,
+    F: Fn(&Path) -> bool + Sync,
 {
-    let mut builder = ignore::WalkBuilder::new(root);
-    builder
-        .follow_links(false)
-        .hidden(false) // index dotfiles; a corpus can legitimately live in one
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(false)
-        .parents(false)
-        .max_depth(max_depth);
-
-    if !extra_ignores.is_empty() {
-        let mut ov = ignore::overrides::OverrideBuilder::new(root);
-        for pat in extra_ignores {
-            // `ignore`'s override syntax is inverted relative to
-            // gitignore: a bare glob *whitelists*. Prefix with `!` so a
-            // config `ignore` entry reads the way a user expects.
-            ov.add(&format!("!{pat}"))
-                .with_context(|| format!("bad ignore pattern {pat:?}"))?;
-        }
-        builder.overrides(ov.build().context("build ignore overrides")?);
+    let mut overrides = OverrideBuilder::new(root);
+    for pat in extra_ignores {
+        // Override syntax is inverted relative to gitignore: a bare glob
+        // *whitelists*. Prefix with `!` so a config `ignore` entry reads the
+        // way a user expects.
+        overrides
+            .add(&format!("!{pat}"))
+            .with_context(|| format!("bad ignore pattern {pat:?}"))?;
     }
-
-    let mut files = Vec::new();
-    let mut errors = Vec::new();
-    for res in builder.build() {
-        match res {
-            Ok(entry) => {
-                let ft = match entry.file_type() {
-                    Some(ft) => ft,
-                    // Only the root sentinel has no file type.
-                    None => continue,
-                };
-                if ft.is_dir() {
-                    continue;
-                }
-                let path = entry.path();
-                if !accept(path) {
-                    continue;
-                }
-                // `entry.metadata()` does not traverse the link when
-                // `follow_links(false)`, so resolve it ourselves. A
-                // dangling link, or one pointing at a directory, is not
-                // a file we can hash.
-                let meta = match std::fs::metadata(path) {
-                    Ok(m) if m.is_file() => m,
-                    Ok(_) => continue,
-                    Err(e) => {
-                        errors.push(WalkError {
-                            path: path.to_path_buf(),
-                            error: e.to_string(),
-                        });
-                        continue;
-                    }
-                };
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(path)
-                    .components()
-                    .map(|c| c.as_os_str().to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                files.push(WalkedFile {
-                    path: path.to_path_buf(),
-                    rel,
-                    meta,
-                });
-            }
-            Err(e) => errors.push(WalkError {
-                path: root.to_path_buf(),
-                error: e.to_string(),
-            }),
-        }
-    }
+    let walker = Walker {
+        root,
+        max_depth,
+        overrides: overrides.build().context("build ignore overrides")?,
+        accept,
+    };
+    let Found { mut files, errors } = walker.walk(root, 0, None);
     // Deterministic order so two scans of an unchanged tree produce
     // identical row ordering (and therefore identical dolt diffs).
-    files.sort_by(|a, b| a.rel.cmp(&b.rel));
+    files.par_sort_unstable_by(|a, b| a.rel.cmp(&b.rel));
     Ok((files, errors))
+}
+
+fn has_no_blocks(md: &std::fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        md.blocks() == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = md;
+        false
+    }
+}
+
+/// A folder's entries, the plain way: one call for the names, and each
+/// file's stat left to a call of its own.
+fn read_dir_entries(dir: &Path) -> std::io::Result<Vec<ListedEntry>> {
+    std::fs::read_dir(dir)?
+        .map(|entry| {
+            let entry = entry?;
+            let kind = entry.file_type().map_or(EntryKind::Other, |ft| {
+                if ft.is_dir() {
+                    EntryKind::Dir
+                } else if ft.is_file() {
+                    EntryKind::File
+                } else {
+                    EntryKind::Other
+                }
+            });
+            Ok(ListedEntry {
+                name: entry.file_name(),
+                kind,
+                stat: None,
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_dir(dir: &Path) -> std::io::Result<Vec<ListedEntry>> {
+    read_dir_entries(dir)
+}
+
+#[cfg(target_os = "macos")]
+fn list_dir(dir: &Path) -> std::io::Result<Vec<ListedEntry>> {
+    bulk::list_dir(dir)
+}
+
+/// `getattrlistbulk`: one folder's names and every entry's stat in one call,
+/// about half the time of a listing and a stat per file.
+#[cfg(target_os = "macos")]
+mod bulk {
+    use super::{read_dir_entries, EntryKind, FreshStat, ListedEntry};
+    use std::ffi::{CString, OsString};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::path::Path;
+
+    const BUFFER_BYTES: usize = 256 * 1024;
+    const VREG: u32 = 1;
+    const VDIR: u32 = 2;
+
+    fn at<T: Copy>(entry: &[u8], offset: usize) -> T {
+        assert!(offset + std::mem::size_of::<T>() <= entry.len());
+        // Safety: in bounds by the assert, and `T` is a plain integer.
+        unsafe { std::ptr::read_unaligned(entry[offset..].as_ptr().cast()) }
+    }
+
+    fn nanos(entry: &[u8], offset: usize) -> i64 {
+        let secs: i64 = at(entry, offset);
+        let nsec: i64 = at(entry, offset + 8);
+        secs * 1_000_000_000 + i64::from(nsec as i32)
+    }
+
+    /// One entry of the buffer. The attributes sit in the order of their bits,
+    /// after the set of those returned, and one not returned takes no room.
+    fn parse(entry: &[u8]) -> Option<ListedEntry> {
+        let common: u32 = at(entry, 4);
+        let file: u32 = at(entry, 16);
+        let mut q = 4 + std::mem::size_of::<libc::attribute_set_t>();
+        let needed = libc::ATTR_CMN_NAME
+            | libc::ATTR_CMN_DEVID
+            | libc::ATTR_CMN_OBJTYPE
+            | libc::ATTR_CMN_MODTIME
+            | libc::ATTR_CMN_CHGTIME
+            | libc::ATTR_CMN_FILEID;
+        if common & libc::ATTR_CMN_NAME == 0 {
+            return None;
+        }
+        let name_at = q as i64 + i64::from(at::<i32>(entry, q));
+        let name_len: u32 = at(entry, q + 4);
+        let name = entry.get(name_at as usize..name_at as usize + name_len as usize - 1)?;
+        let name = OsString::from_vec(name.to_vec());
+        q += 8;
+        if common & needed != needed {
+            return Some(ListedEntry {
+                name,
+                kind: EntryKind::Other,
+                stat: None,
+            });
+        }
+        let dev: i32 = at(entry, q);
+        q += 4;
+        let objtype: u32 = at(entry, q);
+        q += 4;
+        let mtime_ns = nanos(entry, q);
+        q += 16;
+        let ctime_ns = nanos(entry, q);
+        q += 16;
+        let inode: u64 = at(entry, q);
+        q += 8;
+        let (mut allocated, mut size) = (None, None);
+        if file & libc::ATTR_FILE_ALLOCSIZE != 0 {
+            allocated = Some(at::<i64>(entry, q));
+            q += 8;
+        }
+        if file & libc::ATTR_FILE_DATALENGTH != 0 {
+            size = Some(at::<i64>(entry, q));
+        }
+        let kind = match objtype {
+            VDIR => EntryKind::Dir,
+            VREG => EntryKind::File,
+            _ => EntryKind::Other,
+        };
+        let stat = match (kind, allocated, size) {
+            (EntryKind::File, Some(allocated), Some(size)) => Some((
+                FreshStat {
+                    mtime_ns,
+                    size,
+                    inode: Some(inode as i64),
+                    dev: Some(i64::from(dev)),
+                    ctime_ns: Some(ctime_ns),
+                },
+                allocated == 0,
+            )),
+            _ => None,
+        };
+        Some(ListedEntry { name, kind, stat })
+    }
+
+    pub(super) fn list_dir(dir: &Path) -> std::io::Result<Vec<ListedEntry>> {
+        let path = CString::new(dir.as_os_str().as_bytes())?;
+        // Safety: `path` is a valid C string.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Safety: an all-zero `attrlist` is a valid one asking for nothing.
+        let mut asked: libc::attrlist = unsafe { std::mem::zeroed() };
+        asked.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+        asked.commonattr = libc::ATTR_CMN_RETURNED_ATTRS
+            | libc::ATTR_CMN_NAME
+            | libc::ATTR_CMN_DEVID
+            | libc::ATTR_CMN_OBJTYPE
+            | libc::ATTR_CMN_MODTIME
+            | libc::ATTR_CMN_CHGTIME
+            | libc::ATTR_CMN_FILEID;
+        asked.fileattr = libc::ATTR_FILE_ALLOCSIZE | libc::ATTR_FILE_DATALENGTH;
+        let mut buffer = vec![0u8; BUFFER_BYTES];
+        let mut out = Vec::new();
+        let result = loop {
+            // Safety: `fd` is open, `asked` outlives the call, and `buffer` is
+            // writable for the length given.
+            let count = unsafe {
+                libc::getattrlistbulk(
+                    fd,
+                    std::ptr::from_mut(&mut asked).cast(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                    0,
+                )
+            };
+            if count < 0 {
+                break Err(std::io::Error::last_os_error());
+            }
+            if count == 0 {
+                break Ok(());
+            }
+            let mut offset = 0usize;
+            for _ in 0..count {
+                let length: u32 = at(&buffer, offset);
+                let entry = &buffer[offset..offset + length as usize];
+                out.extend(parse(entry));
+                offset += length as usize;
+            }
+        };
+        // Safety: `fd` is open and this is its only close.
+        unsafe { libc::close(fd) };
+        match result {
+            Ok(()) => Ok(out),
+            // A filesystem may not do this at all. It opened, so the plain way
+            // says either the same thing or why it cannot.
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "fswalk_bulk_listing_failed");
+                read_dir_entries(dir)
+            }
+        }
+    }
 }
 
 /// Rewrite `path` to `body` in place and put its mtime back, as `cp -p`
@@ -520,5 +873,201 @@ mod tests {
         .unwrap();
         let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
         assert_eq!(rels, vec!["keep.pdf"]);
+    }
+
+    /// What `ignore`'s own walker makes of the same options: the semantics
+    /// [`walk_files`] promises, from the crate whose rules it follows.
+    fn what_the_ignore_crate_walks(root: &Path, extra: &[String]) -> Vec<String> {
+        let mut builder = ignore::WalkBuilder::new(root);
+        builder
+            .follow_links(false)
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(false)
+            .git_exclude(false)
+            .parents(false);
+        if !extra.is_empty() {
+            let mut ov = OverrideBuilder::new(root);
+            for pat in extra {
+                ov.add(&format!("!{pat}")).unwrap();
+            }
+            builder.overrides(ov.build().unwrap());
+        }
+        let mut rels: Vec<String> = builder
+            .build()
+            .flatten()
+            .filter(|e| e.path() != root)
+            .filter(|e| std::fs::metadata(e.path()).is_ok_and(|m| m.is_file()))
+            .map(|e| {
+                e.path()
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        rels.sort();
+        rels
+    }
+
+    fn write_tree(root: &Path, files: &[(&str, &str)]) {
+        for (rel, body) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+    }
+
+    /// The walk reads ignore files itself, so it is held to the `ignore`
+    /// crate's answer on the rules that have bitten: a `.gitignore` outside a
+    /// repository counts for nothing, nested rules and `!` re-includes, a
+    /// repository inside a repository, `.ignore`, a pruned folder.
+    #[test]
+    fn the_walk_ignores_what_the_ignore_crate_ignores() {
+        let trees: &[&[(&str, &str)]] = &[
+            // No repository: `.gitignore` is not in force, `.ignore` is.
+            &[
+                (".gitignore", "a.txt\n"),
+                (".ignore", "b.txt\n"),
+                ("a.txt", ""),
+                ("b.txt", ""),
+                ("sub/a.txt", ""),
+                ("sub/b.txt", ""),
+            ],
+            // A repository: nested rules, a re-include, a folder pattern.
+            &[
+                (".git/HEAD", "ref"),
+                (".gitignore", "*.log\nbuild/\n/rooted.txt\n"),
+                ("keep.txt", ""),
+                ("x.log", ""),
+                ("rooted.txt", ""),
+                ("sub/rooted.txt", ""),
+                ("build/out.txt", ""),
+                ("sub/build/out.txt", ""),
+                ("sub/.gitignore", "!important.log\nlocal.txt\n"),
+                ("sub/important.log", ""),
+                ("sub/other.log", ""),
+                ("sub/local.txt", ""),
+                ("sub/deep/local.txt", ""),
+                ("elsewhere/local.txt", ""),
+            ],
+            // A repository below the root: its rules stop at its top, and
+            // the outer repository's do not reach in.
+            &[
+                (".git/HEAD", "ref"),
+                (".gitignore", "*.outer\n"),
+                ("a.outer", ""),
+                ("inner/.git/HEAD", "ref"),
+                ("inner/.gitignore", "*.inner\n"),
+                ("inner/a.outer", ""),
+                ("inner/a.inner", ""),
+                ("b.inner", ""),
+            ],
+            // A repository below a folder with no repository above it.
+            &[
+                (".gitignore", "*.top\n"),
+                ("a.top", ""),
+                ("repo/.git/HEAD", "ref"),
+                ("repo/.gitignore", "*.r\n"),
+                ("repo/a.top", ""),
+                ("repo/a.r", ""),
+                ("repo/sub/a.r", ""),
+                ("plain/a.r", ""),
+            ],
+            // `.ignore` above `.gitignore`, and one re-including the other.
+            &[
+                (".git/HEAD", "ref"),
+                (".gitignore", "*.a\n"),
+                (".ignore", "!keep.a\n*.b\n"),
+                ("keep.a", ""),
+                ("drop.a", ""),
+                ("x.b", ""),
+            ],
+        ];
+        for (i, files) in trees.iter().enumerate() {
+            let d = tempfile::tempdir().unwrap();
+            write_tree(d.path(), files);
+            for extra in [
+                vec![],
+                vec!["*.txt".to_string()],
+                vec!["sub/**".to_string()],
+            ] {
+                let (walked, errors) = walk_files(d.path(), &extra, None, |_| true).unwrap();
+                assert!(errors.is_empty(), "{errors:?}");
+                let rels: Vec<String> = walked.into_iter().map(|f| f.rel).collect();
+                assert_eq!(
+                    rels,
+                    what_the_ignore_crate_walks(d.path(), &extra),
+                    "tree {i} {extra:?}"
+                );
+            }
+        }
+    }
+
+    /// A stat that came with a listing must be the stat a stat call gives, to
+    /// the nanosecond: the host cache was written with these, and one field
+    /// off would re-hash every file on the machine.
+    #[test]
+    fn a_stat_from_the_listing_is_the_stat() {
+        let d = tempfile::tempdir().unwrap();
+        write_tree(
+            d.path(),
+            &[
+                ("a.txt", "aaa"),
+                ("empty", ""),
+                ("sub/\u{e9}t\u{e9}.txt", "b"),
+            ],
+        );
+        std::fs::write(d.path().join("big"), vec![7u8; 3_000_000]).unwrap();
+        let sparse = std::fs::File::create(d.path().join("sparse")).unwrap();
+        sparse.set_len(1 << 30).unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::hard_link(d.path().join("a.txt"), d.path().join("hard")).unwrap();
+            std::os::unix::fs::symlink(d.path().join("big"), d.path().join("link")).unwrap();
+        }
+        let (walked, errors) = walk_files(d.path(), &[], None, |_| true).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(walked.len() >= 5);
+        for f in &walked {
+            let m = std::fs::metadata(&f.path).unwrap();
+            let s = fresh_stat(&m);
+            assert_eq!(
+                (
+                    f.stat.mtime_ns,
+                    f.stat.size,
+                    f.stat.inode,
+                    f.stat.dev,
+                    f.stat.ctime_ns
+                ),
+                (s.mtime_ns, s.size, s.inode, s.dev, s.ctime_ns),
+                "{}",
+                f.rel
+            );
+            assert_eq!(f.no_blocks, has_no_blocks(&m), "{}", f.rel);
+        }
+    }
+
+    /// A folder that will not list names itself, not the root, so what the
+    /// walk cannot see is only what is under it.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_will_not_list_is_the_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        write_tree(d.path(), &[("ok/a.txt", ""), ("locked/b.txt", "")]);
+        let locked = d.path().join("locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read_dir(&locked).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let (walked, errors) = walk_files(d.path(), &[], None, |_| true).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(walked.len(), 1);
+        assert_eq!(walked[0].rel, "ok/a.txt");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path, locked);
     }
 }

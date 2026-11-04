@@ -72,7 +72,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 /// What reads one PDF into its row: [`identify`], or in a test, one
 /// that panics.
-type Identify = fn(&Path) -> Result<PdfDocumentRow>;
+type Identify = fn(&Path, &[u8]) -> Result<PdfDocumentRow>;
 
 async fn fetch_with(opts: FetchOptions, identify: Identify) -> Result<FetchSummary> {
     let pool = opts.db.pool().clone();
@@ -112,10 +112,11 @@ async fn scan_tree(
         .await
         .context("record scan root")?;
 
-    // One walk, hashing only what this host's shared cache cannot
-    // vouch for — so a `media` or `fsindex` scan of the same tree has
-    // already paid for most of it.
-    let scan = fsscan::scan(
+    // One walk and no read: a file the host's shared cache can vouch for,
+    // because a `media` or `fsindex` scan of the same tree paid for it or
+    // because nothing has touched it, is known by its hash. The rest are read
+    // below, once, for both their hash and their classification.
+    let scan = fsscan::list(
         &opts.cache,
         &opts.root,
         &fsscan::ScanOptions {
@@ -148,8 +149,6 @@ async fn scan_tree(
         .collect();
     summary.pdfs_seen = scan.files.len();
     summary.too_large = scan.stats.too_large;
-    summary.hashed = scan.stats.hashed;
-    summary.reused = scan.stats.reused;
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
@@ -159,36 +158,62 @@ async fn scan_tree(
 
     for f in &scan.files {
         opts.progress.inc(1);
-        let scanned = fswalk::to_hex(&f.blake3);
-
         // ── Classify the document, once per distinct content ─────────
-        // The scan's hash only decides whether to look. A document read
-        // is named by the hash of the bytes it was classified from, which
-        // differ when the file changed after the scan or the scan's
-        // cached hash was stale.
-        let hash_hex = if prev.known_docs.contains(&scanned) || seen_docs.contains(&scanned) {
-            scanned
+        // A hash from the cache only decides whether to look. A document
+        // read is named by the hash of the bytes it was classified from.
+        let held = |hash: &String| prev.known_docs.contains(hash) || seen_docs.contains(hash);
+        let known = f.known.map(|hash| fswalk::to_hex(&hash)).filter(held);
+        let hash_hex = if let Some(hash) = known {
+            summary.reused += 1;
+            hash
         } else {
-            // lopdf and pdf-inspector read untrusted bytes, so a panic
-            // in either is this file's failure, not the scan's.
-            match run_problems::catching_panics(|| identify(&f.path)) {
-                Ok(row) => {
-                    let read = row.blake3.clone();
-                    if seen_docs.insert(read.clone()) {
-                        summary.documents += 1;
-                        if row.needs_ocr {
-                            summary.needs_ocr += 1;
-                        }
-                        doc_batch.push(row);
-                    }
-                    read
-                }
-                // Retried every scan: a document that never identified
-                // is not in `pdf_documents`.
+            // A file the cache vouches for and no document holds, because it
+            // never classified, is read again without needing its hash.
+            if f.known.is_some() {
+                summary.reused += 1;
+            } else {
+                summary.hashed += 1;
+            }
+            let file = match scan.read(f).await {
+                Ok(file) => file,
                 Err(e) => {
                     summary.errors += 1;
                     found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
+                    // Still there, so it keeps the path row the last scan wrote.
+                    if let Some(hash) = prev.paths.get(&f.rel) {
+                        path_batch.push(PdfPathRow {
+                            id: f.rel.clone(),
+                            blake3: hash.clone(),
+                        });
+                    }
                     continue;
+                }
+            };
+            let read_hash = fswalk::to_hex(&file.file.blake3);
+            if held(&read_hash) {
+                read_hash
+            } else {
+                // lopdf and pdf-inspector read untrusted bytes, so a panic
+                // in either is this file's failure, not the scan's.
+                match run_problems::catching_panics(|| identify(&f.path, &file.bytes)) {
+                    Ok(row) => {
+                        let read = row.blake3.clone();
+                        if seen_docs.insert(read.clone()) {
+                            summary.documents += 1;
+                            if row.needs_ocr {
+                                summary.needs_ocr += 1;
+                            }
+                            doc_batch.push(row);
+                        }
+                        read
+                    }
+                    // Retried every scan: a document that never identified
+                    // is not in `pdf_documents`.
+                    Err(e) => {
+                        summary.errors += 1;
+                        found.record_failed("pdf_paths", &f.rel, format!("{e:#}"));
+                        continue;
+                    }
                 }
             }
         };
@@ -208,6 +233,7 @@ async fn scan_tree(
     if !doc_batch.is_empty() || !path_batch.is_empty() {
         opts.db.write_batch(&doc_batch, &path_batch, &now).await?;
     }
+    scan.finish().await?;
     // A document is reached only through a path, so after a clean walk one
     // no path names is gone from the tree. A file moved within it is named
     // at its new path by now, and keeps its document.
@@ -226,15 +252,14 @@ fn is_pdf(p: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
-/// Classify one PDF and read its metadata, from one read of the file,
-/// and name it by the hash of those bytes.
-fn identify(path: &Path) -> Result<PdfDocumentRow> {
-    let bytes = std::fs::read(path).context("read")?;
+/// Classify one PDF and read its metadata, and name it by the hash of the
+/// bytes.
+fn identify(_path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
     // Detect-only: we want the classification and page census here, not
     // the markdown. Conversion is the render step's job and happens
     // against a different cache key.
     let det = pdf_inspector::process_pdf_mem_with_options(
-        &bytes,
+        bytes,
         pdf_inspector::PdfOptions::detect_only(),
     )
     .map_err(|e| anyhow::anyhow!("classify: {e}"))?;
@@ -242,7 +267,7 @@ fn identify(path: &Path) -> Result<PdfDocumentRow> {
     // One parse feeds both: the metadata fields and the content hash
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.
-    let (ident, content_blake3) = identity::extract_with_content_hash(&bytes);
+    let (ident, content_blake3) = identity::extract_with_content_hash(bytes);
 
     let kind = match det.pdf_type {
         pdf_inspector::PdfType::TextBased => PdfKind::TextBased,
@@ -269,7 +294,7 @@ fn identify(path: &Path) -> Result<PdfDocumentRow> {
     });
 
     Ok(PdfDocumentRow {
-        blake3: blake3_hex(&bytes),
+        blake3: blake3_hex(bytes),
         size: bytes.len() as i64,
         page_count: i64::from(det.page_count),
         pdf_type: kind,
@@ -296,11 +321,11 @@ mod tests {
     use super::content_hash::tests::doc;
     use super::*;
 
-    fn panics_on_red_alert(path: &Path) -> Result<PdfDocumentRow> {
+    fn panics_on_red_alert(path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
         if path.ends_with("red_alert.pdf") {
             panic!("a parser met bytes it did not expect");
         }
-        identify(path)
+        identify(path, bytes)
     }
 
     async fn scan(root: &Path, raw: &Path, db: &RawDb, identify: Identify) -> FetchSummary {
@@ -376,6 +401,45 @@ mod tests {
         assert!(column(&db, "SELECT scope_key FROM problems")
             .await
             .is_empty());
+        db.pool().close().await;
+    }
+
+    /// A PDF that will not open is still there: truncating `pdf_paths` lost
+    /// its path, and the prune then lost its document, until it opened again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_file_that_will_not_open_keeps_its_path_and_document() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (root, raw) = (dir.path().join("logs"), dir.path().join("raw"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&raw).unwrap();
+        for (name, body) in [("bridge.pdf", "warp core"), ("sickbay.pdf", "tricorder")] {
+            std::fs::write(root.join(name), doc(body, name, "01", None)).unwrap();
+        }
+        let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+        scan(&root, &raw, &db, identify).await;
+
+        let locked = root.join("sickbay.pdf");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&locked).is_ok() {
+            // Root reads through any mode; CI's container runs as root.
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+            db.pool().close().await;
+            return;
+        }
+        let summary = scan(&root, &raw, &db, identify).await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(summary.errors, 1);
+        assert_eq!(
+            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            ["bridge.pdf", "sickbay.pdf"]
+        );
+        assert_eq!(
+            column(&db, "SELECT blake3 FROM pdf_documents").await.len(),
+            2
+        );
         db.pool().close().await;
     }
 

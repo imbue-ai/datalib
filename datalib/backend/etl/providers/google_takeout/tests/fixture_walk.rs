@@ -1807,7 +1807,11 @@ async fn a_maps_photo_sidecar_that_will_not_open_keeps_its_row() {
     unlock(&locked);
     assert_eq!(s.removed, 0, "{s:?}");
     assert_eq!(e.count("maps_photos").await, 1);
-    assert_eq!(e.keys().await, [format!("record:files:{rel}")]);
+    let keys = e.keys().await;
+    assert!(
+        matches!(&keys[..], [only] if only.starts_with("skipped:maps_photos:")),
+        "{keys:?}"
+    );
 
     e.sync().await;
     assert_eq!(e.keys().await, Vec::<String>::new());

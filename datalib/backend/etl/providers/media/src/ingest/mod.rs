@@ -163,10 +163,10 @@ async fn scan_tree(
             ..Default::default()
         },
         kind::accept,
-        |path, meta| {
-            if opts.skip_dataless && is_dataless(meta) {
-                tracing::info!(path = %path.display(), "media_skipped_dataless");
-                dataless.lock().unwrap().push(path.to_path_buf());
+        |walked| {
+            if opts.skip_dataless && is_dataless(walked) {
+                tracing::info!(path = %walked.path.display(), "media_skipped_dataless");
+                dataless.lock().unwrap().push(walked.path.clone());
                 return false;
             }
             true
@@ -309,15 +309,8 @@ async fn scan_tree(
 /// A heuristic: a filesystem reporting no block counts at all looks entirely
 /// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
 /// markers need no handling — `kind::accept` never visits them.
-#[cfg(unix)]
-fn is_dataless(md: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    md.blocks() == 0 && md.size() > 0
-}
-
-#[cfg(not(unix))]
-fn is_dataless(_md: &std::fs::Metadata) -> bool {
-    false
+fn is_dataless(walked: &datalib_etl_files::fswalk::WalkedFile) -> bool {
+    walked.no_blocks && walked.stat.size > 0
 }
 
 /// What one distinct item's worth of bytes turned out to be.

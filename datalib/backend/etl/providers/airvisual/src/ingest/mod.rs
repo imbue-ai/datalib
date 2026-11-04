@@ -23,7 +23,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, ScannedFile};
+use datalib_etl_files::fsscan::{self, ListedFile, ScannedFile};
 
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_problems::{Outcome, Problem, Reason};
@@ -224,7 +224,7 @@ async fn fetch_device(
     let scope = cursor_scope(&who.id);
     let identified_ms = started.elapsed().as_millis();
 
-    let scan = match fsscan::scan(cache, &root, &fsscan::ScanOptions::default(), |p| {
+    let scan = match fsscan::list(cache, &root, &fsscan::ScanOptions::default(), |p| {
         p.file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| n.ends_with(HISTORY_SUFFIX))
@@ -250,7 +250,6 @@ async fn fetch_device(
         event = "airvisual_scan",
         device = %who.id,
         files = scan.files.len(),
-        hashed = scan.stats.hashed,
         identified_ms,
         scan_ms = started.elapsed().as_millis() - identified_ms,
         "scanned the export tree"
@@ -262,21 +261,33 @@ async fn fetch_device(
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
-    let changes = scan.changes_since(&prev);
+    let changes = scan.changes_since(&prev, |_| true);
     s.files += scan.files.len();
-    s.files_skipped += changes.unchanged;
     progress.set_message(&format!("airvisual: {}", who.name));
 
     // Sorted so the same timestamp appearing in two files (an archive
     // boundary, or a `corrupt_`/`restored_` pair) resolves the same way
     // every run: the later path wins.
-    let mut todo: Vec<&ScannedFile> = changes.needs_reading().collect();
+    let mut todo: Vec<&ListedFile> = changes.to_read().to_vec();
     todo.sort_by(|a, b| a.rel.cmp(&b.rel));
     let mut tx = db.pool().begin().await?;
     upsert_device(&mut tx, &who, &info, info_error.is_none()).await?;
     for f in todo {
         let file_started = std::time::Instant::now();
-        let read = match read_one(f) {
+        let bytes = match changes.read_if_changed(f).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(e) => {
+                // Not stamped, so the next run reads it again.
+                s.errors += 1;
+                file_failed(
+                    &f.rel,
+                    format!("read {}: {}", f.path.display(), e.root_cause()),
+                );
+                continue;
+            }
+        };
+        let read = match read_one(&bytes, file_started.elapsed().as_millis()) {
             Ok(read) => read,
             Err(Unread::Read(why)) => {
                 // Not stamped, so the next run reads it again.
@@ -292,14 +303,14 @@ async fn fetch_device(
                 file_checkpoint::record_file_with_problem(
                     &mut tx,
                     &scope,
-                    f,
+                    &bytes.file,
                     Some((Outcome::Dropped, problem)),
                 )
                 .await?;
                 continue;
             }
         };
-        let (stats, timing) = write_one(&mut tx, &who.id, &scope, f, read).await?;
+        let (stats, timing) = write_one(&mut tx, &who.id, &scope, &bytes.file, read).await?;
         s.lines += stats.lines;
         s.samples += stats.samples;
         s.sentinels += stats.sentinels;
@@ -330,6 +341,8 @@ async fn fetch_device(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    s.files_skipped += changes.unchanged();
+    scan.finish().await?;
     progress.inc(1);
     Ok(())
 }
@@ -408,18 +421,18 @@ enum Unread {
     Parse(String),
 }
 
-/// Read and parse one file. An `Err` costs that file and nothing else.
-fn read_one(f: &ScannedFile) -> std::result::Result<ReadFile, Unread> {
+/// Parse one file's bytes. An `Err` costs that file and nothing else.
+fn read_one(bytes: &fsscan::ReadFile, read_ms: u128) -> std::result::Result<ReadFile, Unread> {
+    let f = &bytes.file;
     let t = std::time::Instant::now();
-    let body = std::fs::read_to_string(&f.path)
+    let body = std::str::from_utf8(&bytes.bytes)
         .map_err(|e| Unread::Read(format!("read {}: {e}", f.path.display())))?;
-    let read_ms = t.elapsed().as_millis();
-    let parsed = parse::parse(&body, &f.rel)
-        .map_err(|e| Unread::Parse(format!("parse {}: {e:#}", f.rel)))?;
+    let parsed =
+        parse::parse(body, &f.rel).map_err(|e| Unread::Parse(format!("parse {}: {e:#}", f.rel)))?;
     Ok(ReadFile {
         parsed,
         read_ms,
-        parse_ms: t.elapsed().as_millis() - read_ms,
+        parse_ms: t.elapsed().as_millis(),
     })
 }
 
@@ -940,7 +953,7 @@ mod tests {
         assert_eq!((s.errors, s.samples), (1, 1), "{s:?}");
         let rows = problems(e.db.pool()).await;
         assert_eq!(keys(&rows), ["listing:files KITCHEN01"]);
-        assert!(rows[0].1.starts_with(".: "), "{rows:?}");
+        assert!(rows[0].1.starts_with("archive1: "), "{rows:?}");
 
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!((s.errors, s.samples), (0, 1));

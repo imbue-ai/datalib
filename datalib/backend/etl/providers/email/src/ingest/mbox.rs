@@ -799,7 +799,7 @@ fn list_mbox_files(input: &Path) -> Result<(Vec<MboxFile>, Vec<fswalk::WalkError
     let mut files: Vec<MboxFile> = walked
         .into_iter()
         .map(|w| MboxFile {
-            size: w.meta.len(),
+            size: w.stat.size as u64,
             path: w.path,
             rel: w.rel,
         })

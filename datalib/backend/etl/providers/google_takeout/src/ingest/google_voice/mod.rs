@@ -222,7 +222,7 @@ pub async fn ingest(
         .count();
     let deletes = read_all
         && changes.walk_errors == 0
-        && super::product_exported(scan, "Voice")
+        && scan.any_under("Voice")
         && failed == 0
         && unread_voice == 0;
     // A rewritten file keeps its old stamp on a run that deleted nothing,

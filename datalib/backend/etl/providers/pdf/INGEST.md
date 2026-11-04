@@ -1,6 +1,6 @@
 # pdf — download
 
-Scans a local directory tree for `*.pdf`, hashes each file, classifies
+Lists a local directory tree for `*.pdf`, hashes each file as it reads it, classifies
 it, and records what it is. Conversion to markdown is the **render**
 step's job; this side never produces text.
 
