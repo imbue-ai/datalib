@@ -6,7 +6,9 @@ find it. `run` asks every query of the search applet once per answer (each
 tab, and the fused answer a search with no tab gets), records where the
 target ranked and how long each answer took, and prints the scores; `compare`
 says which queries moved between two runs; `show` prints what a query found,
-for judging the rest of the list by eye.
+for judging the rest of the list by eye. `--modes app` instead sends each
+query the way the app does, every request at once, and times what a person
+waits for: run it on its own, since each answer leaves the others cached.
 
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
 "queries": [{"q", "style"}]}]}. A row counts as the target when it is the
@@ -19,13 +21,14 @@ library, never here.
 
 By default `run` starts its own `datalib-applet unified_document_index` on the
 root, which is the applet the app runs, minus the gateway. `--http` asks a
-running `datalib-http` instead, through its gateway, so the times are the
-ones the app sees.
+running `datalib-http` instead, through its gateway, the path the app's
+requests take. Use it for any time you mean to quote.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime
 import hashlib
 import json
@@ -45,6 +48,8 @@ from typing import Any
 
 TABS = ["fields", "words", "meaning"]
 MODES = [*TABS, "fused"]
+APP = "app"
+BUDGET_MS = 1000
 DEFAULT_APPLET = "bazel-bin/datalib/backend/bin/datalib-applet"
 REPO = Path(__file__).resolve().parent.parent
 
@@ -121,9 +126,13 @@ def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str
     params = {"q": q, "limit": str(depth)}
     if mode != "fused":
         params["tab"] = mode
+    return read_answer(get, "/search?" + urllib.parse.urlencode(params))
+
+
+def read_answer(get: Callable[[str], Any], path: str) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        answer = get("/search?" + urllib.parse.urlencode(params))
+        answer = get(path)
     except (OSError, ValueError) as e:  # an answer that failed is a result to record
         return {"error": f"{type(e).__name__}: {e}", "ms": ms_since(started)}
     took = ms_since(started)
@@ -228,26 +237,70 @@ def landing(
     return {"section": section == target["uuid"], "off": off, "snippet": snippet}
 
 
-def ui_answer(by_tab: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    """What the app opens: the app asks every tab at once and opens the first
-    to come back with rows, so the fastest tab that has any."""
-    answered = [t for t in TABS if t in by_tab and by_tab[t].get("total")]
-    if not answered:
-        return {
-            "tab": None,
-            "rank": None,
-            "ms": max((by_tab[t]["ms"] for t in by_tab), default=0),
+# The list a search opens on asks for this many rows (`PAGE` in
+# ui/src/cards/SearchList.ce.vue).
+APP_PAGE = 50
+# ui/src/grid/query.ts's `WORD` and `FILTER`, ui/src/cards/search.ts's `SOURCE`.
+QUERY_WORD = re.compile(r'-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+')
+FILTER_WORD = re.compile(r"^-?[A-Za-z_][\w.]*:")
+SOURCE_WORD = re.compile(r"^(source|source_id):")
+CARRIES_TEXT = ("qmd:", "qmd_vsearch:")
+
+
+def has_free_text(q: str) -> bool:
+    return any(
+        w.startswith(CARRIES_TEXT) or not FILTER_WORD.match(w)
+        for w in QUERY_WORD.findall(q)
+    )
+
+
+def app_requests(q: str) -> dict[str, str]:
+    """What the search card sends for a new search, by what each is for: the
+    rows of the list it opens on (ui/src/cards/SearchList.ce.vue), one row of
+    each tab for its count (`askTabs` in GridCard.ce.vue), and the groups
+    behind the source chips, which ignore the query's own source
+    (`loadSources`)."""
+
+    def rows(limit: int, tab: str | None = None) -> str:
+        params = {"q": q, "limit": str(limit)}
+        if tab:
+            params["tab"] = tab
+        return "/search?" + urllib.parse.urlencode(params)
+
+    others = [w for w in QUERY_WORD.findall(q) if not SOURCE_WORD.match(w)]
+    chips = urllib.parse.urlencode({"q": " ".join(others), "by": "source_ref"})
+    asked = {"rows": rows(APP_PAGE), "chips": "/search/groups?" + chips}
+    if has_free_text(q):
+        asked["count best"] = rows(1)
+        asked |= {f"count {tab}": rows(1, tab) for tab in TABS}
+    return asked
+
+
+def ask_as_app(get: Callable[[str], Any], q: str) -> dict[str, Any]:
+    """Every request at once, as the card sends them. `ms` is how long until
+    the rows arrive, which is what a person waits for; `settled_ms` is how
+    long until the tabs and the chips have answered too."""
+    asked = app_requests(q)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(asked)) as pool:
+        running = {
+            name: pool.submit(read_answer, get, path) for name, path in asked.items()
         }
-    tab = min(answered, key=lambda t: by_tab[t]["ms"])
-    return {"tab": tab, "rank": by_tab[tab].get("rank"), "ms": by_tab[tab]["ms"]}
+        answers = {name: f.result() for name, f in running.items()}
+    times = {name: a["ms"] for name, a in answers.items()}
+    return {**answers["rows"], "settled_ms": max(times.values()), "requests": times}
 
 
 def run(args: argparse.Namespace) -> None:
     evals = json.loads(Path(args.evals).read_text())
     modes = args.modes.split(",")
     for m in modes:
-        if m not in MODES:
-            raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}")
+        if m not in [*MODES, APP]:
+            raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}, {APP}")
+    if APP in modes and len(modes) > 1:
+        raise SystemExit(
+            f"--modes: ask {APP} on its own: an answer asked first leaves the next "
+            "one's work cached, and its time would say nothing"
+        )
     root = Path(args.root).expanduser()
     # Read before the first query: the checkout can move while a run takes
     # its half hour, and the applet was built from what it was at the start.
@@ -257,10 +310,21 @@ def run(args: argparse.Namespace) -> None:
     results: list[dict[str, Any]] = []
     try:
         # The first answer of each kind pays for loading what it reads
-        # (qmd's daemon, the embedding model); time the warm ones.
-        for m in modes:
-            search(server.get, "warm up", m, 1)
+        # (the applet itself, behind a gateway; the embedding model; the
+        # vectors): kept apart, and the rest are timed warm.
+        first_ms = {
+            m: (
+                ask_as_app(server.get, "warm up")
+                if m == APP
+                else search(server.get, "warm up", m, 1)
+            )["ms"]
+            for m in modes
+        }
         held = corpus(server.get)
+        if not held:
+            raise SystemExit(
+                f"{root} has no rows this build can read: sync it with this build first"
+            )
         only = set(args.only.split(",")) if args.only else None
         for t in evals["targets"]:
             if only and t["id"] not in only:
@@ -269,13 +333,15 @@ def run(args: argparse.Namespace) -> None:
                 q = scoped(query["q"], t) if args.scope == "source" else query["q"]
                 by_mode = {}
                 for m in modes:
-                    a = search(server.get, q, m, args.depth)
+                    a = (
+                        ask_as_app(server.get, q)
+                        if m == APP
+                        else search(server.get, q, m, args.depth)
+                    )
                     a["rank"] = rank_of(t, a.get("rows", []))
                     if a["rank"]:
                         a["landing"] = landing(t, a["rows"][a["rank"] - 1], pages)
                     by_mode[m] = a
-                if all(tab in by_mode for tab in TABS):
-                    by_mode["ui"] = ui_answer(by_mode)
                 results.append(
                     {
                         "id": t["id"],
@@ -300,6 +366,7 @@ def run(args: argparse.Namespace) -> None:
         "via": args.http or "applet",
         "scope": args.scope,
         "corpus": held,
+        "first_ms": first_ms,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "provenance": {**made, "load": [*made["load"], round(os.getloadavg()[0], 1)]},
         "results": results,
@@ -367,6 +434,7 @@ def scores(results: list[dict[str, Any]], mode: str) -> dict[str, float] | None:
         "@3": found(3),
         "@10": found(10),
         "any": found(10**9),
+        "over_budget": sum(1 for x in ms if x > BUDGET_MS),
         "mrr": sum(1 / r for r in ranks if r) / n,
         "errors": sum(1 for a in answers if a.get("error")),
         "p50_ms": statistics.median(ms),
@@ -381,7 +449,7 @@ def corpus_line(held: dict[str, int]) -> str:
 
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
-    modes = [m for m in [*MODES, "ui"] if any(m in r["modes"] for r in results)]
+    modes = [m for m in [*MODES, APP, "ui"] if any(m in r["modes"] for r in results)]
     lines = [
         (
             f"{len(results)} queries over {len({r['id'] for r in results})} targets, "
@@ -390,8 +458,8 @@ def report(record: dict[str, Any]) -> str:
         ),
         corpus_line(record.get("corpus") or {}),
         "",
-        "| answer | n | @1 | @3 | @10 | found | MRR | errors | p50 ms | p90 ms | max ms |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        f"| answer | n | @1 | @3 | @10 | found | MRR | errors | p50 ms | p90 ms | max ms | over {BUDGET_MS} ms |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for m in modes:
         s = scores(results, m)
@@ -399,8 +467,11 @@ def report(record: dict[str, Any]) -> str:
             lines.append(
                 f"| {m} | {s['n']} | {s['@1']:.0%} | {s['@3']:.0%} | {s['@10']:.0%} | "
                 f"{s['any']:.0%} | {s['mrr']:.2f} | {s['errors']} | {s['p50_ms']:.0f} | "
-                f"{s['p90_ms']:.0f} | {s['max_ms']:.0f} |"
+                f"{s['p90_ms']:.0f} | {s['max_ms']:.0f} | {s['over_budget']} |"
             )
+    lines += requests_table(results)
+    if record.get("first_ms"):
+        lines += ["", f"the first answer, cold, in ms: {record['first_ms']}"]
     lines += [
         "",
         "where a hit on the page lands, for targets that are a section of a page:",
@@ -439,6 +510,37 @@ def report(record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def requests_table(results: list[dict[str, Any]]) -> list[str]:
+    """How long each request the app sends took, for a run of `app`."""
+    taken: dict[str, list[int]] = {}
+    for r in results:
+        for name, ms in r["modes"].get(APP, {}).get("requests", {}).items():
+            taken.setdefault(name, []).append(ms)
+    settled = [
+        r["modes"][APP]["settled_ms"]
+        for r in results
+        if "settled_ms" in r["modes"].get(APP, {})
+    ]
+    if not taken:
+        return []
+    taken["all of them answered"] = settled
+    lines = [
+        "",
+        "what the app asks at once, and how long each took:",
+        "",
+        f"| request | n | p50 ms | p90 ms | max ms | over {BUDGET_MS} ms |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name, ms in taken.items():
+        ms = sorted(ms)
+        lines.append(
+            f"| {name} | {len(ms)} | {statistics.median(ms):.0f} | "
+            f"{ms[min(len(ms) - 1, int(len(ms) * 0.9))]} | {ms[-1]} | "
+            f"{sum(1 for x in ms if x > BUDGET_MS)} |"
+        )
+    return lines
+
+
 def load(path: str) -> dict[str, Any]:
     """A results file, its fused answer under that name: older files call it
     `default`, and before it existed qmd's hybrid stood in its place."""
@@ -451,7 +553,16 @@ def load(path: str) -> dict[str, Any]:
     return record
 
 
-KEPT_ANSWER_KEYS = ("rank", "ms", "error", "landing", "tab", "total")
+KEPT_ANSWER_KEYS = (
+    "rank",
+    "ms",
+    "error",
+    "landing",
+    "tab",
+    "total",
+    "settled_ms",
+    "requests",
+)
 
 
 def keep(args: argparse.Namespace) -> None:
@@ -469,7 +580,7 @@ def keep(args: argparse.Namespace) -> None:
         "note": args.note,
         "at": record["at"],
         "provenance": {**made, "commit": commit},
-        **{k: record.get(k) for k in ("depth", "via", "scope", "corpus")},
+        **{k: record.get(k) for k in ("depth", "via", "scope", "corpus", "first_ms")},
         "results": [
             {
                 **{k: r.get(k) for k in ("id", "source_id", "q", "asked", "style")},
@@ -497,8 +608,9 @@ def history(args: argparse.Namespace) -> None:
     """Every kept run, oldest first: found in the top 10, mean reciprocal
     rank and median time per answer. Scores compare only between runs on
     the same eval set; a change of set is marked where it happens."""
-    print("| at | commit | note | rows | load | " + " | ".join(MODES) + " |")
-    print("|---" * (len(MODES) + 5) + "|")
+    answers = [*MODES, APP]
+    print("| at | commit | note | rows | load | " + " | ".join(answers) + " |")
+    print("|---" * (len(answers) + 5) + "|")
     evals = None
     kept = [load(str(path)) for path in Path(args.history).glob("*.json")]
     for record in sorted(kept, key=lambda r: ran_at(r["at"])):
@@ -509,7 +621,7 @@ def history(args: argparse.Namespace) -> None:
         evals = made.get("evals_sha256")
         commit = made.get("commit", "?")[:9] + ("+" if made.get("dirty") else "")
         cells = []
-        for m in MODES:
+        for m in answers:
             s = scores(record["results"], m)
             cells.append(
                 ""
@@ -635,7 +747,7 @@ def main() -> None:
     r.add_argument(
         "--modes",
         default=",".join(MODES),
-        help="answers to ask for, of " + ",".join(MODES),
+        help=f"answers to ask for, of {','.join(MODES)}; or {APP} alone",
     )
     r.add_argument(
         "--depth", type=int, default=20, help="rows to read from each answer"

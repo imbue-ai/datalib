@@ -572,11 +572,28 @@ Fields, Words and Meaning tabs, and the fused answer a search with no
 tab gets), records where the target ranked and how long
 each answer took, and prints hit rates at 1, 3 and 10, the mean
 reciprocal rank and latency percentiles, by query style and by source.
-A row counts as the target when it is in the same document. The `ui`
-line is the tab the app would open: the first to answer with rows. For a
+A row counts as the target when it is in the same document. For a
 target that is one message of a page, it also says where the hit on that
 page lands, read from the row's `link`: on the message, how many
 messages off, and whether the snippet shown came from it.
+
+`--modes app` asks each query the way the search card does, and is the
+number to quote for how long a search takes. The card sends six requests
+at once: the rows of the list (`limit=50`), one row of each answer for its
+count, and the groups behind the source chips. `ms` is how long until the
+rows arrive; the report also gives each request's time and how long until
+all of them answered. Run it on its own, with `--http`: each answer leaves
+work cached for the next, so a time taken after another answer of the
+same query says little, and the fused time in a plain run is too low.
+
+What these times leave out, measured against the real card in a browser:
+the card waits 600 ms after the last keystroke before it asks, unless the
+search was opened with Enter in the top box, and it then loads the first
+row's document into the preview. A run asks one query straight after
+another, which came out about 20% faster than the same requests three
+seconds apart, the gap a person leaves. On a server just started, the
+query `run` warms up with is the first search after a launch, and the
+report keeps its time apart.
 
 Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
@@ -595,7 +612,9 @@ sync does not move the answers between two runs:
 ```bash
 bazelisk build //datalib/backend:bin
 export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --out before.json
+DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
+python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
+python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
 python3 scripts/search_eval.py compare before.json after.json   # what moved
 python3 scripts/search_eval.py show after.json --missed words   # what a query found
 python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
@@ -618,11 +637,27 @@ python3 scripts/search_eval.py keep after.json --history <dir> --note "what this
 python3 scripts/search_eval.py history <dir>
 ```
 
-By default it starts its own `datalib-applet unified_document_index` and
-times the answers warm, after one query of each kind. `--http <url>` asks
-a running `datalib-http` through its gateway instead, so the times
-include the gateway. A plain `bazelisk build` compiles Rust unoptimized;
-time what ships with an applet built `-c opt` (`--applet <path>`).
+Without `--http` it starts its own `datalib-applet unified_document_index`
+and asks it directly, which skips the gateway. Either way it times the
+answers warm, after one query of each kind. A plain `bazelisk build`
+compiles Rust unoptimized; time what ships with binaries built `-c opt`.
+A root last synced by an older build may have no index this build can
+read; `run` refuses a root with no rows rather than score an empty one.
+
+**Across languages.** Measured 2026-11-04 on a real library of 450,000 rows,
+with the embedding model pinned in `runtime/src/qmd.rs` (EmbeddingGemma,
+which is multilingual). German and Italian wordings of English
+descriptions the Meaning tab already found: 28 of 28 in its top 10 and 27
+in its top 3, against 14 of 14 at top 3 for the English. Two-to-four-word
+fragments: 16 of 16 in the top 10, 15 in the top 3. A German or Italian
+question about a document in the other language, or an English one about
+either: 8 of 8 in the top 10. The Words tab found none of these 52: it matches
+what was typed. Because of that the fused answer is the Meaning tab's
+here, and it ranked translations first more often than the English
+descriptions it was translated from (20 of 28 against 2 of 14), since the
+English ones' stray word matches push the target down. The set is small and
+was picked where English already worked, so read it as "crossing languages
+costs little", not as a hit rate.
 
 ## Auditing a real sync's logs
 
