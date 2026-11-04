@@ -30,6 +30,13 @@ must match. Free text looks for words in your documents:
 - **`--tab fields`** matches every word as the start of a value a row
   is filed under: a name, an address, an id, a title, a label.
 
+A search can be in another language than the document. Meaning crosses
+languages: a question in German or Italian finds an English document,
+and the other way round. Words and Fields match what you typed, so across
+languages they find only what the two spellings share, such as a name.
+Meaning covers a source only once its `embed` step has run, so a source
+with that step turned off answers in the words it is written in.
+
 Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly, whatever the
 tab: every row that names it, the ones it is most about first. A source's
