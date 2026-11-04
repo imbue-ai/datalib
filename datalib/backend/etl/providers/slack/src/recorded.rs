@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 /// `datetime_to_slack_ts` of UTC midnight on
 /// [`DEFAULT_SINCE`](crate::ingest::DEFAULT_SINCE): the `oldest` a cold
 /// start's history walk sends.
-pub const DEFAULT_SINCE_TS: &str = "0.000000";
+pub const DEFAULT_SINCE_TS: &str = "0";
 
 /// What a download lists when DMs are off.
 pub const CHANNEL_TYPES: &str = "public_channel,private_channel";
