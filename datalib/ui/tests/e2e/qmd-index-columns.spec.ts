@@ -24,9 +24,14 @@ const CROSS = "❌";
 test("the applet reports the fixture's documents indexed and embedded", async ({ request }) => {
   const search = await request.get("/applet/unified_document_index/search?q=&limit=200");
   expect(search.ok(), `search API: HTTP ${search.status()}`).toBeTruthy();
-  const rows = ((await search.json()) as { rows: { markdown_uuid: string | null }[] }).rows;
+  const rows = ((await search.json()) as { rows: { markdown_uuid: string | null; kind: string }[] })
+    .rows;
   const uuids = [...new Set(rows.map((r) => r.markdown_uuid).filter(Boolean))];
   expect(uuids.length, "fixture rows must carry markdown_uuids").toBeGreaterThan(0);
+  // Filed for the grid alone, so qmd is meant not to have it.
+  const gridOnly = rows
+    .filter((r) => r.kind === "Notion Table of Contents")
+    .map((r) => r.markdown_uuid as string);
 
   const resp = await request.post("/applet/unified_document_index/qmd_state", {
     data: { markdown_uuids: uuids },
@@ -47,10 +52,16 @@ test("the applet reports the fixture's documents indexed and embedded", async ({
   // Every uuid we asked about comes back — no silent omissions.
   expect(Object.keys(state.docs).sort()).toEqual([...uuids].sort());
 
-  const notIndexed = Object.entries(state.docs).filter(([, v]) => v.indexed !== true);
+  const docs = Object.entries(state.docs).filter(([uuid]) => !gridOnly.includes(uuid));
+  const notIndexed = docs.filter(([, v]) => v.indexed !== true);
   expect(notIndexed, "every fixture document should hash-match a qmd `documents` row").toEqual([]);
-  const notEmbedded = Object.entries(state.docs).filter(([, v]) => v.embedded !== true);
+  const notEmbedded = docs.filter(([, v]) => v.embedded !== true);
   expect(notEmbedded, "every fixture document should be embedded").toEqual([]);
+
+  expect(gridOnly.length, "the fixture's Notion source has a table of contents").toBeGreaterThan(0);
+  for (const uuid of gridOnly) {
+    expect(state.docs[uuid], "left out of qmd").toEqual({ indexed: false, embedded: false });
+  }
 });
 
 test("the columns are off by default and render check marks once shown", async ({ page }) => {
