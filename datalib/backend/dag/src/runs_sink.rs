@@ -300,7 +300,7 @@ impl RunStoreSink {
             let process_id = acc.process.as_ref().map(|p| p.process_id.clone());
             (std::mem::take(&mut acc.slow).summary(), process_id)
         };
-        let Some((msg, fields)) = summary else {
+        let Some((level, msg, fields)) = summary else {
             return;
         };
         let (ts_utc, tz_offset) = now();
@@ -311,7 +311,7 @@ impl RunStoreSink {
             process_id: process_id.unwrap_or_default(),
             ts_utc,
             tz_offset,
-            level: LogLevel::Info.as_str().into(),
+            level: level.as_str().into(),
             target: Some(RUNNER_TARGET.into()),
             msg,
             fields: Some(fields.to_string()),
@@ -747,7 +747,7 @@ mod tests {
         assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
         assert_eq!(
             lines[2].msg,
-            "2 slow statements took 5.0s in all; 2 of them, 5.0s, were: SELECT id FROM records"
+            "2 slow statements took 5.0s in all, every one: SELECT id FROM records"
         );
         assert_eq!(lines[2].step.as_deref(), Some("slack/render_markdown"));
         assert_eq!(lines[2].attempt, 1);

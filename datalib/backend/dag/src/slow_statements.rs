@@ -15,6 +15,11 @@ const SQLX_TARGET: &str = "sqlx::query";
 /// How much of a statement a sentence quotes.
 const QUOTED_CHARS: usize = 120;
 
+/// An attempt that spent less than this in slow statements says so at
+/// `debug`: a second or two here and there is no one's question, and a
+/// fan-in that spent them would say so on every pass.
+const WORTH_A_LINE_SECS: f64 = 5.0;
+
 /// sqlx logs a statement above `debug` only when it was slow.
 pub fn is_slow_statement(level: LogLevel, target: Option<&str>) -> bool {
     level == LogLevel::Warn && target == Some(SQLX_TARGET)
@@ -70,9 +75,9 @@ impl SlowStatements {
             .add(secs);
     }
 
-    /// The line these come to, and its fields; `None` for an attempt with
-    /// none.
-    pub fn summary(&self) -> Option<(String, Value)> {
+    /// The line these come to, at its level, with its fields; `None` for an
+    /// attempt with none.
+    pub fn summary(&self) -> Option<(LogLevel, String, Value)> {
         let (top, top_spent) = self
             .by_statement
             .iter()
@@ -84,10 +89,24 @@ impl SlowStatements {
             all.slowest = all.slowest.max(spent.slowest);
         }
         let quoted: String = top.chars().take(QUOTED_CHARS).collect();
-        let msg = format!(
-            "{} slow statements took {:.1}s in all; {} of them, {:.1}s, were: {quoted}",
-            all.count, all.secs, top_spent.count, top_spent.secs,
-        );
+        let msg = if all.count == 1 {
+            format!("a slow statement took {:.1}s: {quoted}", all.secs)
+        } else if top_spent.count == all.count {
+            format!(
+                "{} slow statements took {:.1}s in all, every one: {quoted}",
+                all.count, all.secs
+            )
+        } else {
+            format!(
+                "{} slow statements took {:.1}s in all, most of it {} taking {:.1}s: {quoted}",
+                all.count, all.secs, top_spent.count, top_spent.secs,
+            )
+        };
+        let level = if all.secs < WORTH_A_LINE_SECS {
+            LogLevel::Debug
+        } else {
+            LogLevel::Info
+        };
         let fields = serde_json::json!({
             "slow_statements": all.count,
             "total_ms": (all.secs * 1000.0) as u64,
@@ -97,7 +116,7 @@ impl SlowStatements {
             "top_count": top_spent.count,
             "top_total_ms": (top_spent.secs * 1000.0) as u64,
         });
-        Some((msg, fields))
+        Some((level, msg, fields))
     }
 }
 
@@ -127,10 +146,11 @@ mod tests {
         slow.note(Some(&fields(page, "SELECT id", 2.5)));
         slow.note(Some(&fields("", "COMMIT", 1.5)));
 
-        let (msg, fields) = slow.summary().unwrap();
+        let (level, msg, fields) = slow.summary().unwrap();
+        assert_eq!(level, LogLevel::Info);
         assert_eq!(
             msg,
-            "3 slow statements took 7.0s in all; 2 of them, 5.5s, were: \
+            "3 slow statements took 7.0s in all, most of it 2 taking 5.5s: \
              SELECT id, json(payload) FROM records"
         );
         assert_eq!(fields["slow_statements"], 3);
@@ -144,8 +164,27 @@ mod tests {
     fn a_statement_with_no_text_goes_by_its_summary() {
         let mut slow = SlowStatements::default();
         slow.note(Some(&fields("", "COMMIT", 2.0)));
-        let (msg, _) = slow.summary().unwrap();
-        assert!(msg.ends_with("were: COMMIT"), "{msg}");
+        let (_, msg, _) = slow.summary().unwrap();
+        assert!(msg.ends_with(": COMMIT"), "{msg}");
+    }
+
+    /// Guards `1 slow statements took 1.7s in all; 1 of them, 1.7s, were:`,
+    /// which a fan-in wrote on most of its passes at `info`.
+    #[test]
+    fn a_second_or_two_is_a_quiet_singular_line() {
+        let mut slow = SlowStatements::default();
+        slow.note(Some(&fields("SELECT 1", "SELECT 1", 1.7)));
+        let (level, msg, _) = slow.summary().unwrap();
+        assert_eq!(level, LogLevel::Debug);
+        assert_eq!(msg, "a slow statement took 1.7s: SELECT 1");
+
+        slow.note(Some(&fields("SELECT 1", "SELECT 1", 4.0)));
+        let (level, msg, _) = slow.summary().unwrap();
+        assert_eq!(level, LogLevel::Info, "over the line in all");
+        assert_eq!(
+            msg,
+            "2 slow statements took 5.7s in all, every one: SELECT 1"
+        );
     }
 
     #[test]

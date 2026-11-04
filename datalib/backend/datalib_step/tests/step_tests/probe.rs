@@ -18,8 +18,8 @@ fn probe_slack(playback: &Path, rust_log: Option<&str>) -> Output {
     cmd.output().expect("run datalib-step probe")
 }
 
-/// The probe printed a DEBUG `item_fetched` line on stderr before its
-/// answer (#1426): it took the step's `trace` default, meant for lines
+/// The probe printed a DEBUG request line on stderr before its answer
+/// (#1426): it took the step's `trace` default, meant for lines
 /// the runner stores. By hand it says on stderr only what went wrong,
 /// unless `RUST_LOG` asks for more.
 #[test]
@@ -43,7 +43,7 @@ fn a_probe_that_succeeds_is_silent_on_stderr_unless_asked() {
     let asked = probe_slack(&playback, Some("datalib=debug"));
     assert!(asked.status.success(), "{asked:?}");
     assert!(
-        String::from_utf8_lossy(&asked.stderr).contains("item_fetched"),
+        String::from_utf8_lossy(&asked.stderr).contains("http_request"),
         "{asked:?}"
     );
 }

@@ -691,7 +691,7 @@ at, and where:
 | what rate limits cost | `msg LIKE 'HTTP 429%'`, with its `retry_after_ms` |
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
-| what is slow to read | `msg LIKE '% slow statements took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
+| what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
 | what was left behind | files under each `render_markdown/` against its documents; qmd's `documents` with `active = 0`; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)
