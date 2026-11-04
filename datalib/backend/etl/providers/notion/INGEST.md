@@ -255,30 +255,40 @@ or 410 for.
 
 ## Truncation: two cases, one attribute tells them apart
 
-A response may set `truncated: true`. Every hole leaves a marker; what
-differs is whether it can be filled.
+A response can have holes. Every hole leaves a marker, whether or not the
+response sets `truncated: true`, so the holes are read from the body and
+not from that flag. What differs is what can be done about one.
 
 | marker | means | follow-up |
 |---|---|---|
-| `<unknown url="…#id"/>` — **no `alt`** | subtree too large to inline | fetch it as its own page of markdown; it resolves |
-| `<unknown url="…#id" alt="button"/>` — **has `alt`** | a block type markdown cannot express | never resolves — the fetch returns a stub carrying the same id, an infinite regress |
+| `<unknown url="…#id"/>` — **no `alt`** | subtree too large to inline | fetch it as its own page of markdown; what comes back goes where the marker is, and can have holes of its own |
+| `<unknown url="…#id" alt="bookmark"/>` — **has `alt`** | a block type markdown cannot express | fetching it as markdown returns a stub carrying the same id, an infinite regress; fetch it as a block instead |
 
-`alt` present ⇒ record it and stop. `alt` absent ⇒ fetch and splice.
-Unrepresentable types seen so far: `button`, `alias`, `drive`.
+Asking for each `alt`-bearing kind by id, against a real workspace:
+
+| kind | `GET /blocks/<id>` answers | what happens |
+|---|---|---|
+| `bookmark`, `tweet`, `miro`, `external_object_instance` | a `bookmark`, `embed` or `link_preview` with a URL | the marker becomes a link |
+| `alias`, `drive`, `ai_block` | `unsupported` | the marker stays, and the page gets a warning naming the kind |
+| `button`, `breadcrumb` | not asked (`LOSES_NOTHING`) | the marker stays, with no row: nothing a reader would miss |
+
+A kind not on that last line is asked for, so one Notion adds later becomes
+a link or a warning rather than being lost quietly. Only an http or https
+URL becomes a link, because it came from upstream and gets drawn as one.
+`page_markdown.unresolved_block_ids` holds what is still open after all
+this, which is why a page can list a button and still be whole.
 
 An `alt`-less hole can also be an inline database, which Notion answers
 with a 400 ("is a database, not a page") when asked for as markdown.
 One the tree places as a database is not fetched: its marker becomes the
 `<database url="…">Title</database>` link an untruncated body carries.
 
-Always read `unresolved_block_ids` rather than inferring the hole set
-from the text: an id can be listed with no marker in the body.
+Always read `unresolved_block_ids` as well as the text: an id can be listed
+with no marker in the body. A fetched subtree with no marker to replace goes
+at the end of the page.
 
 Follow-ups are capped per page (`MAX_HOLE_FOLLOWUPS`, 64) — one measured
 page wanted ~1,385 of them, which would otherwise dominate a run.
-Truncation itself is rare: one page in a random 70, and that one a
-permanent `drive` embed. Size truncation is rarer still and sits in a
-few very large pages, which is why the cap is per page.
 
 ## When part of a sync fails
 
@@ -302,8 +312,9 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | a page's comments listing | `page_comments:<id>` | the listing fetching whole |
 | comments the credential may not read (403: an integration without the read-comments capability) | one `listing:comments`, a warning; comments are not asked for again that run, and no page is marked failed | a run that reads comments, or has none to read |
 | a page's body | `page_markdown:<id>` | the body fetching |
-| a truncated subtree's follow-up | `page_markdown:<id>`; the body is owed, not stored short | the body fetching whole; a hole the tree places as a database is linked, not followed |
-| more subtrees than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
+| a follow-up for a hole | `page_markdown:<id>`; the body is owed, not stored short | the body fetching whole; a hole the tree places as a database is linked, not followed |
+| more holes than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
+| a hole that stays open: a block the API will not show, a link that is not http or https, or a subtree answering 404 (gone, or not visible to this credential) | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so nothing is lost |
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
 | an attachment larger than one plain request takes (1 GiB) | `notion_attachments:<page>#<slot>`, a warning (`over_size_limit`); it stays owed, and curl stops at once when the size is announced | the file shrinking, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |

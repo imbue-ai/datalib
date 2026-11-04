@@ -508,7 +508,7 @@
   },
   "notion": {
     "schema_hash": "20189a30d548f58583577718876f74ca53a9c812276c283f462a283b70212a21",
-    "schema_version": 2,
+    "schema_version": 3,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE comment_anchors( id TEXT PRIMARY KEY, page_id TEXT NULL, block_type TEXT NULL, plain_text TEXT NULL)",

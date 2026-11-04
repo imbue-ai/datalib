@@ -131,7 +131,7 @@ pub struct FetchSummary {
     pub failed_bodies: usize,
     /// Truncated subtrees fetched as follow-ups.
     pub hole_followups: usize,
-    /// Pages with more truncated subtrees than one run will follow.
+    /// Pages with more holes than one run will follow.
     pub pages_left_incomplete: usize,
     /// Comment rows stored.
     pub comments: usize,

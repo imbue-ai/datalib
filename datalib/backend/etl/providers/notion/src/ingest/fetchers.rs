@@ -25,13 +25,12 @@ use super::official::NotionOfficialError;
 use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
 
-/// Follow-up fetches for subtrees the markdown response was too large to
-/// inline, appended to the body in the order the holes appeared.
-///
-/// Only `alt`-less holes are followed: an `alt`-bearing one names a
-/// block type markdown cannot express, and fetching it returns a stub
-/// carrying the same id — an infinite regress. The cap bounds the pass
-/// so a single pathological page (one measured page wanted ~1,385 of
+/// Follow-up requests for one body's holes. An `alt`-less hole is a
+/// subtree the response was too large to inline, asked for as markdown,
+/// and what comes back goes where the hole was. An `alt`-bearing one is a
+/// block type markdown cannot express, asked for as a block, since as
+/// markdown it returns a stub carrying the same id. The cap bounds the
+/// pass so a single pathological page (one measured page wanted ~1,385 of
 /// these) cannot dominate a run.
 pub const MAX_HOLE_FOLLOWUPS: usize = 64;
 
@@ -203,21 +202,17 @@ impl Bodies<'_> {
             Err(e) => return Err(e),
         };
         let mut body = markdown::parse(&resp);
-        let holes = if body.truncated {
-            self.fill_holes(&mut body).await?
-        } else {
-            Holes::default()
-        };
+        let holes = self.fill_holes(&mut body).await?;
         if let Some((block, e)) = holes.failed.first() {
             return Ok(Outcome::Failed(format!(
-                "{} truncated subtree(s) did not fetch, so the body is incomplete; \
+                "{} hole(s) did not fetch, so the body is incomplete; \
                  first: block {block}: {e}",
                 holes.failed.len()
             )));
         }
         let permanent = body.permanent_holes();
         if !permanent.is_empty() {
-            tracing::info!(
+            tracing::debug!(
                 event = "notion_unrepresentable_blocks",
                 page = pid,
                 count = permanent.len(),
@@ -248,21 +243,24 @@ impl Bodies<'_> {
                     .then(|| serde_json::to_string(&unresolved).unwrap_or_default()),
             },
             slots,
-            complete: holes.over_cap.is_none(),
+            complete: !body.is_missing_text(),
         };
-        Ok(match holes.over_cap {
-            Some(wanted) => {
-                ctx.counts
-                    .pages_left_incomplete
-                    .fetch_add(1, Ordering::Relaxed);
-                Outcome::Unusable(
-                    fetched,
-                    datalib_problems::Reason::DeliberateLoss,
-                    format!(
-                        "the body has {wanted} truncated subtrees and one run follows \
-                         {MAX_HOLE_FOLLOWUPS}, so the rest is missing"
-                    ),
-                )
+        if let Some(wanted) = holes.over_cap {
+            ctx.counts
+                .pages_left_incomplete
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(Outcome::Unusable(
+                fetched,
+                datalib_problems::Reason::DeliberateLoss,
+                format!(
+                    "the body has {wanted} holes and one run follows \
+                     {MAX_HOLE_FOLLOWUPS}, so the rest is missing"
+                ),
+            ));
+        }
+        Ok(match body.what_is_lost() {
+            Some(said) => {
+                Outcome::Unusable(fetched, datalib_problems::Reason::DeliberateLoss, said)
             }
             None => Outcome::Got(fetched),
         })
@@ -272,58 +270,75 @@ impl Bodies<'_> {
         &self,
         body: &mut markdown::PageBody,
     ) -> Result<Holes, NotionOfficialError> {
-        let ctx = self.ctx;
         let mut holes = Holes::default();
-        let databases: Vec<(String, String)> = body
-            .fetchable_holes()
-            .filter_map(|u| {
-                let title = self.databases.get(&u.block_id)?;
-                Some((u.block_id.clone(), title.clone().unwrap_or_default()))
-            })
-            .collect();
-        for (id, title) in &databases {
-            body.link_database(id, title);
+        let mut asked: HashSet<String> = HashSet::new();
+        loop {
+            let mut open = body
+                .unresolved
+                .iter()
+                .filter(|u| !u.loses_nothing() && !asked.contains(&u.block_id));
+            let Some(hole) = open.next().cloned() else {
+                return Ok(holes);
+            };
+            let also_open = open.count();
+            if let Some(title) = self.databases.get(&hole.block_id) {
+                body.link_database(&hole.block_id, title.as_deref().unwrap_or_default());
+                continue;
+            }
+            if asked.len() == MAX_HOLE_FOLLOWUPS {
+                holes.over_cap = Some(asked.len() + 1 + also_open);
+                return Ok(holes);
+            }
+            asked.insert(hole.block_id.clone());
+            self.fill_hole(body, &hole, &mut holes).await?;
         }
-        let todo: Vec<String> = body
-            .fetchable_holes()
-            .map(|u| u.block_id.clone())
-            .take(MAX_HOLE_FOLLOWUPS)
-            .collect();
-        if todo.is_empty() {
-            return Ok(holes);
-        }
-        let total_fetchable = body.fetchable_holes().count();
-        if total_fetchable > MAX_HOLE_FOLLOWUPS {
-            holes.over_cap = Some(total_fetchable);
-        }
-        for id in todo {
-            match ctx.client.get_page_markdown(&id).await {
-                Ok(resp) => {
-                    let part = markdown::parse(&resp);
-                    if part.markdown.is_empty() {
-                        continue;
-                    }
-                    body.markdown.push('\n');
-                    body.markdown.push_str(&part.markdown);
+    }
+
+    /// Ask for one hole. One that answers nothing useful stays a hole, and
+    /// `PageBody::what_is_lost` then says so. An error here is the body's,
+    /// unless it ends the run.
+    async fn fill_hole(
+        &self,
+        body: &mut markdown::PageBody,
+        hole: &markdown::Unresolved,
+        holes: &mut Holes,
+    ) -> Result<(), NotionOfficialError> {
+        let ctx = self.ctx;
+        let id = hole.block_id.as_str();
+        let answer = if hole.is_fetchable() {
+            ctx.client.get_page_markdown(id).await
+        } else {
+            ctx.client.get_block(id).await
+        };
+        match answer {
+            Ok(resp) if hole.is_fetchable() => {
+                let part = markdown::parse(&resp);
+                body.fill(id, part);
+                ctx.counts.hole_followups.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(block) => {
+                if let Some(link) = markdown::link_of_block(&block) {
+                    body.link_block(id, &link);
                     ctx.counts.hole_followups.fetch_add(1, Ordering::Relaxed);
                 }
-                // The block went since the body was read.
-                Err(NotionOfficialError::NotFound(_)) => {}
-                Err(e) if e.ends_the_run() || ctx.stop().requested() => return Err(e),
-                Err(e) => holes.failed.push((id, e.to_string())),
             }
+            // Gone since the body was read, or a block this credential
+            // cannot see; Notion answers the same for both.
+            Err(NotionOfficialError::NotFound(_)) => {}
+            Err(e) if e.ends_the_run() || ctx.stop().requested() => return Err(e),
+            Err(e) => holes.failed.push((id.to_string(), e.to_string())),
         }
-        Ok(holes)
+        Ok(())
     }
 }
 
-/// What the follow-ups for a truncated body could not fill.
+/// What asking for a body's holes could not do.
 #[derive(Default)]
 struct Holes {
     /// `(block id, error)` for each follow-up that failed.
     failed: Vec<(String, String)>,
-    /// How many follow-ups the body wanted, when that was more than
-    /// one run follows.
+    /// How many follow-ups the body was seen to want, when that was more
+    /// than one run follows.
     over_cap: Option<usize>,
 }
 
