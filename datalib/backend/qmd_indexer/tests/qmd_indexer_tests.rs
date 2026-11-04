@@ -261,6 +261,22 @@ fn keyword_progress_counts_every_file() {
     );
 }
 
+/// Holding qmd to one embedding context rests on a variable only qmd reads.
+/// A qmd that stopped reading it would go back to eight contexts, about
+/// 3.6 GB more, with nothing failing (`docs/dev/qmd_behaviour.md`, finding
+/// 16).
+#[test]
+fn the_pinned_qmd_still_reads_the_variable_that_holds_it_to_one_context() {
+    let llm = runfile("QMD_TEST_PACKAGE_RLOC").join("dist/llm.js");
+    let source = std::fs::read_to_string(&llm).unwrap();
+    assert!(
+        source.contains(datalib_qmd_indexer::EMBED_PARALLELISM_VAR),
+        "{} no longer reads {}",
+        llm.display(),
+        datalib_qmd_indexer::EMBED_PARALLELISM_VAR
+    );
+}
+
 /// The embedding model, linked where qmd looks for it, under the name
 /// node-llama-cpp gives a model it downloaded itself.
 fn link_model(index: &Index, work: &Path) {

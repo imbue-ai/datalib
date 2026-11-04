@@ -221,6 +221,34 @@ does not carry over to `createStore()` without being re-measured.
     with `simple-git` and build it. No environment variable turns
     either off.
 
+16. **An embedding context costs far more memory than speed earns.** With
+    GPU memory free, 2.8.3 opens eight contexts (a quarter of free memory
+    at its 150 MB estimate, capped at 8; `QMD_EMBED_PARALLELISM` overrides
+    it). A context costs about 520 MiB once used, and qmd allocates it on
+    first use, which is why an embed of a few chunks can peak well above
+    one with none. Measured on a 16 GB mac, embedding the same model at
+    2048 tokens per context, with `node-llama-cpp` alone on 972-token
+    texts:
+
+    | contexts | footprint | texts/s |
+    |---|---|---|
+    | 1 | 0.7–0.8 GB | 9.6–9.7 |
+    | 2 | 1.3 GB | 10.3 |
+    | 4 | 2.4 GB | 10.1 |
+    | 8 | 4.4–4.5 GB | 9.7–9.8 |
+
+    Through qmd's own embed on a real store, 8 contexts held 4.6 GB at
+    12.4–13.2 chunks/s, and 1 context held about 1 GB at 11.7–12.1. The
+    `rss_peak_bytes` metric cannot show this: on a machine short of memory
+    most of those buffers are swapped out, and one process read 654 MiB of
+    RSS at a 4.5 GB footprint. Read the footprint with `vmmap -summary
+    <pid>`; each context adds about seven `VM_ALLOCATE` regions.
+
+    All of this is one Apple Silicon mac, where the GPU shares the
+    machine's memory. A machine with a discrete GPU has not been measured
+    and may well gain from more contexts. If it does, the limit should
+    become a setting in `config.toml` rather than stay fixed at one.
+
 ## What the shipped steps do with these
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
@@ -231,7 +259,10 @@ own collection, then `update({collections:[g]})`, finding 1) and an
 one-slot `qmd_keyword` and `qmd_embed` locks
 (`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
 own process, so each pays finding 8's model load; that is the price of
-per-source steps over one loop calling `embed({collection})`.
+per-source steps over one loop calling `embed({collection})`. Every
+process running qmd is started with `QMD_EMBED_PARALLELISM=1` (finding 16,
+`set_qmd_env` in `qmd_indexer/src/lib.rs`), taking about 10% off the
+embedding rate for about 3.6 GB less memory.
 
 Finding 14 is why `update` calls `reindexCollection` itself rather than
 `store.update()`, which skips the count. `requireRegistered` reads the

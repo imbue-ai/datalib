@@ -126,16 +126,15 @@ impl QueryEmbedder {
         };
         let script = SdkScript::write()?;
         let cache_home = datalib_runtime::qmd::qmd_cache_home(&self.root);
-        let mut child = std::process::Command::new(&qmd.node)
+        let mut cmd = std::process::Command::new(&qmd.node);
+        crate::set_qmd_env(&mut cmd, &cache_home);
+        let mut child = cmd
             // No node flags before the script: see the script's header.
             .arg(&script.0)
             .arg(&qmd.package)
             .arg(datalib_runtime::qmd::qmd_index_path(&self.root))
             .arg("serve")
             .arg(json!({ "models": crate::model_files(models) }).to_string())
-            .env("XDG_CACHE_HOME", &cache_home)
-            .env("XDG_CONFIG_HOME", &cache_home)
-            .env("NO_COLOR", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
