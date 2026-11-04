@@ -1,0 +1,276 @@
+//! Doltlite-backed raw store for the `file_inventory` provider.
+
+use datalib_etl::store_handle::RawStoreHandle;
+use datalib_etl_macros::RawStoreHandle;
+use std::collections::HashSet;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
+
+use datalib_etl::bulk::{
+    bulk_upsert_entity_in_tx, bulk_upsert_first_seen_in_tx, push_placeholder_list, SQL_CHUNK,
+};
+use datalib_etl::doltlite_raw as dr;
+
+use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow};
+
+#[derive(Clone, Debug, RawStoreHandle)]
+pub struct RawDb {
+    pool: SqlitePool,
+}
+
+/// Per-`diff_type` row counts over `files` and `dirs` together,
+/// between a scan's commit and its parent. `unchanged` rows are not
+/// counted here — they fall out as `total_scanned - added - modified`
+/// at the call site.
+#[derive(Debug, Default, Clone)]
+pub struct DiffCounts {
+    pub added: u64,
+    pub modified: u64,
+    pub removed: u64,
+}
+
+impl RawDb {
+    pub async fn open(db_path: &Path) -> Result<Self> {
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
+        Ok(Self { pool })
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
+    /// Release every store this handle opened, and wait for the
+    /// connections to go away. Dropping only schedules that.
+    pub async fn close(self) {
+        self.close_all().await;
+    }
+
+    /// Drop the `scan_meta` rows of any source but this one; each scan
+    /// writes its own row whole.
+    pub async fn clear_other_scan_meta(&self, source_id: &str) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin scan_meta clear tx")?;
+        for sql in [
+            "DELETE FROM scan_meta WHERE id != ?",
+            "DELETE FROM scan_meta_bookkeeping WHERE id != ?",
+        ] {
+            sqlx::query(sql)
+                .bind(source_id)
+                .execute(&mut *tx)
+                .await
+                .context(sql)?;
+        }
+        tx.commit().await.context("commit scan_meta clear tx")?;
+        Ok(())
+    }
+
+    /// Delete the `files` and `dirs` rows not in `seen`, except an entry in
+    /// `held` and everything beneath it. Returns how many went.
+    pub async fn prune_unseen(&self, seen: &HashSet<String>, held: &[&str]) -> Result<u64> {
+        let kept = |id: &str| {
+            seen.contains(id)
+                || held.iter().any(|h| {
+                    h.is_empty()
+                        || id == *h
+                        || id
+                            .strip_prefix(*h)
+                            .is_some_and(|rest| rest.starts_with('/'))
+                })
+        };
+        let mut removed = 0;
+        let mut tx = self.pool.begin().await.context("begin prune tx")?;
+        for table in ["files", "dirs"] {
+            // Audited: `table` iterates two of our own table names; ids are
+            // bound below.
+            let ids: Vec<String> =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
+                    .fetch_all(&mut *tx)
+                    .await
+                    .with_context(|| format!("list {table} ids"))?;
+            let gone: Vec<String> = ids.into_iter().filter(|id| !kept(id)).collect();
+            for chunk in gone.chunks(SQL_CHUNK) {
+                let mut sql = format!("DELETE FROM {table} WHERE id IN (");
+                push_placeholder_list(&mut sql, chunk.len());
+                sql.push(')');
+                // Audited: `table` is one of two names above; the IN-list is
+                // a `?,?,?` run sized from the chunk and every id is bound.
+                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                for id in chunk {
+                    q = q.bind(id);
+                }
+                removed += q
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("prune {table}"))?
+                    .rows_affected();
+            }
+        }
+        tx.commit().await.context("commit prune tx")?;
+        Ok(removed)
+    }
+
+    /// Put the connection on `branch`, creating it from the writer branch
+    /// if it does not exist.
+    pub async fn checkout_branch(&self, branch: &str) -> Result<()> {
+        // `dolt_connect_branch` errors when the branch is absent, so the
+        // error is the signal to create it. Connect, not checkout: a
+        // checkout writes a working set on every scan, a connect nothing.
+        let existing = sqlx::query("SELECT dolt_connect_branch(?)")
+            .bind(branch)
+            .execute(&self.pool)
+            .await;
+        if let Err(no_such_branch) = existing {
+            sqlx::query("SELECT dolt_checkout('-b', ?)")
+                .bind(branch)
+                .execute(&self.pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "dolt checkout -b {branch} (after connecting to it reported: {no_such_branch})"
+                    )
+                })?;
+        }
+
+        let active: String = sqlx::query("SELECT active_branch() AS b")
+            .fetch_one(&self.pool)
+            .await
+            .with_context(|| format!("read back active branch after switching to {branch}"))?
+            .try_get("b")
+            .with_context(|| format!("decode active branch after switching to {branch}"))?;
+        anyhow::ensure!(
+            active == branch,
+            "switching to branch {branch:?} reported success but the connection is on {active:?}"
+        );
+        Ok(())
+    }
+
+    /// Producer-consumer write path: one batch of content rows lands
+    /// in a SINGLE sqlite transaction (no bookkeeping sidecars — see
+    /// the module docs). The matching host observations go to the
+    /// fingerprint cache, not here. These are sqlite-level `BEGIN…COMMIT`s
+    /// that flush the working set; the single version-control
+    /// `dolt_commit` happens once at end of scan (see [`Self::commit`]).
+    /// Returns the wall time.
+    pub async fn write_batch(
+        &self,
+        files: &[FileRow],
+        dirs: &[DirRow],
+        _now: &str,
+    ) -> Result<std::time::Duration> {
+        let started = std::time::Instant::now();
+        if files.is_empty() && dirs.is_empty() {
+            return Ok(started.elapsed());
+        }
+        let mut tx = self.pool.begin().await.context("begin batch tx")?;
+        bulk_upsert_entity_in_tx(&mut tx, files).await?;
+        bulk_upsert_entity_in_tx(&mut tx, dirs).await?;
+        tx.commit().await.context("commit batch tx")?;
+        Ok(started.elapsed())
+    }
+
+    /// `dolt_gc()`: reclaims the pages the scan's per-batch transactions
+    /// left behind, which otherwise dominate a large scan's file size.
+    /// Returns the wall time.
+    pub async fn gc(&self) -> Result<std::time::Duration> {
+        let started = std::time::Instant::now();
+        sqlx::query("SELECT dolt_gc()")
+            .execute(&self.pool)
+            .await
+            .context("dolt_gc")?;
+        Ok(started.elapsed())
+    }
+
+    /// The one commit per scan, so `HEAD^..HEAD` is what the scan changed;
+    /// `None` when it changed nothing. `commit_run` publishes to `main`
+    /// only from the writer branch, so a scan with no `--branch` is on
+    /// `main` when this returns and one on a named branch stays there.
+    pub async fn commit(&self, msg: &str) -> Result<Option<String>> {
+        dr::commit_run(&self.pool, msg).await
+    }
+
+    /// Root-relative ids of every directory row, in id order. Used by
+    /// the post-write stamping pass to decide which dirs need a UUID
+    /// breadcrumb — bounded by the directory count, which is tiny next
+    /// to the file count.
+    pub async fn dir_ids(&self) -> Result<Vec<String>> {
+        let ids = sqlx::query_scalar::<_, String>("SELECT id FROM dirs ORDER BY id")
+            .fetch_all(&self.pool)
+            .await
+            .context("select dir ids")?;
+        Ok(ids)
+    }
+
+    pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
+        use futures::TryStreamExt;
+        let mut out = std::collections::BTreeSet::new();
+        let mut rows =
+            sqlx::query("SELECT id FROM files UNION ALL SELECT id FROM dirs").fetch(&self.pool);
+        while let Some(r) = rows.try_next().await.context("stream entry ids")? {
+            out.insert(sqlx::Row::try_get::<String, _>(&r, 0).context("read id")?);
+        }
+        Ok(out)
+    }
+
+    /// Stamp one already-written directory row with its breadcrumb
+    /// UUID. The row was written by the streaming pass; this is the
+    /// explicit enrichment UPDATE the stamping pass issues after the
+    /// breadcrumb file lands (see [`super`] stamping notes).
+    pub async fn set_identity_uuid(&self, id: &str, uuid: &str) -> Result<()> {
+        sqlx::query("UPDATE dirs SET identity_uuid = ? WHERE id = ?")
+            .bind(uuid)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("update dirs.identity_uuid")?;
+        Ok(())
+    }
+
+    /// Summarize what the most recent commit changed in `files` and
+    /// `dirs` relative to its parent commit, read from doltlite's
+    /// `dolt_diff_<table>` system tables. A row the scan rewrote
+    /// identically is no change, so only genuinely changed
+    /// entries surface as added/modified/removed.
+    pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
+        let rows = sqlx::query(
+            "SELECT diff_type, COUNT(*) AS n FROM ( \
+                SELECT diff_type FROM dolt_diff_files \
+                 WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD' \
+                UNION ALL \
+                SELECT diff_type FROM dolt_diff_dirs \
+                 WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD') \
+              WHERE diff_type != 'unchanged' GROUP BY diff_type",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .ok()?;
+        let mut c = DiffCounts::default();
+        for r in rows {
+            let diff_type: String = r.try_get::<Option<String>, _>("diff_type").ok().flatten()?;
+            let n: i64 = r.try_get("n").unwrap_or(0);
+            match diff_type.as_str() {
+                "added" => c.added = n as u64,
+                "modified" => c.modified = n as u64,
+                "removed" => c.removed = n as u64,
+                _ => {}
+            }
+        }
+        Some(c)
+    }
+
+    pub async fn write_scan_meta(&self, row: &ScanMetaRow, now: &str) -> Result<()> {
+        let now = datalib_time::parse_strict(now)
+            .with_context(|| format!("parse the run's now {now:?}"))?;
+        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
+        bulk_upsert_first_seen_in_tx(&mut tx, std::slice::from_ref(row), &now).await?;
+        tx.commit().await.context("commit scan_meta tx")?;
+        Ok(())
+    }
+}

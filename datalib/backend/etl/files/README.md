@@ -25,7 +25,7 @@ host-local cache rather than in the provider's versioned store:
   `files` + `file_stats` in one store is 322 B/row against 171 B/row for
   `files` alone,
   because the cursor re-stores the full path as its own primary key
-  (`providers/fsindex/src/ingest/STORAGE_NOTES.md` has the table).
+  (`providers/file_inventory/src/ingest/STORAGE_NOTES.md` has the table).
 
 It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
 door `datalib_runs::store` uses), because losing a cache costs a rehash
@@ -191,7 +191,7 @@ holds back while one is unread, since that file may hold anything.
 The walk lists folders on every core and takes each file's stat with its
 folder's listing where the platform can (`getattrlistbulk` on macOS). Measured
 on 1.2M files in 13.6k folders, warm: about 13s one stat at a time on one core,
-2.85s now. Skipping the listing of an unchanged folder, as `fsindex`'s walker
+2.85s now. Skipping the listing of an unchanged folder, as `file_inventory`'s walker
 does, saves almost nothing here: the listing is the cheap part, and a folder's
 mtime does not move when a file in it is written in place, so its files still
 need their stats. Asking macOS what changed instead would skip those stats, and

@@ -1,4 +1,4 @@
-//! `datalib-dirtree-diff` — diff two fsindex scans into one HTML page.
+//! `datalib-dirtree-diff` — diff two file_inventory scans into one HTML page.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -28,7 +28,7 @@ const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-dirtree-diff",
     bin_name = "datalib-dirtree-diff",
-    about = "Diff two fsindex directory scans into one self-contained HTML page, \
+    about = "Diff two file_inventory directory scans into one self-contained HTML page, \
              with moves detected via directory tree-hashes.",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]

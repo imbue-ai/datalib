@@ -1,15 +1,15 @@
 //! A source that renders no documents counts its items from one raw
-//! table; the real binary's render step, over an fsindex store.
+//! table; the real binary's render step, over an file_inventory store.
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-/// fsindex renders nothing of its own, so its Items cell comes from
+/// file_inventory renders nothing of its own, so its Items cell comes from
 /// the `files` table the storage report counts. Without that, the
 /// render step reported the store's documents' items — zero, however
 /// many files it holds.
 #[tokio::test]
-async fn an_fsindex_render_reports_its_files_as_items() {
+async fn an_file_inventory_render_reports_its_files_as_items() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path();
     let store = datalib_etl::raw_layout::entities_db(&root.join("tng/ingest"));
@@ -35,7 +35,7 @@ async fn an_fsindex_render_reports_its_files_as_items() {
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env("DATALIB_DAG_STEP", "tng/render_markdown")
         .env("DATALIB_DAG_GROUP", "tng")
-        .env("DATALIB_DAG_GROUP_TYPE", "fsindex")
+        .env("DATALIB_DAG_GROUP_TYPE", "file_inventory")
         .env("DATALIB_DAG_FUNCTION", "render_markdown")
         .env("DATALIB_DAG_INPUTS", "tng/ingest")
         .env("DATALIB_DAG_DATA_ROOT", root)

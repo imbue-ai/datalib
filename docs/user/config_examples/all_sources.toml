@@ -76,7 +76,7 @@ inputs = [
   "email-gmail/render_markdown",
   "email-mbox/render_markdown",
   "facebook/render_markdown",
-  "fsindex/render_markdown",
+  "file_inventory/render_markdown",
   "garmin/render_markdown",
   "github/render_markdown",
   "gitlab/render_markdown",
@@ -1470,22 +1470,22 @@ function = "embed"
 command = "datalib-step"
 inputs = ["facebook/keyword_index"]
 
-# --- fsindex by `fswalk` ------------------------------------------------
+# --- file_inventory by `fswalk` -----------------------------------------
 
 # An index of a local directory tree, with every option set. Nothing to
 # sign in to; with `stamp` off the scan only reads the folder `path` names.
 [[groups]]
-id = "fsindex"
+id = "file_inventory"
 name = "Local files"
-type = "fsindex"
+type = "file_inventory"
 
 [[steps]]
-group = "fsindex"
+group = "file_inventory"
 function = "ingest"
 command = "datalib-step"
 
 [steps.params]
-stamp = false  # true writes `.fsindex.toml` UUID breadcrumbs into each directory
+stamp = false  # true writes `.file_inventory.toml` UUID breadcrumbs into each directory
                # that opts in with `stamp_me_with_uuid`; default false
 
 [steps.params.fswalk]
@@ -1494,10 +1494,10 @@ path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
 # Renders no documents, only the storage report every source gets, which
 # is what puts the source in the grid. No options.
 [[steps]]
-group = "fsindex"
+group = "file_inventory"
 function = "render_markdown"
 command = "datalib-step"
-inputs = ["fsindex/ingest"]
+inputs = ["file_inventory/ingest"]
 
 # --- garmin by `api` ----------------------------------------------------
 

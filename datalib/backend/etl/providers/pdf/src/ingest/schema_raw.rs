@@ -36,7 +36,7 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
 )";
 
 /// Lineage lookups (`WHERE xmp_document_id = ?`) are point queries
-/// against a column with no other access path, and unlike fsindex we
+/// against a column with no other access path, and unlike file_inventory we
 /// are at document scale (thousands of rows, not tens of millions), so
 /// the index-size argument that rules them out there does not apply.
 pub const PDF_DOCUMENTS_INDEXES: &[&str] = &[

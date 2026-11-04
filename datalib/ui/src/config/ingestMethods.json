@@ -111,7 +111,7 @@
       "reach": "local"
     }
   ],
-  "fsindex": [
+  "file_inventory": [
     {
       "path": "fswalk",
       "reach": "local"

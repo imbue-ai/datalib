@@ -49,7 +49,7 @@ the light and dark backgrounds.
   the brand's colours: `fastmail_calendar.svg` and
   `fastmail_contacts.svg` take Fastmail's blue and yellow from
   `fastmail.svg`, so they sit beside Fastmail but read as what they hold.
-- **Generic glyphs** (`apple_photos`, `calendar`, `contacts`, `fsindex`,
+- **Generic glyphs** (`apple_photos`, `calendar`, `contacts`, `file_inventory`,
   `media`, `pdf`, `perseus`, `search`, `system`) are
   [Material Design Icons](https://pictogrammers.com/library/mdi/)
   (Apache-2.0) in a mid grey that reads on both themes. Apple publishes

@@ -1,0 +1,23 @@
+# An index of a local directory tree: path, kind, size and blake3 hash
+# for every entry, in the source's raw store. Nothing to sign in to; the
+# scan only reads the folder `path` names.
+[[groups]]
+id = "file_inventory"
+name = "Local files"
+type = "file_inventory"
+
+[[steps]]
+group = "file_inventory"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.fswalk]
+path = "~/Documents/starfleet"
+
+# Renders no documents, only the storage report every source gets, which
+# is what puts the source in the grid.
+[[steps]]
+group = "file_inventory"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["file_inventory/ingest"]

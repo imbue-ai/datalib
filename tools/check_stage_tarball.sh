@@ -86,7 +86,7 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
 
     local f
     for f in datalib-dag datalib-step datalib-http datalib-applet datalib-migrate-config datalib-doltlite \
-             datalib-fsindex latchkey-curl-router curl-impersonate latchkey; do
+             datalib-file-inventory latchkey-curl-router curl-impersonate latchkey; do
         [[ -f "$dir/$f" && -x "$dir/$f" && ! -L "$dir/$f" ]] || { echo "ERROR: $f is not a regular executable in the tarball" >&2; ls -la "$dir" >&2; exit 1; }
     done
     [[ "$(cat "$dir/git-hash")" == 0123456789abcdef0123456789abcdef01234567 ]] || { echo "ERROR: git-hash is $(cat "$dir/git-hash")" >&2; exit 1; }

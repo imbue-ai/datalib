@@ -52,7 +52,7 @@ record plus its own `agentId`, and `isSidechain: true`.
 Two tables, both `WirePayloadRow`, neither with a bookkeeping sidecar
 (a live session's file is re-read whole on every sync, and stamping
 thousands of unchanged rows each time would churn the store for
-nothing — the same call `airvisual` and `fsindex` made):
+nothing — the same call `airvisual` and `file_inventory` made):
 
 - **`transcripts`** — one row per file. The id is the session id, or
   `<session_id>#<agent_id>` for a subagent. Promoted columns:

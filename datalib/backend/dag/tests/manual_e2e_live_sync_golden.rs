@@ -195,7 +195,7 @@ const VOLATILE_KEYS: &[&str] = &[
     // start/stop timestamps and content fields stay put.
     "elapsed_ms",
     "network_seconds",
-    // fsindex's `scan_meta` columns. `last_scan_at_utc` is wall-clock, so it
+    // file_inventory's `scan_meta` columns. `last_scan_at_utc` is wall-clock, so it
     // churns run-to-run even when the scanned bytes are identical, and
     // `scanner_version` is redacted so a version bump doesn't churn the
     // golden.

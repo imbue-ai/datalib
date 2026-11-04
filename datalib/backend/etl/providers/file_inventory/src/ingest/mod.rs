@@ -1,0 +1,761 @@
+//! `file_inventory` download entry point.
+
+pub mod db;
+pub mod hash;
+pub mod metrics;
+pub mod options;
+pub mod schema_raw;
+pub mod walker;
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use tokio::sync::mpsc;
+use tracing::{info, warn};
+
+use datalib_etl::control::DownloadControl;
+use datalib_etl::download_problems::RecordProblem;
+use datalib_etl::progress::Progress;
+use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::fingerprint_cache::{CachedTree, Fingerprint, FingerprintCache};
+use datalib_etl_files::fswalk::StampKind;
+
+pub use db::RawDb;
+
+use metrics::WalkerCounters;
+use options::{EffectiveOptions, FileInventoryOptions, Identity, OptionsCascade};
+use schema_raw::{DirRow, FileRow, ScanMetaRow};
+use walker::ScanRow;
+
+/// One batch sent over the producer→consumer channel: the file rows
+/// and directory rows bound for their two tables, and one fingerprint
+/// per row of either kind bound for the host cache.
+type Batch = (Vec<FileRow>, Vec<DirRow>, Vec<Fingerprint>);
+
+/// Bounded channel between the walker (producer) and the doltlite
+/// writer (consumer). Small cap so backpressure shows up — if the
+/// channel sits full, the writer is the bottleneck.
+const BATCH_CHANNEL_CAPACITY: usize = 4;
+
+/// Progress emission cadence. Cheap atomic loads, so doing this every
+/// half second is essentially free; gives the user a continuous
+/// feedback loop on long scans.
+const PROGRESS_INTERVAL_MS: u64 = 500;
+
+pub struct FetchOptions {
+    /// The store this run writes into, opened and closed by the caller.
+    /// A download never opens a store of its own: one writer per file
+    /// (`datalib/backend/etl/README.md` § "One writer per file, by
+    /// construction").
+    pub db: RawDb,
+    pub source_id: String,
+    pub root: PathBuf,
+    pub target_doltlite_branch: Option<String>,
+    /// This host's fingerprint cache. Unversioned and disposable —
+    /// see [`datalib_etl_files::fingerprint_cache`] for why it is not a table
+    /// in the scan store.
+    pub cache: FingerprintCache,
+    pub no_stamp: bool,
+    pub progress: Progress,
+    pub control: DownloadControl,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FetchSummary {
+    /// Total entries visited. Decomposes exactly as
+    /// `files_reused + files_hashed + dirs + symlinks`.
+    pub entries_scanned: usize,
+    /// Files served from the rescan cache — stat matched, **no content
+    /// read**. The whole point of the incremental cache.
+    pub files_reused: usize,
+    /// Files whose **content was actually re-read and blake3'd** this
+    /// scan (new or changed). This — not `entries_scanned` — is what
+    /// `bytes_hashed` measures.
+    pub files_hashed: usize,
+    /// Directories visited. Each one's tree-hash is recomputed from its
+    /// children's hashes — **no file I/O, no bytes hashed**.
+    pub dirs: usize,
+    /// Symlinks visited. Each one's target *path string* is hashed (a
+    /// handful of bytes); never a file-content read.
+    pub symlinks: usize,
+    pub stamped_directories: usize,
+    pub errors: usize,
+    /// Absolute path of the fingerprint cache this scan used. Worth
+    /// reporting because it is host state living outside both the data
+    /// root and the scan store, so it is the one input a reader cannot
+    /// infer from the command line.
+    pub cache_path: PathBuf,
+    /// Entries this host had already cached for the scan root.
+    pub cache_entries_loaded: usize,
+    /// Fingerprints written back — one per entry the walk visited.
+    pub cache_entries_written: u64,
+    /// Cache entries dropped because their paths are gone from disk.
+    pub cache_entries_forgotten: u64,
+    /// The cache's on-disk footprint before this scan, in bytes —
+    /// database plus its `-wal` / `-shm` sidecars.
+    pub cache_bytes_before: u64,
+    /// And after, once the WAL has been folded back in.
+    pub cache_bytes_after: u64,
+    /// Total bytes fed through blake3 this scan — i.e. the content of
+    /// the `files_hashed` files only.
+    pub bytes_hashed: u64,
+    /// Total bytes we did NOT hash because the rescan cursor let us
+    /// reuse a cached digest — the work the incremental cache saved.
+    pub bytes_skipped: u64,
+}
+
+async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
+    let cached = cache.load_under(root).await?;
+    let visited = db.all_entry_ids().await?;
+
+    let mut gone: Vec<String> = Vec::new();
+    let mut still_present = 0u64;
+    for rel in cached.paths() {
+        if visited.contains(rel) {
+            continue;
+        }
+        let abs = root.join(rel);
+        // `symlink_metadata`, not `metadata`: a dangling symlink is
+        // still an entry that exists, and following it would delete a
+        // cache row for something that is really there.
+        match std::fs::symlink_metadata(&abs) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                gone.push(datalib_etl_files::fingerprint_cache::abs_key(root, rel));
+            }
+            // Present, or unreadable for some other reason (a
+            // permission change on a parent). Either way, not evidence
+            // of deletion — keep it.
+            _ => still_present += 1,
+        }
+    }
+    let removed = cache.forget(&gone).await?;
+    Ok((removed, still_present))
+}
+
+pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
+    let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    run_problems::collecting(&pool, &stop, |found| scan_tree(opts, found)).await
+}
+
+async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+    let total_start = Instant::now();
+    let db = opts.db.clone();
+    if let Some(branch) = opts.target_doltlite_branch.as_deref() {
+        db.checkout_branch(branch).await?;
+    }
+
+    // Canonicalize the root before anything keys off it. The
+    // fingerprint cache is keyed by ABSOLUTE path — that is what makes
+    // it one chain per host rather than one per root — so a relative
+    // `--root` would store relative keys, and the same relative name
+    // used from two directories would have two unrelated trees fighting
+    // over one key. It also collapses `.`, `..`, a trailing slash and a
+    // symlinked route to the same tree onto one set of entries.
+    let root = opts
+        .root
+        .canonicalize()
+        .with_context(|| format!("resolve scan root {}", opts.root.display()))?;
+    let opts = FetchOptions { root, ..opts };
+
+    let load_start = Instant::now();
+    let cache_bytes_before = opts.cache.disk_bytes();
+    // Loading the rescan cache for a large tree can take a while, and
+    // it happens before the walk's per-entry progress bar exists — so
+    // announce it (start log + live message) so it's clearly working,
+    // not hung, on both a TTY and the NDJSON log sink.
+    info!(
+        event = "file_inventory_load_cache_start",
+        root = %opts.root.display(),
+        "loading this host's fingerprint cache for the scan root before the walk",
+    );
+    opts.progress.set_message(&format!(
+        "loading rescan cache for {} …",
+        opts.root.display()
+    ));
+    let prev = opts.cache.load_under(&opts.root).await?;
+    let cache_entries_loaded = prev.len();
+    info!(
+        event = "file_inventory_load_cache_done",
+        entry_rows = prev.len(),
+        elapsed_ms = load_start.elapsed().as_millis() as u64,
+        "loaded {} prior entries for this host from the fingerprint cache",
+        prev.len()
+    );
+    let phase_load = load_start.elapsed();
+
+    opts.progress
+        .set_message(&format!("indexing {}", opts.root.display()));
+    db.clear_other_scan_meta(&opts.source_id).await?;
+
+    let default_stamp_kind = if cfg!(unix) {
+        StampKind::Inode
+    } else {
+        StampKind::NoStamp
+    };
+
+    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+
+    let (
+        mut summary,
+        mut walker_errors,
+        counters,
+        phase_walk,
+        phase_write_total,
+        cache_entries_written,
+        seen,
+    ) = streaming_pipeline(
+        opts.root.clone(),
+        default_stamp_kind,
+        prev,
+        db.clone(),
+        opts.cache.clone(),
+        now.clone(),
+        opts.progress.clone(),
+    )
+    .await?;
+
+    // Every run re-walks the whole tree, so a row it did not write is an
+    // entry gone from disk, unless it is under one the walk found and
+    // could not read.
+    let prune_start = Instant::now();
+    let held: Vec<&str> = walker_errors
+        .iter()
+        .filter(|e| e.holds)
+        .map(|e| e.id.as_str())
+        .collect();
+    db.prune_unseen(&seen, &held).await?;
+    let phase_prune = prune_start.elapsed();
+
+    // Stamping is a post-write enrichment pass, never a separate scan
+    // engine. The stream has already written every row; here we walk
+    // the directory rows and, for any dir whose `.file_inventory.toml` cascade
+    // opts in, drop a UUID breadcrumb and UPDATE its `identity_uuid` —
+    // all in the same pre-commit working tree, so it lands in the one
+    // scan commit the orchestrator makes.
+    if !opts.no_stamp {
+        summary.stamped_directories =
+            stamp_directories(&db, &opts.root, &mut walker_errors).await?;
+        if summary.stamped_directories > 0 {
+            warn!(
+                event = "file_inventory_stamping_active",
+                stamped = summary.stamped_directories,
+                message =
+                    "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
+                "directory stamping is on: directories get a uuid file"
+            );
+        }
+    }
+
+    // ── forget what the filesystem forgot ─────────────────────────────
+    // Cache entries under this root that the walk did not write a row
+    // for are *candidates*, not casualties: the walk may simply have
+    // filtered them out, and this cache is shared with consumers whose
+    // filters differ. One `lstat` settles it — a path that is really
+    // gone is dropped, and anything still on disk is kept whatever this
+    // scan thought of it.
+    let mut cache_entries_forgotten = 0u64;
+    match forget_deleted(&opts.cache, &opts.root, &db).await {
+        Ok((0, _)) => {}
+        Ok((gone, kept)) => {
+            cache_entries_forgotten = gone;
+            info!(
+                event = "file_inventory_cache_forgot_deleted",
+                removed = gone,
+                kept_present = kept,
+                "dropped {gone} cache entries whose paths are gone; kept {kept} that this \
+             scan did not look at but which still exist"
+            );
+        }
+        // A cache that cannot be tidied is still a correct cache.
+        Err(e) => warn!(event = "file_inventory_cache_forget_failed", error = %e,
+                        "could not tidy the fingerprint cache: {e}"),
+    }
+
+    // Settle the WAL before measuring, or the footprint depends on
+    // when SQLite last checkpointed rather than on what we wrote.
+    opts.cache.checkpoint().await;
+    summary.cache_path = opts.cache.path().to_path_buf();
+    summary.cache_bytes_before = cache_bytes_before;
+    summary.cache_bytes_after = opts.cache.disk_bytes();
+    summary.cache_entries_loaded = cache_entries_loaded;
+    summary.cache_entries_written = cache_entries_written;
+    summary.cache_entries_forgotten = cache_entries_forgotten;
+
+    // ── scan_meta ────────────────────────────────────────────────────
+    let root_cascade = build_root_cascade(&opts.root);
+    let effective = root_cascade.effective();
+    let options_fp = options::options_fingerprint(&effective);
+    let os = std::env::consts::OS.to_string();
+    // FIXME(case_sensitive-heuristic): assume case-insensitive on
+    // macOS default volumes, case-sensitive elsewhere.
+    let case_sensitive = !matches!(os.as_str(), "macos");
+    // FIXME(inode_stable-heuristic): assumed true for now.
+    let inode_stable = true;
+    let scan_meta = ScanMetaRow {
+        id: opts.source_id.clone(),
+        abs_path: opts.root.to_string_lossy().into_owned(),
+        os,
+        case_sensitive,
+        inode_stable,
+        options_fingerprint: options_fp,
+        scanner_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let scan_meta_start = Instant::now();
+    db.write_scan_meta(&scan_meta, &now).await?;
+    let phase_scan_meta = scan_meta_start.elapsed();
+
+    // Every run re-walks the whole tree, so this run's set is the whole
+    // truth and replaces the last one's.
+    one_per_entry(&mut walker_errors);
+    found.records_failed(
+        walker_errors
+            .iter()
+            .map(|e| RecordProblem::new(e.table, &e.id, &e.message)),
+    );
+    for table in ["files", "dirs"] {
+        found.records_tried_all(table);
+    }
+
+    // The commit and gc happen in the standalone binary, not here:
+    // `fetch` stays commit-free per the framework's commit-lifecycle rule.
+
+    let total_elapsed = total_start.elapsed();
+
+    // ── Final phase breakdown event ──────────────────────────────────
+    let bytes_hashed = counters.bytes_hashed.load(Ordering::Relaxed);
+    let bytes_saved = counters.bytes_skipped_cache.load(Ordering::Relaxed);
+    let mb_per_s = if phase_walk.as_secs_f64() > 0.0 {
+        (bytes_hashed as f64) / phase_walk.as_secs_f64() / 1_000_000.0
+    } else {
+        0.0
+    };
+    let entries_per_s = if phase_walk.as_secs_f64() > 0.0 {
+        (counters.entries_total() as f64) / phase_walk.as_secs_f64()
+    } else {
+        0.0
+    };
+    info!(
+        event = "file_inventory_phase_breakdown",
+        total_ms = total_elapsed.as_millis() as u64,
+        load_caches_ms = phase_load.as_millis() as u64,
+        prune_ms = phase_prune.as_millis() as u64,
+        walk_ms = phase_walk.as_millis() as u64,
+        write_total_ms = phase_write_total.as_millis() as u64,
+        scan_meta_ms = phase_scan_meta.as_millis() as u64,
+        dirs = counters.dirs_visited.load(Ordering::Relaxed),
+        dirs_readdir_skipped = counters.dirs_readdir_skipped.load(Ordering::Relaxed),
+        files = counters.files_visited.load(Ordering::Relaxed),
+        symlinks = counters.symlinks_visited.load(Ordering::Relaxed),
+        files_reused = counters.files_reused.load(Ordering::Relaxed),
+        files_rehashed = counters.files_rehashed.load(Ordering::Relaxed),
+        bytes_hashed = bytes_hashed,
+        bytes_saved_by_cache = bytes_saved,
+        ignored = counters.ignored_entries.load(Ordering::Relaxed),
+        stat_errors = counters.stat_errors.load(Ordering::Relaxed),
+        read_errors = counters.read_errors.load(Ordering::Relaxed),
+        non_utf8_paths = counters.non_utf8_paths.load(Ordering::Relaxed),
+        batches_emitted = counters.batches_emitted.load(Ordering::Relaxed),
+        mb_per_s = mb_per_s,
+        entries_per_s = entries_per_s,
+        "where the scan's time went"
+    );
+
+    Ok(FetchSummary {
+        errors: walker_errors.len(),
+        bytes_hashed,
+        bytes_skipped: bytes_saved,
+        ..summary
+    })
+}
+
+/// Streaming producer-consumer pipeline. Walker runs on a blocking
+/// thread, pushes batches over a bounded mpsc channel; an async
+/// writer task drains the channel and commits each batch. Both run
+/// concurrently — the walker hashes the next batch while the writer
+/// commits the previous one.
+async fn streaming_pipeline(
+    root: PathBuf,
+    default_stamp_kind: StampKind,
+    prev: CachedTree,
+    db: RawDb,
+    cache: FingerprintCache,
+    now: String,
+    progress: Progress,
+) -> Result<(
+    FetchSummary,
+    Vec<walker::WalkerError>,
+    Arc<WalkerCounters>,
+    Duration,
+    Duration,
+    // Fingerprints written back to the host cache.
+    u64,
+    // The id of every row written.
+    HashSet<String>,
+)> {
+    let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
+    let counters = Arc::new(WalkerCounters::default());
+    let stop_progress = Arc::new(AtomicBool::new(false));
+
+    // ── Writer task ──────────────────────────────────────────────────
+    // One SQL transaction per batch, so our own batch buffers stay
+    // bounded. Each transaction rewrites the pages it touches
+    // (docs/dev/doltlite.md § "What a write costs"); the gc after the
+    // scan's single `dolt_commit` reclaims them.
+    let writer_db = db.clone();
+    let writer_cache = cache.clone();
+    let writer_now = now.clone();
+    let writer_handle = tokio::spawn(async move {
+        let mut total_write = Duration::ZERO;
+        let mut batches_written: u64 = 0;
+        let mut fingerprints_written: u64 = 0;
+        let mut seen: HashSet<String> = HashSet::new();
+        while let Some((files, dirs, fingerprints)) = rx.recv().await {
+            seen.extend(files.iter().map(|f| f.id.clone()));
+            seen.extend(dirs.iter().map(|d| d.id.clone()));
+            // Two destinations, deliberately: content to the versioned
+            // store, host observations to the unversioned cache.
+            let took = writer_db.write_batch(&files, &dirs, &writer_now).await?;
+            fingerprints_written += fingerprints.len() as u64;
+            writer_cache.store(&fingerprints).await?;
+            total_write += took;
+            batches_written += 1;
+        }
+        Ok::<(Duration, u64, u64, HashSet<String>), anyhow::Error>((
+            total_write,
+            batches_written,
+            fingerprints_written,
+            seen,
+        ))
+    });
+
+    // ── Progress task ────────────────────────────────────────────────
+    let progress_counters = counters.clone();
+    let progress_stop = stop_progress.clone();
+    let progress_sink = progress.clone();
+    let progress_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The bar is the only progress surface — no per-tick log spam.
+        // It's a message-only spinner (no indicatif `{pos}`/`{per_sec}`
+        // headline); every counter and rate lives, labeled, in the
+        // message. Rates are computed from per-tick deltas.
+        let mut last_files = 0u64;
+        let mut last_files_hashed = 0u64;
+        let mut last_bytes_hashed = 0u64;
+        let mut last_errors = 0u64;
+        let scan_start = Instant::now();
+        let mut last_tick = scan_start;
+        loop {
+            interval.tick().await;
+            if progress_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let now = Instant::now();
+            let dt = now.duration_since(last_tick).as_secs_f64().max(1e-3);
+            last_tick = now;
+
+            let dirs = progress_counters.dirs_visited.load(Ordering::Relaxed);
+            let dirs_skipped = progress_counters
+                .dirs_readdir_skipped
+                .load(Ordering::Relaxed);
+            let files = progress_counters.files_visited.load(Ordering::Relaxed);
+            let files_hashed = progress_counters.files_rehashed.load(Ordering::Relaxed);
+            let bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed);
+            let bytes_skipped = progress_counters
+                .bytes_skipped_cache
+                .load(Ordering::Relaxed);
+            let bytes_total = bytes_hashed + bytes_skipped;
+
+            // The only log line the scan emits per tick — and only when
+            // new errors have appeared since the last tick, so a clean
+            // scan stays silent and an error doesn't spam every 500ms.
+            let stat_errors = progress_counters.stat_errors.load(Ordering::Relaxed);
+            let read_errors = progress_counters.read_errors.load(Ordering::Relaxed);
+            let errors = stat_errors + read_errors;
+            if errors > last_errors {
+                warn!(
+                    event = "file_inventory_scan_errors",
+                    stat_errors = stat_errors,
+                    read_errors = read_errors,
+                    "file_inventory: {errors} entr{} could not be read",
+                    if errors == 1 { "y" } else { "ies" }
+                );
+                last_errors = errors;
+            }
+
+            // Instantaneous rates from this tick's delta.
+            let files_per_s = files.saturating_sub(last_files) as f64 / dt;
+            let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
+            let mb_hashed_per_s =
+                bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
+            // Cumulative averages over the whole run so far — each total
+            // divided by total elapsed, not just this tick's delta.
+            let total_secs = scan_start.elapsed().as_secs_f64().max(1e-3);
+            let files_per_s_avg = files as f64 / total_secs;
+            let files_hashed_per_s_avg = files_hashed as f64 / total_secs;
+            let mb_hashed_per_s_avg = bytes_hashed as f64 / total_secs / 1_000_000.0;
+            last_files = files;
+            last_files_hashed = files_hashed;
+            last_bytes_hashed = bytes_hashed;
+
+            progress_sink.set_message(&format!(
+                "dirs={dirs} ({dirs_skipped} readdir-skipped) files={files} \
+                 ({files_per_s:.1} files/s, avg {files_per_s_avg:.1}) total={} | \
+                 hashed {files_hashed} files / {} @ \
+                 {files_hashed_per_s:.1} files/s (avg {files_hashed_per_s_avg:.1}) \
+                 {mb_hashed_per_s:.1} MB/s (avg {mb_hashed_per_s_avg:.1}) \
+                 | skipped {}",
+                human_bytes(bytes_total),
+                human_bytes(bytes_hashed),
+                human_bytes(bytes_skipped),
+            ));
+        }
+    });
+
+    // ── Walker task on blocking thread ───────────────────────────────
+    let walker_counters = counters.clone();
+    let walker_root = root.clone();
+    let walker_handle = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<walker::WalkerError>, walker::WalkerSummary, Duration)> {
+            let started = Instant::now();
+            let walker = walker::Walker::new(&walker_root, &prev, default_stamp_kind);
+            let (errs, summ) = walker.collect_streaming(&walker_counters, |batch| {
+                let mut files = Vec::with_capacity(batch.len());
+                let mut dirs = Vec::new();
+                let mut fingerprints = Vec::with_capacity(batch.len());
+                for r in batch {
+                    match r.row {
+                        _ if r.held => {}
+                        ScanRow::File(f) => files.push(f),
+                        ScanRow::Dir(d) => dirs.push(d),
+                    }
+                    fingerprints.push(r.fingerprint);
+                }
+                tx.blocking_send((files, dirs, fingerprints))
+                    .map_err(|e| anyhow::anyhow!("writer channel closed: {e}"))?;
+                Ok(())
+            })?;
+            Ok((errs, summ, started.elapsed()))
+        },
+    );
+
+    // Wait for walker FIRST (closes tx by dropping when closure exits).
+    let walker_join = walker_handle.await.context("walker task join")?;
+    // Then the writer drains the rest and finishes.
+    let writer_join = writer_handle.await.context("writer task join")?;
+
+    // Stop progress task.
+    stop_progress.store(true, Ordering::Relaxed);
+    let _ = progress_handle.await;
+
+    // Error-precedence: when the WRITER dies first it drops `rx`, so the
+    // walker's `blocking_send` then fails with a generic "channel
+    // closed". That masks the real cause. So if the writer errored,
+    // surface the writer's error regardless of what the walker said.
+    let (phase_write_total, _batches_written, fingerprints_written, seen) = match writer_join {
+        Ok(v) => v,
+        Err(writer_err) => {
+            return Err(writer_err.context("doltlite writer task failed"));
+        }
+    };
+    let (walker_errors, walker_summary, phase_walk) = walker_join?;
+
+    let entries_scanned = (walker_summary.rehashed + walker_summary.reused)
+        + counters.non_utf8_paths.load(Ordering::Relaxed) as usize;
+    // Decompose the "non-reused" bucket (walker_summary.rehashed) into
+    // its real parts: file-content rehashes vs dirs vs symlinks. Only
+    // file rehashes read bytes; dirs/symlinks recompute their hash for
+    // free, so lumping them under one "rehashed" number is misleading.
+    let summary = FetchSummary {
+        entries_scanned,
+        files_reused: counters.files_reused.load(Ordering::Relaxed) as usize,
+        files_hashed: counters.files_rehashed.load(Ordering::Relaxed) as usize,
+        dirs: counters.dirs_visited.load(Ordering::Relaxed) as usize,
+        symlinks: counters.symlinks_visited.load(Ordering::Relaxed) as usize,
+        stamped_directories: 0,
+        errors: 0, // filled in by caller
+        // byte totals are stamped onto the summary by `fetch` from the
+        // counters after this returns.
+        ..Default::default()
+    };
+
+    Ok((
+        summary,
+        walker_errors,
+        counters,
+        phase_walk,
+        phase_write_total,
+        fingerprints_written,
+        seen,
+    ))
+}
+
+/// Keeps the first error each entry had, so the summary's `errors` counts
+/// entries: the walk and the stamping pass can both fail on one folder's
+/// options file.
+fn one_per_entry(errors: &mut Vec<walker::WalkerError>) {
+    let mut seen = std::collections::HashSet::new();
+    errors.retain(|e| seen.insert((e.table, e.id.clone())));
+}
+
+/// Post-write stamping pass. The scan has already streamed every row
+/// into `files` and `dirs`; here we walk `dirs` and, for any one
+/// whose `.file_inventory.toml` cascade enables `stamp_me_with_uuid`, ensure
+/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`. A
+/// folder whose breadcrumb will not read or write is an error of its
+/// own and the rest are still stamped.
+async fn stamp_directories(
+    db: &RawDb,
+    root: &std::path::Path,
+    errors: &mut Vec<walker::WalkerError>,
+) -> Result<usize> {
+    let mut count = 0_usize;
+    for id in db.dir_ids().await? {
+        let dir = if id.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&id)
+        };
+        let cascade = build_dir_cascade(root, &dir);
+        if !cascade.effective().stamp_me_with_uuid {
+            continue;
+        }
+        let mut dir_options = match options::load_at(&dir) {
+            Ok(y) => y.unwrap_or_default(),
+            Err(e) => {
+                errors.push(stamp_error(&id, e));
+                continue;
+            }
+        };
+        let uuid = match &dir_options.identity {
+            Some(identity) => identity.uuid.clone(),
+            None => {
+                let uuid = new_uuid();
+                let stamped_at = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+                let originally_at = dir
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned());
+                dir_options.identity = Some(Identity {
+                    uuid: uuid.clone(),
+                    stamped_at,
+                    stamper_version: 1,
+                    originally_at,
+                });
+                if let Err(e) = options::write_breadcrumb(&dir, &dir_options) {
+                    errors.push(stamp_error(&id, e));
+                    continue;
+                }
+                info!(event = "file_inventory_stamped", path = %dir.display(), uuid = %uuid, "stamped a directory with a uuid");
+                count += 1;
+                uuid
+            }
+        };
+        db.set_identity_uuid(&id, &uuid).await?;
+    }
+    Ok(count)
+}
+
+fn stamp_error(id: &str, e: anyhow::Error) -> walker::WalkerError {
+    walker::WalkerError {
+        table: "dirs",
+        id: id.to_string(),
+        message: format!("could not stamp: {e:#}"),
+        holds: false,
+    }
+}
+
+fn new_uuid() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
+
+pub fn human_growth(before: u64, after: u64) -> String {
+    let delta = if after >= before {
+        format!("+{}", human_bytes(after - before))
+    } else {
+        format!("-{}", human_bytes(before - after))
+    };
+    format!(
+        "{before}->{after} ({} -> {}, {delta})",
+        human_bytes(before),
+        human_bytes(after)
+    )
+}
+
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if n < 1000 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1000.0 && i < UNITS.len() - 1 {
+        v /= 1000.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", UNITS[i])
+}
+
+fn build_root_cascade(root: &std::path::Path) -> OptionsCascade {
+    let mut c = OptionsCascade::new();
+    if let Ok(Some(y)) = options::load_at(root) {
+        c.push(root.to_path_buf(), y);
+    }
+    c
+}
+
+fn build_dir_cascade(root: &std::path::Path, dir: &std::path::Path) -> OptionsCascade {
+    let mut c = OptionsCascade::new();
+    let mut cur = root.to_path_buf();
+    if let Ok(Some(y)) = options::load_at(&cur) {
+        c.push(cur.clone(), y);
+    }
+    if let Ok(rel) = dir.strip_prefix(root) {
+        for part in rel.iter() {
+            cur.push(part);
+            if let Ok(Some(y)) = options::load_at(&cur) {
+                c.push(cur.clone(), y);
+            }
+        }
+    }
+    c
+}
+
+// Keep types referenced even if not used at the module surface.
+const _: Option<EffectiveOptions> = None;
+const _: Option<FileInventoryOptions> = None;
+
+#[cfg(test)]
+mod growth_tests {
+    use super::human_growth;
+
+    #[test]
+    fn growth_shows_raw_bytes_then_the_human_form() {
+        assert_eq!(
+            human_growth(12_288, 475_136),
+            "12288->475136 (12.3 KB -> 475.1 KB, +462.8 KB)"
+        );
+    }
+
+    #[test]
+    fn no_change_is_plus_zero_not_a_blank() {
+        assert_eq!(
+            human_growth(4096, 4096),
+            "4096->4096 (4.1 KB -> 4.1 KB, +0 B)"
+        );
+    }
+
+    /// A cache can shrink — `VACUUM`, or a fresh file — so the delta
+    /// has to carry a sign rather than underflowing.
+    #[test]
+    fn a_shrink_is_reported_as_negative() {
+        assert_eq!(
+            human_growth(1_000_000, 400_000),
+            "1000000->400000 (1.0 MB -> 400.0 KB, -600.0 KB)"
+        );
+    }
+}

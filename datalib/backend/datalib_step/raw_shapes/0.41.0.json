@@ -240,7 +240,7 @@
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
-  "fsindex": {
+  "file_inventory": {
     "schema_hash": "87372fbb260f0582540ec47f7ffd1673c5182a575c9eb96ca5eefcdd74468dcd",
     "schema_version": 0,
     "shared_schema_version": 1,

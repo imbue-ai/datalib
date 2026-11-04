@@ -2,7 +2,7 @@
 //! transcript file and one per record in it. Neither table has a
 //! bookkeeping sidecar: a live session's file is re-read whole on every
 //! sync, and stamping thousands of unchanged rows each time would churn
-//! the store for nothing (the same call `airvisual` and `fsindex` made).
+//! the store for nothing (the same call `airvisual` and `file_inventory` made).
 
 use datalib_etl::doltlite_raw::{WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;

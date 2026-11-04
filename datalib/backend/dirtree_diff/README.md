@@ -1,6 +1,6 @@
-# A move-aware diff viewer for two `fsindex` directory scans
+# A move-aware diff viewer for two `file_inventory` directory scans
 
-`fsindex` records one row per file (path, kind, size, blake3, in
+`file_inventory` records one row per file (path, kind, size, blake3, in
 `files`) and one per directory (path, size, entry count, tree-hash, in
 `dirs`) into a doltlite store. This tool turns two such scans into
 a single self-contained HTML page: the two trees side by side, colour
@@ -25,10 +25,10 @@ chunks, so the second one is nearly free.
 
 ```sh
 # 1. scan the first tree into scans.doltlite_db, on branch `before`
-datalib-fsindex --db scans.doltlite_db --root ./tree1 --branch before
+datalib-file-inventory --db scans.doltlite_db --root ./tree1 --branch before
 
 # 2. scan the second tree into the SAME file, on branch `after`
-datalib-fsindex --db scans.doltlite_db --root ./tree2 --branch after
+datalib-file-inventory --db scans.doltlite_db --root ./tree2 --branch after
 
 # 3. diff the two branches — no unification step, they already share
 #    a chunk store
@@ -47,9 +47,9 @@ wrote diff.html — 1 move(s) (+3 rolled up), 0 modified, 1 added,
 entries inside it are rolled up rather than repeated. Both scans live in
 one 9 KB file.
 
-A release carries `datalib-fsindex` but not this tool; build it from a
-checkout. There, `datalib-fsindex` is
-`bazel-bin/datalib/backend/bin/datalib-fsindex` after `bazelisk build
+A release carries `datalib-file-inventory` but not this tool; build it from a
+checkout. There, `datalib-file-inventory` is
+`bazel-bin/datalib/backend/bin/datalib-file-inventory` after `bazelisk build
 //datalib/backend:bin`, and `datalib-dirtree-diff` is
 `bazel-bin/datalib/backend/dirtree_diff/dirtree_diff` after the build
 above.
@@ -68,8 +68,8 @@ old="$HOME/Library/CloudStorage/Dropbox/backups/Archive 2025"
 new="$HOME/Library/CloudStorage/Dropbox/backups/Archive 2026"
 db="$TMPDIR/compare.doltlite_db"     # anywhere outside both trees
 
-datalib-fsindex --db "$db" --root "$old" --branch older --no-stamp
-datalib-fsindex --db "$db" --root "$new" --branch newer --no-stamp
+datalib-file-inventory --db "$db" --root "$old" --branch older --no-stamp
+datalib-file-inventory --db "$db" --root "$new" --branch newer --no-stamp
 
 datalib-dirtree-diff --left "$db#older" --right "$db#newer" -o "$TMPDIR/compare.html"
 open "$TMPDIR/compare.html"
@@ -88,7 +88,7 @@ inode all match. A second folder's first scan reads every byte, even
 where the files are copies of the first folder's.
 
 `--no-stamp` makes the scan read-only. Without it, a folder whose
-`.fsindex.toml` opts into stamping gets a UUID written into that file,
+`.file_inventory.toml` opts into stamping gets a UUID written into that file,
 which is a change a sync client will upload.
 
 The line `datalib-dirtree-diff` prints answers the question. The newer
@@ -111,8 +111,8 @@ datalib-doltlite -readonly -box "$db" "
 
 Swap the `SELECT` line for `SELECT o.id, o.size` to list the files
 that are missing. Scans in one file are read by branch name, never as
-`main`; see fsindex's
-[INGEST.md](../etl/providers/fsindex/INGEST.md) §"Several roots in one
+`main`; see file_inventory's
+[INGEST.md](../etl/providers/file_inventory/INGEST.md) §"Several roots in one
 file: branches".
 
 Three zsh traps. Quote every path: zsh does not split an unquoted
@@ -187,12 +187,12 @@ anything is unified. `#REF` defaults to `HEAD`.
 
 ### Writing several roots into one file
 
-`fsindex --branch <name>` scans a root into its own branch of a shared
+`file_inventory --branch <name>` scans a root into its own branch of a shared
 file, which is what `demo.sh` case 2 uses:
 
 ```sh
-datalib-fsindex --db scans.doltlite_db --root ./before --branch before
-datalib-fsindex --db scans.doltlite_db --root ./after  --branch after
+datalib-file-inventory --db scans.doltlite_db --root ./before --branch before
+datalib-file-inventory --db scans.doltlite_db --root ./after  --branch after
 ```
 
 Each scan's `scan_meta.id` defaults to its root's directory name, so
@@ -200,9 +200,9 @@ standalone runs need no identifier. Pass `--source-id` when you want to
 choose one — the pipeline does, because there a source's identity comes
 from its config entry and outlives any particular path.
 
-The checkout is fsindex's `RawDb::checkout_branch`
-(`etl/providers/fsindex/src/ingest/db.rs`), covered by fsindex's
-`tests/fsindex_tests/branch_scan.rs`. It connects to the branch with
+The checkout is file_inventory's `RawDb::checkout_branch`
+(`etl/providers/file_inventory/src/ingest/db.rs`), covered by file_inventory's
+`tests/file_inventory_tests/branch_scan.rs`. It connects to the branch with
 `dolt_connect_branch`, which writes nothing, and creates the branch
 with `dolt_checkout('-b', …)` only when that connect fails, then reads
 the active branch back. The branch
@@ -212,8 +212,8 @@ is per connection, so the pool keeps its one connection for good
 
 ## How moves are detected
 
-`fsindex` hashes a directory over a canonical encoding of its immediate
-children (`etl/providers/fsindex/src/ingest/hash.rs`), so a directory's blake3 covers its whole subtree.
+`file_inventory` hashes a directory over a canonical encoding of its immediate
+children (`etl/providers/file_inventory/src/ingest/hash.rs`), so a directory's blake3 covers its whole subtree.
 Move a directory and its digest is unchanged — it simply appears at a
 different path.
 
@@ -370,7 +370,7 @@ diff.
 Distinguishing `deleted` from `gone (copy remains)` is not free: it asks
 whether a digest exists *anywhere* on the other side, and neither table
 carries a secondary index on `blake3` (deliberately —
-[`STORAGE_NOTES.md`](../etl/providers/fsindex/src/ingest/STORAGE_NOTES.md)
+[`STORAGE_NOTES.md`](../etl/providers/file_inventory/src/ingest/STORAGE_NOTES.md)
 §2 measures what one costs). A directory digest is
 looked up in `dirs`, which is small enough not to matter; a file digest
 costs one whole-corpus scan of `files`, however many digests are
@@ -479,7 +479,7 @@ number before anyone reopens that debate.
   are deleted and several identical files appear, which pairs with which
   is a basename-then-depth heuristic. For identical content the
   distinction is cosmetic.
-- **`identity_uuid` is unused.** fsindex can stamp directories with a
+- **`identity_uuid` is unused.** file_inventory can stamp directories with a
   breadcrumb UUID that survives a move *and* an edit; this tool matches
   on content only, so a directory that moved and changed in the same
   pass reads as a delete plus an add. Pairing on `identity_uuid` first

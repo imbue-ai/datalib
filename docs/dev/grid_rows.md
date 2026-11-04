@@ -451,7 +451,7 @@ left, and every full read of that store then fails (#1202).
 Every source's render wave ends by measuring its own raw store and
 emitting a handful of rows tagged `provider = "datalib"`, `source_label
 = "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
-gives a download-only source — `fsindex`, `media` — a place in the grid
+gives a download-only source — `file_inventory`, `media` — a place in the grid
 at all: they render no documents, so without this they appear nowhere.
 `source:datalib` is "show me what everything weighs". The code is
 `datalib/backend/datalib_step/src/introspect.rs`; its header has the
