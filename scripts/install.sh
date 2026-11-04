@@ -157,12 +157,17 @@ mv "${LIB_DIR}.new" "${LIB_DIR}"
 rm -rf "${LIB_DIR}.old"
 
 installed=""
-for bin in "${LIB_DIR}"/*; do
-    [ -f "${bin}" ] || continue
-    name="$(basename "${bin}")"
-    chmod +x "${bin}"
-    ln -sfn "${bin}" "${INSTALL_DIR}/${name}"
-    installed="${installed} ${name}"
+for file in "${LIB_DIR}"/*; do
+    [ -f "${file}" ] || continue
+    name="$(basename "${file}")"
+    link="${INSTALL_DIR}/${name}"
+    if [ -x "${file}" ]; then
+        ln -sfn "${file}" "${link}"
+        installed="${installed} ${name}"
+    elif [ "$(readlink "${link}" 2>/dev/null)" = "${file}" ]; then
+        # A data file (git-hash, runtime.manifest) an earlier install linked.
+        rm -f "${link}"
+    fi
 done
 [ -n "${installed}" ] || err "no binaries found in tarball"
 

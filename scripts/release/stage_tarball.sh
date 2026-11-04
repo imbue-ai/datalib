@@ -97,8 +97,7 @@ fi
 # send an agent to, the example configs), written by the `datalib-step`
 # they ship beside, so each file and its `datalib-step help` page cannot
 # disagree; a link to a file not compiled in names the commit just
-# written. At its path in the repo, under a directory, because
-# install.sh links every file at the top into the user's PATH.
+# written. At its path in the repo, under a directory.
 # `help docs` prints a `<topic> <path>` line per doc.
 "$stage/datalib-step" help docs | awk '$2 ~ /\.(md|toml)$/ { print $1, $2 }' > "$stage/.docs"
 while read -r topic path; do

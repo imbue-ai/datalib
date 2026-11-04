@@ -137,6 +137,7 @@ const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-step",
     bin_name = "datalib-step",
+    version = datalib_runtime::build_id::DATALIB_VERSION,
     about = "The built-in step program datalib-dag runs, and tools for setting a source up",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
@@ -923,5 +924,13 @@ mod cli_tests {
     fn the_help_examples_parse() {
         super::Cli::command().debug_assert();
         datalib_cli_help::assert_examples_parse(super::Cli::command(), super::EXAMPLES);
+    }
+
+    #[test]
+    fn version_flag_prints_the_workspace_version() {
+        datalib_cli_help::assert_version_flag_prints(
+            super::Cli::command(),
+            datalib_runtime::build_id::DATALIB_VERSION,
+        );
     }
 }
