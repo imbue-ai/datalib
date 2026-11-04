@@ -4,6 +4,7 @@
 //! search says when qmd cannot answer.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::OnceLock;
 
 use super::tabs::SearchTab;
@@ -16,23 +17,26 @@ const QUERY: &str = "the enterprise";
 /// qmd finds its node and package through `DATALIB_RUNTIME_DIR`, which
 /// every test in this binary shares; the BUILD rule runs them one at a
 /// time (`RUST_TEST_THREADS=1`), so setting it once, before any qmd runs,
-/// races nothing.
-fn stage_runtime_once() {
-    static STAGED: OnceLock<()> = OnceLock::new();
-    STAGED.get_or_init(|| {
+/// races nothing. Answers the directory the runtime is staged in.
+fn stage_runtime_once() -> &'static Path {
+    static WORK: OnceLock<PathBuf> = OnceLock::new();
+    WORK.get_or_init(|| {
         let work = tempfile::tempdir().unwrap().keep();
         let runtime = datalib_qmd_fixture::stage_runtime(&work);
         // SAFETY: see above; no other thread is running a test.
         unsafe { std::env::set_var("DATALIB_RUNTIME_DIR", &runtime) };
-    });
+        work
+    })
 }
 
-/// The fixture's root: its grid index, its qmd index and qmd's model.
+/// The fixture's root: its grid index, its qmd index and qmd's model. The
+/// roots share one models directory, so the stamp the first verification
+/// leaves there spares every later test from hashing 300 MB.
 pub(super) fn fixture_root() -> tempfile::TempDir {
-    stage_runtime_once();
+    let work = stage_runtime_once();
     let root = tempfile::tempdir().unwrap();
     datalib_qmd_fixture::materialize_root_with_grid(root.path());
-    datalib_qmd_fixture::stage_models(root.path(), &root.path().join("_work"));
+    datalib_qmd_fixture::stage_models(root.path(), work);
     root
 }
 
