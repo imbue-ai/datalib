@@ -1,9 +1,10 @@
 {
   "airvisual": {
-    "schema_hash": "7548cd75eedf66a585955e1268d85306b0e880520a0fbe1d9be090c0b2f7ed79",
+    "schema_hash": "fabce8a18fc8bb3d3ee471ebeea4dd46f0e8f42623a08160e7aa3cbf4a6be04c",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
+      "CREATE TABLE airvisual_clock_changes( device_id TEXT NOT NULL, archive INTEGER NOT NULL, previous_wall_s INTEGER NOT NULL, after_wall_s INTEGER NOT NULL, after_timezone TEXT NULL, PRIMARY KEY(device_id, archive))",
       "CREATE TABLE airvisual_devices( id TEXT PRIMARY KEY, name TEXT NOT NULL, model TEXT NULL, mac_address TEXT NULL, app_version TEXT NULL, system_version TEXT NULL, timezone TEXT NULL, last_ts_ms INTEGER NULL)",
       "CREATE TABLE airvisual_samples( device_id TEXT NOT NULL, ts_ms INTEGER NOT NULL, pm25_ugm3 REAL NULL, pm10_ugm3 REAL NULL, pm1_ugm3 REAL NULL, aqi_us REAL NULL, aqi_cn REAL NULL, outdoor_aqi_us REAL NULL, outdoor_aqi_cn REAL NULL, temperature_c REAL NULL, humidity_pct REAL NULL, co2_ppm REAL NULL, voc_ppb REAL NULL, source_file TEXT NOT NULL, PRIMARY KEY(device_id, ts_ms))",
       "CREATE TABLE airvisual_unplaced_samples( id TEXT PRIMARY KEY, payload TEXT NULL, device_id TEXT NOT NULL, source_file TEXT NOT NULL, line_no INTEGER NOT NULL, device_ts_s INTEGER NOT NULL)",

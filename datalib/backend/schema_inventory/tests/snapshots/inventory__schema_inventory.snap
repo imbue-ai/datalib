@@ -1352,6 +1352,12 @@ recipients_bookkeeping
     held_version
 
 == airvisual/raw ==
+airvisual_clock_changes
+    device_id
+    archive
+    previous_wall_s
+    after_wall_s
+    after_timezone
 airvisual_devices
     id
     name

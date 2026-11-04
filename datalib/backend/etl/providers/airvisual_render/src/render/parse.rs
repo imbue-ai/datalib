@@ -2,7 +2,7 @@
 //! The store is wide (one column per measurement); the plots want one
 //! series per (device, measurement), so this is where the pivot happens.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -10,7 +10,9 @@ use datalib_etl_render::inputs::{Input, RawRange};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use datalib_etl_airvisual::ingest::clock::{clock_model, ClockModel};
 use datalib_etl_airvisual::ingest::db_path_for;
+use datalib_etl_airvisual::ingest::schema_raw::load_clock_changes;
 
 pub use datalib_etl_timeseries_render::series::Series;
 
@@ -56,10 +58,15 @@ pub struct ParsedAirvisual {
 /// The tables the page reads, whole: any row of any of them moving
 /// re-renders it.
 pub fn inputs() -> Vec<Input> {
-    ["airvisual_devices", "airvisual_samples", "ingested_files"]
-        .into_iter()
-        .map(Input::whole_table)
-        .collect()
+    [
+        "airvisual_devices",
+        "airvisual_samples",
+        "airvisual_clock_changes",
+        "ingested_files",
+    ]
+    .into_iter()
+    .map(Input::whole_table)
+    .collect()
 }
 
 pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedAirvisual> {
@@ -99,8 +106,12 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedAirvisual> {
 }
 
 async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedAirvisual> {
-    let devices = load_devices(pool).await?;
-    let series = load_series(pool).await?;
+    let mut devices = load_devices(pool).await?;
+    let models = load_clocks(pool, &devices).await?;
+    let (series, newest) = load_series(pool, &models).await?;
+    for device in &mut devices {
+        device.last_ts_ms = newest.get(&device.id).copied();
+    }
     let files = load_files(pool).await;
     let sample_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM airvisual_samples")
         .fetch_one(pool)
@@ -139,15 +150,52 @@ async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
         .collect())
 }
 
-/// One pass over `airvisual_samples` in (device, time) order, fanned
-/// out into one series per measurement column that has a value. The
-/// `airvisual_samples_by_device_ts` index covers the ORDER BY.
-async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
+/// What each device's clock means. What is doubtful about one is the
+/// download's to report, which holds the same facts.
+async fn load_clocks(
+    pool: &SqlitePool,
+    devices: &[DeviceRow],
+) -> Result<HashMap<String, ClockModel>> {
+    let mut models = HashMap::new();
+    for device in devices {
+        let changes = load_clock_changes(pool, &device.id)
+            .await
+            .with_context(|| format!("load the clock changes of {}", device.id))?;
+        let (model, _) = clock_model(&changes, device.timezone.as_deref());
+        models.insert(device.id.clone(), model);
+    }
+    Ok(models)
+}
+
+/// A device's readings in real time, the same moment twice (a `corrupt_` /
+/// `restored_` pair) keeping the later one.
+fn in_real_order(series: &mut Series) {
+    let mut points: Vec<(i64, f64)> = series
+        .ts_ms
+        .iter()
+        .copied()
+        .zip(series.values.iter().copied())
+        .collect();
+    points.sort_by_key(|(t, _)| *t);
+    points.reverse();
+    points.dedup_by_key(|(t, _)| *t);
+    points.reverse();
+    (series.ts_ms, series.values) = points.into_iter().unzip();
+}
+
+/// One pass over `airvisual_samples`, fanned out into one series per
+/// measurement column that has a value, in real time; and each device's
+/// newest reading. What the store holds is the device's own count, which
+/// goes back when its clock does, so its order is not time's.
+async fn load_series(
+    pool: &SqlitePool,
+    models: &HashMap<String, ClockModel>,
+) -> Result<(Vec<Series>, HashMap<String, i64>)> {
     let columns: Vec<&'static str> = METRICS.iter().map(|m| m.metric).collect();
     // Audited: `columns` is the `&'static str` metric table above, our
     // own column names; no runtime data reaches the statement.
     let sql = format!(
-        "SELECT device_id, ts_ms, {} \
+        "SELECT device_id, ts_ms, source_file, {} \
            FROM airvisual_samples ORDER BY device_id, ts_ms",
         columns.join(", ")
     );
@@ -157,9 +205,16 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
         .context("load airvisual_samples")?;
 
     let mut by_key: BTreeMap<(String, &'static str), Series> = BTreeMap::new();
+    let mut newest: HashMap<String, i64> = HashMap::new();
     for r in rows {
         let device: String = r.get("device_id");
-        let ts_ms: i64 = r.get("ts_ms");
+        let wall_ms: i64 = r.get("ts_ms");
+        let ts_ms = match models.get(&device) {
+            Some(model) => model.real_ms(r.get::<&str, _>("source_file"), wall_ms),
+            None => wall_ms,
+        };
+        let held = newest.entry(device.clone()).or_insert(ts_ms);
+        *held = (*held).max(ts_ms);
         for col in &columns {
             let Some(value) = r.get::<Option<f64>, _>(*col) else {
                 continue;
@@ -170,7 +225,9 @@ async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
                 .push(ts_ms, value);
         }
     }
-    Ok(by_key.into_values().collect())
+    let mut series: Vec<Series> = by_key.into_values().collect();
+    series.iter_mut().for_each(in_real_order);
+    Ok((series, newest))
 }
 
 async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
@@ -186,4 +243,23 @@ async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
             size_bytes: r.get::<i64, _>("size_bytes"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clocks going back put an hour's readings after the hour they
+    /// follow in the device's own count, and a pair of files can say one
+    /// moment twice.
+    #[test]
+    fn readings_are_put_in_real_order_and_a_repeat_keeps_the_later() {
+        let mut series = Series::new("d".into(), "m".into());
+        for (t, v) in [(30, 3.0), (10, 1.0), (20, 2.0), (10, 9.0)] {
+            series.push(t, v);
+        }
+        in_real_order(&mut series);
+        assert_eq!(series.ts_ms, [10, 20, 30]);
+        assert_eq!(series.values, [9.0, 2.0, 3.0]);
+    }
 }
