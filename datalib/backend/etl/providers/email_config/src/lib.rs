@@ -117,7 +117,8 @@ pub struct EmailRenderConfig {
     /// these mailbox label paths (POSIX-like, exact match). Empty = render
     /// everything extracted. Separate from the download step's
     /// `only_extract_labels`, so a giant inbox can be extracted in full but
-    /// rendered down to a subset.
+    /// rendered down to a subset. A label no mailbox has selects no thread,
+    /// and each run reports it as a warning on the render step.
     #[serde(default)]
     pub only_render_labels: Vec<String>,
 }

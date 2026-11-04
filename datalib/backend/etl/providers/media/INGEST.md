@@ -12,7 +12,7 @@ the contracts every provider honors are in
 ## Relationship to `fsindex` and `pdf`
 
 All three scan a local tree. `media` and `pdf` walk it through
-[`datalib_etl_files::fsscan`](/datalib/backend/etl/files/src/fsscan.rs), which
+[`datalib_etl_files::file_changes_scan`](/datalib/backend/etl/files/src/file_changes_scan.rs), which
 hashes only what the host-wide fingerprint cache cannot vouch for
 (`etl/files/README.md` §"Answering "did it change?" for a file-backed
 source"); `fsindex` has its own walker over the same blake3 and

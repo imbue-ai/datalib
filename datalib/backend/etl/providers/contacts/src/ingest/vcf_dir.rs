@@ -9,9 +9,9 @@ use tracing::warn;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
 use super::db::{addressbook_pk, RawDb};
@@ -70,14 +70,13 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     db.upsert_account(&account_id, &server_url, None, None)
         .await?;
 
-    // One scan answers both questions at once: which `.vcf` files are
-    // there, and which have changed since this source last finished
-    // with them. The walk, the hashing, and the decision not to re-hash
-    // what the host cache can vouch for all live in the utility.
-    let scan = fsscan::scan(
+    // One listing answers both questions at once: which `.vcf` files are
+    // there, and which may have changed since this source last finished
+    // with them.
+    let scan = file_changes_scan::list(
         &opts.cache,
         &opts.input_path,
-        &fsscan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions::default(),
         |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vcf")),
     )
     .await?;
@@ -89,20 +88,34 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
-    let changes = scan.changes_since(&prev);
-    summary.files_skipped = changes.unchanged;
+    let changes = scan.changes_since(&prev, |_| true);
     opts.progress.set_length(Some(scan.files.len() as u64));
-    opts.progress.inc(changes.unchanged as u64);
+    opts.progress.inc(changes.unchanged() as u64);
 
     let mut read: BTreeSet<&str> = BTreeSet::new();
     scan.report_problems(&found, "files");
-    for f in changes.needs_reading_by_path() {
+    for &f in changes.to_read() {
         opts.progress
             .set_message(&format!("ingesting {}", f.path.display()));
+        let file = match changes.read_if_changed_by_path(f).await {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                opts.progress.inc(1);
+                continue;
+            }
+            // Not stamped, so the next run reads it again.
+            Err(e) => {
+                summary.errors += 1;
+                found.listing(&format!("vcf {}", f.rel), format!("{e:#}"));
+                opts.progress.inc(1);
+                continue;
+            }
+        };
         match ingest_one(
             &db,
             &scan.given_resolved,
             &f.path,
+            &file.bytes,
             &account_id,
             &mut summary,
         )
@@ -111,7 +124,7 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
             Ok(()) => {
                 // Stamp only after a clean ingest, so a crash mid-file
                 // leaves no cursor and the next run re-ingests it.
-                file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, f).await?;
+                file_checkpoint::record_file_pool(db.pool(), CHECKPOINT_SCOPE, &file.file).await?;
                 read.insert(f.rel.as_str());
             }
             // Not stamped, so the next run reads it again.
@@ -133,6 +146,8 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
             .await?;
         summary.files_removed += 1;
     }
+    summary.files_skipped = changes.unchanged();
+    scan.finish().await?;
     Ok(summary)
 }
 
@@ -140,17 +155,18 @@ async fn ingest_one(
     db: &RawDb,
     root: &Path,
     file: &Path,
+    bytes: &[u8],
     account_id: &str,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    let body = std::str::from_utf8(bytes).with_context(|| format!("read {}", file.display()))?;
     let label = addressbook_label(file);
     let book_href = relative_href(root, file);
     let book_id = addressbook_pk(account_id, &book_href);
     // The parse is ours, but it reads whatever the file holds, so a
     // panic in it is this file's failure, not the run's.
     let rows =
-        run_problems::catching_panics(|| card_rows(file, &label, &book_href, &book_id, &body))?;
+        run_problems::catching_panics(|| card_rows(file, &label, &book_href, &book_id, body))?;
     db.upsert_addressbook(account_id, &book_href, Some(&label), None, None)
         .await?;
     summary.addressbooks += 1;

@@ -15,8 +15,8 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan;
 use datalib_etl_files::fswalk;
 
 pub use db::{db_path_for, RawDb, WriteBatch};
@@ -154,19 +154,19 @@ async fn scan_tree(
     // an mtime, and touching a byte silently pulls the whole thing back
     // over the network.
     let dataless = std::sync::Mutex::new(Vec::new());
-    let scan = fsscan::scan_with(
+    let scan = file_changes_scan::scan_with(
         &opts.cache,
         &opts.root,
-        &fsscan::ScanOptions {
+        &file_changes_scan::ScanOptions {
             ignore: opts.ignore.clone(),
             max_bytes: opts.max_bytes,
             ..Default::default()
         },
         kind::accept,
-        |path, meta| {
-            if opts.skip_dataless && is_dataless(meta) {
-                tracing::info!(path = %path.display(), "media_skipped_dataless");
-                dataless.lock().unwrap().push(path.to_path_buf());
+        |walked| {
+            if opts.skip_dataless && is_dataless(walked) {
+                tracing::info!(path = %walked.path.display(), "media_skipped_dataless");
+                dataless.lock().unwrap().push(walked.path.clone());
                 return false;
             }
             true
@@ -303,21 +303,14 @@ async fn scan_tree(
 ///
 /// Reading one asks Dropbox or iCloud to materialize the file, so a first scan
 /// of an evicted library would try to pull the whole thing down. Consulted
-/// through [`fsscan::scan_with`]'s admit hook, the only place that sees a stat
+/// through [`file_changes_scan::scan_with`]'s admit hook, the only place that sees a stat
 /// *before* anything reads.
 ///
 /// A heuristic: a filesystem reporting no block counts at all looks entirely
 /// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
 /// markers need no handling — `kind::accept` never visits them.
-#[cfg(unix)]
-fn is_dataless(md: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    md.blocks() == 0 && md.size() > 0
-}
-
-#[cfg(not(unix))]
-fn is_dataless(_md: &std::fs::Metadata) -> bool {
-    false
+fn is_dataless(walked: &datalib_etl_files::fswalk::WalkedFile) -> bool {
+    walked.no_blocks && walked.stat.size > 0
 }
 
 /// What one distinct item's worth of bytes turned out to be.
@@ -386,7 +379,7 @@ fn read_head(path: &Path) -> Result<Vec<u8>> {
 async fn scan_playlists(
     opts: &FetchOptions,
     now: &datalib_time::IsoOffsetTimestamp,
-    files: &[fsscan::ScannedFile],
+    files: &[file_changes_scan::ScannedFile],
     prev: &mut db::PrevCache,
     summary: &mut FetchSummary,
     found: &RunProblems,

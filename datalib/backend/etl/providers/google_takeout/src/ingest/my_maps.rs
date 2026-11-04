@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
-use datalib_etl_files::fsscan;
+use datalib_etl_files::file_changes_scan;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::{json, Map, Value};
@@ -38,7 +38,7 @@ const STYLE_TAGS: &[&str] = &["Style", "StyleMap"];
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &file_changes_scan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<Counts> {

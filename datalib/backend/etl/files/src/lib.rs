@@ -4,8 +4,8 @@
 
 pub mod archive;
 pub mod export_files;
+pub mod file_changes_scan;
 pub mod file_checkpoint;
 pub mod fingerprint_cache;
-pub mod fsscan;
 pub mod fswalk;
 pub mod read_stamp;

@@ -17,8 +17,8 @@ use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
-use datalib_etl_files::fsscan;
 use datalib_problems::{Outcome, Problem, Reason, Severity};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -79,10 +79,10 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // One scan answers what `.xml` files are there and which have
     // changed since the last pass — walk, hash, and the decision not
     // to re-hash what the host cache can vouch for, all in the utility.
-    let scan = fsscan::scan(
+    let scan = file_changes_scan::scan(
         &opts.cache,
         &opts.input_path,
-        &fsscan::ScanOptions::default(),
+        &file_changes_scan::ScanOptions::default(),
         |p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml")),
     )
     .await?;
@@ -93,7 +93,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let read_all = changes.may_have_dropped_records()
         || changes.needs_reading().count() == scan.files.len()
         || an_mms_lacks_its_addrs(db.pool()).await?;
-    let to_read: Vec<&fsscan::ScannedFile> = if read_all {
+    let to_read: Vec<&file_changes_scan::ScannedFile> = if read_all {
         scan.files.iter().collect()
     } else {
         changes.needs_reading().collect()
@@ -103,7 +103,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let mut reads: Vec<Read> = Vec::new();
     let mut call_rows: Vec<SmsCallRow> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
-    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut done: Vec<&file_changes_scan::ScannedFile> = Vec::new();
     let mut summary = FetchSummary::default();
     // Files that would not open. They are left unstamped, so the next run
     // reads them again.
@@ -111,9 +111,9 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // Files that opened and would not parse. Reading them again gets the
     // same answer, so they are stamped with their problem and read again
     // only once they change.
-    let mut unparsed: Vec<(&fsscan::ScannedFile, String)> = Vec::new();
+    let mut unparsed: Vec<(&file_changes_scan::ScannedFile, String)> = Vec::new();
     // XML that is not an export: stamped with its problem the same way.
-    let mut foreign: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut foreign: Vec<&file_changes_scan::ScannedFile> = Vec::new();
 
     for f in to_read {
         let path = &f.path;
@@ -267,7 +267,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     scan.report_problems(&found, "files");
     let mut problems = unread;
     if !deletes && read_all && changes.walk_errors == 0 && changes.may_have_dropped_records() {
-        problems.push(fsscan::Scan::deletions_held_back(
+        problems.push(file_changes_scan::Scan::deletions_held_back(
             summary.parse_errors + scan.present_unread.len(),
         ));
     }

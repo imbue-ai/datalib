@@ -66,8 +66,8 @@ pub struct Resolved {
     /// labels.
     pub ids: HashSet<String>,
     /// Requested labels that matched no mailbox — almost always a typo
-    /// or a label that doesn't exist in this account. Callers log these
-    /// so a misspelled filter doesn't silently drop every message.
+    /// or a label that doesn't exist in this account. Callers report
+    /// these so a misspelled filter doesn't silently drop every message.
     pub unmatched: Vec<String>,
 }
 

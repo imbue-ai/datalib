@@ -2,7 +2,7 @@
 
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::run_problems::RunProblems;
-use datalib_etl_files::fsscan;
+use datalib_etl_files::file_changes_scan;
 use datalib_problems::{Problem, Severity};
 
 use anyhow::Result;
@@ -21,12 +21,12 @@ const SCOPE: &str = "google_takeout/youtube_watch_history";
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &file_changes_scan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<SnapshotCounts> {
     let mut skipped = None;
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan, FILE_REL, |bytes| {
         let skipped = skipped.insert(Vec::new());
         let html = String::from_utf8_lossy(bytes);
         let mut rows: Vec<YoutubeWatchRow> = Vec::new();

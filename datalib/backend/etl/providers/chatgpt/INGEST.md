@@ -289,7 +289,7 @@ the API walk writes, and makes no request, so no rate limit applies:
   nothing and are a `phase:conversations.json` row.
 
 **An export unchanged since it was last read is not read again.**
-`fsscan` fingerprints the zip, or every file of the folder, and the
+`file_changes_scan` fingerprints the zip, or every file of the folder, and the
 `ingested_files` table (`file_checkpoint`, scope `chatgpt:export`)
 holds what they were when the last read finished; a run that finds them
 the same is skipped (`export unchanged since it was last read`). The
