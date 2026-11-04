@@ -59,6 +59,7 @@ rust_test(
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
     ],
     tags = ["cpu:2"],

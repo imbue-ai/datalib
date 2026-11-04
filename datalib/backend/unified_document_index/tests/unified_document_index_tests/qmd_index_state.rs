@@ -11,7 +11,21 @@ use datalib_unified_document_index::qmd::QmdIndexReader;
 use datalib_unified_document_index::query::parse_query;
 use datalib_unified_document_index::repo::IndexRepo;
 
+fn is_unindexed(file: &Path) -> bool {
+    file.components()
+        .any(|c| c.as_os_str() == datalib_runtime::layout::UNINDEXED_DIR)
+}
+
+/// What qmd is meant to have indexed: every rendered file but those a
+/// renderer filed for the grid alone.
 fn rendered_markdowns(root: &Path) -> Vec<PathBuf> {
+    every_rendered_file(root)
+        .into_iter()
+        .filter(|p| !is_unindexed(p))
+        .collect()
+}
+
+fn every_rendered_file(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -132,6 +146,38 @@ async fn a_root_without_an_index_opens_to_none() {
 /// Editing a rendered document must flip **exactly its own rows** to
 /// not-indexed, and restoring it must flip them back — with every other
 /// document's rows untouched throughout.
+/// A document filed for the grid alone is in the fixture, and qmd does not
+/// have it: this is the end-to-end proof, through the steps that build the
+/// fixture's index, that the folder is left out.
+#[tokio::test]
+async fn a_document_filed_for_the_grid_alone_is_reported_not_indexed() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    materialize_root_with_grid(root);
+    let repo = DoltRepo::open(Arc::new(root.to_path_buf()))
+        .await
+        .expect("open the fixture grid index");
+    let reader = QmdIndexReader::open(root)
+        .await
+        .expect("open the fixture qmd index")
+        .expect("the fixture ships an index.sqlite");
+
+    let left_out: Vec<String> = every_rendered_file(root)
+        .iter()
+        .filter(|p| is_unindexed(p))
+        .filter_map(|p| Some(p.file_stem()?.to_str()?.to_string()))
+        .collect();
+    assert!(!left_out.is_empty(), "the fixture has Notion's contents");
+
+    let states = resolve_markdown_states(&repo, &reader, &left_out)
+        .await
+        .expect("resolve");
+    for md in &left_out {
+        assert_eq!(states[md].indexed, Some(false), "{md}");
+        assert_eq!(states[md].embedded, Some(false), "{md}");
+    }
+}
+
 #[tokio::test]
 async fn editing_one_document_flips_only_its_own_rows() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -162,7 +208,15 @@ async fn editing_one_document_flips_only_its_own_rows() {
             by_doc.entry(md.clone()).or_default().push(r.uuid.clone());
         }
     }
-    let all_uuids: Vec<String> = by_doc.keys().cloned().collect();
+    let filed: BTreeSet<String> = rendered_markdowns(root)
+        .iter()
+        .filter_map(|p| Some(p.file_stem()?.to_str()?.to_string()))
+        .collect();
+    let all_uuids: Vec<String> = by_doc
+        .keys()
+        .filter(|md| filed.contains(*md))
+        .cloned()
+        .collect();
     assert!(all_uuids.len() > 10, "expected many documents");
 
     // Pick a document that several grid rows share, so "only its rows"

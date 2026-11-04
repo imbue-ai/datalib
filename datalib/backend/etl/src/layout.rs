@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+pub use datalib_runtime::layout::UNINDEXED_DIR;
+
 /// The ingest step's function, and so the directory its raw store lives
 /// in: `<data_root>/<group>/ingest`.
 pub const INGEST_DIR: &str = "ingest";

@@ -8,6 +8,11 @@ use std::path::{Path, PathBuf};
 /// stanza lives under here.
 pub const SYSTEM_DIR: &str = "system";
 
+/// A folder under a source's `render_markdown/`: a document filed here is
+/// in the grid and opens like any other, and free-text search skips it,
+/// because each source's qmd collection ignores this folder.
+pub const UNINDEXED_DIR: &str = "unindexed";
+
 /// The top-level tree holding every search index. Owned end to end by
 /// the `unified_document_index` applet and the two steps that write it; nothing
 /// in `datalib-http` or `datalib-dag` reads what is under here.

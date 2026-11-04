@@ -89,6 +89,13 @@ struct Row {
     markdown_uuid: Option<String>,
 }
 
+/// Whether a document is filed for the grid alone, so qmd has no text of it.
+fn is_unindexed(qmd_path: &str) -> bool {
+    qmd_path
+        .split('/')
+        .any(|part| part == datalib_runtime::layout::UNINDEXED_DIR)
+}
+
 /// Every grid row, and each document's text: its rendered file, which is
 /// what qmd indexed.
 async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<String, String>) {
@@ -112,10 +119,12 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
     let mut texts: HashMap<String, String> = HashMap::new();
     for r in read {
         if let (true, Some(md), Some(path)) = (r.is_document, &r.markdown_uuid, &r.qmd_path) {
-            let file = root.join(path);
-            let text = std::fs::read_to_string(&file)
-                .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
-            texts.insert(md.clone(), text);
+            if !is_unindexed(path) {
+                let file = root.join(path);
+                let text = std::fs::read_to_string(&file)
+                    .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
+                texts.insert(md.clone(), text);
+            }
         }
         rows.insert(
             r.uuid,
@@ -394,6 +403,23 @@ async fn every_row_is_found_by_what_it_holds() {
             .map(|r| r.source_id.clone())
             .expect("a document has rows");
         coverage.checked("words: its rarest word", &source);
+    }
+
+    // Notion's table of contents is filed for the grid alone: its title
+    // finds its row on the Fields tab, and the Words tab, which reads qmd,
+    // does not return it.
+    let contents_rows = |got: Vec<SearchRow>| {
+        got.iter()
+            .filter(|r| r.kind == "Notion Table of Contents")
+            .count()
+    };
+    let by_title = every_uuid(&s, "Table-of-Contents", Some(SearchTab::Fields)).await;
+    if contents_rows(by_title) != 1 {
+        failures.push("the Fields tab missed the table of contents by its title".to_string());
+    }
+    let by_words = every_uuid(&s, "Table-of-Contents", Some(SearchTab::Words)).await;
+    if contents_rows(by_words) != 0 {
+        failures.push("the Words tab returned the table of contents".to_string());
     }
 
     // A document is among the ten nearest its own opening words on the

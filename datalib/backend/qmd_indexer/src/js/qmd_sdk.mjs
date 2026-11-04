@@ -4,8 +4,8 @@
 //
 // argv: <package-dir> <index.sqlite> <verb> <json>, where <json> is:
 //
-//   register  {config, root, collections: [{name, glob}]}  exactly these, no others
-//   update    {config, root, collections: [{name, glob}]}  registers them first
+//   register  {config, root, collections: [{name, glob, ignore}]}  exactly these, no others
+//   update    {config, root, collections: [{name, glob, ignore}]}  registers them first
 //   embed     {collections: [name]}                        in one process: one model load
 //   status    {}
 //   serve     {}   long-lived: embeds search queries, one per stdin line
@@ -95,8 +95,8 @@ try {
 const now = () => Math.round(performance.now());
 
 async function addCollections(store, root, collections) {
-  for (const { name, glob } of collections) {
-    await store.addCollection(name, { path: root, pattern: glob });
+  for (const { name, glob, ignore } of collections) {
+    await store.addCollection(name, { path: root, pattern: glob, ignore });
   }
   return collections.map((c) => c.name);
 }

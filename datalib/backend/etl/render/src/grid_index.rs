@@ -877,6 +877,16 @@ pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
     render_root.join(datalib_schema::grid_rows::doc_file_rel(markdown_uuid))
 }
 
+/// [`doc_md_path`] for a document free-text search should not return: one
+/// that only repeats what other documents say, at a size that would cost
+/// real embedding time. Its grid row and its link work as usual.
+pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
+    doc_md_path(
+        &render_root.join(datalib_etl::layout::UNINDEXED_DIR),
+        markdown_uuid,
+    )
+}
+
 /// Why a document cannot be indexed where it was written: a file not
 /// named for its id, or a row naming another file. `None` when it can.
 fn misfiled(md: &RenderedMarkdown, qmd_path: &str) -> Option<String> {

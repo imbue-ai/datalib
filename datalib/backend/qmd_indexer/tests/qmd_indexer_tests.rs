@@ -135,6 +135,86 @@ fn a_keyword_update_fills_its_own_collection_and_no_other() {
     );
 }
 
+/// A document a renderer filed for the grid alone stays out of the index,
+/// across the separate processes that register a collection and update it.
+#[test]
+fn a_document_filed_as_unindexed_is_left_out_of_its_collection() {
+    let root = root_with(LOGS);
+    let unindexed = format!("{}/ab", datalib_runtime::layout::UNINDEXED_DIR);
+    std::fs::create_dir_all(root.path().join("bridge/render_markdown").join(&unindexed)).unwrap();
+    write(
+        root.path(),
+        "bridge",
+        &format!("{unindexed}/contents.md"),
+        "# Contents\n\nEvery log on this bridge.\n",
+    );
+    let index = open(root.path());
+    index.register(&["bridge"]).unwrap();
+
+    let first = index.keyword_index(&["bridge"], &quiet).unwrap().done;
+    assert_eq!(
+        first,
+        Updated {
+            indexed: 2,
+            ..Updated::default()
+        }
+    );
+    assert_eq!(by_name(&index), [("bridge".into(), 2, 2)]);
+
+    let again = index.keyword_index(&["bridge"], &quiet).unwrap().done;
+    assert_eq!(
+        again,
+        Updated {
+            unchanged: 2,
+            ..Updated::default()
+        },
+        "the next run does not pick it up either"
+    );
+}
+
+/// An index from before this folder existed has its collections registered
+/// with no ignore list. The next update has to give them one, or an
+/// upgraded root indexes what a fresh one leaves out.
+#[test]
+fn a_collection_registered_without_the_ignore_list_gets_it_on_update() {
+    let root = root_with(LOGS);
+    let state = datalib_runtime::qmd::qmd_state_dir(root.path());
+    std::fs::create_dir_all(&state).unwrap();
+    let earlier_build = serde_json::json!({
+        "config": state.join("index.yml"),
+        "root": root.path(),
+        "collections": [{"name": "bridge", "glob": "bridge/render_markdown/**/*.md"}],
+    });
+    let out = std::process::Command::new(runfile("QMD_TEST_NODE_RLOC"))
+        .arg(runfile("QMD_TEST_SDK_RLOC"))
+        .arg(runfile("QMD_TEST_PACKAGE_RLOC"))
+        .arg(state.join("index.sqlite"))
+        .arg("register")
+        .arg(earlier_build.to_string())
+        .env("XDG_CACHE_HOME", root.path())
+        .env("XDG_CONFIG_HOME", root.path())
+        .env("NO_COLOR", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let unindexed = format!("{}/ab", datalib_runtime::layout::UNINDEXED_DIR);
+    std::fs::create_dir_all(root.path().join("bridge/render_markdown").join(&unindexed)).unwrap();
+    write(
+        root.path(),
+        "bridge",
+        &format!("{unindexed}/contents.md"),
+        "# Contents\n\nEvery log on this bridge.\n",
+    );
+    let index = open(root.path());
+    index.keyword_index(&["bridge"], &quiet).unwrap();
+    assert_eq!(by_name(&index), [("bridge".into(), 2, 2)]);
+}
+
 /// A keyword step's log said nothing between its start and its end, so
 /// a 27 s floor on a two-document source could not be placed.
 #[test]
