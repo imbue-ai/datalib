@@ -197,7 +197,7 @@ mtime does not move when a file in it is written in place, so its files still
 need their stats. Asking macOS what changed instead would skip those stats, and
 `//datalib/backend/fsevents_facts:fsevents_facts_test` holds what stands in the
 way: a file held open is not reported until it closes, and a burst of changes
-loses events without saying so.
+can lose events without saying so.
 
 The walk follows the same `.gitignore` and `.ignore` rules as the `ignore`
 crate, which it uses to parse them, and a test holds it to that crate's answer.

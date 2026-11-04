@@ -6,7 +6,8 @@
 //! this root since the event id I stored last run?" A new stream replays the
 //! on-disk log from that id and says when it has caught up.
 //!
-//! Three facts have no test, because each takes too long or a reboot:
+//! Four facts have no test, because each takes too long, needs a reboot, or
+//! did not hold every time:
 //! - Replay cost grows with activity on the whole machine, not under the
 //!   root: about 1s per 1M ids and 11s for 50M, on a machine producing about
 //!   1.85M ids an hour, with nothing changed under the root.
@@ -15,6 +16,11 @@
 //!   showed no event older than the current boot, which proves nothing either
 //!   way, so a stored id has to be checked against
 //!   `FSEventsCopyUUIDForDevice` at the least.
+//! - A burst of changes can lose events and say nothing. Touching all 1.2M
+//!   files of a tree with folders of up to 1,500 files left 4-7% of them with
+//!   no event and no warning flag, the same count missing three minutes later,
+//!   in three runs. The same burst on 1.2M files in folders of 100 lost none,
+//!   once. What decides it was not looked into.
 
 #![cfg(target_os = "macos")]
 #![allow(non_snake_case, non_upper_case_globals)]
@@ -78,15 +84,11 @@ extern "C" {
 
 const CF_UTF8: u32 = 0x0800_0100;
 const CREATE_FILE_EVENTS: u32 = 0x10;
-const MUST_SCAN_SUBDIRS: u32 = 0x1;
-const USER_DROPPED: u32 = 0x2;
-const KERNEL_DROPPED: u32 = 0x4;
 const HISTORY_DONE: u32 = 0x10;
 
 #[derive(Default)]
 struct Replay {
     paths: HashSet<PathBuf>,
-    warned_of_loss: bool,
     done: bool,
 }
 
@@ -106,7 +108,6 @@ extern "C" fn on_events(
             replay.done = true;
             continue;
         }
-        replay.warned_of_loss |= flag & (MUST_SCAN_SUBDIRS | USER_DROPPED | KERNEL_DROPPED) != 0;
         let path = unsafe { CStr::from_ptr(*paths.add(i)) }.to_string_lossy();
         replay
             .paths
@@ -414,48 +415,4 @@ fn an_id_cannot_be_looked_up_by_time() {
         };
         assert_eq!(id, 0, "{days_ago} days ago");
     }
-}
-
-/// A burst loses events and says nothing: touching 1.2M files in about 19s
-/// left about 4–7% of them with no event at all, no flag warning of it, and
-/// the same ones missing three minutes later. Set `FSEVENTS_FLOOD_FILES` to
-/// change the size; the default takes about a minute and a half.
-#[test]
-#[ignore = "touches 1.2M files; run by hand"]
-fn a_burst_of_changes_silently_loses_events() {
-    let count: usize =
-        std::env::var("FSEVENTS_FLOOD_FILES").map_or(1_200_000, |n| n.parse().unwrap());
-    let t = tree();
-    let folders: Vec<PathBuf> = (0..count / 100 + 1)
-        .map(|i| t.root.join(format!("d{i}")))
-        .collect();
-    let mut files = Vec::with_capacity(count);
-    for (i, folder) in folders.iter().enumerate() {
-        std::fs::create_dir(folder).unwrap();
-        for j in 0..100 {
-            if i * 100 + j < count {
-                let file = folder.join(format!("f{j}"));
-                std::fs::write(&file, b"").unwrap();
-                files.push(file);
-            }
-        }
-    }
-    let _ = sentinel(&t.root, current_id());
-    let since = current_id();
-
-    std::thread::scope(|s| {
-        for chunk in files.chunks(files.len().div_ceil(10)) {
-            s.spawn(move || {
-                for f in chunk {
-                    let open = std::fs::File::options().write(true).open(f).unwrap();
-                    open.set_modified(std::time::UNIX_EPOCH).unwrap();
-                }
-            });
-        }
-    });
-
-    let seen = sentinel(&t.root, since);
-    let lost = files.iter().filter(|f| !seen.paths.contains(*f)).count();
-    assert!(lost > 0, "every event survived this time");
-    assert!(!seen.warned_of_loss, "the replay warned of the loss");
 }
