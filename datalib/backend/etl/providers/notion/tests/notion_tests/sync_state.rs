@@ -52,7 +52,7 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     );
     let db = RawDb::open(&store).await.unwrap();
     let cut = interrupt::run(
-        Some(4),
+        Some(5),
         How::Stop,
         stop.clone(),
         retry::scope(
@@ -69,8 +69,8 @@ async fn a_failed_comments_listing_survives_the_page_being_written_again() {
     );
     let ran = playback::scope(&tape, cut).await;
     assert_eq!(
-        ran.requests, 4,
-        "the search, the page, its body, and the cut at its comments"
+        ran.requests, 5,
+        "the search, the trash, the page, its body, and the cut at its comments"
     );
     ran.finished
         .unwrap()

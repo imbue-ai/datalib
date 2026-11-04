@@ -10,17 +10,24 @@
 //! `roots_round` for a root nothing placed). Either way a page object
 //! lands held at its `last_edited_time`, and that stamp is what its body
 //! and its comments are owed against.
+//!
+//! The same search with `filter: {in_trash: true}` lists Notion's trash,
+//! which the search above never shows, and says which held pages are in
+//! it (`trash_pass`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl_web::coverage::{self, Span};
-use datalib_etl_web::owed::{self, Held};
+use datalib_etl_web::owed::{self, Held, Listed};
 use serde_json::Value;
+use sqlx::{Sqlite, Transaction};
 
 use super::db::{PageUpsert, TreeUpsert};
+use super::fetchers::LeftTrashPages;
 use super::official::NotionOfficialError;
 use super::schema_raw::PAGES;
 use super::{run_over, Ctx, FetchSummary};
@@ -215,7 +222,152 @@ fn not_yet_held(rows: Vec<PageUpsert>, held: &HashMap<String, Held>) -> (Vec<Pag
     (keep, stored)
 }
 
+/// The page objects a page of trash-listing results names.
+fn trashed_rows(results: &[Value]) -> Vec<PageUpsert> {
+    results
+        .iter()
+        .filter(|r| r.get("object").and_then(Value::as_str) == Some("page"))
+        .filter_map(PageUpsert::from_object)
+        .filter(|r| r.in_trash)
+        .collect()
+}
+
+/// Of `rows`, the ones the trash pass writes: a page the store holds, and
+/// either has not got in the trash or holds at another stamp. A page the
+/// store never held is not mirrored for being in the trash, and one it
+/// already has there at this stamp is not written again, since its
+/// payload may carry a signed URL that differs on every fetch.
+fn trash_rows_to_write(
+    rows: Vec<PageUpsert>,
+    held: &HashMap<String, Held>,
+    in_trash: &HashSet<&str>,
+) -> Vec<PageUpsert> {
+    rows.into_iter()
+        .filter(|r| {
+            held.get(&r.id).is_some_and(|h| {
+                h.fetched && !(in_trash.contains(r.id.as_str()) && h.satisfies(&r.last_edited_time))
+            })
+        })
+        .collect()
+}
+
+/// Of the pages the store had in the trash, the ones a complete listing
+/// of the trash did not name. The listing is not enough to say what
+/// became of them: a page restored and a page deleted for good both
+/// leave it.
+fn left_the_trash(in_trash: Vec<Listed>, listed: &HashSet<String>) -> Vec<Listed> {
+    in_trash
+        .into_iter()
+        .filter(|l| !listed.contains(&l.key))
+        .collect()
+}
+
+/// What the end of one page of a listing says to do next.
+#[derive(Debug, PartialEq, Eq)]
+enum Next {
+    Page(String),
+    End,
+    /// `has_more` with no cursor, or no `has_more` at all: the listing
+    /// cannot be called complete.
+    Lost,
+}
+
+fn next_of(resp: &Value) -> Next {
+    let cursor = resp.get("next_cursor").and_then(Value::as_str);
+    match (resp.get("has_more").and_then(Value::as_bool), cursor) {
+        (Some(false), _) => Next::End,
+        (Some(true), Some(c)) => Next::Page(c.to_string()),
+        _ => Next::Lost,
+    }
+}
+
 impl Ctx<'_> {
+    /// Writes page objects the store already holds, and in roots mode the
+    /// stamps they were read at, so the page is not owed against the stamp
+    /// `listed_pages` had before.
+    pub(crate) async fn store_held_pages(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        rows: &[PageUpsert],
+        listing: Listing,
+    ) -> Result<()> {
+        self.db.store_pages(tx, rows).await?;
+        if listing == Listing::Roots {
+            self.db.store_listed_pages(tx, rows).await?;
+        }
+        Ok(())
+    }
+
+    /// Reads Notion's whole trash and brings `pages.in_trash` into line
+    /// with it (INGEST.md, "The trash"). It keeps no position: a page
+    /// edited years ago can go into the trash today, so no stretch of edit
+    /// times can be skipped. Only a listing read whole clears a flag.
+    pub async fn trash_pass(&self, listing: Listing, s: &mut FetchSummary) -> Result<()> {
+        let in_trash = self.db.pages_in_trash().await?;
+        let expected: HashSet<&str> = in_trash.iter().map(|l| l.key.as_str()).collect();
+        let mut listed: HashSet<String> = HashSet::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let resp = match self.client.search(cursor.as_deref(), true).await {
+                Ok(resp) => resp,
+                Err(_) if self.stop().requested() => return Ok(()),
+                Err(e) if e.ends_the_run() => return Err(run_over(e)),
+                Err(e) => {
+                    self.found.listing(
+                        "trash",
+                        format!(
+                            "the trash listing stopped after {} pages, so what the rest of the \
+                             trash holds was not looked at: {e}",
+                            listed.len()
+                        ),
+                    );
+                    return Ok(());
+                }
+            };
+            let results = resp.get("results").and_then(Value::as_array);
+            let rows = trashed_rows(results.map_or(&[], Vec::as_slice));
+            listed.extend(rows.iter().map(|r| r.id.clone()));
+            let held =
+                owed::held_versions(self.db.pool(), PAGES, rows.iter().map(|r| r.id.as_str()))
+                    .await?;
+            let rows = trash_rows_to_write(rows, &held, &expected);
+            if !rows.is_empty() {
+                let mut tx = self.db.pool().begin().await?;
+                self.store_held_pages(&mut tx, &rows, listing).await?;
+                tx.commit().await?;
+                self.wrote(rows.len() as u64).await;
+                s.trashed_pages += rows.len();
+            }
+            match next_of(&resp) {
+                Next::Page(c) if results.is_some() => cursor = Some(c),
+                Next::End if results.is_some() => break,
+                _ => {
+                    self.found.listing(
+                        "trash",
+                        format!(
+                            "the trash listing stopped after {} pages on an answer it could not \
+                             follow, so what the rest of the trash holds was not looked at",
+                            listed.len()
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        let left = left_the_trash(in_trash, &listed);
+        if left.is_empty() {
+            return Ok(());
+        }
+        let f = LeftTrashPages {
+            ctx: self,
+            listing,
+            restored: AtomicUsize::new(0),
+        };
+        self.drain(PAGES, left, &f, 50, 0).await?;
+        s.restored_pages += f.restored.load(Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Stores the objects of `rows` not held at their stamp, and the
     /// `databases` the same results described, with `span` covered, in
     /// one transaction.
@@ -582,6 +734,93 @@ mod tests {
         assert_eq!(read.end, Some(Ended::CutShort));
         assert_eq!(covered(T3, T2, Ended::CutShort, None), s(T2, T3));
         assert_eq!(covered(T3, T1, Ended::AtEnd, None), s("", T3));
+    }
+
+    fn trashed(id: &str, edited: &str) -> Value {
+        let mut p = page(id, edited);
+        p["in_trash"] = serde_json::json!(true);
+        p
+    }
+
+    fn held_at(version: &str) -> Held {
+        Held {
+            fetched: true,
+            version: Some(version.into()),
+        }
+    }
+
+    /// The trash pass writes a held page new to the trash, or there at a
+    /// new stamp. It leaves one already there alone, and does not mirror
+    /// a page for being in the trash.
+    #[test]
+    fn the_trash_pass_writes_only_what_it_changes() {
+        let rows = trashed_rows(&[
+            trashed("newly", T1),
+            trashed("moved", T2),
+            trashed("known", T1),
+            trashed("stranger", T1),
+            trashed("stub", T1),
+        ]);
+        let held: HashMap<String, Held> = [
+            ("newly".to_string(), held_at(T1)),
+            ("moved".to_string(), held_at(T1)),
+            ("known".to_string(), held_at(T1)),
+            (
+                "stub".to_string(),
+                Held {
+                    fetched: false,
+                    version: None,
+                },
+            ),
+        ]
+        .into();
+        let in_trash: HashSet<&str> = ["moved", "known"].into();
+        let ids: Vec<String> = trash_rows_to_write(rows, &held, &in_trash)
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, ["newly", "moved"]);
+    }
+
+    /// A data source sits in the trash too, and a result that says it is
+    /// not in the trash is no evidence that it is.
+    #[test]
+    fn the_trash_listing_reads_only_pages_in_the_trash() {
+        let ds = serde_json::json!({"object": "data_source", "id": "d", "in_trash": true});
+        let rows = trashed_rows(&[ds, page("live", T1), trashed("gone", T1)]);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["gone"]);
+    }
+
+    #[test]
+    fn a_page_left_the_trash_when_a_complete_listing_does_not_name_it() {
+        let in_trash = vec![Listed::new("a", Some(T1)), Listed::new("b", Some(T2))];
+        let listed: HashSet<String> = ["a".to_string(), "c".to_string()].into();
+        assert_eq!(
+            left_the_trash(in_trash, &listed),
+            [Listed::new("b", Some(T2))]
+        );
+    }
+
+    /// A listing is complete only on Notion's own word for it: losing the
+    /// thread must not read as the end, or a flag is asked about for
+    /// nothing.
+    #[test]
+    fn only_has_more_false_ends_a_listing() {
+        let next = |v: Value| next_of(&v);
+        assert_eq!(
+            next(serde_json::json!({"has_more": false, "next_cursor": null})),
+            Next::End
+        );
+        assert_eq!(
+            next(serde_json::json!({"has_more": true, "next_cursor": "c"})),
+            Next::Page("c".into())
+        );
+        assert_eq!(
+            next(serde_json::json!({"has_more": true, "next_cursor": null})),
+            Next::Lost
+        );
+        assert_eq!(next(serde_json::json!({})), Next::Lost);
     }
 
     #[test]

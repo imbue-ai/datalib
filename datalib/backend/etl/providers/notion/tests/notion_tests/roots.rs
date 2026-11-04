@@ -200,9 +200,9 @@ async fn roots_mirror_what_hangs_under_them_and_what_a_root_links() {
 
     let second = run(&tape, &store, &roots).await.unwrap();
     assert_eq!(
-        second.official_requests, 1,
-        "the search alone: every page is held at the stamp it lists, and \
-         the toggle was placed once"
+        second.official_requests, 2,
+        "the search and the trash: every page is held at the stamp it lists, \
+         and the toggle was placed once"
     );
 }
 

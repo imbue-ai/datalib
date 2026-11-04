@@ -352,6 +352,22 @@ impl RawDb {
             .collect())
     }
 
+    /// Every page the store has in Notion's trash, at its
+    /// `last_edited_time`: what the trash listing is expected to name.
+    pub async fn pages_in_trash(&self) -> Result<Vec<Listed>> {
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, last_edited_time FROM pages \
+             WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("list the pages in the trash")?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, edited)| Listed::new(id, edited))
+            .collect())
+    }
+
     /// Every attachment a stored body names, at no version: its bytes
     /// only have to have landed once.
     pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
@@ -624,6 +640,22 @@ impl RawDb {
                 .with_context(|| format!("place page {} in the tree", r.id))?;
             owed::hold(tx, TREE, &r.id, None).await?;
         }
+        Ok(())
+    }
+
+    /// A page that left the trash and that Notion no longer shows: this
+    /// stops the trash pass asking after it. The payload stays the object
+    /// as Notion last returned it, in the trash.
+    pub async fn no_longer_in_trash(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        id: &str,
+    ) -> Result<()> {
+        sqlx::query("UPDATE pages SET in_trash = 0 WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("take page {id} out of the trash"))?;
         Ok(())
     }
 

@@ -132,26 +132,64 @@ pub fn serve_page(tape: &Path, id: &str, edited: &str, markdown: &str) {
 }
 
 pub fn serve_search(tape: &Path, cursor: Option<&str>, results: Value, next: Option<&str>) {
-    let mut body = json!({
-        "page_size": PAGE_SIZE,
-        "sort": { "timestamp": "last_edited_time", "direction": "descending" },
-    });
-    if let Some(c) = cursor {
-        body["start_cursor"] = json!(c);
+    serve_listing(tape, cursor, false, results, next);
+    // Every run reads the trash after the search; a tape that says
+    // nothing about it has an empty one.
+    let trash = tape.join("notion").join(fixture_key(&trash_req(None)));
+    if cursor.is_none() && !trash.exists() {
+        serve_trash(tape, None, json!([]), None);
     }
-    let req = HttpRequest::post_json(
+}
+
+/// One page of the trash listing.
+pub fn serve_trash(tape: &Path, cursor: Option<&str>, results: Value, next: Option<&str>) {
+    serve_listing(tape, cursor, true, results, next);
+}
+
+/// The first page of the trash listing, answered with `status`.
+pub fn serve_trash_status(tape: &Path, status: u16) {
+    let resp = HttpResponse {
+        status,
+        body: format!(r#"{{"object":"error","status":{status}}}"#).into_bytes(),
+        ..json_response(&json!({}))
+    };
+    write_fixture(tape, &trash_req(None), &resp).unwrap();
+}
+
+fn search_req(cursor: Option<&str>, in_trash: bool) -> HttpRequest {
+    HttpRequest::post_json(
         HttpService::Notion,
         format!("{BASE}/search"),
-        body.to_string().into_bytes(),
+        search_body(cursor, in_trash).to_string().into_bytes(),
     )
-    .header("Accept", "application/json");
+    .header("Accept", "application/json")
+}
+
+fn trash_req(cursor: Option<&str>) -> HttpRequest {
+    search_req(cursor, true)
+}
+
+fn serve_listing(
+    tape: &Path,
+    cursor: Option<&str>,
+    in_trash: bool,
+    results: Value,
+    next: Option<&str>,
+) {
     let resp = json!({
         "object": "list",
         "results": results,
         "has_more": next.is_some(),
         "next_cursor": next,
     });
-    write_fixture(tape, &req, &json_response(&resp)).unwrap();
+    write_fixture(tape, &search_req(cursor, in_trash), &json_response(&resp)).unwrap();
+}
+
+/// A page as the trash listing, or asking for it by id, shows it.
+pub fn trashed(id: &str, edited: &str) -> Value {
+    let mut p = page(id, edited);
+    p["in_trash"] = json!(true);
+    p
 }
 
 /// The workspace's search, one page of it: each of `ids` a page at
@@ -163,18 +201,12 @@ pub fn serve_workspace(tape: &Path, ids: &[&str]) {
 
 /// The first page of the search, answered with `status`.
 pub fn serve_search_status(tape: &Path, status: u16) {
-    let req = HttpRequest::post_json(
-        HttpService::Notion,
-        format!("{BASE}/search"),
-        search_body(None, false).to_string().into_bytes(),
-    )
-    .header("Accept", "application/json");
     let resp = HttpResponse {
         status,
         body: format!(r#"{{"object":"error","status":{status}}}"#).into_bytes(),
         ..json_response(&json!({}))
     };
-    write_fixture(tape, &req, &resp).unwrap();
+    write_fixture(tape, &search_req(None, false), &resp).unwrap();
 }
 
 pub fn serve_status(tape: &Path, url: &str, status: u16) {

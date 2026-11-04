@@ -4,8 +4,9 @@
 //! kind of work it has: a search of two pages, a body with an
 //! attachment, a truncated body with a follow-up, a body that answers
 //! 404, comments on the page and on a block, a user Notion has and one
-//! it has not, and a page inside a toggle, which roots mode finds by
-//! walking down from the root through the toggle's children. Run from an empty store and from the store an earlier
+//! it has not, a page inside a toggle, which roots mode finds by
+//! walking down from the root through the toggle's children, and pages
+//! going into the trash and leaving it. Run from an empty store and from the store an earlier
 //! run left, against a workspace that has moved since; in search mode
 //! and from a root.
 
@@ -85,6 +86,7 @@ const BLOCK: &str = "1701d000-0000-4000-8000-00000000bb01";
 const HOLE: &str = "1701d000-0000-4000-8000-00000000cc01";
 const TOGGLE: &str = "1701d000-0000-4000-8000-00000000dd01";
 const READY_ROOM: &str = "1701d000-0000-4000-8000-00000000dd02";
+const BRIG: &str = "1701d000-0000-4000-8000-00000000ee01";
 const SLOT: &str = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/warp.png";
 
 fn link(id: &str) -> String {
@@ -223,7 +225,27 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
             );
         }
     }
-    serve_search(&t, Some("p2"), json!([page(HOLODECK, T1)]), None);
+    serve_search(
+        &t,
+        Some("p2"),
+        json!([page(HOLODECK, T1), page(BRIG, T1)]),
+        None,
+    );
+    // The trash: the brig and the holodeck go in before the upgrade, and
+    // the next edition has the brig restored, the holodeck deleted for
+    // good and sickbay gone in instead.
+    serve_page(&t, BRIG, T1, "Under guard.\n");
+    match edition {
+        Edition::Before => {
+            serve_page_object(&t, trashed(HOLODECK, T1));
+            serve_trash(&t, None, json!([trashed(BRIG, T1)]), Some("t2"));
+            serve_trash(&t, Some("t2"), json!([trashed(HOLODECK, T1)]), None);
+        }
+        Edition::After => {
+            serve_trash(&t, None, json!([trashed(SICKBAY, T2)]), None);
+            serve_status(&t, &format!("{BASE}/pages/{HOLODECK}"), 404);
+        }
+    }
     t
 }
 

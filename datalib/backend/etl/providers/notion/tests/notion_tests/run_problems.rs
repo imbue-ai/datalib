@@ -342,7 +342,7 @@ async fn a_body_that_will_not_come_is_held_in_search_mode() {
     // Not asked for again: a request now would miss the tape and fail.
     unserve(&tape, &body);
     let third = run(&tape, &store, &[]).await.unwrap();
-    assert_eq!(third.official_requests, 1, "the search alone");
+    assert_eq!(third.official_requests, 2, "the search and the trash");
     assert_eq!(
         stored_pages(&store).await,
         vec![BRIDGE.to_string(), SICKBAY.to_string()],
@@ -380,8 +380,8 @@ async fn a_body_that_will_not_come_is_held_in_roots_mode() {
     unserve(&tape, &body);
     let third = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(
-        third.official_requests, 1,
-        "the search alone: both pages are held at the stamp it lists"
+        third.official_requests, 2,
+        "the search and the trash: both pages are held at the stamp it lists"
     );
     assert_eq!(
         stored_pages(&store).await,
@@ -515,9 +515,9 @@ async fn comments_the_credential_may_not_read_are_one_row() {
     let first = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(first.new_pages, 2);
     // The search for its newest edit, each root as a block and its
-    // children, the search for what changed since, two objects, two
-    // bodies, and comments asked once.
-    assert_eq!(first.official_requests, 11);
+    // children, the search for what changed since, the trash, two objects,
+    // two bodies, and comments asked once.
+    assert_eq!(first.official_requests, 12);
     assert_eq!(
         problems(&store).await,
         vec![row("listing:comments", "warning")]
@@ -526,8 +526,8 @@ async fn comments_the_credential_may_not_read_are_one_row() {
     let second = run(&tape, &store, &[BRIDGE, SICKBAY]).await.unwrap();
     assert_eq!(second.skipped_pages, 2);
     assert_eq!(
-        second.official_requests, 2,
-        "the search, and comments asked once"
+        second.official_requests, 3,
+        "the search, the trash, and comments asked once"
     );
     assert_eq!(
         problems(&store).await,

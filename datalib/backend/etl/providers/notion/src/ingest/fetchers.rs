@@ -1,7 +1,7 @@
 //! What each loop fetches and how a flush of it is stored, one
-//! [`Fetcher`] per kind: in roots mode a page's object; a page's body,
-//! an attachment's bytes, a page's comments listed whole, a commented
-//! block, a parent in the tree, a user. Each is one request
+//! [`Fetcher`] per kind: in roots mode a page's object; a page that left
+//! the trash; a page's body, an attachment's bytes, a page's comments
+//! listed whole, a commented block, a parent in the tree, a user. Each is one request
 //! per record; the loop (`datalib_etl_web::owed`) owns the stop, the
 //! failure budget, the flush and what each outcome means for the
 //! record's sidecar.
@@ -21,6 +21,7 @@ use super::db::{
     CommentAnchorUpsert, CommentUpsert, KnownUser, PageMarkdownUpsert, PageUpsert, Placed,
     TreeUpsert,
 };
+use super::listing::Listing;
 use super::official::NotionOfficialError;
 use super::schema_raw::{split_edge_key, TreeKind};
 use super::{markdown, run_over, slots, Ctx};
@@ -121,6 +122,88 @@ impl Fetcher<PageUpsert> for Objects<'_> {
             };
             count.fetch_add(1, Ordering::Relaxed);
         }
+        Ok(())
+    }
+}
+
+// ── pages a complete trash listing left out ────────────────────────────
+
+/// What asking for a page the trash listing left out came to.
+pub enum LeftTrash {
+    /// Its object: out of the trash, or in it at a new stamp.
+    Object(PageUpsert),
+    /// In the trash at the stamp the store holds: the listing has not
+    /// caught up, and there is nothing to write.
+    StillThere,
+    /// Notion no longer shows it: deleted for good, or no longer shared.
+    Unseen,
+}
+
+/// Each page the store has in the trash that a complete trash listing
+/// left out. Only the page's own object can say which way it went.
+pub(crate) struct LeftTrashPages<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    pub(crate) listing: Listing,
+    pub(crate) restored: AtomicUsize,
+}
+
+#[async_trait]
+impl Fetcher<LeftTrash> for LeftTrashPages<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<LeftTrash>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            self.ctx.bar.doing(&listed.key);
+            let (held_at, answer) = match self.ctx.client.get_page(&listed.key).await {
+                Ok(obj) => match PageUpsert::from_object(&obj) {
+                    Some(row) if row.in_trash && row.last_edited_time == listed.version => {
+                        (listed.version, Ok(Outcome::Got(LeftTrash::StillThere)))
+                    }
+                    // Held at the stamp the object carries, which may
+                    // have moved since the store last saw the page.
+                    Some(row) => (
+                        row.last_edited_time.clone(),
+                        Ok(Outcome::Got(LeftTrash::Object(row))),
+                    ),
+                    None => (
+                        listed.version,
+                        Ok(Outcome::Failed("the page object has no id".into())),
+                    ),
+                },
+                Err(NotionOfficialError::NotFound(_) | NotionOfficialError::Forbidden(_)) => {
+                    (listed.version, Ok(Outcome::Got(LeftTrash::Unseen)))
+                }
+                Err(e) => (listed.version, Err(e)),
+            };
+            out.push(Fetched {
+                outcome: outcome(self.ctx, answer)?,
+                listed: Listed {
+                    key: listed.key,
+                    version: held_at,
+                },
+            });
+            self.ctx.bar.did(1);
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<LeftTrash>],
+    ) -> Result<()> {
+        let mut rows: Vec<PageUpsert> = Vec::new();
+        for f in batch {
+            match &f.outcome {
+                Outcome::Got(LeftTrash::Object(row)) => rows.push(row.clone()),
+                Outcome::Got(LeftTrash::Unseen) => {
+                    self.ctx.db.no_longer_in_trash(tx, &f.listed.key).await?
+                }
+                _ => {}
+            }
+        }
+        self.ctx.store_held_pages(tx, &rows, self.listing).await?;
+        let restored = rows.iter().filter(|r| !r.in_trash).count();
+        self.restored.fetch_add(restored, Ordering::Relaxed);
         Ok(())
     }
 }

@@ -1,8 +1,9 @@
 //! Notion downloader: mirror pages via the official API.
 //!
-//! A run is a listing and six loops. The listing stores page objects
-//! held at their `last_edited_time` (`listing`); each loop then fetches
-//! what the store lists and does not yet hold at that stamp — the
+//! A run is a listing, a trash pass and six loops. The listing stores
+//! page objects held at their `last_edited_time` (`listing`), and the
+//! trash pass marks which of them are in Notion's trash; each loop then
+//! fetches what the store lists and does not yet hold at that stamp — the
 //! databases and blocks pages sit under, bodies, attachment bytes,
 //! comments, commented blocks, users — through
 //! `datalib_etl_web::owed`, which owns the stop, the failure budget, the
@@ -123,6 +124,12 @@ pub struct FetchSummary {
     /// all-failed check at the end of [`fetch`]: when this is the only
     /// thing that happened, the run fails.
     pub failed_pages: usize,
+    /// Held pages the trash listing wrote: newly in the trash, or there
+    /// at a new stamp.
+    pub trashed_pages: usize,
+    /// Pages back out of the trash, by asking for each one a complete
+    /// trash listing left out.
+    pub restored_pages: usize,
     /// Page bodies fetched from the markdown endpoint.
     pub bodies: usize,
     /// Bodies that came back empty — the common case for a database
@@ -421,6 +428,7 @@ impl Ctx<'_> {
         let ids = match roots {
             Roots::Workspace => {
                 self.search_walk(Listing::Workspace, s).await?;
+                self.trash_pass(Listing::Workspace, s).await?;
                 self.ancestors().await?;
                 return self.bodies(s).await;
             }
@@ -445,6 +453,7 @@ impl Ctx<'_> {
         } else {
             self.search_walk(Listing::Roots, s).await?;
         }
+        self.trash_pass(Listing::Roots, s).await?;
         self.ancestors().await?;
         let tree = self.db.load_tree().await?;
         let database_roots: Vec<&str> = ids
