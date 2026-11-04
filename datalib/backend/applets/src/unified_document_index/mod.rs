@@ -2460,13 +2460,24 @@ mod tests {
     }
 
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        Index::open(
-            root.to_path_buf(),
-            models::ModelGate::new(root),
-            EMBED_DEADLINE,
-        )
-        .await
-        .unwrap()
+        // Prime the model gate before serving, as both production callers
+        // do (`Index::open`'s callers above: one `provision_now`, one
+        // `warm`). Without it the gate is `Idle`, so the *first search*
+        // is what verifies the embedding model — some 300 MB of sha256 —
+        // against `EMBED_DEADLINE`, which is a request's budget and not a
+        // verification's. On any machine whose model cache was cold the
+        // vector tests then failed with "the search model is still being
+        // fetched and verified", which reads like a product bug and is
+        // not one. A root with no qmd index leaves the gate `Idle`, which
+        // is what the tests that have no index expect.
+        let models = models::ModelGate::new(root);
+        let gate = models.clone();
+        tokio::task::spawn_blocking(move || gate.provision_now())
+            .await
+            .expect("verify the embedding model before a search asks for it");
+        Index::open(root.to_path_buf(), models, EMBED_DEADLINE)
+            .await
+            .unwrap()
     }
 
     pub(super) async fn search(
