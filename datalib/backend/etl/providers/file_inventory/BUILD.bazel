@@ -1,0 +1,130 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+# TNG-themed synthetic directory tree used as a scan root by the file_inventory
+# e2e test and dropped into the dev/e2e data root (as `file_inventory_scan/`) by
+# `//tests/fixtures:materialize_tng_root`. The leading-dot `.file_inventory.toml`
+# breadcrumb is matched explicitly — the default glob skips dotfiles.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(
+        [
+            "tests/fixtures/file_inventory_tng/**/*",
+            "tests/fixtures/file_inventory_tng/**/.file_inventory.toml",
+        ],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "datalib_etl_file_inventory",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "datalib_etl_file_inventory",
+    edition = "2021",
+    proc_macro_deps = [
+        "//datalib/backend/etl/macros:datalib_etl_macros",
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
+        "//datalib/backend/etl/providers/file_inventory_config:datalib_etl_file_inventory_config",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:ignore",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:toml",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_binary(
+    name = "file_inventory",
+    srcs = ["src/bin/file_inventory.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_etl_file_inventory",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "//datalib/backend/cli_help:datalib_cli_help",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+# Inline `#[cfg(test)]` unit tests living in the library sources
+# (stamp.rs, hash.rs, walker.rs). This `crate = ":..."` target is what
+# actually compiles and runs them under `bazel test` — without it the
+# inline tests are silently never executed. Every other library in the
+# repo has the equivalent target; file_inventory was missing it.
+rust_test(
+    name = "file_inventory_unittests",
+    size = "small",
+    crate = ":datalib_etl_file_inventory",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# Every hermetic file_inventory test in one binary; the modules are listed in
+# its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
+# link of the provider stack and that is most of what a test here costs.
+rust_test(
+    name = "file_inventory_tests",
+    srcs = glob(["tests/file_inventory_tests/*.rs"]),
+    crate_root = "tests/file_inventory_tests/main.rs",
+    data = glob(["tests/file_inventory_tests/snapshots/*.snap"], allow_empty = True) + [
+        ":tng_fixture",
+    ],
+    edition = "2021",
+    env = {
+        "FILE_INVENTORY_TNG_DIR": "datalib/backend/etl/providers/file_inventory/tests/fixtures/file_inventory_tng",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
+        ":datalib_etl_file_inventory",
+        "@datalib_crates//:insta",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "file_inventory_tests.update",
+    test = ":file_inventory_tests",
+)
+
+
+
+# Inline tests in the binary. `file_inventory_unittests` covers the library
+# (`crate = ":datalib_etl_file_inventory"`), whose glob excludes `src/bin/**`,
+# so without this target the binary's own tests would never run.
+rust_test(
+    name = "file_inventory_bin_unittests",
+    size = "small",
+    crate = ":file_inventory",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)

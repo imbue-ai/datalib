@@ -378,10 +378,10 @@ pub fn plan(
             datalib_etl_google_drive,
             datalib_etl_google_drive_render
         ),
-        SourceType::Fsindex => ingest_only!(
-            datalib_etl_fsindex_config::FsindexConfig,
-            datalib_etl_fsindex_config::FsindexRenderConfig,
-            datalib_etl_fsindex
+        SourceType::FileInventory => ingest_only!(
+            datalib_etl_file_inventory_config::FileInventoryConfig,
+            datalib_etl_file_inventory_config::FileInventoryRenderConfig,
+            datalib_etl_file_inventory
         ),
     })
 }
@@ -425,7 +425,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::AppleMessages => datalib_etl_apple_messages::processor::migrate(raw_dir).await,
         SourceType::ApplePhotos => datalib_etl_apple_photos::processor::migrate(raw_dir).await,
         SourceType::GoogleDrive => datalib_etl_google_drive::processor::migrate(raw_dir).await,
-        SourceType::Fsindex => datalib_etl_fsindex::processor::migrate(raw_dir).await,
+        SourceType::FileInventory => datalib_etl_file_inventory::processor::migrate(raw_dir).await,
     }
 }
 
@@ -881,7 +881,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         for (ty, params) in [
             ("media", serde_json::json!({"playlists": false})),
-            ("fsindex", serde_json::json!({})),
+            ("file_inventory", serde_json::json!({})),
         ] {
             let dl = plan(
                 ty,

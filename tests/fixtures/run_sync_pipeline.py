@@ -72,7 +72,7 @@ Args (positional):
     23: pdf_tng       TNG-themed PDF corpus (Captain's logs, a warp-core
                       manual, a scanned blueprint). File-backed; the
                       scanner walks its `path` directly. Unlike
-                      fsindex this source RENDERS, so its markdown
+                      file_inventory this source RENDERS, so its markdown
                       reaches grid_index and the qmd index like any
                       chat source — which is the whole point of
                       including it here.

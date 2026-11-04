@@ -64,7 +64,7 @@ diffs the tables a document declared as inputs, and a `last_seen_at_utc`
 on one of them is a change every time. That includes a scan's
 `*_scan_meta` row, which every document of a file-backed source reads
 its root from. A provider that opts out of the sidecar for scale
-(`bulk_upsert_entity_in_tx`, fsindex's entry tables) keeps no stamp
+(`bulk_upsert_entity_in_tx`, file_inventory's entry tables) keeps no stamp
 at all on those rows. `content_tables_changed` is the check: ingest
 the same input twice under two nows and it must name no table — each
 file-backed provider's tests do exactly that.
@@ -164,7 +164,7 @@ about the tree ([locks and writers](/docs/dev/doltlite.md#locks-and-writers)).
 So every open here pins `max_connections(1)` and disables
 `idle_timeout` and `max_lifetime`: sqlx would otherwise retire the very
 connection whose session state is load-bearing, and its replacement
-starts on the default branch — an fsindex scan on a non-`main` branch
+starts on the default branch — an file_inventory scan on a non-`main` branch
 would silently start writing to `main` after 30 minutes and report
 success.
 
@@ -224,7 +224,7 @@ Per file, not per root, so two sources with nothing in common can be
 written by two runners at once (#247): the lock says who owns *this*
 store, and nothing about the others.
 
-`datalib-fsindex` and the provider `*_ingest` binaries write through
+`datalib-file-inventory` and the provider `*_ingest` binaries write through
 `RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
 stores it is given through `datalib_pin::open_reader` and writes only
 its own scratch. `datalib-doltlite` is the raw shell and takes no lock
@@ -288,7 +288,7 @@ belongs in a table that moves the version**, not in a sidecar: a
 consumer is woken by the version, and a change only a sidecar holds
 reaches it at the next content change, not before.
 
-Two things deliberately stay off this path. `fsindex` keeps one branch
+Two things deliberately stay off this path. `file_inventory` keeps one branch
 per scan root and publishes none of them — the reserved branch name is
 the signal, so a connection on any other branch seals without touching
 `main`. And the app stores in `core` open plain sqlx pools
@@ -431,7 +431,7 @@ What that means here:
   for what one run writes together" and `docs/dev/entity_ids.md`
   § "The layout".
 - **Commit cadence is free until something runs `dolt_gc()`**, and only
-  `sqlite_mirror` and `fsindex` do today. Without gc every store keeps
+  `sqlite_mirror` and `file_inventory` do today. Without gc every store keeps
   every transaction's pages regardless.
 - **A squash deletes commit hashes.** Folding old commits into one
   (`dolt_reset('--soft', <base>)` then `dolt_commit`) lets the next gc

@@ -61,7 +61,7 @@ impl Cadence {
 /// its store is consistent. A commit landing mid-prune or mid-reconcile
 /// publishes a store that is missing data it will have again a moment
 /// later — and a provider that truncates and refills on every run
-/// (`whatsapp`, `pdf`, `fsindex`) must not ask until the refill is done,
+/// (`whatsapp`, `pdf`, `file_inventory`) must not ask until the refill is done,
 /// since half of one reads as a source that lost most of its data.
 #[derive(Debug)]
 pub struct Checkpointer {

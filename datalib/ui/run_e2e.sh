@@ -248,7 +248,7 @@ export DATALIB_TEST_E2E_BIN_DIR="$BIN_STAGE"
 
 # The local PDF corpus the sync spec scans. Anchor off one file and
 # hand over its directory, the way materialize_tng_root.sh anchors the
-# fsindex tree off its breadcrumb.
+# file_inventory tree off its breadcrumb.
 PDF_ANCHOR="$(need_runfile _main/datalib/backend/etl/providers/pdf/tests/fixtures/pdf_tng/captains_log.pdf -f)"
 export DATALIB_TEST_E2E_PDF_FIXTURE_DIR="$(dirname "$PDF_ANCHOR")"
 

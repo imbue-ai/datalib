@@ -251,7 +251,7 @@ pub async fn bulk_upsert<T: BulkUpsertable>(pool: &sqlx::SqlitePool, rows: &[T])
 
 /// The entity-table half of [`bulk_upsert_in_tx`], WITHOUT the paired
 /// `<t>_bookkeeping` stamp. Use this for tables that deliberately have
-/// no bookkeeping sidecar — e.g. `datalib-etl-fsindex`, where the
+/// no bookkeeping sidecar — e.g. `datalib-etl-file_inventory`, where the
 /// sidecars (a) aren't needed (the scanner has no retry/attempt model)
 /// and (b) roughly double the row count, which matters at the
 /// tens-of-millions-of-rows design scale. The framework default is

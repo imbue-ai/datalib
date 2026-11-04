@@ -531,7 +531,7 @@ threads_bookkeeping
     tz_offset
     held_version
 
-== fsindex/raw ==
+== file_inventory/raw ==
 dirs
     id
     size

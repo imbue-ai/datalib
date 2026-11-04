@@ -17,7 +17,7 @@ every column of a line is typed (`Temperature(F)` is `temperature_c`
 converted), so keeping the line as JSON beside them would only repeat
 it, and a sensor sample has no fetch to retry, so the `_bookkeeping`
 row the shared upsert writes per entity would double the row count
-for nothing — `fsindex` makes the same call. `schema_raw::upsert_samples`
+for nothing — `file_inventory` makes the same call. `schema_raw::upsert_samples`
 is the chunked multi-row upsert, and one device's files all go in one
 transaction with its device row and its cursor stamps: a full re-read
 is a minute, so the per-file durability `contacts` and `google_takeout`

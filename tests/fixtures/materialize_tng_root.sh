@@ -168,17 +168,17 @@ for entry in \
 done
 ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_document_index/qmd_aggregator/qmd/models"
 
-# Drop the TNG-themed scan tree into the root as `fsindex_scan/`. It's a plain
-# directory the `fsindex` (Unison-style) scanner can index; nothing renders it
-# (fsindex is extract-only), so it just sits in the root alongside the
-# per-stanza markdown trees. Anchor off the checked-in `.fsindex.toml`
+# Drop the TNG-themed scan tree into the root as `file_inventory_scan/`. It's a plain
+# directory the `file_inventory` (Unison-style) scanner can index; nothing renders it
+# (file_inventory is extract-only), so it just sits in the root alongside the
+# per-stanza markdown trees. Anchor off the checked-in `.file_inventory.toml`
 # breadcrumb and copy its containing dir, dereferencing the runfiles symlinks
 # (`cp -RL`) so the materialized tree is real files, like a user's directory.
-FSINDEX_BREADCRUMB="$(rlocation _main/datalib/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng/.fsindex.toml)"
-if [[ -f "$FSINDEX_BREADCRUMB" ]]; then
-  cp -RL "$(dirname "$FSINDEX_BREADCRUMB")" "$OUT_ROOT/fsindex_scan"
+FILE_INVENTORY_BREADCRUMB="$(rlocation _main/datalib/backend/etl/providers/file_inventory/tests/fixtures/file_inventory_tng/.file_inventory.toml)"
+if [[ -f "$FILE_INVENTORY_BREADCRUMB" ]]; then
+  cp -RL "$(dirname "$FILE_INVENTORY_BREADCRUMB")" "$OUT_ROOT/file_inventory_scan"
 else
-  echo "ERROR: fsindex_tng fixture not found at $FSINDEX_BREADCRUMB" >&2
+  echo "ERROR: file_inventory_tng fixture not found at $FILE_INVENTORY_BREADCRUMB" >&2
   exit 1
 fi
 

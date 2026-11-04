@@ -8,7 +8,7 @@
 # WITHOUT such a target, the inline tests never compile
 # and are SILENTLY SKIPPED by the supported `bazel test //...` path —
 # i.e. they look like they pass while never running. We hit exactly this:
-# `datalib_etl_fsindex` shipped with inline tests in stamp.rs/hash.rs
+# `datalib_etl_file_inventory` shipped with inline tests in stamp.rs/hash.rs
 # that no CI run ever executed. This check makes that failure loud.
 #
 # Mechanism: `labels(crate, kind(rust_test, //...))` is the set of crates

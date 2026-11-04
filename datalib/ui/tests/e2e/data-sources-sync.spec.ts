@@ -13,7 +13,7 @@
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries most of this spec: an `ingest -> render_markdown` edge is
 // what makes "everything downstream is queued too" a real assertion
-// about the DAG rather than a contrived one. `fsindex` (download-only)
+// about the DAG rather than a contrived one. `file_inventory` (download-only)
 // is the unrelated second source — the one whose history must not move.
 // Watching a run in flight needs a run that cannot finish before it is
 // seen, so that test syncs a replayed ChatGPT download instead, held
@@ -201,14 +201,14 @@ inputs = ["pdfs/ingest"]
 
 [[groups]]
 id = "docs"
-type = "fsindex"
+type = "file_inventory"
 
 [[steps]]
 group = "docs"
 function = "ingest"
 command = "'${STEP_BIN}'"
 [steps.params.fswalk]
-path = "${dataRoot}/fsindex_scan"
+path = "${dataRoot}/file_inventory_scan"
 
 # Declared and never synced by any test in this file, so "never run" is
 # a state the grid can be observed handling — a Status with no time, and
@@ -218,14 +218,14 @@ path = "${dataRoot}/fsindex_scan"
 # correctly as text.
 [[groups]]
 id = "unsynced"
-type = "fsindex"
+type = "file_inventory"
 
 [[steps]]
 group = "unsynced"
 function = "ingest"
 command = "'${STEP_BIN}'"
 [steps.params.fswalk]
-path = "${dataRoot}/fsindex_scan"
+path = "${dataRoot}/file_inventory_scan"
 ${applets()}`;
 
   test("syncing one source leaves another source's history untouched", async ({ page }) => {

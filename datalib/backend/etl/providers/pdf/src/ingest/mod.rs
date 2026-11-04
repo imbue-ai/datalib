@@ -92,7 +92,7 @@ async fn scan_tree(
     let mut summary = FetchSummary::default();
 
     // Load the cache BEFORE truncating the path table, exactly as
-    // fsindex does — the truncate is what makes deletions fall out, and
+    // file_inventory does — the truncate is what makes deletions fall out, and
     // the in-memory cache is what preserves the fast-rescan path across
     // it.
     let prev = opts.db.load_prev().await.context("load rescan cache")?;
@@ -113,7 +113,7 @@ async fn scan_tree(
         .context("record scan root")?;
 
     // One walk and no read: a file the host's shared cache can vouch for,
-    // because a `media` or `fsindex` scan of the same tree paid for it or
+    // because a `media` or `file_inventory` scan of the same tree paid for it or
     // because nothing has touched it, is known by its hash. The rest are read
     // below, once, for both their hash and their classification.
     let scan = file_changes_scan::list(

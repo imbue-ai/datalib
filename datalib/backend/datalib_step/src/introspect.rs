@@ -1,7 +1,7 @@
 //! What a source's mirror weighs, as rows the grid can show.
 //!
 //! Every source's render wave ends here, including the ones that render
-//! no documents of their own — which is how `fsindex` and `media` get a
+//! no documents of their own — which is how `file_inventory` and `media` get a
 //! place in the UI at all, and where their Items count comes from
 //! (`SourceType::item_table`).
 //!

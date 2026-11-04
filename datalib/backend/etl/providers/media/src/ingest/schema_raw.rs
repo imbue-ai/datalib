@@ -39,7 +39,7 @@ pub const MEDIA_ITEMS_INDEXES: &[&str] = &[
     // The query the column exists for: every file that is the same
     // recording or the same exposure, regardless of how it was tagged.
     // A point lookup against a column with no other access path, at
-    // item scale rather than fsindex scale, so the index earns its
+    // item scale rather than file_inventory scale, so the index earns its
     // keep.
     "CREATE INDEX IF NOT EXISTS idx_media_items_payload \
      ON media_items (payload_blake3)",

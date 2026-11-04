@@ -796,7 +796,7 @@ Creating and dropping a table in one open still appends chunks, though
 - **gc writes a compacted copy before it drops the original**, so it
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
-- `sqlite_mirror` and `fsindex` run gc, and so does `datalib-dag
+- `sqlite_mirror` and `file_inventory` run gc, and so does `datalib-dag
   --free-disk-space` on every step's doltlite store
   (`doltlite_raw::collect_garbage`). With `--drop-old-versions-on-derived-data` it folds
   the render stores' history into one commit first

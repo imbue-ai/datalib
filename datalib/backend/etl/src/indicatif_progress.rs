@@ -1,5 +1,5 @@
 //! Indicatif-backed [`ProgressSink`] for a binary that wants a live
-//! terminal progress bar: the standalone `fsindex` CLI.
+//! terminal progress bar: the standalone `file_inventory` CLI.
 //!
 //! One bar per step, never a tree of them: a step cannot have two
 //! independent bars (`datalib/backend/dag/README.md` § "One bar per
@@ -15,7 +15,7 @@ struct IndicatifSink {
     bar: ProgressBar,
     // When true the bar renders only `{prefix} {spinner} {msg}` — no
     // `{pos}`/`{per_sec}` headline. For callers whose message already
-    // carries every counter and rate (fsindex's scan dashboard), where
+    // carries every counter and rate (file_inventory's scan dashboard), where
     // the headline would just duplicate them unlabeled.
     message_only: bool,
 }
@@ -70,7 +70,7 @@ impl Progress {
     /// Like [`Progress::indicatif`] but the bar is a bare
     /// `{prefix} {spinner} {msg}` — no `{pos}`/`{per_sec}` headline. For
     /// callers whose `set_message` string already carries every counter
-    /// and rate (e.g. fsindex's scan dashboard), where the headline
+    /// and rate (e.g. file_inventory's scan dashboard), where the headline
     /// would only duplicate them, unlabeled.
     pub fn indicatif_message_only(prefix: impl Into<String>) -> Progress {
         Self::indicatif_inner(prefix.into(), true)

@@ -4,7 +4,7 @@
 //! file is a NULL here. Every column of a line is typed, so the line
 //! itself would only repeat them; and a sensor sample has no fetch to
 //! retry, so the sidecar would double the row count for nothing (the
-//! same call `fsindex` makes).
+//! same call `file_inventory` makes).
 
 use datalib_etl::bulk::SQL_CHUNK;
 use datalib_etl::doltlite_raw::WirePayload;

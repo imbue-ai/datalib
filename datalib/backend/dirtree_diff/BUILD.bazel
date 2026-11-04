@@ -67,7 +67,7 @@ rust_test(
     crate_root = "tests/dirtree_diff_tests/main.rs",
     edition = "2021",
     deps = [
-        "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        "//datalib/backend/etl/providers/file_inventory:datalib_etl_file_inventory",
         ":datalib_dirtree_diff",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:hex",
@@ -86,14 +86,14 @@ sh_test(
     srcs = ["recipe_test.sh"],
     args = [
         "$(rootpath README.md)",
-        "$(rootpath //datalib/backend/etl/providers/fsindex:fsindex)",
+        "$(rootpath //datalib/backend/etl/providers/file_inventory:file_inventory)",
         "$(rootpath :dirtree_diff)",
         "$(rootpath //third-party/doltlite:doltlite)",
     ],
     data = [
         "README.md",
         ":dirtree_diff",
-        "//datalib/backend/etl/providers/fsindex:fsindex",
+        "//datalib/backend/etl/providers/file_inventory:file_inventory",
         "//third-party/doltlite:doltlite",
     ],
 )

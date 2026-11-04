@@ -233,11 +233,11 @@ datalib/
                    (config schema) per provider. Twelve of the
                    file-backed ones scan a local tree through
                    etl/files/src/file_changes_scan.rs (claude_code and codex by way
-                   of etl/agent_sessions/; fsindex has its own walker
+                   of etl/agent_sessions/; file_inventory has its own walker
                    over etl/files/src/fswalk.rs); four mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin); lightroom renders
-                   a row per photo and writes no markdown. fsindex,
+                   a row per photo and writes no markdown. file_inventory,
                    media, apple_photos and linear have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.

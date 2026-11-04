@@ -23,7 +23,9 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::ClaudeCode => datalib_etl_claude_code_config::ClaudeCodeConfig::METHODS,
         SourceType::Codex => datalib_etl_codex_config::CodexConfig::METHODS,
         SourceType::Email => datalib_etl_email_config::EmailConfig::METHODS,
-        SourceType::Fsindex => datalib_etl_fsindex_config::FsindexConfig::METHODS,
+        SourceType::FileInventory => {
+            datalib_etl_file_inventory_config::FileInventoryConfig::METHODS
+        }
         SourceType::Garmin => datalib_etl_garmin_config::GarminConfig::METHODS,
         SourceType::Github => datalib_etl_github_config::GithubConfig::METHODS,
         SourceType::Gitlab => datalib_etl_gitlab_config::GitlabConfig::METHODS,

@@ -441,6 +441,17 @@ latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fas
 and name the same account in the source. The `fastmail` table needs
 nothing else; `addressbooks` narrows it to the address books you name.
 
+## File inventory
+
+`type = "file_inventory"` — any directory tree on disk (`fswalk.path`).
+Keeps a record of every entry — path, kind, size, blake3 hash;
+download-only, nothing is rendered.
+
+Nothing but a path. The scan is incremental, keyed on mtime, size and
+inode, so a rescan of a big tree is fast, and it stays read-only
+against its input unless you turn `stamp` on. Query the record in the
+source's raw store.
+
 ## Garmin
 
 `type = "garmin"` — Garmin Connect's API through latchkey (`api`). Mirrors per-day health metrics (sleep, heart
@@ -787,17 +798,6 @@ it or in its place.
 Connections come without photos: the export has none, and linkedin.com
 shows a profile only to someone signed in. Photos an earlier version
 fetched are kept.
-
-## Local file index
-
-`type = "fsindex"` — any directory tree on disk (`fswalk.path`).
-Mirrors an index of every entry — path, kind, size, blake3 hash;
-download-only, nothing is rendered.
-
-Nothing but a path. The scan is incremental, keyed on mtime, size and
-inode, so a rescan of a big tree is fast, and it stays read-only
-against its input unless you turn `stamp` on. Query the index in the
-source's raw store.
 
 ## Local media
 
