@@ -192,11 +192,14 @@ impl Ctx<'_> {
         self.wrote(n.max(1)).await
     }
 
-    /// Where the walk of completed tasks stops: the configured date, else
-    /// the day the account joined.
+    /// Where the walk of completed tasks stops: the configured `since`,
+    /// an offset counted back from this run, else the day the account
+    /// joined.
     async fn floor(&mut self) -> Result<Option<String>> {
-        if let Some(since) = &self.opts.sync.completed_since {
-            return Ok(windows::normalize(since));
+        if let Some(since) = &self.opts.sync.since {
+            let now = datalib_time::parse_strict(&self.now)?;
+            let since = datalib_time::TimeBound::absolute(since, &now)?;
+            return Ok(windows::normalize(&since));
         }
         let joined = db::joined_at(self.writes.tx().await?).await?;
         Ok(joined.as_deref().and_then(windows::normalize))
@@ -211,7 +214,7 @@ impl Ctx<'_> {
             self.found.phase(
                 COMPLETED_ITEMS.table,
                 "the account's user record says nothing of when it joined Todoist, so it is \
-                 not known how far back to read completed tasks; set `api.completed_since` \
+                 not known how far back to read completed tasks; set `api.since` \
                  to read them",
             );
             return Ok(());
@@ -337,7 +340,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let db = opts.db.clone();
     let run_config = json!({
         "completed": opts.sync.completed,
-        "completed_since": opts.sync.completed_since,
+        "since": opts.sync.since,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let now = opts

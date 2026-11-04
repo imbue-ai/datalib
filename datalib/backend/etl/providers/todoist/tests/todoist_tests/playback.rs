@@ -218,7 +218,7 @@ async fn completed_tasks_are_left_alone_when_turned_off() {
         Edition::Before,
         TodoistSync {
             completed: false,
-            completed_since: None,
+            since: None,
         },
     )
     .await
@@ -230,27 +230,31 @@ async fn completed_tasks_are_left_alone_when_turned_off() {
     );
 }
 
-/// `completed_since` stops the walk at its date rather than at the day
-/// the account joined: of the tape's windows, only the newest is asked.
+/// `since` stops the walk at its date rather than at the day the account
+/// joined: of the tape's windows, only the newest is asked. An offset
+/// counts back from the run, as every source's `since` does; before, the
+/// setting took only a date.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn completed_since_bounds_the_walk() {
-    let d = tempfile::tempdir().unwrap();
-    let t = tape::tape(d.path(), Edition::Before);
+async fn since_bounds_the_walk_as_a_date_or_an_offset() {
     let windows = tape::windows_of(Edition::Before, &[]);
-    let store = d.path().join("store");
-    let s = run_with(
-        &store,
-        &t,
-        Edition::Before,
-        TodoistSync {
-            completed: true,
-            completed_since: Some(windows[0].0[..10].to_string()),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(s.windows, 1, "{s:?}");
-    assert_eq!(s.completed_written, 1, "{s:?}");
+    let one_window = format!("-{}d", datalib_etl_todoist::ingest::windows::WINDOW_DAYS);
+    for since in [windows[0].0[..10].to_string(), one_window] {
+        let d = tempfile::tempdir().unwrap();
+        let t = tape::tape(d.path(), Edition::Before);
+        let s = run_with(
+            &d.path().join("store"),
+            &t,
+            Edition::Before,
+            TodoistSync {
+                completed: true,
+                since: Some(since.clone()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.windows, 1, "{since}: {s:?}");
+        assert_eq!(s.completed_written, 1, "{since}: {s:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

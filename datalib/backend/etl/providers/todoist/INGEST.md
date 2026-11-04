@@ -58,7 +58,7 @@ Two parts, in this order (`src/ingest/mod.rs`):
    `limit=200` and the `next_cursor` of the page before. A window's
    span is written to `coverage` (scope `completed_items`) in the
    transaction that stores its last page. What is left to read is the
-   range wanted, from `completed_since` (else the account's
+   range wanted, from `since` (else the account's
    `joined_at`) up to now, less the spans held.
 
 The one position kept is Todoist's own sync token, which AGENTS.md
@@ -183,7 +183,8 @@ bazel run //datalib/backend/etl/providers/todoist:todoist_live
 
 runs `tests/todoist_tests/live.rs` against the account latchkey holds
 for `todoist` (`TODOIST_TEST_ACCOUNT` picks one of several;
-`TODOIST_TEST_COMPLETED_SINCE=YYYY-MM-DD` keeps the first run short).
+`TODOIST_TEST_SINCE`, a day or an offset such as `-30d`, keeps the
+first run short).
 It runs a full sync, checks no API token reached the store, and runs
 again to check the second run is incremental. It prints only counts and
 the store's path.
