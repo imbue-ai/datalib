@@ -896,11 +896,14 @@ fn log_attempt(
         req.method.as_str(),
         took.as_millis(),
     );
-    let failed = !matches!(outcome, Ok(resp) if resp.status < 400);
+    let ending = match outcome {
+        Ok(resp) => crate::outbound::Ending::of_status(resp.status),
+        Err(_) => crate::outbound::Ending::Failed,
+    };
     crate::outbound::record(
         crate::outbound::host_of(url),
         crate::outbound::Attempt {
-            failed,
+            ending,
             bytes: bytes as u64,
             took,
         },
