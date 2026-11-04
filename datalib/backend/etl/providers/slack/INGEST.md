@@ -282,6 +282,29 @@ is `since = "-7d"`. The processor resolves an offset against the run's
 `now` and hands the download an instant, so the window slides; what it
 slides past stays stored.
 
+A `since` earlier than the epoch is fine to write — `1900-01-01`, or
+`0000-01-01` — and means the same as the epoch, because no Slack message
+is older than one. What reaches the API is clamped to the epoch and then
+spelled the way `conversations.history` will take it, which is narrower
+than it looks. Measured against the live API:
+
+| `oldest=` | answer |
+|---|---|
+| `-62135596800.000000` (a pre-epoch stamp) | an empty page, so the mirror held nothing (#1048) |
+| `0.000000` | `invalid_ts_oldest` |
+| `0.0` | `invalid_ts_oldest` |
+| `0` | ok |
+| `0.000001` | ok |
+| `1704067200.000000` | ok |
+
+So Slack refuses a zero that carries a fraction, while taking a bare
+zero and every real stamp. Every other bound goes out as
+`<seconds>.<micros>`; a bound at the epoch goes out as `0`
+(`oldest_param` in `ingest/mod.rs`, with the tests that hold us to it).
+This is worth knowing because the epoch is not an edge case here: it is
+what a source with no `since` asks from, so getting it wrong means a
+source mirrors no messages at all.
+
 `refresh_window_days` is *not* that knob, despite reading like one. It
 re-reads the trailing days of what is already mirrored, so edits and
 reactions on stored messages get picked up; it never narrows a run's

@@ -827,6 +827,30 @@ fn ts_key(ts: &str) -> String {
     format!("{ts:0>19}")
 }
 
+/// A `coverage` bound as Slack's `oldest`.
+///
+/// Two things `conversations.history` refuses, both of which a `since`
+/// of the epoch can produce:
+///
+/// - **A stamp before the epoch.** `since = "0001-01-01"` once went out
+///   as `oldest=-62135596800.000000` and the mirror held no messages
+///   (#1048). [`datetime_to_slack_ts`] clamps for that.
+/// - **A zero with a fraction.** `oldest=0.000000` and `oldest=0.0` both
+///   come back `invalid_ts_oldest`, while `0`, `0.000001` and every real
+///   stamp are taken — measured against the live API. So the epoch, which
+///   is what a source with no `since` asks from, goes out as `0`.
+///
+/// A bound that is the epoch therefore serializes as `0`, not as the
+/// `<seconds>.<micros>` every other bound uses.
+fn oldest_param(span_lo: &str) -> String {
+    let ts = key_ts(span_lo);
+    if ts.trim_start_matches(['0', '.']).is_empty() {
+        "0".to_string()
+    } else {
+        ts
+    }
+}
+
 fn key_ts(key: &str) -> String {
     let ts = key.trim_start_matches('0');
     if ts.is_empty() || ts.starts_with('.') {
@@ -1370,7 +1394,7 @@ fn history_params(channel_id: &str, walk: &Walk) -> BTreeMap<String, String> {
     let stretch = &walk.stretch;
     let mut params = BTreeMap::new();
     params.insert("channel".to_string(), channel_id.to_string());
-    params.insert("oldest".to_string(), key_ts(&stretch.span.lo));
+    params.insert("oldest".to_string(), oldest_param(&stretch.span.lo));
     params.insert("inclusive".to_string(), stretch.inclusive.to_string());
     params.insert("include_all_metadata".to_string(), "true".to_string());
     params.insert("limit".to_string(), MESSAGES_PER_PAGE.to_string());
@@ -2388,6 +2412,63 @@ mod tests {
         assert!(ts_key("12604000800.000800").as_str() < END_OF_TIME);
         assert_eq!(key_ts(&ts_key(SINCE)), SINCE);
         assert_eq!(key_ts(&ts_key("0.000001")), "0.000001");
+    }
+
+    /// Whatever a person writes as `since`, the `oldest` that reaches
+    /// Slack is one it accepts. Measured against the live API: it refuses
+    /// `oldest=0.000000` and `oldest=0.0` with `invalid_ts_oldest`, and
+    /// takes `0`, `0.000001` and every real stamp; a stamp before the
+    /// epoch comes back empty (#1048).
+    ///
+    /// The regression this guards: `DEFAULT_SINCE` moved to the epoch, so
+    /// every source without a `since` — the default — sent
+    /// `oldest=0.000000` and mirrored no messages at all. The playback
+    /// tape could not catch it, because the tape was recorded from our own
+    /// request.
+    #[test]
+    fn whatever_since_a_person_writes_the_oldest_slack_gets_is_one_it_takes() {
+        for since in [
+            "0000-01-01",
+            "0001-01-01",
+            "1900-01-01",
+            "1969-12-31T23:59:59.5Z",
+            "1970-01-01",
+            "1970-01-01T00:00:00.000001Z",
+            "2024-01-01",
+            "2369-04-01",
+        ] {
+            let at = parse_iso_or_utc_date(since)
+                .unwrap_or_else(|e| panic!("{since} should parse as a since: {e}"));
+            let wire = oldest_param(&ts_key(&datetime_to_slack_ts(&at)));
+            assert!(
+                !wire.starts_with('-'),
+                "{since} sent a stamp before the epoch: oldest={wire}"
+            );
+            assert!(
+                wire == "0" || !wire.trim_start_matches(['0', '.']).is_empty(),
+                "{since} sent a zero with a fraction, which Slack refuses: oldest={wire}"
+            );
+        }
+        // The two the epoch collapses to, spelled out.
+        let epoch = |s| {
+            oldest_param(&ts_key(&datetime_to_slack_ts(
+                &parse_iso_or_utc_date(s).unwrap(),
+            )))
+        };
+        assert_eq!(epoch("0000-01-01"), "0");
+        assert_eq!(epoch("1970-01-01"), "0");
+        assert_eq!(epoch("1970-01-01T00:00:00.000001Z"), "0.000001");
+        assert_eq!(epoch("2024-01-01"), "1704067200.000000");
+    }
+
+    /// The request a cold walk actually sends carries that `oldest`, so
+    /// the guard above is on the wire and not just on a helper.
+    #[test]
+    fn a_cold_walks_request_asks_from_an_oldest_slack_takes() {
+        let held = from_since(&ts_key(EPOCH_TS));
+        let stretch = stretches(&held, None, &[]).pop().expect("one stretch");
+        let params = history_params("C0", &Walk::new(0, stretch));
+        assert_eq!(params.get("oldest").map(String::as_str), Some("0"));
     }
 
     /// #1048: `since = "0001-01-01"` went out as
