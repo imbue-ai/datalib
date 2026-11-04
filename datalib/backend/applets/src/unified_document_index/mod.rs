@@ -31,6 +31,7 @@ mod search_terms;
 #[cfg(test)]
 mod serve_tests;
 pub(crate) mod tabs;
+mod warm;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{markdown_uuid_of_path, GridRow, GridRowColumn};
@@ -182,7 +183,8 @@ pub fn serve(port: u16) -> Result<()> {
         // than during it.
         let models = models::ModelGate::new(&root);
         models.warm();
-        let state = Index::open(root, models, EMBED_DEADLINE).await?;
+        let state = Index::open(root, models.clone(), EMBED_DEADLINE).await?;
+        tokio::spawn(warm::keep_warm(state.clone(), models));
         let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let listener = tokio::net::TcpListener::bind(addr)
             .await

@@ -119,6 +119,22 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
+/// Warming reads every vector before anyone searches, and the messages of
+/// what `from:me` reaches, so neither first search waits for them.
+#[tokio::test]
+async fn warming_reads_what_the_first_searches_would_wait_for() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let open = s.qmd_index.open(&s.root).await.unwrap().unwrap();
+    assert_eq!(open.vectors.held().await, (0, 0));
+
+    super::warm::warm_once(&s).await;
+
+    let (vectors, messages) = open.vectors.held().await;
+    assert!(vectors > 0, "no vector was read");
+    assert!(messages > 0, "no document's messages were read");
+}
+
 /// `source:` scopes the ranking, not only the rows the grid keeps: a
 /// source whose hits rank below another source's still answers in full.
 #[tokio::test]
