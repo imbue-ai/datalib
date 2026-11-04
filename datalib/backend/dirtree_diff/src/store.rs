@@ -95,7 +95,7 @@ pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<SqlitePo
     Ok(pool)
 }
 
-/// Which of fsindex's two entry tables a read goes to. `dirs` is a few
+/// Which of file_inventory's two entry tables a read goes to. `dirs` is a few
 /// percent the size of `files` and a directory's digest covers its
 /// whole subtree, so anything that can be answered from `dirs` alone
 /// is answered there first.

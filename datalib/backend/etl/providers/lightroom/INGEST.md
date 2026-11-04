@@ -388,7 +388,7 @@ cannot be mirrored again, and mirroring an older one on top would take
 its state out of HEAD; so HEAD stays where the last sync left it, and
 that backup is a problem on the Manage row until a newer one arrives.
 
-- **Which file is a backup.** The folder is scanned with `fsscan`. A
+- **Which file is a backup.** The folder is scanned with `file_changes_scan`. A
   backup is known by its hash (below), so every run needs every
   backup's hash; the host's fingerprint cache answers that with a
   `stat` for a file it has hashed before. Each entry in the folder is
@@ -647,5 +647,5 @@ and the crate's `src/read.rs`. Render reads only the mirror; the
 previews are read by the applet, live, from the `Previews.lrdata` beside
 the catalog, since their file names change on every edit.
 
-**`fsindex` as a companion**, if you want to know whether the files the
+**`file_inventory` as a companion**, if you want to know whether the files the
 catalog points at are still there.

@@ -430,7 +430,7 @@ fn a_changed_directory_is_structure_not_a_finding() {
 
 #[test]
 fn the_root_row_is_never_a_finding() {
-    // fsindex records the scan root as a row with an empty path.
+    // file_inventory records the scan root as a row with an empty path.
     let r = Case {
         modified: vec![(dir("", ALPHA), dir("", BETA))],
         ..Default::default()

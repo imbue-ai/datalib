@@ -24,7 +24,7 @@ rust_test(
         "//datalib/backend/etl/providers/calendar:datalib_etl_calendar",
         "//datalib/backend/etl/providers/contacts:datalib_etl_contacts",
         "//datalib/backend/etl/providers/email:datalib_etl_email",
-        "//datalib/backend/etl/providers/fsindex:datalib_etl_fsindex",
+        "//datalib/backend/etl/providers/file_inventory:datalib_etl_file_inventory",
         "//datalib/backend/etl/providers/github:datalib_etl_github",
         "//datalib/backend/etl/providers/gitlab:datalib_etl_gitlab",
         "//datalib/backend/etl/providers/google_takeout:datalib_etl_google_takeout",

@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+# What macOS's FSEvents history does and does not vouch for, one test per
+# fact. Nothing in datalib uses FSEvents yet; this is what a fast path
+# would have to design around. macOS only, so PR CI (Linux) skips it.
+rust_test(
+    name = "fsevents_facts_test",
+    size = "medium",
+    srcs = ["fsevents_facts.rs"],
+    edition = "2021",
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "@datalib_crates//:libc",
+        "@datalib_crates//:tempfile",
+    ],
+)

@@ -1,6 +1,6 @@
 //! Re-reading one Codex home must move no content table. The bug this
 //! guards is a stamp the store itself mints landing in a content row:
-//! the live bake found exactly that on `pdf`, `media` and `fsindex`
+//! the live bake found exactly that on `pdf`, `media` and `file_inventory`
 //! (imbue-ai/datalib#671), where every row then read as modified on
 //! every sync and the render re-rendered everything.
 //!

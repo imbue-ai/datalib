@@ -60,9 +60,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
         T::Facebook => docs::<datalib_etl_facebook_config::FacebookConfig>(
             datalib_etl_facebook_config::EXAMPLES,
         ),
-        T::Fsindex => {
-            docs::<datalib_etl_fsindex_config::FsindexConfig>(datalib_etl_fsindex_config::EXAMPLES)
-        }
+        T::FileInventory => docs::<datalib_etl_file_inventory_config::FileInventoryConfig>(
+            datalib_etl_file_inventory_config::EXAMPLES,
+        ),
         T::Garmin => {
             docs::<datalib_etl_garmin_config::GarminConfig>(datalib_etl_garmin_config::EXAMPLES)
         }

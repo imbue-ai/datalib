@@ -328,7 +328,7 @@ pub fn lock_path_for(db_path: &Path) -> PathBuf {
 /// creates the tables — because a reader resolves `main`'s tip before it
 /// opens that commit.
 ///
-/// The name is also the signal. `fsindex` keeps one branch per scan root
+/// The name is also the signal. `file_inventory` keeps one branch per scan root
 /// and publishes none of them, so [`publish_to_main`] fires only for a
 /// connection sitting on this exact branch and leaves every other one
 /// alone.
@@ -397,7 +397,7 @@ async fn checkout_writer_branch(
     // thinks it moved and did not writes to `main` — visible to every
     // reader, mid-batch, which is what the branch exists to prevent.
     // Doltlite 0.50.3 let a failed checkout through silently (#691).
-    // `fsindex::checkout_branch` reads back for the same reason.
+    // `file_inventory::checkout_branch` reads back for the same reason.
     let active: String = sqlx::query_scalar("SELECT active_branch()")
         .fetch_one(&mut *conn)
         .await?;
@@ -2005,7 +2005,7 @@ pub async fn content_tables_changed(
 /// A raw store's version: the commit [`CONTENT_BRANCH`] names, the last
 /// seal at which content moved. Still a commit, so a consumer can pin a
 /// read to it; its content tables are `main`'s. A store with no content
-/// branch yet (one no build since has opened, fsindex's scans) reports
+/// branch yet (one no build since has opened, file_inventory's scans) reports
 /// its [`head_commit`].
 pub async fn content_commit(pool: &SqlitePool) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {

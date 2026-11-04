@@ -52,7 +52,7 @@ record plus its own `agentId`, and `isSidechain: true`.
 Two tables, both `WirePayloadRow`, neither with a bookkeeping sidecar
 (a live session's file is re-read whole on every sync, and stamping
 thousands of unchanged rows each time would churn the store for
-nothing — the same call `airvisual` and `fsindex` made):
+nothing — the same call `airvisual` and `file_inventory` made):
 
 - **`transcripts`** — one row per file. The id is the session id, or
   `<session_id>#<agent_id>` for a subagent. Promoted columns:
@@ -78,7 +78,7 @@ line that is not JSON is counted as `malformed` and stepped over.
 
 ## Incrementality
 
-`fsscan` over the root for `*.jsonl`, with `file_checkpoint` holding
+`file_changes_scan` over the root for `*.jsonl`, with `file_checkpoint` holding
 each file's hash under the `claude_code/sessions` scope. A file whose
 hash moved is re-read whole and every row upserted; a row whose payload
 did not change is no change to doltlite

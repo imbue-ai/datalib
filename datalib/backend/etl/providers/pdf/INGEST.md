@@ -1,6 +1,6 @@
 # pdf — download
 
-Scans a local directory tree for `*.pdf`, hashes each file, classifies
+Lists a local directory tree for `*.pdf`, hashes each file as it reads it, classifies
 it, and records what it is. Conversion to markdown is the **render**
 step's job; this side never produces text.
 
@@ -9,14 +9,14 @@ Row shapes and the identity argument are in
 every provider honors are in
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 
-## Relationship to `fsindex` and `media`
+## Relationship to `file_inventory` and `media`
 
 The three providers that scan a local tree, how they share the walk and
 why they are separate sources:
-[`../media/INGEST.md`](../media/INGEST.md) §"Relationship to `fsindex`
+[`../media/INGEST.md`](../media/INGEST.md) §"Relationship to `file_inventory`
 and `pdf`".
 
-One difference matters here. A `read(2)` either succeeds for `fsindex` or
+One difference matters here. A `read(2)` either succeeds for `file_inventory` or
 is a real error, but a document can fail for reasons worth retrying (a
 file caught mid-write, a half-synced Dropbox placeholder). So a file
 that could not be identified is identified again on the next scan

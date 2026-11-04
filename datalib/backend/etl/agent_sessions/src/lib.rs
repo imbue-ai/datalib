@@ -15,9 +15,9 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, BulkUpsertable};
 use datalib_etl::progress::{Progress, RunBar};
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, ScannedFile};
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
 /// one row per session file, and `records`, one per line it keeps from
@@ -129,13 +129,6 @@ pub struct ParsedSession<T, R> {
     pub counts: SessionCounts,
 }
 
-/// A file the scan says changed, and where its rows and stamp go.
-struct ToRead {
-    scope: String,
-    rel_path: String,
-    file: ScannedFile,
-}
-
 /// Whether a path under one tree is one this run had no way to read.
 type Unseen = Box<dyn Fn(&str) -> bool + Send + Sync>;
 
@@ -219,11 +212,10 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
     mut parse: impl FnMut(&str, &str) -> Option<ParsedSession<T, R>>,
 ) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
-    let mut to_read: Vec<ToRead> = Vec::new();
-    let mut gone: Vec<(String, String)> = Vec::new();
     let mut unseen: Vec<(String, Unseen)> = Vec::new();
     let mut missing = Vec::new();
     let mut stored = 0;
+    let mut listed = Vec::new();
     for tree in trees {
         if !tree.root.is_dir() && tree.optional {
             continue;
@@ -234,27 +226,19 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
             missing.push(tree);
             continue;
         }
-        let scan = fsscan::scan(cache, &tree.root, &fsscan::ScanOptions::default(), |p| {
-            p.extension().is_some_and(|e| e == "jsonl")
-        })
+        let listing = file_changes_scan::list(
+            cache,
+            &tree.root,
+            &file_changes_scan::ScanOptions::default(),
+            |p| p.extension().is_some_and(|e| e == "jsonl"),
+        )
         .await?;
-        scan.report_problems(found, &tree.scope);
-        if !scan.errors.is_empty() {
-            unseen.push((tree.rel_prefix.clone(), Box::new(scan.unseen())));
+        listing.report_problems(found, &tree.scope);
+        if !listing.errors.is_empty() {
+            unseen.push((tree.rel_prefix.clone(), Box::new(listing.unseen())));
         }
-        let changes = scan.changes_since(&prev);
-        summary.files += scan.files.len();
-        gone.extend(
-            changes
-                .gone()
-                .into_iter()
-                .map(|rel| (tree.scope.clone(), rel.to_string())),
-        );
-        to_read.extend(changes.needs_reading().map(|f| ToRead {
-            scope: tree.scope.clone(),
-            rel_path: format!("{}{}", tree.rel_prefix, f.rel),
-            file: f.clone(),
-        }));
+        summary.files += listing.files.len();
+        listed.push((tree, listing, prev));
     }
     if let Some(first) = missing.first() {
         if stored == 0 && summary.files == 0 {
@@ -262,65 +246,75 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
         }
     }
 
-    let bar = RunBar::new(progress, to_read.len() as u64);
+    let changes: Vec<_> = listed
+        .iter()
+        .map(|(tree, listing, prev)| (*tree, listing.changes_since(prev, |_| true)))
+        .collect();
+    let to_read: usize = changes.iter().map(|(_, c)| c.to_read().len()).sum();
+    let bar = RunBar::new(progress, to_read as u64);
     let mut tx = pool
         .begin()
         .await
         .with_context(|| format!("begin {provider} tx"))?;
     let mut batch = Batch::<T, R>::new();
-    for ToRead {
-        scope,
-        rel_path,
-        file,
-    } in to_read
-    {
-        batch.files += 1;
-        let bytes = match std::fs::read(&file.path) {
-            Ok(b) => b,
-            Err(e) => {
-                summary.unreadable += 1;
-                found.record_failed("transcripts", &rel_path, e.to_string());
-                continue;
-            }
-        };
-        batch.bytes += bytes.len() as u64;
-        let text = String::from_utf8_lossy(&bytes);
-        let lossy = matches!(text, std::borrow::Cow::Owned(_));
-        summary.files_read += 1;
-        let problem = match parse(&rel_path, &text) {
-            None => {
-                summary.not_transcripts += 1;
-                None
-            }
-            Some(session) => {
-                let counts = session.counts;
-                summary.transcripts += 1;
-                summary.records += counts.records;
-                summary.malformed_lines += counts.malformed_lines;
-                if counts.is_subagent {
-                    summary.subagents += 1;
+    for (tree, changes) in &changes {
+        for &f in changes.to_read() {
+            batch.files += 1;
+            let rel_path = format!("{}{}", tree.rel_prefix, f.rel);
+            let read = match changes.read_if_changed(f).await {
+                Ok(Some(read)) => read,
+                Ok(None) => continue,
+                Err(e) => {
+                    summary.unreadable += 1;
+                    found.record_failed("transcripts", &rel_path, e.root_cause().to_string());
+                    continue;
                 }
-                batch.transcripts.push(session.transcript);
-                batch.records.extend(session.records);
-                file_problem(lossy, counts.skipped)
+            };
+            batch.bytes += read.bytes.len() as u64;
+            let text = String::from_utf8_lossy(&read.bytes);
+            let lossy = matches!(text, std::borrow::Cow::Owned(_));
+            summary.files_read += 1;
+            let problem = match parse(&rel_path, &text) {
+                None => {
+                    summary.not_transcripts += 1;
+                    None
+                }
+                Some(session) => {
+                    let counts = session.counts;
+                    summary.transcripts += 1;
+                    summary.records += counts.records;
+                    summary.malformed_lines += counts.malformed_lines;
+                    if counts.is_subagent {
+                        summary.subagents += 1;
+                    }
+                    batch.transcripts.push(session.transcript);
+                    batch.records.extend(session.records);
+                    file_problem(lossy, counts.skipped)
+                }
+            };
+            file_checkpoint::record_file_with_problem(&mut tx, &tree.scope, &read.file, problem)
+                .await?;
+            bar.doing(&format!(
+                "{provider}: {} transcripts / {} records ({} of {} files read)",
+                summary.transcripts, summary.records, summary.files_read, summary.files,
+            ));
+            if batch.bytes >= BATCH_BYTES {
+                batch.write(&mut tx, &bar).await?;
             }
-        };
-        file_checkpoint::record_file_with_problem(&mut tx, &scope, &file, problem).await?;
-        bar.doing(&format!(
-            "{provider}: {} transcripts / {} records ({} of {} files read)",
-            summary.transcripts, summary.records, summary.files_read, summary.files,
-        ));
-        if batch.bytes >= BATCH_BYTES {
-            batch.write(&mut tx, &bar).await?;
         }
     }
     batch.write(&mut tx, &bar).await?;
-    for (scope, rel) in &gone {
-        file_checkpoint::forget_file(&mut tx, scope, rel).await?;
+    for (tree, changes) in &changes {
+        for rel in changes.gone() {
+            file_checkpoint::forget_file(&mut tx, &tree.scope, rel).await?;
+        }
     }
     tx.commit()
         .await
         .with_context(|| format!("commit {provider} tx"))?;
+    for (_, listing, _) in &listed {
+        listing.finish().await?;
+    }
 
     for tree in missing {
         unseen.push((tree.rel_prefix.clone(), Box::new(|_| true)));

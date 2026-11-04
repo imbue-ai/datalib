@@ -17,7 +17,7 @@ pub const OUTBOUND_TARGET: &str = "http.outbound";
 /// binaries whose crate is named for the tool, plus the hand-named targets
 /// (`http.request`, `http.loop`, `http.outbound`), which no crate's module
 /// path can collide with. A directive matches a target by prefix.
-const OUR_TARGETS: [&str; 4] = ["datalib", "fsindex", "dirtree_diff", "http."];
+const OUR_TARGETS: [&str; 4] = ["datalib", "file_inventory", "dirtree_diff", "http."];
 
 /// The libraries that would talk over us, kept to warnings whatever
 /// the level. `sqlx` matters most: at `debug` it logs every statement,
@@ -60,7 +60,7 @@ mod tests {
     fn our_crates_take_the_level_and_libraries_stop_at_info() {
         assert_eq!(
             filter_at("trace"),
-            "info,datalib=trace,fsindex=trace,dirtree_diff=trace,http.=trace,\
+            "info,datalib=trace,file_inventory=trace,dirtree_diff=trace,http.=trace,\
              sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn,html5ever=error,axum=info"
         );
         assert!(filter_at("debug").starts_with("info,datalib=debug,"));

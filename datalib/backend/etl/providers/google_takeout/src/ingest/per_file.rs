@@ -9,7 +9,7 @@ use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::prune;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl_files::{file_checkpoint, fsscan};
+use datalib_etl_files::{file_changes_scan, file_checkpoint};
 use datalib_problems::{Problem, Reason};
 use datalib_time::IsoOffsetTimestamp;
 
@@ -45,28 +45,33 @@ pub struct Counts {
 /// next run reads it again; the rest of the feed lands.
 pub async fn ingest<T: FromFile>(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &file_changes_scan::Listing,
     feed: &Feed,
     found: &RunProblems,
-    parse: impl Fn(&fsscan::ScannedFile, &[u8]) -> Result<Vec<T>>,
+    parse: impl Fn(&file_changes_scan::ScannedFile, &[u8]) -> Result<Vec<T>>,
 ) -> Result<Counts> {
     let scope = feed.scope();
     let prev = file_checkpoint::load_cursor(db.pool(), &scope).await?;
-    let changes = scan.changes_since(&prev);
+    let changes = scan.changes_since(&prev, |rel| {
+        file_changes_scan::is_under(rel, feed.dir) && (feed.reads)(rel)
+    });
     let mut rows: Vec<T> = Vec::new();
-    let mut read: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut read: Vec<file_changes_scan::ScannedFile> = Vec::new();
     let mut skipped: Vec<SkippedRecord> = Vec::new();
-    for f in changes
-        .needs_reading_by_path()
-        .filter(|f| fsscan::is_under(&f.rel, feed.dir) && (feed.reads)(&f.rel))
-    {
-        let parsed = std::fs::read(&f.path)
-            .with_context(|| format!("read {}", super::shape::shape_rel(&f.rel)))
-            .and_then(|bytes| run_problems::catching_panics(|| parse(f, &bytes)));
+    for &f in changes.to_read() {
+        let file = match changes.read_if_changed_by_path(f).await {
+            Ok(Some(file)) => Ok(file),
+            Ok(None) => continue,
+            Err(e) => Err(e.context(format!("read {}", super::shape::shape_rel(&f.rel)))),
+        };
+        let parsed = file.and_then(|file| {
+            let parsed = run_problems::catching_panics(|| parse(&file.file, &file.bytes))?;
+            Ok((file.file, parsed))
+        });
         match parsed {
-            Ok(r) => {
+            Ok((file, r)) => {
                 rows.extend(r);
-                read.push(f);
+                read.push(file);
             }
             Err(e) => skipped.push(SkippedRecord {
                 entry: f.rel.clone(),
@@ -103,9 +108,9 @@ pub async fn ingest<T: FromFile>(
     // A file that is gone takes its rows, unless the whole product is
     // missing: then it was left out of this export, not emptied.
     let read_rels: BTreeSet<&str> = read.iter().map(|f| f.rel.as_str()).collect();
-    if super::product_exported(scan, feed.dir) {
+    if scan.any_under(feed.dir) {
         for rel in changes.gone_by_path(&read_rels) {
-            if !fsscan::is_under(rel, feed.dir) || !(feed.reads)(rel) {
+            if !file_changes_scan::is_under(rel, feed.dir) || !(feed.reads)(rel) {
                 continue;
             }
             counts.removed +=

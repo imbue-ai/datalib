@@ -4,9 +4,9 @@ use std::path::Path;
 
 use datalib_dirtree_diff::analyze::Explained;
 use datalib_dirtree_diff::store::{self, Commit, Skip, Table};
-use datalib_etl_fsindex::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
+use datalib_etl_file_inventory::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
 
-/// A store with fsindex's own two tables. A `dir` row lands in `dirs`
+/// A store with file_inventory's own two tables. A `dir` row lands in `dirs`
 /// (its `size` doubling as `entries`, which these tests never read
 /// back), anything else in `files`.
 async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {

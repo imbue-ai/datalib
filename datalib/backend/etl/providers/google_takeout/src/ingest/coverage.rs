@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use datalib_etl::download_problems::SkippedRecord;
-use datalib_etl_files::fsscan;
+use datalib_etl_files::file_changes_scan;
 use datalib_problems::{Problem, Reason, Severity};
 
 use super::shape::shape_rel;
@@ -24,7 +24,7 @@ pub const PART: &str = "unread_files";
 /// not it is on.
 pub fn feed_of(rel: &str) -> Option<&'static str> {
     let parts: Vec<&str> = rel.split('/').collect();
-    let under = |dir: &str| fsscan::is_under(rel, dir);
+    let under = |dir: &str| file_changes_scan::is_under(rel, dir);
     if rel == maps_reviews::FILE_REL {
         Some("maps_reviews")
     } else if rel == maps_saved_places::FILE_REL {
@@ -85,7 +85,7 @@ fn left_out(rel: &str) -> Option<&'static str> {
     if rel == "Voice/Phones.vcf" {
         return Some("the account's own phone numbers");
     }
-    if fsscan::is_under(rel, play_books::FEED.dir) {
+    if file_changes_scan::is_under(rel, play_books::FEED.dir) {
         return Some("the books themselves");
     }
     let product = rel.split('/').next().unwrap_or("");

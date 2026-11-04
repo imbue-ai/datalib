@@ -9,19 +9,19 @@ Row shapes are in [`src/ingest/schema_raw.rs`](src/ingest/schema_raw.rs);
 the contracts every provider honors are in
 [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 
-## Relationship to `fsindex` and `pdf`
+## Relationship to `file_inventory` and `pdf`
 
 All three scan a local tree. `media` and `pdf` walk it through
-[`datalib_etl_files::fsscan`](/datalib/backend/etl/files/src/fsscan.rs), which
+[`datalib_etl_files::file_changes_scan`](/datalib/backend/etl/files/src/file_changes_scan.rs), which
 hashes only what the host-wide fingerprint cache cannot vouch for
 (`etl/files/README.md` §"Answering "did it change?" for a file-backed
-source"); `fsindex` has its own walker over the same blake3 and
+source"); `file_inventory` has its own walker over the same blake3 and
 Unison-cursor primitives in
 [`datalib_etl_files::fswalk`](/datalib/backend/etl/files/src/fswalk.rs).
 
 They are separate **sources** because they answer different questions:
 
-| | `fsindex` | `pdf` | `media` |
+| | `file_inventory` | `pdf` | `media` |
 |---|---|---|---|
 | Question | "what is in this tree?" | "what documents do I have?" | "what music, photos and video do I have?" |
 | Scale | 10⁷ entries | 10³ documents | 10⁵–10⁶ files, terabytes |
@@ -32,7 +32,7 @@ They are separate **sources** because they answer different questions:
 
 ## No render side
 
-`media` fills its raw store and stops, the way `fsindex` does.
+`media` fills its raw store and stops, the way `file_inventory` does.
 "Download-only" is structural — `processor::plan_render` returns no
 processors — not a flag.
 
@@ -337,7 +337,7 @@ in `media_items` is not identified again, so the container parse, the
 payload hash and the metadata extraction — all of the expensive work —
 run once per distinct content. A settled tree reports `hashed=0`.
 
-There is no directory-level short-circuit; that is `fsindex`'s Merkle
+There is no directory-level short-circuit; that is `file_inventory`'s Merkle
 tree, and a document provider hashes leaves and stops. So a million-file
 library costs a million `stat` calls per scan — cheap (a few seconds)
 but not zero.

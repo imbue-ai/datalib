@@ -105,7 +105,12 @@ const CATALOG: &[Entry] = &[
     ),
     e("beeper", None, "Beeper", Some("beeper")),
     e("pdf", None, "Local PDFs", Some("pdf")),
-    e("fsindex", None, "Local file index", Some("fsindex")),
+    e(
+        "file_inventory",
+        None,
+        "File inventory",
+        Some("file_inventory"),
+    ),
     e("media", None, "Local media", Some("media")),
     e("airvisual", None, "IQAir AirVisual", Some("airvisual")),
     e("lightroom", None, "Lightroom", Some("lightroom")),

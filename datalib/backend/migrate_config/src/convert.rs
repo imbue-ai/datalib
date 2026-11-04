@@ -332,7 +332,7 @@ fn rewrite_ingest_params(ty: &str, params: &mut toml::Table) -> Result<()> {
             params.remove("fetch_photos");
             insert(params, "export", with_path(toml::Table::new(), input_path));
         }
-        "fsindex" | "pdf" | "media" => {
+        "file_inventory" | "pdf" | "media" => {
             insert(params, "fswalk", with_path(toml::Table::new(), input_path));
         }
         "lightroom" => {

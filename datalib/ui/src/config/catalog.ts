@@ -2208,13 +2208,13 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
-    type: "fsindex",
-    label: "Local file index",
-    blurb: "Index a directory tree — paths, sizes, content hashes.",
-    keywords: ["files", "filesystem", "index", "directory", "disk"],
+    type: "file_inventory",
+    label: "File inventory",
+    blurb: "Keep a record of a directory tree — paths, sizes, content hashes.",
+    keywords: ["files", "filesystem", "index", "inventory", "directory", "disk"],
     kind: "local",
-    icon: "fsindex",
-    defaultName: "fsindex",
+    icon: "file_inventory",
+    defaultName: "file_inventory",
     nameHint: "My home folder",
     wizard: true,
     sections: [
@@ -2240,7 +2240,7 @@ export const CATALOG: CatalogEntry[] = [
         label: "Write UUID breadcrumbs into the tree",
         default: false,
         help:
-          "Off keeps the scan read-only. On writes a UUID into the .fsindex.toml of any " +
+          "Off keeps the scan read-only. On writes a UUID into the .file_inventory.toml of any " +
           "directory that set stamp_me_with_uuid = true, so it keeps one identity across moves " +
           "and renames.",
       },

@@ -58,7 +58,7 @@ pub async fn run(
         .item_table()
         .map(|t| (t, crate::introspect::table_rows(&measured, t)));
     // Every source gets a storage report, including the ones that
-    // render no documents of their own — for `fsindex` and `media` it
+    // render no documents of their own — for `file_inventory` and `media` it
     // is the only thing they put in the grid.
     let storage = crate::introspect::plan(data_root, &name, &env.step, measured, now)?;
 

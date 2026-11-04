@@ -97,16 +97,16 @@ pub fn stage_runtime(work: &Path) -> PathBuf {
 /// A hybrid search embeds the query text. Left unstaged, qmd finds a model
 /// in the developer's own `~/.cache/qmd/models`, and on a machine without
 /// one (every CI container) reaches for the network instead. Measured:
-/// staged 2.1 s, unstaged 8.6 s with the host cache warm.
+/// staged 2.1 s, unstaged 8.6 s with the host cache warm. `work` may be
+/// shared between roots; the model's link in it is made once.
 pub fn stage_models(root: &Path, work: &Path) {
     let models = work.join("models");
     std::fs::create_dir_all(&models).expect("mkdir models");
     let gguf = runfile_from_env("QMD_FIXTURE_EMBED_MODEL_RLOC");
-    std::os::unix::fs::symlink(
-        gguf,
-        models.join("hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"),
-    )
-    .expect("link model");
+    let staged = models.join("hf_ggml-org_embeddinggemma-300M-Q8_0.gguf");
+    if !staged.exists() {
+        std::os::unix::fs::symlink(gguf, staged).expect("link model");
+    }
     let link = datalib_runtime::qmd::qmd_state_dir(root).join("models");
     let _ = std::fs::remove_file(&link);
     let _ = std::fs::remove_dir_all(&link);

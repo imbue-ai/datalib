@@ -1,4 +1,4 @@
-//! A move-aware diff of two `fsindex` directory scans.
+//! A move-aware diff of two `file_inventory` directory scans.
 
 pub mod analyze;
 pub mod model;

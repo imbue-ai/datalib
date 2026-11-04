@@ -25,8 +25,8 @@ use datalib_etl::download_problems::{self, RunProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::archive;
+use datalib_etl_files::file_changes_scan::{self, ScanOptions};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_files::fsscan::{self, ScanOptions};
 use datalib_etl_files::fswalk;
 use datalib_etl_files::read_stamp::ReadStamp;
 use mail_parser::MessageParser;
@@ -632,7 +632,9 @@ async fn read_stamp(
         return Ok(None);
     };
     let scan = match input {
-        Input::Files(_) => fsscan::scan(cache, path, &ScanOptions::default(), is_mbox).await?,
+        Input::Files(_) => {
+            file_changes_scan::scan(cache, path, &ScanOptions::default(), is_mbox).await?
+        }
         Input::Parts(parts) => {
             let names: BTreeSet<&std::ffi::OsStr> =
                 parts.iter().filter_map(|p| p.file_name()).collect();
@@ -640,7 +642,7 @@ async fn read_stamp(
                 max_depth: Some(1),
                 ..ScanOptions::default()
             };
-            fsscan::scan(cache, path, &opts, |p| {
+            file_changes_scan::scan(cache, path, &opts, |p| {
                 p.file_name().is_some_and(|n| names.contains(n))
             })
             .await?
@@ -799,7 +801,7 @@ fn list_mbox_files(input: &Path) -> Result<(Vec<MboxFile>, Vec<fswalk::WalkError
     let mut files: Vec<MboxFile> = walked
         .into_iter()
         .map(|w| MboxFile {
-            size: w.meta.len(),
+            size: w.stat.size as u64,
             path: w.path,
             rel: w.rel,
         })

@@ -2,7 +2,7 @@
 
 A source that reads local files asks this crate what changed rather than
 walking a folder or re-reading an input itself: `fswalk.rs` walks a tree,
-`fingerprint_cache.rs` remembers each file's hash per host, `fsscan.rs`
+`fingerprint_cache.rs` remembers each file's hash per host, `file_changes_scan.rs`
 answers "what is there now and what changed", `file_checkpoint.rs` keeps
 what one feed already ingested, and `export_files.rs` finds the files of
 an unpacked export (Facebook, LinkedIn). It sits on `datalib_etl`, whose
@@ -25,7 +25,7 @@ host-local cache rather than in the provider's versioned store:
   `files` + `file_stats` in one store is 322 B/row against 171 B/row for
   `files` alone,
   because the cursor re-stores the full path as its own primary key
-  (`providers/fsindex/src/ingest/STORAGE_NOTES.md` has the table).
+  (`providers/file_inventory/src/ingest/STORAGE_NOTES.md` has the table).
 
 It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
 door `datalib_runs::store` uses), because losing a cache costs a rehash
@@ -49,9 +49,9 @@ inside the data root it builds.
 
 ## Answering "did it change?" for a file-backed source
 
-`fsscan` walks a tree and hashes only what the host cache cannot vouch for;
-`file_checkpoint` stores what one feed already ingested. The split is the
-point:
+`file_changes_scan` walks a tree and stats it, reading no file; `file_checkpoint` stores
+what one feed already ingested. The split between the cache and the cursor is
+the point:
 
 - the **fingerprint cache** is host-wide, shared and unversioned — expensive
   to compute, identical for every consumer, and a description of a machine
@@ -64,10 +64,40 @@ close: it is shared, so another consumer's scan moves it. The question is only
 well-posed relative to a particular looker.
 
 ```text
-let scan    = fsscan::scan(cache, root, opts, accept).await?;
-let changes = scan.changes_since(&load_cursor(pool, SCOPE).await?);
-for f in changes.needs_reading() { …; record_file(&mut tx, SCOPE, f).await?; }
+let listing = file_changes_scan::list(cache, root, opts, accept).await?;
+let prev    = load_cursor(pool, SCOPE).await?;
+let changes = listing.changes_since(&prev, |rel| this_feed_reads(rel));
+for &f in changes.to_read() {
+    let Some(read) = changes.read_if_changed(f).await? else { continue };
+    …; record_file(&mut tx, SCOPE, &read.file).await?;
+}
+listing.finish().await?;
 ```
+
+**A source that reads a whole file gets its hash with its bytes.** A listing
+knows a file's hash only where the cache vouches for it, which costs a stat. For
+any other file the only way to know whether the bytes moved is to read them, so
+the source reads through the listing: one read, hashed as it comes in, and the
+hash goes to the cache under the stat taken before the read. A file only
+touched comes back `None`, read once and neither parsed nor stamped.
+`finish` writes the hashes the reads left, in batches because the cache's
+rollback journal makes one write per file slow. `wanted`, in `changes_since`,
+says which files are this source's: a file it left out is not one it failed to
+read, and a file it named and did not read holds back every deletion, since a
+vanished file may have gone there. `agent_sessions`, `calendar`, `contacts`,
+`airvisual`, `pdf`, `whatsapp` and Takeout's feeds read this way.
+
+**A source that needs hashes before it reads calls `file_changes_scan::scan`**, which is
+`list` then `Listing::hashed`, hashing on every core. Three reasons to: it never
+reads the whole file (`media` reads headers, `email` streams an mbox, `lightroom`,
+`chatgpt` and a Takeout archive are zips), the hash is the question (`ReadStamp`,
+`signal`), or it decides what to read from the changes (`sms_backup_restore` and
+Takeout's Voice feed read every file once a record may have left, so a touched
+file must not look rewritten). `Listing::hashed_where` hashes part of a listing,
+which is how Voice shares one with the feeds around it.
+
+A warm scan writes nothing to the cache. A row is written only when a file was
+hashed.
 
 A scope namespaces cursor rows per `(provider, feed)`, so two feeds can claim
 the same file without colliding. Stamping is per file and inside the caller's
@@ -140,7 +170,7 @@ dropped and refilled.
 **Some files must not be read at all.** A macOS file evicted to iCloud is
 "dataless": it has a size and an mtime, and reading one byte silently pulls
 the whole thing back over the network. Only the stat can see that, so
-`scan_with` takes a veto consulted after the stat and before any read. A
+`list_with` takes a veto consulted after the stat and before any read. A
 refused file is absent from `files` and leaves the cache untouched, so
 nothing later mistakes "we declined to look" for "we looked and it was empty".
 It is listed in `present_unread`, as is a file over `max_bytes`: both are
@@ -155,6 +185,22 @@ any other path. `Scan::report_problems` makes it a `record:<name>:<path>`
 row beside the walk's `listing:<name>` row, and the row goes the run the
 file opens. A source that deletes only after reading every file still
 holds back while one is unread, since that file may hold anything.
+
+## Why every scan still stats every file
+
+The walk lists folders on every core and takes each file's stat with its
+folder's listing where the platform can (`getattrlistbulk` on macOS). Measured
+on 1.2M files in 13.6k folders, warm: about 13s one stat at a time on one core,
+2.85s now. Skipping the listing of an unchanged folder, as `file_inventory`'s walker
+does, saves almost nothing here: the listing is the cheap part, and a folder's
+mtime does not move when a file in it is written in place, so its files still
+need their stats. Asking macOS what changed instead would skip those stats, and
+`//datalib/backend/fsevents_facts:fsevents_facts_test` holds what stands in the
+way: a file held open is not reported until it closes, and a burst of changes
+can lose events without saying so.
+
+The walk follows the same `.gitignore` and `.ignore` rules as the `ignore`
+crate, which it uses to parse them, and a test holds it to that crate's answer.
 
 ## Skipping a whole read
 

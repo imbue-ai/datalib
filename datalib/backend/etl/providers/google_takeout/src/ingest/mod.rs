@@ -25,7 +25,7 @@ pub use db::{db_path_for, RawDb};
 
 use datalib_etl::download_problems::RunProblemKind;
 use datalib_etl_files::fingerprint_cache::{abs_key, canonical_root, FingerprintCache};
-use datalib_etl_files::{file_checkpoint, fsscan};
+use datalib_etl_files::{file_changes_scan, file_checkpoint};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -138,15 +138,6 @@ pub struct FetchSummary {
     pub unpacked: usize,
 }
 
-/// Whether the export holds `product_dir` at all. Only a product that is
-/// here says what was deleted from it: one missing entirely was left out of
-/// the Takeout request, so its records stay and its cursor is kept.
-pub(crate) fn product_exported(scan: &fsscan::Scan, product_dir: &str) -> bool {
-    scan.files
-        .iter()
-        .any(|f| fsscan::is_under(&f.rel, product_dir))
-}
-
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
     run_problems::collecting(&pool, &stop, |found| read_export(opts, found)).await
@@ -172,12 +163,12 @@ async fn read_archives(
     found: &RunProblems,
 ) -> Result<FetchSummary> {
     let names: BTreeSet<&str> = parts.iter().map(String::as_str).collect();
-    let scan_opts = fsscan::ScanOptions {
+    let scan_opts = file_changes_scan::ScanOptions {
         max_depth: Some(1),
         progress: opts.progress.clone(),
         ..Default::default()
     };
-    let hashed = fsscan::scan(&opts.cache, &opts.input_path, &scan_opts, |p| {
+    let hashed = file_changes_scan::scan(&opts.cache, &opts.input_path, &scan_opts, |p| {
         p.file_name()
             .and_then(|n| n.to_str())
             .is_some_and(|n| names.contains(n))
@@ -258,16 +249,22 @@ async fn read_tree(
     opts: &FetchOptions,
     root: &Path,
     found: &RunProblems,
-) -> Result<(FetchSummary, fsscan::Scan)> {
+) -> Result<(FetchSummary, file_changes_scan::Listing)> {
     let db = opts.db.clone();
 
     let mut summary = FetchSummary::default();
     let progress = &opts.progress;
-    // One scan of the export, up front, so the walk and the hashing happen
-    // once rather than nine times in nine slightly different shapes. The first
-    // run hashes everything; later runs are `stat`-only, and a feed enabled
-    // later costs nothing extra because its files are already in the cache.
-    let walked = fsscan::scan(&opts.cache, root, &fsscan::ScanOptions::default(), |_| true).await?;
+    // One listing of the export, up front, so the walk happens once rather
+    // than nine times in nine slightly different shapes. Nothing is hashed
+    // here: this folder is new every time, so each feed reads and hashes only
+    // the files that are its own.
+    let walked = file_changes_scan::list(
+        &opts.cache,
+        root,
+        &file_changes_scan::ScanOptions::default(),
+        |_| true,
+    )
+    .await?;
     for e in &walked.errors {
         warn!(event = "takeout_walk_error", path = %e.path.display(), error = %e.error, "an entry of the export could not be walked");
     }
@@ -368,9 +365,15 @@ async fn read_tree(
         }
     }
     if opts.sync.google_voice {
+        // Records here are keyed by what they say, so this feed needs every
+        // Voice file's hash before it can decide which to read.
+        let voice_files = scan
+            .hashed_where(|f| file_changes_scan::is_under(&f.rel, "Voice"))
+            .await?;
+        voice_files.report_unreadable(found, "files");
         let voice = google_voice::ingest(
             &db,
-            scan,
+            &voice_files,
             opts.sync.google_voice_include_spam,
             progress,
             found,
@@ -408,6 +411,7 @@ async fn read_tree(
         }
     }
     summary.feeds_failed = found.count(RunProblemKind::Phase);
+    walked.finish().await?;
 
     Ok((summary, walked))
 }

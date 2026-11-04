@@ -5,11 +5,11 @@
 # recipe quotes for), bash otherwise.
 set -euo pipefail
 
-readme=$1 fsindex=$2 dirtree_diff=$3 doltlite=$4
+readme=$1 file_inventory=$2 dirtree_diff=$3 doltlite=$4
 
 work=$(mktemp -d "${TEST_TMPDIR:-/tmp}/recipe.XXXXXX")
 mkdir -p "$work/bin" "$work/tmp"
-ln -s "$PWD/$fsindex" "$work/bin/datalib-fsindex"
+ln -s "$PWD/$file_inventory" "$work/bin/datalib-file-inventory"
 ln -s "$PWD/$dirtree_diff" "$work/bin/datalib-dirtree-diff"
 ln -s "$PWD/$doltlite" "$work/bin/datalib-doltlite"
 # The recipe ends by opening the page; here that only has to be a page.
