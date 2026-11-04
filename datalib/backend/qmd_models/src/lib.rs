@@ -150,8 +150,16 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel, fetch: Fetch) -> Result<Ou
 /// size and mtime it had; the same size and mtime next time means the
 /// same bytes, short of someone editing the file and resetting its
 /// mtime, which is not the threat this guards.
+///
+/// The mtime is recorded to the nanosecond, not the second: a stamp
+/// that is more precise than it needs to be only ever costs an extra
+/// hash, while one that is less precise lets changed bytes through, so
+/// the two errors are not worth trading evenly. Nanoseconds survive a
+/// Docker layer, which is where the saving matters most — the image
+/// stamps the models at build time and a container must not re-hash
+/// them.
 fn verified(path: &Path, want: &str) -> Result<bool> {
-    if stamp_matches(path, want)? {
+    if stamp_matches(path, want) {
         return Ok(true);
     }
     let got = sha256_file(path)?;
@@ -168,31 +176,40 @@ fn stamp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn file_identity(path: &Path) -> Result<(u64, u64)> {
-    let meta = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok((meta.len(), mtime))
+/// The file's size and mtime, the pair a stamp is keyed to.
+///
+/// `None` when either cannot be read — an mtime the platform will not
+/// give, or one before 1970. Nothing is then trusted and nothing is
+/// stamped, so the bytes are hashed. Reporting such a file as mtime
+/// zero, which this used to do, meant a second unreadable mtime at the
+/// same size matched the stamp and the bytes went unchecked.
+fn file_identity(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((meta.len(), mtime.as_nanos()))
 }
 
-fn stamp_matches(path: &Path, want: &str) -> Result<bool> {
-    let Ok(text) = fs::read_to_string(stamp_path(path)) else {
-        return Ok(false);
+fn stamp_matches(path: &Path, want: &str) -> bool {
+    let Some((len, mtime)) = file_identity(path) else {
+        return false;
     };
-    let (len, mtime) = file_identity(path)?;
-    Ok(text.trim() == stamp_text(want, len, mtime))
+    let Ok(text) = fs::read_to_string(stamp_path(path)) else {
+        return false;
+    };
+    text.trim() == stamp_text(want, len, mtime)
 }
 
-fn stamp_text(sha: &str, len: u64, mtime: u64) -> String {
+fn stamp_text(sha: &str, len: u64, mtime: u128) -> String {
     format!("{sha} {len} {mtime}")
 }
 
 fn write_stamp(path: &Path, sha: &str) -> Result<()> {
-    let (len, mtime) = file_identity(path)?;
+    // A stamp nothing is keyed to would be read back and trusted, so a
+    // file whose identity will not read simply goes unstamped: the hash
+    // that just passed is the only thing vouching for it.
+    let Some((len, mtime)) = file_identity(path) else {
+        return Ok(());
+    };
     let stamp = stamp_path(path);
     fs::write(&stamp, format!("{}\n", stamp_text(sha, len, mtime)))
         .with_context(|| format!("write {}", stamp.display()))
@@ -215,10 +232,10 @@ mod tests {
         assert!(!stamp_path(&path).exists());
         assert!(verified(&path, HELLO_SHA).unwrap());
         assert!(stamp_path(&path).exists());
-        assert!(stamp_matches(&path, HELLO_SHA).unwrap());
+        assert!(stamp_matches(&path, HELLO_SHA));
 
         fs::write(&path, b"hello, world").unwrap();
-        assert!(!stamp_matches(&path, HELLO_SHA).unwrap());
+        assert!(!stamp_matches(&path, HELLO_SHA));
         assert!(!verified(&path, HELLO_SHA).unwrap());
     }
 
@@ -246,6 +263,72 @@ mod tests {
         assert!(!verified(&path, HELLO_SHA).unwrap());
     }
 
+    /// Sub-second granularity is the point: the stamp recorded whole
+    /// seconds until now, so bytes replaced inside the same second as
+    /// the stamped mtime, at the same size, were trusted without being
+    /// hashed. The mtime here is set to a whole second so that adding a
+    /// millisecond cannot cross into the next one and pass for the wrong
+    /// reason.
+    #[test]
+    fn a_change_inside_the_stamped_second_goes_back_to_the_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.gguf");
+        fs::write(&path, b"hello").unwrap();
+        let set_mtime = |t| {
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        };
+        let whole_second = UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        set_mtime(whole_second);
+        assert!(verified(&path, HELLO_SHA).unwrap(), "hashes and stamps");
+
+        // Same size, same second, different bytes.
+        fs::write(&path, b"jello").unwrap();
+        set_mtime(whole_second + std::time::Duration::from_millis(1));
+        assert!(!verified(&path, HELLO_SHA).unwrap());
+    }
+
+    /// An mtime that will not read is not an identity, so nothing is
+    /// stamped and every call hashes. Recording it as zero, as this used
+    /// to, let a second such file at the same size match the stamp.
+    #[test]
+    fn a_file_with_no_readable_mtime_is_never_trusted_from_a_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.gguf");
+        fs::write(&path, b"hello").unwrap();
+        let before_the_epoch = UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let set_mtime = |t| {
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        };
+        set_mtime(before_the_epoch);
+        // Asserted rather than skipped: reporting such a file as mtime
+        // zero also reads back as an identity, so a `return` here would
+        // make this test pass against the very behaviour it guards.
+        assert!(
+            file_identity(&path).is_none(),
+            "an mtime before 1970 is not an identity"
+        );
+        assert!(verified(&path, HELLO_SHA).unwrap(), "the hash still passes");
+        assert!(
+            !stamp_path(&path).exists(),
+            "a file with no identity must not be stamped"
+        );
+
+        // The bytes change, the unreadable mtime does not: it must hash.
+        fs::write(&path, b"jello").unwrap();
+        set_mtime(before_the_epoch);
+        assert!(!verified(&path, HELLO_SHA).unwrap());
+    }
+
     /// A stamp for one digest must not vouch for another.
     #[test]
     fn stamp_is_bound_to_the_digest() {
@@ -253,7 +336,7 @@ mod tests {
         let path = dir.path().join("m.gguf");
         fs::write(&path, b"hello").unwrap();
         assert!(verified(&path, HELLO_SHA).unwrap());
-        assert!(!stamp_matches(&path, &"0".repeat(64)).unwrap());
+        assert!(!stamp_matches(&path, &"0".repeat(64)));
     }
 
     /// With fetching off, an absent model is reported, not downloaded,
