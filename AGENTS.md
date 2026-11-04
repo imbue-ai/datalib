@@ -673,11 +673,11 @@ still works) and the column a person sees is "Source".
 ## A local file or folder: ask `fsscan` what changed
 
 **Don't walk a folder or re-read an input yourself to learn whether it
-changed; ask `datalib_etl_files::fsscan`.** It hashes each file once per host
-(a shared fingerprint cache), so an unchanged input costs a `stat` —
-milliseconds, where re-reading costs seconds — and `file_checkpoint`
-keeps this source's `path → blake3` cursor to diff against. The recipe
-is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
+changed; ask `datalib_etl_files::fsscan`.** A listing reads no file: a shared
+fingerprint cache vouches for each file's hash per host, so an unchanged input
+costs a `stat`, and a source that reads a changed file gets its hash with its
+bytes rather than reading it twice. `file_checkpoint` keeps this source's
+`path → blake3` cursor to diff against. The recipe is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
 for a file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
 ## A network source owes what upstream listed and the store does not hold

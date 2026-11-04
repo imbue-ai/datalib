@@ -260,30 +260,6 @@ impl Changes {
         self.added.iter().chain(self.modified.iter())
     }
 
-    /// [`Self::needs_reading`] for a store that keys its rows by path, where
-    /// a move is new rows at one path and none at the other: the moved
-    /// files are read again at their new path.
-    pub fn needs_reading_by_path(&self) -> impl Iterator<Item = &ScannedFile> {
-        self.needs_reading()
-            .chain(self.moved.iter().map(|m| &m.now))
-    }
-
-    /// The paths whose rows a store keyed by path should delete: every
-    /// removed path, and a moved file's old path once `read` holds its new
-    /// one. Nothing at all when the walk reported errors, so a folder that
-    /// failed to read cannot shrink the store.
-    pub fn gone_by_path(&self, read: &BTreeSet<&str>) -> Vec<&str> {
-        if self.walk_errors > 0 {
-            return Vec::new();
-        }
-        let moved = self
-            .moved
-            .iter()
-            .filter(|m| read.contains(m.now.rel.as_str()))
-            .map(|m| m.was.as_str());
-        self.gone().into_iter().chain(moved).collect()
-    }
-
     /// For a store keyed by content, whose files are snapshots that can
     /// overlap: whether a record may have left the input — a file gone or
     /// rewritten, after a clean walk. Only a read of every file says which,
@@ -516,7 +492,7 @@ pub async fn scan_with<A, D>(
 ) -> Result<Scan>
 where
     A: Fn(&Path) -> bool + Sync,
-    D: Fn(&Path, &std::fs::Metadata) -> bool + Sync,
+    D: Fn(&fswalk::WalkedFile) -> bool + Sync,
 {
     list_with(cache, given, opts, accept, admit)
         .await?
@@ -538,7 +514,7 @@ pub async fn list<A>(
 where
     A: Fn(&Path) -> bool + Sync,
 {
-    list_with(cache, given, opts, accept, |_, _| true).await
+    list_with(cache, given, opts, accept, |_| true).await
 }
 
 /// [`list`], plus a veto consulted **after** the stat and **before** any read.
@@ -559,7 +535,7 @@ pub async fn list_with<A, D>(
 ) -> Result<Listing>
 where
     A: Fn(&Path) -> bool + Sync,
-    D: Fn(&Path, &std::fs::Metadata) -> bool + Sync,
+    D: Fn(&fswalk::WalkedFile) -> bool + Sync,
 {
     // Resolved, so the cache's keys line up and two spellings of one tree
     // address one set of entries — a configured root is rarely canonical. The
@@ -598,11 +574,11 @@ where
     let mut files = Vec::with_capacity(walked.len());
     let mut present_unread = Vec::new();
     for entry in walked {
-        if !admit(&entry.path, &entry.meta) {
+        if !admit(&entry) {
             present_unread.push(entry.rel);
             continue;
         }
-        let stat = fswalk::fresh_stat(&entry.meta);
+        let stat = entry.stat;
         if let Some(max) = opts.max_bytes {
             if stat.size as u64 > max {
                 stats.too_large += 1;
@@ -1347,38 +1323,6 @@ mod tests {
         assert!(changes.added.is_empty());
     }
 
-    /// A path-keyed store drops a deleted file's rows, and a moved file's
-    /// old rows only once its new path was read, so a failed re-read never
-    /// leaves the content keyed nowhere.
-    #[tokio::test]
-    async fn a_path_keyed_store_drops_deleted_and_moved_away_paths() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("tree");
-        write(&root, "stays.vcf", b"a");
-        write(&root, "goes.vcf", b"b");
-        write(&root, "old.vcf", b"moved bytes");
-        let cache = fresh_cache(tmp.path()).await;
-        let mark = scan_all(&cache, &root).await.cursor();
-
-        std::fs::remove_file(root.join("goes.vcf")).unwrap();
-        std::fs::rename(root.join("old.vcf"), root.join("new.vcf")).unwrap();
-        let changes = scan_all(&cache, &root).await.changes_since(&mark);
-
-        let to_read: Vec<&str> = changes
-            .needs_reading_by_path()
-            .map(|f| f.rel.as_str())
-            .collect();
-        assert_eq!(to_read, vec!["new.vcf"]);
-
-        let read = BTreeSet::from(["new.vcf"]);
-        assert_eq!(changes.gone_by_path(&read), vec!["goes.vcf", "old.vcf"]);
-        assert_eq!(
-            changes.gone_by_path(&BTreeSet::new()),
-            vec!["goes.vcf"],
-            "a move whose new path failed to read keeps its old rows",
-        );
-    }
-
     /// A walk that hit an error cannot tell a deleted file from one it
     /// failed to see, so nothing it reports gone is deleted.
     #[cfg(unix)]
@@ -1397,7 +1341,7 @@ mod tests {
 
         assert_eq!(changes.walk_errors, 1, "{changes:?}");
         assert_eq!(changes.removed.len(), 1, "the removal is still reported");
-        assert!(changes.gone_by_path(&BTreeSet::new()).is_empty());
+        assert!(changes.gone().is_empty());
     }
 
     /// A file that will not open is there: it was a walk error, so one

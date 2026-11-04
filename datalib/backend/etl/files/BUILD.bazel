@@ -22,7 +22,10 @@ rust_library(
         "@datalib_crates//:tar",
         "@datalib_crates//:tracing",
         "@datalib_crates//:zip",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["@datalib_crates//:libc"],
+        "//conditions:default": [],
+    }),
 )
 
 rust_test(
