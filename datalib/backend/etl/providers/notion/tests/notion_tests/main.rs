@@ -2,6 +2,7 @@
 //! behaviour.
 
 mod blob_render;
+mod holes;
 mod incremental_render;
 mod interrupt;
 mod live;
