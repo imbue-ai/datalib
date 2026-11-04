@@ -15,6 +15,8 @@ const EVERY: Duration = Duration::from_secs(60);
 struct Count {
     requests: u64,
     failed: u64,
+    refused: u64,
+    rate_limited: u64,
     bytes: u64,
     wire: Duration,
 }
@@ -22,16 +24,43 @@ struct Count {
 impl Count {
     fn add(&mut self, attempt: &Attempt) {
         self.requests += 1;
-        self.failed += u64::from(attempt.failed);
+        match attempt.ending {
+            Ending::Answered => {}
+            Ending::Failed => self.failed += 1,
+            Ending::Refused => self.refused += 1,
+            Ending::RateLimited => self.rate_limited += 1,
+        }
         self.bytes += attempt.bytes;
         self.wire += attempt.took;
+    }
+}
+
+/// How a request ended, as far as the transport can tell. A 404 or a 429
+/// is an ordinary answer that its caller may well handle, so only a request
+/// that got no answer, or a server's own error, counts as failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ending {
+    Answered,
+    Failed,
+    Refused,
+    RateLimited,
+}
+
+impl Ending {
+    pub(crate) fn of_status(status: u16) -> Self {
+        match status {
+            429 => Self::RateLimited,
+            400..=499 => Self::Refused,
+            500.. => Self::Failed,
+            _ => Self::Answered,
+        }
     }
 }
 
 /// One request that left the machine, however it ended.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Attempt {
-    pub failed: bool,
+    pub ending: Ending,
     pub bytes: u64,
     pub took: Duration,
 }
@@ -100,13 +129,22 @@ pub(crate) fn sentence(said: &Said) -> String {
     let Count {
         requests,
         failed,
+        refused,
+        rate_limited,
         bytes,
         wire,
     } = said.count;
+    let mut answers = String::new();
+    if refused > 0 {
+        answers.push_str(&format!(", {refused} answered 4xx"));
+    }
+    if rate_limited > 0 {
+        answers.push_str(&format!(", {rate_limited} rate limited"));
+    }
     let what = if requests == 1 { "request" } else { "requests" };
     let over = if said.in_all { " in all" } else { "" };
     format!(
-        "outbound: {requests} {what} to {}{over}: {failed} failed, {:.1} MB, {:.1}s waiting on it",
+        "outbound: {requests} {what} to {}{over}: {failed} failed{answers}, {:.1} MB, {:.1}s waiting on it",
         said.host,
         bytes as f64 / 1_000_000.0,
         wire.as_secs_f64(),
@@ -128,6 +166,8 @@ fn say(said: &Said) {
         host = %said.host,
         requests = count.requests,
         failed = count.failed,
+        refused = count.refused,
+        rate_limited = count.rate_limited,
         bytes = count.bytes,
         wire_ms = count.wire.as_millis() as u64,
         in_all = said.in_all,
@@ -166,7 +206,7 @@ mod tests {
 
     fn ok(bytes: u64) -> Attempt {
         Attempt {
-            failed: false,
+            ending: Ending::Answered,
             bytes,
             took: Duration::from_millis(100),
         }
@@ -188,7 +228,7 @@ mod tests {
             .note(
                 "mail.example",
                 Attempt {
-                    failed: true,
+                    ending: Ending::Failed,
                     bytes: 0,
                     took: Duration::from_millis(100),
                 },
@@ -226,6 +266,7 @@ mod tests {
                 failed: 2,
                 bytes: 3_200_000,
                 wire: Duration::from_millis(96_100),
+                ..Count::default()
             },
             in_all: true,
         };
@@ -233,6 +274,30 @@ mod tests {
             sentence(&said),
             "outbound: 412 requests to gmail.googleapis.com in all: \
              2 failed, 3.2 MB, 96.1s waiting on it"
+        );
+    }
+
+    /// A source that handled every 404 and waited out every 429 read as
+    /// hundreds of failures, which made the one real failure hard to see.
+    #[test]
+    fn an_answer_the_caller_may_handle_is_not_a_failure() {
+        let mut count = Count::default();
+        for status in [200, 304, 403, 404, 429, 429, 500, 503] {
+            count.add(&Attempt {
+                ending: Ending::of_status(status),
+                bytes: 0,
+                took: Duration::ZERO,
+            });
+        }
+        let said = Said {
+            host: "api.example".into(),
+            count,
+            in_all: false,
+        };
+        assert_eq!(
+            sentence(&said),
+            "outbound: 8 requests to api.example: \
+             2 failed, 2 answered 4xx, 2 rate limited, 0.0 MB, 0.0s waiting on it"
         );
     }
 
