@@ -216,7 +216,7 @@ that failed, and is a row in the store's `problems` table:
 
 | what | key | when it clears |
 | --- | --- | --- |
-| a device folder that could not be read at all, or has no serial | `listing:device <name or path>` | the next run that reads it |
+| a device folder that is missing or empty, usually a share that is not mounted; one that could not be read at all; one with no serial | `listing:device <name or path>` | the next run that reads it |
 | a clock that cannot be trusted (§ "A device's clock") | `listing:clock <serial>` | the next run that finds nothing wrong with it |
 | entries the walk of a folder could not read | `listing:files <serial>` | the next run whose walk is clean |
 | a history file that would not read, or a `latest_config_measurements.json` that would not read or parse | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
