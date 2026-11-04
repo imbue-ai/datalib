@@ -137,8 +137,31 @@ grep -rn <thing-said-to-exist> <subtree> # is the thing there at all?
 
 **Test-quality claims are the highest-risk category**, because a false
 one is self-concealing. Treat "now covered by a test" as unverified until
-you have read the assertion — and for a test whose job is to catch a
-silent no-op, until you have watched it fail against the broken behavior.
+you have read the assertion *and* watched it fail against the broken
+behaviour.
+
+Reading is not enough, because the test you most need to doubt is the
+**tautological** one — where its fixture, its precondition or its skip
+condition came from the code it is checking, so it cannot fail while the
+bug is there. Such a test reads perfectly well. Two that got through:
+
+- **A fixture recorded from our own request.** Slack's
+  `conversations.history` tape was keyed `"oldest": "0.000000"` — the
+  one spelling of the epoch the API refuses — because it was recorded
+  from the request we send. Playback asserted the bug and passed, and
+  every Slack source mirrored no messages (#1573). A synthesized
+  fixture's request shape needs one live test that actually sends it
+  (`tests/*/live.rs`); without that, the tape only proves the code
+  agrees with itself.
+- **A skip whose condition is the bug's signature.** A test for "an
+  mtime that will not read is no identity" skipped when the identity
+  read back — which is exactly what the broken code did — so it passed
+  against the behaviour it guarded (#1590). Assert a precondition;
+  never skip on one.
+
+Where the broken behaviour cannot be staged — a race that needs a loaded
+machine — say so in the PR instead of leaving the reader to assume you
+watched it fail.
 
 ## Write plainspoken
 
