@@ -16,7 +16,7 @@ use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
-use datalib_problems::{Problem, Reason};
+use datalib_problems::{Problem, Reason, Severity};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::json;
 use sqlx::{Sqlite, Transaction};
@@ -84,7 +84,11 @@ pub async fn ingest(
             problem: Problem::record(
                 reason,
                 &format!("{}: {detail}", crate::ingest::shape::shape_rel(&f.rel)),
-            ),
+            )
+            .severity(match reason {
+                Reason::NotFound => Severity::Warning,
+                _ => Severity::Error,
+            }),
         });
     };
     // Files that would not read at all; their records are unknown.
@@ -110,7 +114,7 @@ pub async fn ingest(
         } else {
             continue;
         };
-        let mut missing: Vec<String> = Vec::new();
+        let mut missing = Missing::default();
         match ingest_record(
             folder,
             &f.path,
@@ -120,19 +124,13 @@ pub async fn ingest(
             &mut missing,
         ) {
             Ok(false) => {}
-            Ok(true) if missing.is_empty() => done.push(f),
-            Ok(true) => {
-                unread(
-                    f,
-                    Reason::FetchFailed,
-                    format!(
-                        "{} attachments could not be read; first: {}",
-                        missing.len(),
-                        missing[0]
-                    ),
-                );
-                incomplete.push(f);
-            }
+            Ok(true) => match missing.reason_and_detail() {
+                None => done.push(f),
+                Some((reason, detail)) => {
+                    unread(f, reason, detail);
+                    incomplete.push(f);
+                }
+            },
             Err(e) => {
                 unread(f, Reason::Undeserializable, e.root_cause().to_string());
                 failed += 1;
@@ -342,6 +340,30 @@ async fn prune_unseen(
     Ok(owners.len() + bills.len())
 }
 
+/// The attachments a file names and could not supply. One the export does
+/// not hold is a fact about the export, which no run can change, while one
+/// that would not read may read next time.
+#[derive(Debug, Default)]
+struct Missing {
+    not_in_export: Vec<String>,
+    unreadable: Vec<String>,
+}
+
+impl Missing {
+    fn reason_and_detail(&self) -> Option<(Reason, String)> {
+        let (reason, first) = if let Some(first) = self.unreadable.first() {
+            (Reason::FetchFailed, first)
+        } else {
+            (Reason::NotFound, self.not_in_export.first()?)
+        };
+        let total = self.unreadable.len() + self.not_in_export.len();
+        Some((
+            reason,
+            format!("{total} attachments could not be read; first: {first}"),
+        ))
+    }
+}
+
 /// Parse one `Calls/`/`Spam/` file into message rows + CAS edges.
 /// Returns `true` if the file was understood (and should be
 /// checkpointed), `false` if skipped (e.g. an attachment blob already
@@ -354,7 +376,7 @@ fn ingest_record(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
-    missing: &mut Vec<String>,
+    missing: &mut Missing,
 ) -> Result<bool> {
     let name = file_name(path);
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&name);
@@ -440,7 +462,7 @@ fn ingest_text_thread(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
-    missing: &mut Vec<String>,
+    missing: &mut Missing,
 ) -> Result<()> {
     let msgs = parse_chat_log(html);
     // Voice writes a thread file only for a thread with messages, so one
@@ -479,10 +501,12 @@ fn ingest_text_thread(
                         *n_attachments += 1;
                         attachment_refs.push(ref_name);
                     }
-                    Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
+                    Err(e) => missing
+                        .unreadable
+                        .push(format!("read {}: {e}", shown_name(&blob_path))),
                 }
             } else {
-                missing.push(format!(
+                missing.not_in_export.push(format!(
                     "{} is not in the export",
                     shown_name(Path::new(src))
                 ));
@@ -525,7 +549,7 @@ fn ingest_event(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
-    missing: &mut Vec<String>,
+    missing: &mut Missing,
 ) -> Result<()> {
     let ev = parse_haudio(html);
     if ev.published.trim().is_empty() {
@@ -553,10 +577,12 @@ fn ingest_event(
                     *n_attachments += 1;
                     audio_ref = Some(ref_name);
                 }
-                Err(e) => missing.push(format!("read {}: {e}", shown_name(&blob_path))),
+                Err(e) => missing
+                    .unreadable
+                    .push(format!("read {}: {e}", shown_name(&blob_path))),
             }
         } else {
-            missing.push(format!(
+            missing.not_in_export.push(format!(
                 "{} is not in the export",
                 shown_name(Path::new(src))
             ));
@@ -598,7 +624,7 @@ fn ingest_orphan_audio(
     rows: &mut Vec<VoiceMessageRow>,
     acc: &mut CasEdgeAccumulator,
     n_attachments: &mut usize,
-    missing: &mut Vec<String>,
+    missing: &mut Missing,
 ) {
     let party = Party {
         tel: label.starts_with('+').then(|| label.to_string()),
@@ -620,7 +646,9 @@ fn ingest_orphan_audio(
             acc.add_fetched(&id, &ref_name, bytes, guess_content_type(path));
             *n_attachments += 1;
         }
-        Err(e) => missing.push(format!("read {}: {e}", shown_name(path))),
+        Err(e) => missing
+            .unreadable
+            .push(format!("read {}: {e}", shown_name(path))),
     }
     let payload = json!({
         "id": id.clone(),

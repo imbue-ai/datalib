@@ -440,7 +440,7 @@ async fn record_unreadable_store(
     .with_context(|| format!("record that {}'s render store is unreadable", row.source_id))?;
     // A fan-in comes here once per producer checkpoint, for as long as the
     // store stays this way; the row says so meanwhile.
-    if is_news(earlier.as_ref(), row) {
+    if row.is_news(earlier.as_ref()) {
         tracing::warn!(
             source = %row.source_id,
             why = %row.sample,
@@ -450,12 +450,6 @@ async fn record_unreadable_store(
         datalib_schema::problems::note_recorded([row]);
     }
     Ok(())
-}
-
-/// Whether a stamped row says something the one before it did not: a row's
-/// `changed_at_utc` moves only when what it says does.
-fn is_news(earlier: Option<&ProblemRow>, row: &ProblemRow) -> bool {
-    earlier.is_none_or(|e| e.changed_at_utc != row.changed_at_utc)
 }
 
 pub fn schema_hash() -> String {
@@ -2155,15 +2149,15 @@ mod open_index_tests {
         use datalib_schema::problems::Severity;
         let row = || unreadable_store_problem("s", OLDER_SHAPE, Severity::Warning);
         let first = row().stamped(None, "2026-11-04T10:00:00Z", None);
-        assert!(is_news(None, &first));
+        assert!(first.is_news(None));
         let again = row().stamped(Some(&first), "2026-11-04T10:05:00Z", None);
-        assert!(!is_news(Some(&first), &again), "nothing it says changed");
+        assert!(!again.is_news(Some(&first)), "nothing it says changed");
         let other = unreadable_store_problem("s", "it will not open", Severity::Warning).stamped(
             Some(&first),
             "2026-11-04T10:10:00Z",
             None,
         );
-        assert!(is_news(Some(&first), &other), "it says something else now");
+        assert!(other.is_news(Some(&first)), "it says something else now");
     }
 
     /// Replacing a document looks its old rows up by index. Without one,

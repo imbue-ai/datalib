@@ -477,6 +477,12 @@ impl ProblemRow {
         }
     }
 
+    /// Whether this stamped row says something the one before it did not:
+    /// `changed_at_utc` moves only when what a row says does.
+    pub fn is_news(&self, earlier: Option<&ProblemRow>) -> bool {
+        earlier.is_none_or(|e| e.changed_at_utc != self.changed_at_utc)
+    }
+
     /// Every column, by name, off a `SELECT *`. A vocabulary word this
     /// build does not know is an error, not a guess: the store was
     /// written by a newer build and the caller decides what that means.
@@ -526,6 +532,29 @@ mod tests {
             Problem::record(Reason::NotFound, sample),
             None,
         )
+    }
+
+    /// An old error logged again on every run read as a new failure each
+    /// time. Only a row saying something new is news.
+    #[test]
+    fn a_row_recorded_again_unchanged_is_not_news() {
+        let row = |sample: &str| {
+            ProblemRow::new(
+                "tng",
+                Stage::Fetch,
+                Scope::Entity("record"),
+                None,
+                Outcome::Ok,
+                Problem::record(Reason::NotFound, sample),
+                None,
+            )
+        };
+        let first = row("gone").stamped(None, "day 1", None);
+        assert!(first.is_news(None));
+        let again = row("gone").stamped(Some(&first), "day 2", None);
+        assert!(!again.is_news(Some(&first)));
+        let changed = row("still gone").stamped(Some(&again), "day 3", None);
+        assert!(changed.is_news(Some(&again)));
     }
 
     /// A standing problem re-stamped on every run made a commit, and

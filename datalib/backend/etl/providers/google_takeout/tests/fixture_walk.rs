@@ -1067,13 +1067,20 @@ async fn a_gemini_attachment_not_in_the_export_is_tried_again() {
 }
 
 /// A Voice file whose attachment is not in the export is named and read
-/// again next run, and the read that finds it clears the row.
+/// again next run, and the read that finds it clears the row. No run can
+/// change what an export holds, so it is a warning: it read as a failure
+/// on every run for as long as the export stayed.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_voice_attachment_not_in_the_export_is_tried_again() {
     let e = Export::new();
     let mms = e.take(VOICE_MMS);
     e.sync().await;
     assert_eq!(e.skipped_parts().await, ["skipped:google_voice"]);
+    let rows = e.problems().await;
+    assert_eq!(
+        (rows[0].1.as_str(), rows[0].2.as_str()),
+        ("warning", "not_found")
+    );
     e.sync().await;
     assert_eq!(
         e.skipped_parts().await,

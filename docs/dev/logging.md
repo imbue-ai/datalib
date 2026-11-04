@@ -237,14 +237,16 @@ says `where the render's time went`, in `load_ms` (the store's answer),
   ([`plans/problem_visibility.md`](plans/problem_visibility.md)), which
   travels with the data and reaches the Manage counts and the document
   banner. A `warn!` reaches nobody who is not reading the log, so do
-  not write one beside a problem: the step logs what it stored, once,
-  at its end — one `problems_recorded` line per kind of problem (stage,
+  not write one beside a problem: the step logs what is new, once, at
+  its end — one `problems_recorded` line per kind of problem (stage,
   reason, rule, field) with its `count`, at its loudest row's severity
   (`error`, `warn`, or `debug` for a finding), and never a row's
-  `sample` or key, which hold the record's own contents. A writer that
-  stores a row it made calls `datalib_problems::note_recorded`; one that
-  copies another step's rows does not. `ingested_tng_test` checks the
-  counts against the rows.
+  `sample` or key, which hold the record's own contents. A row that says
+  what it said last run is not news: it stays on the Manage row and says
+  nothing in the log. A writer that stores a row it made, new or changed
+  (`ProblemRow::is_news`), calls `datalib_problems::note_recorded`; one
+  that copies another step's rows does not. `ingested_tng_test` checks
+  the counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
   `metric` event, not a sentence with a number in it. The Manage
   screen's queue and ETA (in its Status column) and the sync dashboard's charts come from

@@ -2540,7 +2540,9 @@ async fn record_fetch_problem(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record the fetch problem of {entity_id}"))?;
-    datalib_problems::note_recorded([&row]);
+    if row.is_news(earlier.as_ref()) {
+        datalib_problems::note_recorded([&row]);
+    }
     Ok(())
 }
 

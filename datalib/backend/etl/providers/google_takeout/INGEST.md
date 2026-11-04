@@ -192,10 +192,13 @@ or stamped with its problem. Each kind is a `problems` row:
 - **A Maps photo whose media is missing or unreadable** lands its row
   without bytes and a `maps_photos:<stem>` problem, and its sidecar is
   left unstamped so the next run looks for the media again.
-- **A Voice attachment** that is missing or unreadable is a
-  `skipped:google_voice:<hash>` row on the file naming it, which is
+- **A Voice attachment** that is not in the export is a `not_found`
+  warning, and one that is there but will not read an error, both as a
+  `skipped:google_voice:<hash>` row on the file naming it. That file is
   left unstamped: a Voice message names only the attachments it read, so
-  reading the file again is the only way to add one.
+  reading the file again is the only way to add one. A real export can
+  name audio and images it does not hold, and only a new export can add
+  them.
 - **A file that will not open** is `record:files:<path>`. It is there,
   so a Maps photo whose sidecar will not open keeps its row.
 - **Deletions are held back** when a walk had errors (`listing:files`)

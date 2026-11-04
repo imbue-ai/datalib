@@ -1,7 +1,9 @@
 //! How a problem reaches the log: every writer that stores a row it made
-//! (not a copy) hands it to [`note_recorded`], and the step logs the tally
-//! once, at its end, through [`log_recorded`] — one line per kind of
-//! problem, at the highest severity among its rows. The line carries the
+//! (not a copy), and that says something the row before it did not (see
+//! `ProblemRow::is_news`), hands it to [`note_recorded`], and the step logs
+//! the tally once, at its end, through [`log_recorded`] — one line per kind
+//! of problem, at the highest severity among its rows. A problem that stands
+//! is on the Manage row and says nothing more each run. The line carries the
 //! count and the vocabulary, never a row's `sample` or key: those hold the
 //! record's own contents and belong in the store, not the log.
 
@@ -71,9 +73,9 @@ fn louder(a: Severity, b: Severity) -> Severity {
 
 static RECORDED: Mutex<Tally> = Mutex::new(Tally(BTreeMap::new()));
 
-/// Rows this process just stored and made itself. A copy of another
-/// step's rows (render taking the download's, the index taking every
-/// source's) was already counted by the step that made them.
+/// Rows this process just stored and made itself, new or changed. A copy
+/// of another step's rows (render taking the download's, the index taking
+/// every source's) was already counted by the step that made them.
 pub fn note_recorded<'a>(rows: impl IntoIterator<Item = &'a ProblemRow>) {
     RECORDED.lock().unwrap_or_else(|e| e.into_inner()).add(rows);
 }
