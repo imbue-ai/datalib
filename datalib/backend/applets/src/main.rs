@@ -35,6 +35,7 @@ const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-applet",
     bin_name = "datalib-applet",
+    version = datalib_runtime::build_id::DATALIB_VERSION,
     about = "Applet host for the datalib app, and its search from the command line",
     long_about = "Applet host for the datalib app, and its search from the command line. \
                   `datalib-applet search <data_root> '<query>'` answers as the app's \
@@ -270,5 +271,13 @@ mod cli_tests {
         let commands = datalib_agent_docs::commands_running("datalib-applet");
         assert!(!commands.is_empty(), "no doc runs datalib-applet");
         datalib_cli_help::assert_argvs_parse(super::Cli::command(), &commands);
+    }
+
+    #[test]
+    fn version_flag_prints_the_workspace_version() {
+        datalib_cli_help::assert_version_flag_prints(
+            super::Cli::command(),
+            datalib_runtime::build_id::DATALIB_VERSION,
+        );
     }
 }

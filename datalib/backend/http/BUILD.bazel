@@ -345,6 +345,7 @@ rust_binary(
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
         "@datalib_crates//:chrono",

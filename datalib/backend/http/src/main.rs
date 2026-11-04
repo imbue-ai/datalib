@@ -37,6 +37,7 @@ const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-http",
     bin_name = "datalib-http",
+    version = datalib_runtime::build_id::DATALIB_VERSION,
     about = "Serve the datalib app (web UI, API and sync loop) for one data root.",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
@@ -341,5 +342,13 @@ mod tests {
         let commands = datalib_agent_docs::commands_running("datalib-http");
         assert!(!commands.is_empty(), "no doc runs datalib-http");
         datalib_cli_help::assert_argvs_parse(super::Args::command(), &commands);
+    }
+
+    #[test]
+    fn version_flag_prints_the_workspace_version() {
+        datalib_cli_help::assert_version_flag_prints(
+            super::Args::command(),
+            datalib_runtime::build_id::DATALIB_VERSION,
+        );
     }
 }

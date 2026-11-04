@@ -51,6 +51,17 @@ pub fn assert_examples_parse(cmd: clap::Command, examples: &[Example]) {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Parsing `--version` stops with the binary's name and `version`, whatever
+/// else the binary requires.
+pub fn assert_version_flag_prints(cmd: clap::Command, version: &str) {
+    let name = cmd.get_name().to_string();
+    let shown = cmd
+        .try_get_matches_from([name.as_str(), "--version"])
+        .expect_err("--version should stop the parse");
+    assert_eq!(shown.kind(), clap::error::ErrorKind::DisplayVersion);
+    assert_eq!(shown.to_string().trim(), format!("{name} {version}"));
+}
+
 /// The command lines a doc shows, each with where it is, put through the
 /// binary's parser. `--help` and `--version` count as parsing.
 pub fn assert_argvs_parse(cmd: clap::Command, commands: &[(String, Vec<String>)]) {

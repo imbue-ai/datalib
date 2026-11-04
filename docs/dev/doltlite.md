@@ -122,7 +122,7 @@ each one. Dolthub's **`doltlite`** package on PyPI makes Python's own
 `sqlite3` module run on doltlite, so a store opens once and stays open:
 
 ```sh
-pip install doltlite==<DOLTLITE_VERSION>   # the pin in third-party/doltlite/BUILD.bazel
+pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
 ```
 
 ```python
@@ -135,8 +135,8 @@ conn = sqlite3.connect(f"file:{store}@{commit}?mode=ro", uri=True)  # one commit
 
 The second form is the [detached open](#opening-a-revision-by-path) our
 own readers use, and it is read-only even without `?mode=ro`. Install
-the wheel whose version matches the pin: a release that changes the
-storage format refuses our stores.
+the wheel whose version matches your shell's: a release that changes
+the storage format refuses our stores.
 
 Measured on a mac against a 212 MB store, with the 0.50.16 wheel: the
 open and first query took ~11 ms, and a lookup by primary key on the open
