@@ -37,7 +37,7 @@ pub struct GeminiSummary {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<GeminiSummary> {
@@ -50,21 +50,25 @@ pub async fn ingest(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
-    if prev.get(&f.rel) == Some(&f.blake3) {
+    let read = match f.known.filter(|known| prev.get(&f.rel) == Some(known)) {
+        Some(_) => None,
+        None => Some(scan.read(f).await?).filter(|r| prev.get(&f.rel) != Some(&r.file.blake3)),
+    };
+    let Some(read) = read else {
         let blobs_stored = retry_unfetched_attachments(db, &cell_dir).await?;
         return Ok(GeminiSummary {
             blobs_stored,
             ..GeminiSummary::default()
         });
-    }
+    };
     let html =
-        std::fs::read_to_string(&f.path).with_context(|| format!("read {}", f.path.display()))?;
+        std::str::from_utf8(&read.bytes).with_context(|| format!("read {}", f.path.display()))?;
     let mut acc = CasEdgeAccumulator::new();
     let mut rows: Vec<GeminiActivityRow> = Vec::new();
     let mut skipped: Vec<SkippedRecord> = Vec::new();
     let mut n_attachments: usize = 0;
 
-    let cells: Vec<&str> = mdl_html::iter_cells(&html).collect();
+    let cells: Vec<&str> = mdl_html::iter_cells(html).collect();
     if cells.is_empty() {
         return Err(super::unknown_layout(FILE_REL, "holds no activity cells"));
     }
@@ -122,7 +126,7 @@ pub async fn ingest(
     bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     let gone = prune::prune_scope_in_tx(&mut tx, "gemini_activity", &[], &keep).await?;
     prune::delete_owned_in_tx(&mut tx, "gemini_attachments", "activity_id", &gone).await?;
-    file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
+    file_checkpoint::record_file(&mut tx, SCOPE, &read.file).await?;
     tx.commit().await.context("commit gemini_apps tx")?;
     prune::record("gemini_activity", keep.len() + gone.len(), gone.len());
     found.skipped("gemini_apps", skipped);

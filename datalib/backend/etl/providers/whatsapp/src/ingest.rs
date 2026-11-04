@@ -331,7 +331,7 @@ async fn mirror_media_files(
     summary: &mut IngestSummary,
     found: &RunProblems,
 ) -> Result<()> {
-    let scan = fsscan::scan(
+    let scan = fsscan::list(
         cache,
         media_root,
         &fsscan::ScanOptions {
@@ -354,34 +354,49 @@ async fn mirror_media_files(
         .into_iter()
         .collect();
 
-    // `(hash, problem)`: a copy of the same bytes elsewhere may still read.
-    let mut unreadable: Vec<(String, RecordProblem)> = Vec::new();
-    // Scan hash → the file read for it, whose key its copies take.
+    // `rel → hash` of every file this run knows the bytes of. A file not here
+    // would not open, and keeps the row it had.
+    let mut hashes: HashMap<&str, String> = HashMap::new();
+    // With the hash the cache knows it by: a copy of the same bytes elsewhere
+    // may still read.
+    let mut unreadable: Vec<(Option<String>, RecordProblem)> = Vec::new();
+    // Hash → the file read for it, whose key its copies take.
     let mut staged: HashMap<String, String> = HashMap::new();
     // `rel → (key, size)` for every file this run read.
     let mut stored: HashMap<String, (String, i64)> = HashMap::new();
     let mut pending: Vec<(String, Vec<u8>, Option<String>)> = Vec::new();
     let mut pending_bytes: u64 = 0;
     for f in &scan.files {
-        let hex = fsscan::hex(&f.blake3);
-        if known.contains(&hex) || staged.contains_key(&hex) {
-            continue;
+        let cached = f.known.map(|hash| fsscan::hex(&hash));
+        if let Some(hex) = &cached {
+            if known.contains(hex) || staged.contains_key(hex) {
+                hashes.insert(&f.rel, hex.clone());
+                continue;
+            }
         }
-        let bytes = match std::fs::read(&f.path) {
-            Ok(b) => b,
+        let file = match scan.read(f).await {
+            Ok(file) => file,
             Err(e) => {
-                let problem = RecordProblem::new(
-                    WA_MEDIA_FILES,
-                    &format!("{MEDIA_DIR}/{}", f.rel),
-                    e.to_string(),
-                );
-                unreadable.push((hex, problem));
+                let why = e.root_cause().to_string();
+                let problem = match &cached {
+                    Some(hex) => {
+                        hashes.insert(&f.rel, hex.clone());
+                        RecordProblem::new(WA_MEDIA_FILES, &format!("{MEDIA_DIR}/{}", f.rel), why)
+                    }
+                    None => RecordProblem::new("media", &f.rel, format!("could not open: {why}")),
+                };
+                unreadable.push((cached, problem));
                 continue;
             }
         };
+        let hex = fsscan::hex(&file.file.blake3);
+        hashes.insert(&f.rel, hex.clone());
+        if known.contains(&hex) || staged.contains_key(&hex) {
+            continue;
+        }
         staged.insert(hex, f.rel.clone());
-        pending_bytes += bytes.len() as u64;
-        pending.push((f.rel.clone(), bytes, mime_from_ext(&f.path)));
+        pending_bytes += file.bytes.len() as u64;
+        pending.push((f.rel.clone(), file.bytes, mime_from_ext(&f.path)));
         if pending_bytes >= PUT_BATCH_BYTES {
             stored.extend(put_media_batch(cas, &pending).await?);
             pending.clear();
@@ -389,21 +404,7 @@ async fn mirror_media_files(
         }
     }
     stored.extend(put_media_batch(cas, &pending).await?);
-    let misjudged = scan
-        .files
-        .iter()
-        .filter(|f| {
-            stored
-                .get(&f.rel)
-                .is_some_and(|(key, _)| *key != fsscan::hex(&f.blake3))
-        })
-        .count();
-    if misjudged > 0 {
-        tracing::warn!(
-            files = misjudged,
-            "media bytes read differ from the scan's hash; registered under the hash of what was read"
-        );
-    }
+    scan.finish().await?;
 
     // Drop-and-refill, like the mirrored tables: a byte-identical refill
     // is not a change to doltlite, and a file gone from `Media/` goes
@@ -412,7 +413,12 @@ async fn mirror_media_files(
     // keeps the row it had.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
     let mut kept: Vec<(String, String, i64, Option<String>)> = Vec::new();
-    for rel in &scan.present_unread {
+    let unopened = scan
+        .files
+        .iter()
+        .map(|f| &f.rel)
+        .filter(|rel| !hashes.contains_key(rel.as_str()));
+    for rel in scan.present_unread.iter().chain(unopened) {
         kept.extend(
             sqlx::query_as(
                 "SELECT blake3, relative_path, size_bytes, mime_type \
@@ -444,11 +450,13 @@ async fn mirror_media_files(
         .context("keep the row of an unread media file")?;
     }
     for f in &scan.files {
-        let hex = fsscan::hex(&f.blake3);
-        let read_as = staged.get(&hex).unwrap_or(&f.rel);
+        let Some(hex) = hashes.get(f.rel.as_str()) else {
+            continue;
+        };
+        let read_as = staged.get(hex).unwrap_or(&f.rel);
         let (blake3, size) = match stored.get(read_as) {
             Some((key, size)) => (key.clone(), *size),
-            None => (hex, f.size),
+            None => (hex.clone(), f.size),
         };
         sqlx::query(
             "INSERT OR IGNORE INTO wa_media_files \
@@ -468,7 +476,7 @@ async fn mirror_media_files(
     found.records_failed(
         unreadable
             .into_iter()
-            .filter(|(hex, _)| !staged.contains_key(hex))
+            .filter(|(hex, _)| hex.as_ref().is_none_or(|hex| !staged.contains_key(hex)))
             .map(|(_, problem)| problem),
     );
     // Every run reads again whatever the CAS still lacks, so a row stands

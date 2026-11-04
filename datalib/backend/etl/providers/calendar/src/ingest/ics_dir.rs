@@ -48,7 +48,7 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     })
     .await?;
 
-    let scan = fsscan::scan(
+    let scan = fsscan::list(
         &opts.cache,
         &opts.input_path,
         &fsscan::ScanOptions::default(),
@@ -65,19 +65,32 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     }
 
     let prev = file_checkpoint::load_cursor(db.pool(), CHECKPOINT_SCOPE).await?;
-    let changes = scan.changes_since(&prev);
-    summary.files_skipped = changes.unchanged;
+    let changes = scan.changes_since(&prev, |_| true);
     opts.progress.set_length(Some(scan.files.len() as u64));
-    opts.progress.inc(changes.unchanged as u64);
+    opts.progress.inc(changes.unchanged() as u64);
     let mut read: BTreeSet<&str> = BTreeSet::new();
     scan.report_problems(&found, "files");
-    for f in changes.needs_reading_by_path() {
+    for &f in changes.to_read() {
         if opts.control.stop.requested() {
             break;
         }
         opts.progress
             .set_message(&format!("reading {}", f.path.display()));
-        match ingest_one(db, &scan.given_resolved, &f.path, &mut summary).await {
+        let file = match changes.read_if_changed_by_path(f).await {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                opts.progress.inc(1);
+                continue;
+            }
+            // Not stamped, so the next run reads it again.
+            Err(e) => {
+                summary.errors += 1;
+                found.listing(&format!("ics {}", f.rel), format!("{e:#}"));
+                opts.progress.inc(1);
+                continue;
+            }
+        };
+        match ingest_one(db, &scan.given_resolved, &f.path, &file.bytes, &mut summary).await {
             // Stamped only after a clean read, so a crash mid-file leaves
             // no cursor and the next run reads it again.
             Ok(without_uid) => {
@@ -85,7 +98,7 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
                 file_checkpoint::record_file_with_problem(
                     &mut tx,
                     CHECKPOINT_SCOPE,
-                    f,
+                    &file.file,
                     no_uid_problem(without_uid),
                 )
                 .await?;
@@ -110,6 +123,8 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
             .await?;
         summary.files_removed += 1;
     }
+    summary.files_skipped = changes.unchanged();
+    scan.finish().await?;
     Ok(summary)
 }
 
@@ -133,14 +148,15 @@ async fn ingest_one(
     db: &RawDb,
     root: &Path,
     file: &Path,
+    bytes: &[u8],
     summary: &mut FetchSummary,
 ) -> Result<usize> {
-    let body = std::fs::read_to_string(file).with_context(|| format!("read {}", file.display()))?;
+    let body = std::str::from_utf8(bytes).with_context(|| format!("read {}", file.display()))?;
     // The parse is ours, but it reads whatever the file holds, so a
     // panic in it is this file's failure, not the run's.
     let split = run_problems::catching_panics(|| {
-        let split = ical::split_file(&body);
-        ensure_whole_calendar(&body, &split)?;
+        let split = ical::split_file(body);
+        ensure_whole_calendar(body, &split)?;
         Ok(split)
     })?;
     let calendar_id = calendar_id(root, file);

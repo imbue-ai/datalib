@@ -39,7 +39,7 @@ const ENTRY_CLASSES: &[&str] = &["annotation", "document-position"];
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<Counts> {

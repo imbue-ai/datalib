@@ -22,12 +22,12 @@ const SCOPE: &str = "google_takeout/youtube_subscriptions";
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<SnapshotCounts> {
     let mut skipped = None;
-    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan.file(FILE_REL), |bytes| {
+    let n = file_checkpoint::ingest_snapshot(db.pool(), SCOPE, scan, FILE_REL, |bytes| {
         let skipped = skipped.insert(Vec::new());
         let text = String::from_utf8_lossy(bytes);
         let mut lines = text.lines();

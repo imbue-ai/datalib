@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use crate::fsscan::{FileScanCursor, ScannedFile};
+use crate::fsscan::{FileScanCursor, Listing, ScannedFile};
 
 /// The cursor table. One row per `(scope, root-relative path)`.
 ///
@@ -239,8 +239,9 @@ pub struct SnapshotCounts {
 /// what it lists, and delete the rows it no longer lists, in one
 /// transaction.
 ///
-/// Takes a [`ScannedFile`] rather than a path because the provider has already
-/// scanned the export root, so the file's existence and its hash are known.
+/// Takes the listing rather than a path because the provider has already
+/// listed the export root, so the file's existence is known, and its hash where
+/// the cache can vouch for it. A file whose stat moved is read to find out.
 ///
 /// `parse` returns every record the file holds, and an empty list
 /// empties the table. A file it cannot read as a whole list — not the
@@ -253,22 +254,26 @@ pub struct SnapshotCounts {
 pub async fn ingest_snapshot<T, F>(
     pool: &SqlitePool,
     scope: &str,
-    file: Option<&ScannedFile>,
+    listing: &Listing,
+    rel: &str,
     parse: F,
 ) -> Result<SnapshotCounts>
 where
     T: datalib_etl::bulk::BulkUpsertable,
     F: FnOnce(&[u8]) -> Result<Vec<T>>,
 {
-    let Some(f) = file else {
+    let Some(f) = listing.file(rel) else {
         return Ok(SnapshotCounts::default());
     };
-    if crate::fsscan::is_unchanged(&load_cursor(pool, scope).await?, f) {
+    let cursor = load_cursor(pool, scope).await?;
+    if f.known.is_some() && f.known.as_ref() == cursor.get(rel) {
         return Ok(SnapshotCounts::default());
     }
-
-    let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
-    let rows = parse(&bytes)?;
+    let read = listing.read(f).await?;
+    if cursor.get(rel) == Some(&read.file.blake3) {
+        return Ok(SnapshotCounts::default());
+    }
+    let rows = parse(&read.bytes)?;
 
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let mut tx = pool
@@ -283,7 +288,7 @@ where
         written: rows.len(),
         removed: gone.len(),
     };
-    record_file(&mut tx, scope, f).await?;
+    record_file(&mut tx, scope, &read.file).await?;
     tx.commit()
         .await
         .with_context(|| format!("commit {scope} tx"))?;
@@ -335,6 +340,10 @@ mod tests {
     use std::path::Path;
     use std::str::FromStr;
     use tempfile::tempdir;
+
+    fn is_unchanged(cursor: &FileScanCursor, f: &ScannedFile) -> bool {
+        cursor.get(&f.rel) == Some(&f.blake3)
+    }
 
     /// The store forgets every cursor when a table is recreated, and it
     /// finds them by name in `datalib_etl`, which cannot see this crate.
@@ -414,7 +423,7 @@ mod tests {
         record_file_pool(&e.pool, "p/feed", f).await.unwrap();
 
         let cursor = load_cursor(&e.pool, "p/feed").await.unwrap();
-        assert!(fsscan::is_unchanged(&cursor, f));
+        assert!(is_unchanged(&cursor, f));
         assert_eq!(
             e.scan()
                 .await
@@ -495,7 +504,7 @@ mod tests {
         record_file_pool(&e.pool, "p/one", f).await.unwrap();
         // A different scope sees nothing for the same file.
         let other = load_cursor(&e.pool, "p/two").await.unwrap();
-        assert!(!fsscan::is_unchanged(&other, f));
+        assert!(!is_unchanged(&other, f));
     }
 
     #[tokio::test]

@@ -41,7 +41,7 @@ pub struct ChatSummary {
 
 /// The name of the directory a scanned file sits in — a Chat user id
 /// or group id, which is how the export names them.
-fn parent_dir_name(f: &fsscan::ScannedFile) -> Option<String> {
+fn parent_dir_name(f: &fsscan::ListedFile) -> Option<String> {
     let name = f
         .path
         .parent()?
@@ -51,24 +51,37 @@ fn parent_dir_name(f: &fsscan::ScannedFile) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-fn read_json(f: &fsscan::ScannedFile) -> Result<Value> {
-    let bytes = std::fs::read(&f.path).with_context(|| format!("read {}", f.path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parse {}", f.path.display()))
+fn parse_json(file: &fsscan::ReadFile) -> Result<Value> {
+    let path = file.file.path.display();
+    serde_json::from_slice(&file.bytes).with_context(|| format!("parse {path}"))
+}
+
+/// A file's bytes and what they hold: `None` when they are what the cursor
+/// says, `Err` when they would not read or parse.
+async fn read_json<'a>(
+    changes: &fsscan::ListingChanges<'a>,
+    f: &'a fsscan::ListedFile,
+) -> Result<Option<(fsscan::ScannedFile, Value)>> {
+    let Some(file) = changes.read_if_changed_by_path(f).await? else {
+        return Ok(None);
+    };
+    let value = parse_json(&file)?;
+    Ok(Some((file.file, value)))
 }
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<ChatSummary> {
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
-    let changes = scan.changes_since(&prev);
+    let changes = scan.changes_since(&prev, |rel| chat_file(rel).is_some());
     let mut summary = ChatSummary::default();
     // A file that will not read or parse is left unstamped, so the next
     // run reads it again and its row is re-reported until it reads.
     let mut skipped: Vec<SkippedRecord> = Vec::new();
-    let mut unread = |f: &fsscan::ScannedFile, e: anyhow::Error| {
+    let mut unread = |f: &fsscan::ListedFile, e: anyhow::Error| {
         skipped.push(SkippedRecord {
             entry: f.rel.clone(),
             problem: Problem::record(
@@ -80,19 +93,18 @@ pub async fn ingest(
 
     // ── Users ──────────────────────────────────────────────────────
     let mut user_rows: Vec<ChatUserRow> = Vec::new();
-    let mut user_files: Vec<&fsscan::ScannedFile> = Vec::new();
-    for f in changes
-        .needs_reading_by_path()
+    let mut user_files: Vec<fsscan::ScannedFile> = Vec::new();
+    for &f in changes
+        .to_read()
+        .iter()
         .filter(|f| fsscan::is_under(&f.rel, "Google Chat/Users"))
     {
-        if f.path.file_name().and_then(|s| s.to_str()) != Some("user_info.json") {
-            continue;
-        }
         let Some(dir_name) = parent_dir_name(f) else {
             continue;
         };
-        let payload = match read_json(f) {
-            Ok(payload) => payload,
+        let (file, payload) = match read_json(&changes, f).await {
+            Ok(Some(read)) => read,
+            Ok(None) => continue,
             Err(e) => {
                 unread(f, e);
                 continue;
@@ -104,14 +116,14 @@ pub async fn ingest(
                 payload: payload.to_string(),
             },
         });
-        user_files.push(f);
+        user_files.push(file);
     }
 
     // ── Groups + messages ──────────────────────────────────────────
     let mut group_rows: Vec<ChatGroupRow> = Vec::new();
-    let mut group_files: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut group_files: Vec<fsscan::ScannedFile> = Vec::new();
     let mut message_rows: Vec<ChatMessageRow> = Vec::new();
-    let mut messages_files: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut messages_files: Vec<fsscan::ScannedFile> = Vec::new();
     let mut acc = CasEdgeAccumulator::new();
     let mut n_attachments: usize = 0;
     // A group's `messages.json` is all of its messages: what a re-read one
@@ -123,8 +135,9 @@ pub async fn ingest(
     // A group is a directory holding `group_info.json` and
     // `messages.json`. Both are just changed files in the scan, so
     // dispatch on which one this is rather than walking the tree.
-    for f in changes
-        .needs_reading_by_path()
+    for &f in changes
+        .to_read()
+        .iter()
         .filter(|f| fsscan::is_under(&f.rel, "Google Chat/Groups"))
     {
         let Some(dir_name) = parent_dir_name(f) else {
@@ -135,8 +148,9 @@ pub async fn ingest(
         };
         match f.path.file_name().and_then(|s| s.to_str()) {
             Some("group_info.json") => {
-                let payload = match read_json(f) {
-                    Ok(payload) => payload,
+                let (file, payload) = match read_json(&changes, f).await {
+                    Ok(Some(read)) => read,
+                    Ok(None) => continue,
                     Err(e) => {
                         unread(f, e);
                         continue;
@@ -148,11 +162,12 @@ pub async fn ingest(
                         payload: payload.to_string(),
                     },
                 });
-                group_files.push(f);
+                group_files.push(file);
             }
             Some("messages.json") => {
-                let parsed = match read_json(f) {
-                    Ok(parsed) => parsed,
+                let (file, parsed) = match read_json(&changes, f).await {
+                    Ok(Some(read)) => read,
+                    Ok(None) => continue,
                     Err(e) => {
                         unread(f, e);
                         continue;
@@ -184,7 +199,7 @@ pub async fn ingest(
                     message_rows.push(row);
                 }
                 reread_groups.insert(dir_name);
-                messages_files.push(f);
+                messages_files.push(file);
             }
             _ => {}
         }
@@ -244,7 +259,7 @@ pub async fn ingest(
         .iter()
         .filter_map(|f| chat_file(&f.rel))
         .collect();
-    let gone = if super::product_exported(scan, "Google Chat") {
+    let gone = if scan.any_under("Google Chat") {
         changes.gone_by_path(&read)
     } else {
         Vec::new()
@@ -337,7 +352,7 @@ fn attach(acc: &mut CasEdgeAccumulator, group_dir: &Path, owning: &str, export_n
 /// so this is the only retry it gets unless its group is re-read.
 async fn retry_unfetched_attachments(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     reread_groups: &HashSet<String>,
     acc: &mut CasEdgeAccumulator,
 ) -> Result<()> {

@@ -56,24 +56,30 @@ struct Photo {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<MapsPhotosSummary> {
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
-    let changes = scan.changes_since(&prev);
+    let changes = scan.changes_since(&prev, is_sidecar);
 
     let mut complete: Vec<MapsPhotoRow> = Vec::new();
     let mut without_media: Vec<(MapsPhotoRow, MediaProblem)> = Vec::new();
     let mut cas_inserts_owned: Vec<PendingCas> = Vec::new();
-    let mut done: Vec<&fsscan::ScannedFile> = Vec::new();
+    let mut done: Vec<fsscan::ScannedFile> = Vec::new();
     let mut skipped: Vec<SkippedRecord> = Vec::new();
-    for f in changes
-        .needs_reading_under(DIR_REL)
-        .filter(|f| f.path.extension().and_then(|s| s.to_str()) == Some("json"))
-    {
-        match ingest_one(&f.path) {
-            Ok(Some(photo)) => {
+    for &f in changes.to_read() {
+        let file = match changes.read_if_changed(f).await {
+            Ok(Some(file)) => Ok(file),
+            Ok(None) => continue,
+            Err(e) => Err(e),
+        };
+        let photo = file.and_then(|file| {
+            let photo = ingest_one(&f.path, &file.bytes)?;
+            Ok((file.file, photo))
+        });
+        match photo {
+            Ok((file, Some(photo))) => {
                 if let Some(c) = photo.cas {
                     cas_inserts_owned.push(c);
                 }
@@ -82,12 +88,12 @@ pub async fn ingest(
                 match photo.media_problem {
                     None => {
                         complete.push(photo.row);
-                        done.push(f);
+                        done.push(file);
                     }
                     Some(problem) => without_media.push((photo.row, problem)),
                 }
             }
-            Ok(None) => done.push(f),
+            Ok((file, None)) => done.push(file),
             // Not stamped, so it is read again next run, and its row is
             // re-reported until it reads.
             Err(e) => skipped.push(SkippedRecord {
@@ -145,7 +151,7 @@ pub async fn ingest(
     // A photo row is keyed by its sidecar's stem, so a row whose stem no
     // sidecar here carries is gone — read as "not exported" when the
     // folder is missing, and as nothing when the walk could not see it all.
-    let removed = if super::product_exported(scan, DIR_REL) && changes.walk_errors == 0 {
+    let removed = if scan.any_under(DIR_REL) && changes.walk_errors == 0 {
         // A sidecar there and unread is there.
         let present: HashSet<String> = scan
             .files
@@ -180,11 +186,9 @@ fn stem(rel: &str) -> Option<&str> {
     Path::new(rel).file_stem()?.to_str()
 }
 
-fn ingest_one(json_path: &Path) -> Result<Option<Photo>> {
-    let bytes =
-        std::fs::read(json_path).with_context(|| format!("read {}", json_path.display()))?;
+fn ingest_one(json_path: &Path, bytes: &[u8]) -> Result<Option<Photo>> {
     let payload: Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", json_path.display()))?;
+        serde_json::from_slice(bytes).with_context(|| format!("parse {}", json_path.display()))?;
     let stem = json_path
         .file_stem()
         .and_then(|s| s.to_str())

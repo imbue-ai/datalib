@@ -66,6 +66,17 @@ pub fn hash_file_reporting(
     Ok(*hasher.finalize().as_bytes())
 }
 
+/// The hash of bytes already in hand, the same one [`hash_file`] gives.
+pub fn hash_bytes(bytes: &[u8]) -> Blake3 {
+    let mut hasher = blake3::Hasher::new();
+    if bytes.len() as u64 >= PARALLEL_THRESHOLD {
+        hasher.update_rayon(bytes);
+    } else {
+        hasher.update(bytes);
+    }
+    *hasher.finalize().as_bytes()
+}
+
 pub fn hash_symlink_target(target: &[u8]) -> Blake3 {
     *blake3::hash(target).as_bytes()
 }
@@ -227,7 +238,7 @@ pub fn walk_files<F>(
     accept: F,
 ) -> Result<(Vec<WalkedFile>, Vec<WalkError>)>
 where
-    F: Fn(&Path) -> bool,
+    F: Fn(&Path) -> bool + Sync,
 {
     let mut builder = ignore::WalkBuilder::new(root);
     builder

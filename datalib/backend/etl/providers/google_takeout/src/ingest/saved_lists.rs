@@ -30,7 +30,7 @@ impl FromFile for MapsSavedListRow {
 
 pub async fn ingest(
     db: &RawDb,
-    scan: &fsscan::Scan,
+    scan: &fsscan::Listing,
     progress: &Progress,
     found: &RunProblems,
 ) -> Result<Counts> {
