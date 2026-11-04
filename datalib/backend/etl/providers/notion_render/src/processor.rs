@@ -31,7 +31,7 @@ impl SourceRender for NotionRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        use crate::render::{parse_api_dir, render::render_from_store};
+        use crate::render::{parse_api_dir, render::render_from_store, toc};
         let parsed = parse_api_dir(raw_path, ctx.raw_range())
             .with_context(|| format!("notion parse {}", raw_path.display()))?;
         // Every bucket this run renders — page or thread — is declared
@@ -50,6 +50,11 @@ impl SourceRender for NotionRender {
             ctx.page_size.bytes,
         )
         .context("render_notion")?;
+        // It reads whole tables, and a whole-table input is never evidence
+        // that its rows left, so the driver would keep an old list.
+        if parsed.renders(toc::BUCKET) && !s.buckets.iter().any(|b| b.key == toc::BUCKET) {
+            ctx.exclude_bucket(toc::BUCKET)?;
+        }
         ctx.finish(&s.buckets, parsed.head.as_deref())?;
         Ok(format!("rendered {} document(s)", s.rendered))
     }

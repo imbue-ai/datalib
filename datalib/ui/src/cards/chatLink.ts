@@ -13,7 +13,8 @@ import { writeDoc } from "@/uri";
 //                        to "/" + set the hash, which trips through to
 //                        Vue Router but as a page-replace from the
 //                        miller view's perspective.
-const CHAT_HREF_RE = /^(?:#|\/#?)?\/chat\/([^/?#]+)/;
+// A `#<section>` after any of them names a section of that document.
+const CHAT_HREF_RE = /^(?:#|\/#?)?\/chat\/([^/?#]+)(?:\?[^#]*)?(?:#(.+))?/;
 
 /**
  * A click the browser should keep: a modifier or a non-primary button
@@ -82,6 +83,11 @@ function samePageTarget(el: Element): Element | null {
 export function chatUuidFromHref(href: string): string | null {
   const m = CHAT_HREF_RE.exec(href);
   return m ? m[1] : null;
+}
+
+/** The section of that document the href names, or null. */
+export function chatSectionFromHref(href: string): string | null {
+  return CHAT_HREF_RE.exec(href)?.[2] ?? null;
 }
 
 /** A copied 🆔 button (`chatSections.js`) becomes the 🆔 and the uuid

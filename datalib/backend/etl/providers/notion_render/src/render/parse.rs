@@ -11,13 +11,14 @@ use datalib_etl_render::inputs::{changed_rows, RawRange};
 use serde_json::Value;
 
 /// Every table a page or a thread reads; the forward scan diffs each.
-const TABLES: [&str; 6] = [
+const TABLES: [&str; 7] = [
     "pages",
     "page_markdown",
     "comments",
     "comment_anchors",
     "notion_attachments",
     "users",
+    "tree",
 ];
 
 #[derive(Clone, Default)]
@@ -44,6 +45,9 @@ pub struct ParsedNotion {
     /// Every page, database and block the store places in the tree, by
     /// id: what the path above a page is walked through.
     pub tree: HashMap<String, TreeRow>,
+    /// Every page last seen in Notion's trash, rendered this run or not:
+    /// what the table of contents marks.
+    pub trashed: HashSet<String>,
     /// `notion_attachments` row ids per page, bytes fetched or not.
     pub attachment_ids_by_page: HashMap<String, Vec<String>>,
     /// The attachment refs whose bytes were fetched, per page: what
@@ -95,6 +99,12 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     let mut page_markdown = db.load_page_markdown().await?;
     let comments = db.load_comments().await?;
     let attachments = db.load_attachments().await?;
+    let trashed: HashSet<String> = pages
+        .iter()
+        .filter(|p| in_trash(p))
+        .filter_map(id_of)
+        .map(String::from)
+        .collect();
 
     let forward = changed.map(|changed| forward_buckets(&changed, &pages, &comments, &attachments));
     let render = range.narrow(forward.as_ref());
@@ -139,6 +149,7 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
         user_emails,
         anchor_text,
         tree,
+        trashed,
         attachment_ids_by_page,
         refs_by_page,
         db_path: None,
@@ -150,7 +161,8 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
 /// The buckets the changed rows name, through the rows still there: a
 /// row that went names nothing here, and the bucket that read it is
 /// the driver's to find. A page names its threads too, which read its
-/// title.
+/// title. A `tree` row names the table of contents, which has read
+/// nothing yet if the store held no page when it last rendered.
 fn forward_buckets(
     changed: &HashMap<String, HashSet<String>>,
     pages: &[Value],
@@ -199,11 +211,19 @@ fn forward_buckets(
             }
         }
     }
+    if of("tree").is_some_and(|ids| !ids.is_empty()) {
+        out.insert(super::toc::BUCKET.to_string());
+    }
     out
 }
 
 fn id_of(v: &Value) -> Option<&str> {
     v.get("id").and_then(Value::as_str)
+}
+
+/// Whether the page was in Notion's trash when last fetched.
+pub fn in_trash(page: &Value) -> bool {
+    page.get("in_trash").and_then(Value::as_bool) == Some(true)
 }
 
 fn discussion_of(c: &Value) -> Option<&str> {

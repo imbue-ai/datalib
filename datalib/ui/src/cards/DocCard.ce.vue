@@ -33,7 +33,12 @@ import {
   messageAncestor,
   type FeedbackContext,
 } from "@/feedback/context";
-import { chatUuidFromHref, isBrowserClick, type ClickedLink } from "./chatLink";
+import {
+  chatSectionFromHref,
+  chatUuidFromHref,
+  isBrowserClick,
+  type ClickedLink,
+} from "./chatLink";
 import { asElement } from "./docFrame";
 import { openExternal } from "@/externalLinks";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
@@ -79,12 +84,13 @@ function openDoc(md: string, anchor: string | null) {
 /// tab, anything else in the browser the person uses.
 function onFrameLink(link: ClickedLink) {
   const uuid = chatUuidFromHref(link.href);
+  const section = chatSectionFromHref(link.href);
   if (uuid && !link.browserClick) {
-    openDoc(uuid, null);
+    openDoc(uuid, section);
     return;
   }
   const url = uuid
-    ? new URL(props.ctx.host.hrefFor(docSource(uuid, null)), location.href).href
+    ? new URL(props.ctx.host.hrefFor(docSource(uuid, section)), location.href).href
     : link.resolved;
   if (new URL(url).origin === location.origin) window.open(url, "_blank", "noopener");
   else void openExternal(url);

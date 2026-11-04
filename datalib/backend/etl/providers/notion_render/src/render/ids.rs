@@ -11,6 +11,11 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Notion;
 pub const KIND_PAGE: &str = "page";
 pub const KIND_DISCUSSION: &str = "discussion";
 pub const KIND_COMMENT: &str = "comment";
+pub const KIND_TOC: &str = "table_of_contents";
+pub const KIND_TOC_ENTRY: &str = "table_of_contents_entry";
+
+/// A source has one table of contents, so its key says only that.
+const TOC_KEY: &str = "toc";
 
 /// Millis: a stamp here is the record's own string, read back whole
 /// by `record_stamp_ms`, so nothing is rounded away.
@@ -44,6 +49,18 @@ pub fn comment(source_id: &str, comment_id: &str, created_time: Option<&str>) ->
     )
 }
 
+/// No stamp: it holds no moment of its own, and its id is what every
+/// path above a page links to.
+pub fn toc(source_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_TOC, TOC_KEY.to_string(), None)
+}
+
+/// The anchor in the table of contents of a `tree` row with no document:
+/// `node_id` is its Notion id.
+pub fn toc_entry(source_id: &str, node_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_TOC_ENTRY, node_id.to_string(), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,6 +74,8 @@ mod tests {
             page("src", "p", AT),
             discussion("src", "d"),
             comment("src", "c", AT),
+            toc("src"),
+            toc_entry("src", "db"),
         ] {
             assert_eq!(
                 got.uuid,
