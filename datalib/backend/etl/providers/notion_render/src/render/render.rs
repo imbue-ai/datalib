@@ -1,4 +1,5 @@
-//! Emit one document per Notion page and one per comment thread.
+//! Emit one document per Notion page, one per comment thread, and the
+//! source's table of contents (`toc.rs`).
 //!
 //! Notion returns a page body already rendered as its enhanced markdown,
 //! and the download step stores it whole. This resolves each attachment
@@ -27,7 +28,8 @@ use serde_json::Value;
 
 use super::enhanced;
 use super::grid_rows::{comment_author_handle, gather_documents, PageDocument, ThreadDocument};
-use super::parse::{ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
+use super::parse::{in_trash, ParsedNotion, ATTACHMENTS_PROJECTION_SQL};
+use super::toc;
 use datalib_etl_notion::ingest::db::{RawDb, TreeRow};
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::pages::batches;
@@ -45,7 +47,9 @@ use datalib_etl_render::pages::batches;
 /// v11: a page opens with the path of pages and databases it sits under.
 /// v12: a page body is Notion's enhanced markdown turned into CommonMark,
 ///      under the shared title line, with its ids in the front matter.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: a source has a table of contents, the path above a page links it
+///      where the path used to link Notion, and a trashed page says so.
+pub const RENDER_VERSION: u32 = 13;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -131,8 +135,9 @@ fn head(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> String
 /// The line above a page naming where it sits, top first: each page,
 /// database and titled block above it, up to the top of what the store
 /// knows. A page this source renders links its document; anything else
-/// links Notion. A column or a toggle is walked through and not shown.
-/// Empty for a page at the top of the workspace.
+/// has no document, so it links its entry in the table of contents, where
+/// the way on to Notion is. A column or a toggle is walked through and
+/// not shown. Empty for a page at the top of the workspace.
 fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza: &str) -> String {
     let mut crumbs: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -144,14 +149,15 @@ fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza:
         let Some(row) = tree.get(&id) else {
             break;
         };
-        let title = || escape_md_inline(row.title.as_deref().unwrap_or("Untitled"));
-        match (row.kind, &row.title) {
-            (Some(TreeKind::Page), _) => {
-                let uuid = super::ids::page(stanza, &id, row.created_time.as_deref()).uuid;
-                crumbs.push(format!("[{}](/chat/{uuid})", title()));
-            }
-            (_, Some(_)) => crumbs.push(format!("[{}]({})", title(), notion_url(&id))),
-            (_, None) => {}
+        if let Some(title) = toc::shown_title(row) {
+            let href = match row.kind {
+                Some(TreeKind::Page) => {
+                    let uuid = super::ids::page(stanza, &id, row.created_time.as_deref()).uuid;
+                    format!("/chat/{uuid}")
+                }
+                _ => toc::entry_href(stanza, &id),
+            };
+            crumbs.push(format!("[{}]({href})", escape_md_inline(title)));
         }
         next = parent_of(row);
     }
@@ -162,7 +168,7 @@ fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza:
     format!("{}\n\n", crumbs.join(" › "))
 }
 
-fn parent_of(row: &TreeRow) -> Option<String> {
+pub(super) fn parent_of(row: &TreeRow) -> Option<String> {
     match row.parent_type.as_deref() {
         Some("workspace") | None => None,
         Some(_) => row.parent_id.clone(),
@@ -526,7 +532,11 @@ pub fn render_notion(
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     fs::create_dir_all(render_markdown_root(root, stanza))?;
-    if parsed.pages.is_empty() && parsed.comments.is_empty() {
+    let contents = parsed
+        .renders(toc::BUCKET)
+        .then(|| toc::document(&parsed.tree, &parsed.trashed, stanza))
+        .flatten();
+    if parsed.pages.is_empty() && parsed.comments.is_empty() && contents.is_none() {
         return Ok(summary);
     }
 
@@ -536,7 +546,9 @@ pub fn render_notion(
         .iter()
         .filter_map(|p| p.get("id").and_then(|v| v.as_str()).map(|id| (id, p)))
         .collect();
-    progress.set_length(Some((docs.pages.len() + docs.threads.len()) as u64));
+    progress.set_length(Some(
+        (docs.pages.len() + docs.threads.len() + usize::from(contents.is_some())) as u64,
+    ));
 
     let empty_bundle = BlobBundle::default();
     let page_ids: Vec<&str> = docs.pages.iter().map(|d| d.page_uuid.as_str()).collect();
@@ -575,6 +587,9 @@ pub fn render_notion(
                 body
             };
             let mut out = head(page_title, markdown_uuid, page_uuid, page);
+            if in_trash(page) {
+                out.push_str("*This page is in Notion's trash.*\n\n");
+            }
             out.push_str(&breadcrumb(
                 page_uuid,
                 inputs.lookup("tree", &parsed.tree),
@@ -653,6 +668,27 @@ pub fn render_notion(
             key: discussion_uuid.clone(),
             inputs: inputs.declared(),
         });
+        summary.rendered += 1;
+        progress.inc(1);
+    }
+    if let Some(doc) = contents {
+        let (md_path, rows) =
+            file_document(root, stanza, &doc.markdown_uuid, &doc.rows, &doc.markdown)?;
+        on_doc_complete(RenderedMarkdown {
+            markdown_uuid: doc.markdown_uuid,
+            source_id: String::new(),
+            upstream_cursor: None,
+            bucket_key: Some(toc::BUCKET.to_string()),
+            md_path,
+            render_version: RENDER_VERSION,
+            rows,
+            sections: Vec::new(),
+            edges: Vec::new(),
+            contacts: Vec::new(),
+            photos: Vec::new(),
+            problems: doc.problems,
+        })?;
+        summary.buckets.push(toc::bucket());
         summary.rendered += 1;
         progress.inc(1);
     }
@@ -799,20 +835,20 @@ mod tests {
         let inputs = datalib_etl_render::inputs::Inputs::default();
         let line = breadcrumb("row", inputs.lookup("tree", &tree), "notion");
         let bridge = super::super::ids::page("notion", "bridge", None).uuid;
+        let db = toc::entry_href("notion", "db");
         assert_eq!(
             line,
-            format!(
-                "[Bridge](/chat/{bridge}) › [Crew \\[manifest\\]](https://www.notion.so/db)\n\n"
-            )
+            format!("[Bridge](/chat/{bridge}) › [Crew \\[manifest\\]]({db})\n\n")
         );
         let read: Vec<String> = inputs.declared().into_iter().map(|i| i.id).collect();
         assert_eq!(read, ["bridge", "col", "db", "row"]);
     }
 
     /// A page above a root that roots mode placed but does not mirror
-    /// has no document here, so its crumb links Notion.
+    /// has no document here, so its crumb links its entry in the table of
+    /// contents, and that entry is there to land on.
     #[test]
-    fn a_page_this_source_does_not_mirror_links_notion() {
+    fn a_page_this_source_does_not_mirror_links_its_contents_entry() {
         let tree: HashMap<String, TreeRow> = [
             (
                 "debrief",
@@ -831,10 +867,148 @@ mod tests {
         .map(|(id, row)| (id.to_string(), row))
         .collect();
         let inputs = datalib_etl_render::inputs::Inputs::default();
+        let href = toc::entry_href("notion", "wiki");
         assert_eq!(
             breadcrumb("debrief", inputs.lookup("tree", &tree), "notion"),
-            "[Wiki](https://www.notion.so/wiki)\n\n"
+            format!("[Wiki]({href})\n\n")
         );
+        let doc = toc::document(&tree, &HashSet::new(), "notion").unwrap();
+        let (toc_link, entry) = href.split_once('#').unwrap();
+        assert_eq!(toc_link, format!("/chat/{}", doc.markdown_uuid));
+        assert!(
+            doc.markdown
+                .contains(&format!("data-section-uuid=\"{entry}\">[Wiki]")),
+            "{}",
+            doc.markdown
+        );
+    }
+
+    fn top_page(title: &str) -> Value {
+        json!({
+            "id": title,
+            "object": "page",
+            "properties": {"title": {"type": "title", "title": [{"plain_text": title}]}},
+        })
+    }
+
+    fn top_row(title: &str) -> (String, TreeRow) {
+        (
+            title.to_string(),
+            node(TreeKind::Page, Some(title), ("workspace", "workspace")),
+        )
+    }
+
+    fn render(parsed: &ParsedNotion, root: &Path) -> (Vec<RenderedMarkdown>, RenderSummary) {
+        let mut emitted: Vec<RenderedMarkdown> = Vec::new();
+        let mut on_doc = |md: RenderedMarkdown| {
+            emitted.push(md);
+            Ok(())
+        };
+        let summary = render_notion(
+            parsed,
+            root,
+            "notion",
+            &Progress::noop(),
+            &mut on_doc,
+            &HashMap::new(),
+            1,
+        )
+        .unwrap();
+        (emitted, summary)
+    }
+
+    /// A cold render writes the table of contents beside the pages, in
+    /// the file its row names, reading the two tables whose rows can
+    /// change what it says.
+    #[test]
+    fn a_cold_render_writes_the_table_of_contents() {
+        let d = tempdir().unwrap();
+        let parsed = ParsedNotion {
+            pages: vec![top_page("Bridge")],
+            tree: [top_row("Bridge")].into_iter().collect(),
+            ..Default::default()
+        };
+        let (emitted, summary) = render(&parsed, d.path());
+        assert_eq!(emitted.len(), 2, "the page and the contents");
+        let contents = emitted
+            .iter()
+            .find(|d| d.bucket_key.as_deref() == Some(toc::BUCKET))
+            .expect("the contents");
+        let md = fs::read_to_string(&contents.md_path).unwrap();
+        assert!(md.contains(toc::TITLE), "{md}");
+        assert!(md.contains("[Bridge](/chat/"), "{md}");
+        let rel = contents.md_path.strip_prefix(d.path()).unwrap();
+        assert_eq!(
+            contents.rows[0].qmd_path.as_deref(),
+            rel.to_str(),
+            "the row names the file"
+        );
+        let bucket = summary
+            .buckets
+            .iter()
+            .find(|b| b.key == toc::BUCKET)
+            .expect("declared");
+        let read: Vec<(&str, &str)> = bucket
+            .inputs
+            .iter()
+            .map(|i| (i.table.as_str(), i.id.as_str()))
+            .collect();
+        assert_eq!(read, [("tree", "*"), ("pages", "*")]);
+    }
+
+    /// A rename of a database changes `tree` and no page, so this run has
+    /// no pages to render and the contents still has to. An early return
+    /// on "no pages" would leave it showing the old name.
+    #[test]
+    fn a_run_that_names_only_the_contents_renders_only_the_contents() {
+        let d = tempdir().unwrap();
+        let parsed = ParsedNotion {
+            tree: [top_row("Bridge")].into_iter().collect(),
+            render: Some([toc::BUCKET.to_string()].into_iter().collect()),
+            ..Default::default()
+        };
+        let (emitted, _) = render(&parsed, d.path());
+        let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
+        assert_eq!(keys, [Some(toc::BUCKET)]);
+    }
+
+    /// And a run that names a page and not the contents leaves it alone.
+    #[test]
+    fn a_run_that_does_not_name_the_contents_does_not_write_it() {
+        let d = tempdir().unwrap();
+        let parsed = ParsedNotion {
+            pages: vec![top_page("Bridge")],
+            tree: [top_row("Bridge")].into_iter().collect(),
+            render: Some(["Bridge".to_string()].into_iter().collect()),
+            ..Default::default()
+        };
+        let (emitted, _) = render(&parsed, d.path());
+        let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
+        assert_eq!(keys, [Some("Bridge")]);
+    }
+
+    /// A trashed page stays in the mirror, so its document has to say
+    /// Notion no longer shows it. A page not in the trash says nothing.
+    #[test]
+    fn a_trashed_page_says_so_under_its_title() {
+        let d = tempdir().unwrap();
+        let mut gone = top_page("Gone");
+        gone["in_trash"] = json!(true);
+        let parsed = ParsedNotion {
+            pages: vec![gone, top_page("Kept")],
+            ..Default::default()
+        };
+        let (emitted, _) = render(&parsed, d.path());
+        let body = |key: &str| {
+            let doc = emitted
+                .iter()
+                .find(|d| d.bucket_key.as_deref() == Some(key))
+                .unwrap();
+            fs::read_to_string(&doc.md_path).unwrap()
+        };
+        const NOTE: &str = "*This page is in Notion's trash.*";
+        assert!(body("Gone").contains(NOTE), "{}", body("Gone"));
+        assert!(!body("Kept").contains(NOTE), "{}", body("Kept"));
     }
 
     /// A page at the top has no path, and one whose parent this

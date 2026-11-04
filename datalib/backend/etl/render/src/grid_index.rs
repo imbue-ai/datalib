@@ -807,6 +807,7 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
         "PDF Document" => "document",
         // Likewise a Claude Project: written context, not a conversation.
         "Project" => "document",
+        "Notion Table of Contents" => "document",
         // The per-source storage report: datalib describing a mirror,
         // not anything the upstream authored.
         "Source Size" => datalib_schema::measurements::DOC_KIND,

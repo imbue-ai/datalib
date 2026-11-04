@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  chatSectionFromHref,
   chatUuidFromHref,
   finishFrameClick,
   linkFromClick,
@@ -149,6 +150,17 @@ describe("chatUuidFromHref", () => {
     expect(chatUuidFromHref("/chat/abc")).toBe("abc");
     expect(chatUuidFromHref("#/chat/abc")).toBe("abc");
     expect(chatUuidFromHref("/#/chat/abc?x=1")).toBe("abc");
+  });
+  it("reads the document and the section out of a link to a section", () => {
+    for (const href of ["/chat/abc#sec-1", "#/chat/abc#sec-1", "/chat/abc?x=1#sec-1"]) {
+      expect(chatUuidFromHref(href)).toBe("abc");
+      expect(chatSectionFromHref(href)).toBe("sec-1");
+    }
+  });
+  it("finds no section in a link to a whole document or off the site", () => {
+    expect(chatSectionFromHref("/chat/abc")).toBeNull();
+    expect(chatSectionFromHref("/chat/abc?x=1")).toBeNull();
+    expect(chatSectionFromHref("https://claude.ai/chat/abc#sec-1")).toBeNull();
   });
   it("ignores a card stack and an off-site link", () => {
     expect(chatUuidFromHref("/gridView()/documentView(%22abc%22)")).toBeNull();

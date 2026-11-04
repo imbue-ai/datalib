@@ -389,7 +389,8 @@ A page document opens with the path above it — `Bridge › Crew
 manifest` for a row of the crew database — so a row of a synced
 database says where it came from. Each page on the path links its
 document; a database or a page this source does not render (an
-`unmirrored_page`, a block) links Notion. `tree` holds what that path is walked through: one row per
+`unmirrored_page`, a block) links its entry in the table of contents,
+where a link goes on to Notion. `tree` holds what that path is walked through: one row per
 page, database and block, with its kind, title and parent. Its own
 table rather than read from `pages`, because a page's `pages` row
 changes on every edit and a render that read its parents' rows would
@@ -419,6 +420,30 @@ Where each row comes from:
 
 A database row's `parent_id` is its database's id, though Notion names
 its data source too; the path names the database.
+
+## The table of contents
+
+Each source has one more document, titled "Notion TOC: Table-of-Contents
+(Datalib generated)", with a grid row of its own: every page the store
+holds as a nested list, under the pages and databases above it, database
+rows included. It is `render/toc.rs` in the render crate, read from `tree`.
+
+- **Order.** `tree` keeps no position among siblings, so each level reads
+  A to Z rather than in Notion's sidebar order.
+- **What is left out.** A column or a toggle hands its children up, as in
+  the path above a page, and a branch with no held page below it is
+  dropped, since roots mode's `tree` names pages all over the workspace.
+- **Its row counts no item.** Its `item_count` is 0, so it adds nothing
+  to the source's Items column. Its dates are the earliest and latest
+  `created_time` of the pages listed.
+- **Its anchors.** A database or an unmirrored page has no document, so
+  its entry links Notion and is wrapped in a `span` with a
+  `data-section-uuid`. The path above a page links `/chat/<toc>#<anchor>`,
+  and the viewer opens the contents scrolled to that entry.
+- **When it renders.** It reads `tree` and `pages` whole. A rename, a move
+  or a new page changes `tree`; a page entering the trash changes only
+  `pages`. So it renders again after any page edit, which costs one pass
+  over `tree` and writes the same bytes unless its list changed.
 
 ## People and anchors
 
@@ -456,7 +481,8 @@ Notion id. When a bucket renders it declares every raw row it read
 `page_markdown` row, every `notion_attachments` row — bytes fetched or
 not — its author's `users` row, found or not, and every `tree` row on
 its path, found or not; a thread its
-`comments`, its page (for the title) and its `comment_anchors` block.
+`comments`, its page (for the title) and its `comment_anchors` block;
+the table of contents all of `tree` and `pages`.
 The render step diffs those tables from the commit it last completed
 against and hands render the buckets whose rows moved; render's own
 scan adds what a new row names through the rows still there (a new
@@ -490,9 +516,11 @@ on that reading would destroy a live document.
 
 The ingest never deletes a page: search by edit time never reports a
 deletion, so a page deleted or trashed in Notion stays in the mirror.
-`pages.in_trash` is stored when a trashed page is seen, and render does
-not read it. A trash pass (`filter: {in_trash: true}`) is not built,
-nor is a data-source schema. A page's comments are listed whole, so a
+`pages.in_trash` is stored when a trashed page is seen, and render then
+says so under the page's title and on its line in the table of contents.
+Search does not report a page going into the trash, so a page trashed
+after it was last fetched reads as an ordinary page. A trash pass
+(`filter: {in_trash: true}`) is not built, nor is a data-source schema. A page's comments are listed whole, so a
 comment the listing no longer returns is deleted with that listing, and
 an attachment a complete body no longer links loses its edge.
 

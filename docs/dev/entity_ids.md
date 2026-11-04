@@ -302,7 +302,7 @@ back by render as the natural key.
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
-| notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id | pages, comments — Notion's `created_time` |
+| notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id; the table of contents is keyed `toc`, an anchor in it on the Notion id of what it lists | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
 | signal | none — keyed on who a chat is with and who wrote a message (ACI, else PNI, else number; a group by its master key's hash), never the backup's own numbering | messages, on `date_sent` |
