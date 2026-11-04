@@ -86,6 +86,7 @@ rust_test(
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",
+        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
         ":datalib_unified_document_index",

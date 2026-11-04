@@ -436,6 +436,10 @@ rows included. It is `render/toc.rs` in the render crate, read from `tree`.
 - **Its row counts no item.** Its `item_count` is 0, so it adds nothing
   to the source's Items column. Its dates are the earliest and latest
   `created_time` of the pages listed.
+- **Not in free-text search.** It is filed under `render_markdown/unindexed/`,
+  which qmd ignores: it only repeats the titles of the pages it lists, and on
+  a whole workspace it runs to megabytes that would have to be embedded. Its
+  grid row is still found by its title.
 - **Its anchors.** A database or an unmirrored page has no document, so
   its entry links Notion and is wrapped in a `span` with a
   `data-section-uuid`. The path above a page links `/chat/<toc>#<anchor>`,

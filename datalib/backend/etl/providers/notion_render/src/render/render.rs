@@ -16,7 +16,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
@@ -362,16 +362,13 @@ fn thread_markdown(
     out
 }
 
-/// Write a document to the file its id names, and point each of its rows
-/// at that file.
+/// Write a document to `md_path`, and point each of its rows at that file.
 fn file_document(
     root: &Path,
-    stanza: &str,
-    markdown_uuid: &str,
+    md_path: PathBuf,
     rows: &[GridRow],
     body: &str,
 ) -> Result<(PathBuf, Vec<GridRow>)> {
-    let md_path = doc_md_path(&render_markdown_root(root, stanza), markdown_uuid);
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
@@ -531,7 +528,8 @@ pub fn render_notion(
     blob_bytes: u64,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    fs::create_dir_all(render_markdown_root(root, stanza))?;
+    let render_root = render_markdown_root(root, stanza);
+    fs::create_dir_all(&render_root)?;
     let contents = parsed
         .renders(toc::BUCKET)
         .then(|| toc::document(&parsed.tree, &parsed.trashed, stanza))
@@ -596,7 +594,8 @@ pub fn render_notion(
                 stanza,
             ));
             out.push_str(&body);
-            let (md_path, rows) = file_document(root, stanza, markdown_uuid, &doc.rows, &out)?;
+            let md_path = doc_md_path(&render_root, markdown_uuid);
+            let (md_path, rows) = file_document(root, md_path, &doc.rows, &out)?;
 
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: markdown_uuid.clone(),
@@ -649,7 +648,8 @@ pub fn render_notion(
         let emails = inputs.lookup("users", &parsed.user_emails);
         let author_of = |c: &Value| comment_author_handle(c, emails);
         let body = thread_markdown(stanza, page_title, members, anchor, &author_of);
-        let (md_path, rows) = file_document(root, stanza, markdown_uuid, &doc.rows, &body)?;
+        let md_path = doc_md_path(&render_root, markdown_uuid);
+        let (md_path, rows) = file_document(root, md_path, &doc.rows, &body)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
@@ -672,8 +672,8 @@ pub fn render_notion(
         progress.inc(1);
     }
     if let Some(doc) = contents {
-        let (md_path, rows) =
-            file_document(root, stanza, &doc.markdown_uuid, &doc.rows, &doc.markdown)?;
+        let md_path = unindexed_doc_md_path(&render_root, &doc.markdown_uuid);
+        let (md_path, rows) = file_document(root, md_path, &doc.rows, &doc.markdown)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: doc.markdown_uuid,
             source_id: String::new(),
@@ -938,6 +938,14 @@ mod tests {
         assert!(md.contains(toc::TITLE), "{md}");
         assert!(md.contains("[Bridge](/chat/"), "{md}");
         let rel = contents.md_path.strip_prefix(d.path()).unwrap();
+        assert!(
+            rel.starts_with(format!(
+                "notion/render_markdown/{}",
+                datalib_etl::layout::UNINDEXED_DIR
+            )),
+            "free-text search leaves it out: {}",
+            rel.display()
+        );
         assert_eq!(
             contents.rows[0].qmd_path.as_deref(),
             rel.to_str(),

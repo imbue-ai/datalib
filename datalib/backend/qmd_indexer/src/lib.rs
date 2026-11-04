@@ -37,6 +37,15 @@ pub fn mask_for_group(group: &str) -> String {
     format!("{group}/render_markdown/**/*.md")
 }
 
+/// What a group's collection leaves out of [`mask_for_group`]: documents a
+/// renderer filed for the grid alone (`layout::UNINDEXED_DIR`).
+pub fn ignore_for_group(group: &str) -> String {
+    format!(
+        "{group}/render_markdown/{}/**",
+        datalib_runtime::layout::UNINDEXED_DIR
+    )
+}
+
 /// How far along the embedding pass is, as qmd's own `EmbedProgress`
 /// reports it (`third-party/qmd/src/store.ts`).
 ///
@@ -494,7 +503,10 @@ impl Index {
     fn collection_args(&self, groups: &[impl AsRef<str>]) -> Vec<Value> {
         groups
             .iter()
-            .map(|g| json!({ "name": g.as_ref(), "glob": mask_for_group(g.as_ref()) }))
+            .map(|g| {
+                let g = g.as_ref();
+                json!({ "name": g, "glob": mask_for_group(g), "ignore": [ignore_for_group(g)] })
+            })
             .collect()
     }
 
