@@ -117,7 +117,15 @@ The cache directory is `$XDG_CACHE_HOME/datalib/runtime`, else
 `~/.cache/datalib/runtime`, beside qmd's model cache, and carries a
 `CACHEDIR.TAG`. A cache directory rather than the data root, because
 two data roots on one machine then share one copy and the `latchkey` launcher can find it without a data root in
-hand (it looks there after the two sibling candidates).
+hand.
+
+The launcher is a shell script and cannot fetch. After the two sibling
+candidates it looks in the cache for the one directory its
+`runtime.manifest` names. Until a sync or `pull-runtime` has fetched that
+one, which includes the time just after an upgrade, when the cache still
+holds the previous release's tree, it refuses and names the command to
+run. Running the other tree would mean running a different latchkey from
+the one this release pins.
 
 `datalib-step pull-runtime` runs the same path ahead of time and prints
 the tree it resolved, `qmd --version` through it, and the latchkey the
