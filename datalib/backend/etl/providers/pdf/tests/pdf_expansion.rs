@@ -167,11 +167,15 @@ fn entries_nested_into_one_another(depth: usize) -> Vec<u8> {
 }
 
 /// Two layers, which only `lopdf` can decode, so the first is held to measure.
-fn metadata_of_spaces_twice(mib: usize) -> Vec<u8> {
-    pdf(
-        "/Metadata 6 0 R",
+/// A form, because `pdf-inspector` inflates one and only the check bounds it.
+fn form_of_spaces_twice(mib: usize) -> Vec<u8> {
+    pdf_with(
+        "/XObject << /X1 6 0 R >>",
+        "/X1 Do",
+        "",
         &[stream(
-            "/Type /Metadata /Subtype /XML /Filter [/FlateDecode /FlateDecode]",
+            "/Type /XObject /Subtype /Form /BBox [0 0 612 792] \
+             /Filter [/FlateDecode /FlateDecode]",
             &zlib(&inflates_to_spaces(mib)),
         )],
     )
@@ -214,7 +218,7 @@ fn crafted() -> [(&'static str, Vec<u8>, usize); 5] {
         ("one_offset.pdf", entries_at_one_offset(100), 128 * MIB),
         ("nested.pdf", entries_nested_into_one_another(90), 128 * MIB),
         ("metadata.pdf", metadata_of_spaces(3072), 64 * MIB),
-        ("twice.pdf", metadata_of_spaces_twice(3072), 2600 * MIB),
+        ("twice.pdf", form_of_spaces_twice(3072), 2600 * MIB),
         ("dropped.pdf", form_the_loader_drops(3072), 64 * MIB),
     ]
 }
