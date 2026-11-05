@@ -71,7 +71,10 @@ sh_test(
     size = "large",
     srcs = ["check_stage_runtime.sh"],
     data = STAGE_RUNTIME_DATA,
-    env = {"RELEASE_SHELL": "/bin/bash"},
+    env = {
+        "RELEASE_RSYNC": "/usr/bin/rsync",
+        "RELEASE_SHELL": "/bin/bash",
+    },
     target_compatible_with = ["@platforms//os:macos"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

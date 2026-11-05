@@ -4,8 +4,9 @@
 # is not the repo, with a relative <dest> — v0.35.0's job was the first
 # to pass one, and the script's smoke test could not find the node it
 # had just staged. Then checks the asset it produced names the pinned
-# qmd. RELEASE_SHELL picks the bash the script runs under; the macOS
-# variant sets /bin/bash, the 3.2 the mac runner has.
+# qmd. RELEASE_SHELL picks the bash the script runs under and RELEASE_RSYNC
+# the rsync; the macOS variant sets what the mac runner has, /bin/bash (3.2)
+# and /usr/bin/rsync (openrsync), which a laptop's Homebrew rsync would hide.
 
 # --- begin runfiles.bash initialization v3 ---
 # Copy-pasted from the Bazel Bash runfiles library v3.
@@ -36,6 +37,12 @@ case "$(uname -s)-$(uname -m)" in
     *) echo "ERROR: no runtime triple for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
 
+if [[ -n "${RELEASE_RSYNC:-}" ]]; then
+    mkdir -p "$TEST_TMPDIR/tools"
+    ln -s "$RELEASE_RSYNC" "$TEST_TMPDIR/tools/rsync"
+    export PATH="$TEST_TMPDIR/tools:$PATH"
+fi
+
 work="$TEST_TMPDIR/work"
 mkdir -p "$work"
 cd "$work"
@@ -51,6 +58,9 @@ echo "$files"
 # the resolver relies on.
 mkdir unpacked
 tar -xzf "runtime-$triple.tar.gz" -C unpacked
+# Bazel's outputs are read-only, and the app's build signs these files in place.
+read_only="$(find unpacked ! -type l ! -perm -u+w)"
+[[ -z "$read_only" ]] || { echo "ERROR: read-only in the asset:"$'\n'"$read_only" >&2; exit 1; }
 got="$(unpacked/node/bin/node unpacked/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version)"
 echo "$got"
 case "$got" in

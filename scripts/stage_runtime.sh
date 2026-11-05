@@ -155,16 +155,19 @@ fi
 # rsync rather than cp: `-a` keeps the pnpm store's relative symlinks as
 # symlinks (`--no-symlinks` rewrites the tree afterwards, once every
 # prune is done), `--delete` clears whatever a previous stage left
-# behind, and `--chmod` makes the copy writable since Bazel's outputs
-# are read-only and codesign has to rewrite them. `--copy-unsafe-links`
-# is for a runfiles tree, where every package directory is an absolute
-# link into bazel-out: those are copied for real, so the staged tree
-# is one, while bazel-bin's own links are all relative and untouched.
+# behind. `--copy-unsafe-links` is for a runfiles tree, where every
+# package directory is an absolute link into bazel-out: those are
+# copied for real, so the staged tree is one, while bazel-bin's own
+# links are all relative and untouched. The chmod is not rsync's
+# `--chmod` because macOS's own rsync (openrsync, since macOS 15) accepts
+# that and ignores it on a tree; Bazel's outputs are read-only, and
+# the smoke below and codesign both write here.
 stage_tree() { # kind, version, source node_modules dir
     local dest="$runtime_dir/$1/$2/node_modules"
     log "staging $1@$2"
     mkdir -p "$dest"
-    rsync -a --copy-unsafe-links --delete --chmod=Du+wx,Fu+w "$3/" "$dest/"
+    rsync -a --copy-unsafe-links --delete "$3/" "$dest/"
+    chmod -R u+w "$dest"
 }
 
 # Drop a package we deliberately do not ship, and any symlink left
@@ -188,10 +191,12 @@ prune_pkg() { # dest root, store glob
 
 log "staging node"
 mkdir -p "$runtime_dir/node/bin"
-rsync -aL --chmod=u+wx "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+rsync -aL "$bin/datalib/tauri/bundled_node_bin" "$runtime_dir/node/bin/node"
+chmod u+wx "$runtime_dir/node/bin/node"
 # Node's own notice travels with the binary; the release's full set of
 # third-party notices is scripts/third_party_notices.sh's job.
-rsync -aL --chmod=u+w "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
+rsync -aL "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LICENSE"
+chmod u+w "$runtime_dir/node/LICENSE"
 
 stage_tree qmd "$qmd_version" "$bin/third-party/qmd/runtime/node_modules"
 prune_pkg "$runtime_dir/qmd/$qmd_version/node_modules" 'typescript@*'
