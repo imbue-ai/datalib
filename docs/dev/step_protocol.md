@@ -127,6 +127,11 @@ plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and
 anything in the entry's `env` table (which wins over the run-wide values
 on collision).
 
+**Put a temp file where `TMPDIR` says.** In a protected library it names a
+folder inside the library, and your temp files hold what the library holds.
+Your language's temp-file call follows it in Rust and Node. macOS's own
+`mktemp` does not, so in a shell script write `mktemp "$TMPDIR/x.XXXXXX"`.
+
 **Nothing else of the runner's own environment reaches a step but a
 short list** (`datalib_env::inherit_only`): what any program needs to
 run (`HOME`, `TMPDIR`, the locale and time zone, proxy and certificate

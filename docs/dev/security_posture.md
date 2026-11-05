@@ -215,8 +215,16 @@ is not what this section defends, and the desktop app does not use it.
 | The library's files | macOS's guard on a group container, from macOS 15. Before that the app does not offer the folder | A program you said Allow to, and one with Full Disk Access | Full Disk Access measured on macOS 26.7.2. The version comes from Apple's documentation |
 | The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
 | The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
-| Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`: a visible Chromium keeps its `SingletonSocket` in macOS's own temp dir at any `TMPDIR` length (measured up to 94 bytes), and that socket holds no library content. Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. The desktop app's side is `protected_test` plus reading the code |
+| Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
 | An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
+
+**`TMPDIR` only moves what follows it.** Rust's `temp_dir()` and Node's
+`os.tmpdir()` do, and they are what datalib's code and latchkey use. macOS's own
+`mktemp` does not, with or without `-t`, even when it is run outside the app
+(measured on macOS 26), so a custom step's shell script that calls it writes
+outside the folder. Name the path instead: `mktemp "$TMPDIR/x.XXXXXX"`. A
+visible Chromium keeps its `SingletonSocket` in macOS's temp dir at any `TMPDIR`
+length (measured up to 94 bytes), which holds no library content.
 
 ### What is still open
 
