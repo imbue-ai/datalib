@@ -222,6 +222,8 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // Freeing disk runs `datalib-step` on every step, so this root's
   // server has to find it.
   "free-disk-space": { DATALIB_BINARY_DIR: binDir },
+  // Its stand-in for a sender's host is on this machine.
+  "remote-images-load": { DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE: "1" },
 };
 
 // Where a spec holds and releases its tapes, one file per spec, named
@@ -556,6 +558,8 @@ export default defineConfig({
         /dactal-sandbox\.spec\.ts/,
         // The document frame that runs no script; the desktop app is WebKit.
         /document-sandbox\.spec\.ts/,
+        // Which requests are a link from another site is the browser's say.
+        /links-from-elsewhere\.spec\.ts/,
         // A chip's clicks in that frame: a right-click's auxclick and the
         // menu drawn over the frame.
         /chip-menu\.spec\.ts/,
