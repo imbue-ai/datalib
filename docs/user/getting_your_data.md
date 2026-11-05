@@ -295,7 +295,9 @@ mirror.
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
 Mirrors your address book. Fastmail has a section of its own:
-[Fastmail Contacts](#fastmail-contacts).
+[Fastmail Contacts](#fastmail-contacts). This source is a copy of what
+the address book says; saying that several handles are one person is
+[the contacts app](contacts_app.md), which needs no source.
 
 - **A `.vcf` export.** Most address books export vCards; point
   `vcf.path` at a directory of them. No credentials. Each file is an
@@ -418,6 +420,8 @@ nothing else; `calendars` narrows it to the calendars you name.
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
 latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
+Saying that several handles are one person is [the contacts
+app](contacts_app.md), which needs no source.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App

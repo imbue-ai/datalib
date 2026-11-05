@@ -28,6 +28,10 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 /// differently, so it moves nothing.
 pub const RULES_VERSION: u32 = 2;
 
+/// How a handle is written, for a refusal to say.
+pub const SPELLING: &str = "a handle is <kind>:<value>, such as email:riker@enterprise.org, \
+                            tel:+12025550101 or slack:T01/U02";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum HandleKind {

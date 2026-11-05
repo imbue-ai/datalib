@@ -6,7 +6,7 @@
 # `function`: what it does within its group. Its id is composed as
 # `<group>/<function>` and never written; that id is the directory the
 # step writes, and what another step's `inputs` name. An `[[applets]]`
-# entry is a server the app spawns, filed under a group for display.
+# entry is a server the app runs, filed under a group for display.
 #
 # Every step names the program it runs in `command` (see
 # docs/dev/step_protocol.md); the runner writes `params` to an
@@ -297,7 +297,7 @@ inputs = ["unified_document_index/qmd_aggregator"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the
-# http gateway spawns on demand, contributing both card components and
+# http gateway starts with itself, contributing both card components and
 # the endpoints behind them. It declares no inputs because it is never
 # scheduled — it reads what the steps above already wrote.
 #
@@ -339,3 +339,10 @@ workspace = "Slack"
 group = "unified_document_index"
 id = "unified_document_index"
 command = "datalib-applet unified_document_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
