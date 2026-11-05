@@ -231,7 +231,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // fields a successful one does — the defaults populated as far as
     // the run got. Mirrors the JMAP path.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
-    run.finish(&result, &summary_for_bookkeeping).await;
+    run.finish(found.ended_early(), &result, &summary_for_bookkeeping)
+        .await;
     result
 }
 

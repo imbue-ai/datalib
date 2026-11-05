@@ -254,7 +254,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         .counts
         .forbidden_retry_recoveries
         .load(Ordering::Relaxed) as u64;
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result?;
     Ok(summary)
 }

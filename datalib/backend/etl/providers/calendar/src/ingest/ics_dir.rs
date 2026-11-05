@@ -17,7 +17,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
-use super::FetchSummary;
+use super::{noting_how_it_ended, FetchSummary};
 use crate::ical;
 
 pub struct FetchOptions {
@@ -34,7 +34,10 @@ const ACCOUNT_ID: &str = "ics";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
-    run_problems::collecting(&pool, &stop, |found| read_folder(opts, found)).await
+    run_problems::collecting(&pool, &stop, |found| {
+        noting_how_it_ended(found.clone(), read_folder(opts, found))
+    })
+    .await
 }
 
 async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {

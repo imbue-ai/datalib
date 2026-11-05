@@ -31,7 +31,7 @@ use super::db::RawDb;
 use super::schema_raw::{
     calendly_uuid, AccountRow, CalendarRow, CalendlyEventRow, CalendlyInviteesRow,
 };
-use super::{FetchSummary, Window};
+use super::{noting_how_it_ended, FetchSummary, Window};
 
 pub const HTTP_SERVICE: HttpService = HttpService::Calendly;
 pub const BASE: &str = "https://api.calendly.com";
@@ -55,7 +55,10 @@ pub struct FetchOptions {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
     let sealer = opts.sealer.clone();
-    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| sync(opts, found)).await
+    run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
+        noting_how_it_ended(found.clone(), sync(opts, found))
+    })
+    .await
 }
 
 /// The signed-in user, as `/users/me` describes them.

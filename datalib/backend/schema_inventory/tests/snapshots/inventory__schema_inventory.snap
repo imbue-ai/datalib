@@ -1444,6 +1444,10 @@ coverage
     scope
     lo
     hi
+coverage_checked
+    scope
+    checked_at_utc
+    tz_offset
 involving
     id
     payload

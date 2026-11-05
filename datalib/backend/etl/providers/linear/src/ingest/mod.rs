@@ -550,7 +550,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
         }
     };
     s.requests = api.requests();
-    run.finish(&result, &s).await;
+    run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
 }
 
