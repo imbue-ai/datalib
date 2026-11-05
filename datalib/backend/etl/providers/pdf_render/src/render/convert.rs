@@ -11,7 +11,7 @@ use std::path::Path;
 /// v5: ids are minted through `datalib_id` under `Content`, and carry
 ///     the document's own date in their leading bits (`datalib_id`'s
 ///     v8 layout). Every uuid moved; the bucket key is now the blake3.
-pub const RENDER_VERSION: u32 = 8;
+pub const RENDER_VERSION: u32 = 9;
 
 /// One page of converted text.
 pub struct Page {
@@ -35,6 +35,13 @@ impl Page {
     }
 }
 
+/// One document, converted.
+pub struct Converted {
+    pub pages: Vec<Page>,
+    /// What a person is told when part of the file could not be read.
+    pub absent: Option<String>,
+}
+
 /// What we write in place of a page we could not read.
 pub fn note_for_page(number: u32) -> String {
     format!(
@@ -43,7 +50,9 @@ pub fn note_for_page(number: u32) -> String {
 }
 
 /// `bytes` are the PDF; `path` is where they were read, for messages.
-pub fn convert(bytes: &[u8], path: &Path) -> Result<Vec<Page>> {
+pub fn convert(bytes: &[u8], path: &Path) -> Result<Converted> {
+    let checked = datalib_etl_pdf::ingest::expansion::check(bytes)?;
+
     let md = pdf_inspector::MarkdownOptions {
         // We split on these markers to build per-page sections, so they
         // are required, not cosmetic.
@@ -71,7 +80,10 @@ pub fn convert(bytes: &[u8], path: &Path) -> Result<Vec<Page>> {
     strip_repeated_chrome(&mut pages);
     pages.retain(|p| !p.text.trim().is_empty());
     note_unreadable_pages(&mut pages, res.page_count, saw_page_markers(&md_text));
-    Ok(pages)
+    Ok(Converted {
+        pages,
+        absent: checked.absent(),
+    })
 }
 
 fn saw_page_markers(md: &str) -> bool {

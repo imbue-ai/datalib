@@ -3,6 +3,7 @@
 
 pub mod content_hash;
 pub mod db;
+pub mod expansion;
 pub mod identity;
 pub mod schema_raw;
 
@@ -255,7 +256,17 @@ fn is_pdf(p: &Path) -> bool {
 
 /// Classify one PDF and read its metadata, and name it by the hash of the
 /// bytes.
-fn identify(_path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
+fn identify(path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
+    identify_within(path, bytes, &expansion::LIMITS)
+}
+
+fn identify_within(
+    _path: &Path,
+    bytes: &[u8],
+    limits: &expansion::Limits,
+) -> Result<PdfDocumentRow> {
+    let checked = expansion::check_within(bytes, limits)?;
+
     // Detect-only: we want the classification and page census here, not
     // the markdown. Conversion is the render step's job and happens
     // against a different cache key.
@@ -269,6 +280,9 @@ fn identify(_path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
     // want the same `lopdf::Document`, and building it is the expensive
     // half of each.
     let (ident, content_blake3) = identity::extract_with_content_hash(bytes);
+    // A hash over part of a document could agree with a different one. Say
+    // nothing rather than something false, as for an encrypted one.
+    let content_blake3 = content_blake3.filter(|_| checked.object_streams_left_out == 0);
 
     let kind = match det.pdf_type {
         pdf_inspector::PdfType::TextBased => PdfKind::TextBased,
@@ -442,6 +456,69 @@ mod tests {
             2
         );
         db.pool().close().await;
+    }
+
+    fn refuses_past_a_kilobyte(path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
+        identify_within(
+            path,
+            bytes,
+            &expansion::Limits {
+                stream_bytes: 1024,
+                ..expansion::LIMITS
+            },
+        )
+    }
+
+    /// A crafted file is that file's problem: the rest of the tree syncs, and
+    /// a person is told which file and why.
+    #[tokio::test]
+    async fn a_pdf_that_expands_too_far_costs_only_that_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, raw) = (dir.path().join("logs"), dir.path().join("raw"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&raw).unwrap();
+        std::fs::write(root.join("bridge.pdf"), doc("warp core", "Log", "01", None)).unwrap();
+        std::fs::write(
+            root.join("crafted.pdf"),
+            doc(&"warp core ".repeat(200), "Log", "02", None),
+        )
+        .unwrap();
+        let db = RawDb::open(&db_path_for(&raw)).await.unwrap();
+
+        let summary = scan(&root, &raw, &db, refuses_past_a_kilobyte).await;
+        assert_eq!((summary.documents, summary.errors), (1, 1));
+        assert_eq!(
+            column(&db, "SELECT id FROM pdf_paths").await,
+            ["bridge.pdf"]
+        );
+        let problems: Vec<(String, String)> =
+            sqlx::query_as("SELECT scope_key, sample FROM problems")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].0, "record:pdf_paths:crafted.pdf");
+        assert!(
+            problems[0].1.contains("more than 1024 bytes"),
+            "{}",
+            problems[0].1
+        );
+        db.pool().close().await;
+    }
+
+    /// A document with an object stream the loaders leave out is read, and
+    /// keeps no content hash, which would cover only part of it.
+    #[test]
+    fn an_object_stream_the_loaders_leave_out_costs_the_content_hash_alone() {
+        let whole = expansion::tests::with_object_stream(4096);
+        let row = identify(Path::new("whole.pdf"), &whole).unwrap();
+        assert!(row.content_blake3.is_some());
+
+        let over = expansion::EXPANDED_OBJECT_STREAM_BYTES + 1;
+        let part = expansion::tests::with_object_stream(over);
+        let row = identify(Path::new("part.pdf"), &part).unwrap();
+        assert_eq!(row.page_count, 1);
+        assert_eq!(row.content_blake3, None);
     }
 
     #[test]

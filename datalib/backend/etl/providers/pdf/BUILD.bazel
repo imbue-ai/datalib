@@ -28,6 +28,7 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:flate2",
         "@datalib_crates//:lopdf",
         "@datalib_crates//:pdf-inspector",
         "@datalib_crates//:sqlx",
@@ -40,6 +41,26 @@ rust_test(
     crate = ":datalib_etl_pdf",
     edition = "2021",
     deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Its own binary because it counts allocations, and a test binary's tests
+# share a process. Inflates about a gigabyte, so no other test runs beside it.
+rust_test(
+    name = "pdf_expansion",
+    size = "medium",
+    srcs = ["tests/pdf_expansion.rs"],
+    edition = "2021",
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_etl_pdf",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/files:datalib_etl_files",
+        "//datalib/backend/etl/providers/pdf_render:datalib_etl_pdf_render",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

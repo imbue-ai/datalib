@@ -215,7 +215,7 @@ fn read_document(t: &RenderTarget) -> Result<Option<Vec<u8>>> {
 
 /// What a document's page holds.
 enum Content {
-    Pages(Vec<convert::Page>),
+    Pages(convert::Converted),
     /// Its file no longer holds the bytes it is named by, so there is
     /// nothing to convert. The page says so, and so does a problem row,
     /// until the next sync reads the file as it is now.
@@ -266,10 +266,26 @@ fn render_one(
         grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
     let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
     let (page_rows, problems) = match content {
-        Content::Pages(pages) => {
-            let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
+        Content::Pages(converted) => {
+            let (pages_md, page_rows) = pages_markdown(&title, &converted.pages, page_uuid);
             body.push_str(&pages_md);
-            (page_rows, Vec::new())
+            // A warning: the document is here, and short of what the file holds.
+            let problems = converted.absent.map(|said| {
+                ProblemRow::new(
+                    source_id,
+                    Stage::Render,
+                    Scope::Markdown(doc_uuid),
+                    Some(doc_uuid),
+                    Outcome::Nulled,
+                    Problem::explained(
+                        Reason::DeliberateLoss,
+                        None,
+                        &format!("{}: {said}", t.rel_path),
+                    ),
+                    Some(RENDER_VERSION),
+                )
+            });
+            (page_rows, problems.into_iter().collect())
         }
         Content::FileChanged => {
             body.push_str(&format!(

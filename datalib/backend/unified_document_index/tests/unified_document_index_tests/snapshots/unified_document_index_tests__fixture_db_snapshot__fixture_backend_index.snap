@@ -1212,7 +1212,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/06/00000000-0000-8a13-8568-fa91d9598906.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "tng_pdfs",
       "title": "Hull Integrity Survey"
     },
@@ -1668,7 +1668,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/91/00000000-0000-8ccc-b967-791c3561a091.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "tng_pdfs",
       "title": "warp_core_manual.pdf"
     },
@@ -2016,7 +2016,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/7d/0b50f5ba-0c60-856f-8ff1-ea60e22c037d.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
     },
@@ -2028,7 +2028,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/21/0b50f5ba-0c60-8e25-aebf-920f19049521.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
     },
