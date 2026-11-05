@@ -3,8 +3,10 @@
 //! handle, what its popover needs to create or link a contact, the
 //! photo a person put on one, the draft a contact is edited through
 //! on its card, the table of every contact the app's Browse opens, and
-//! the review of what agents proposed (`review.rs`).
+//! the review of what agents proposed (`review.rs`). `GET /` lists every
+//! route (`api.rs`).
 
+mod api;
 mod review;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -15,10 +17,10 @@ use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, State},
+    handler::Handler,
     http::{header, HeaderMap, StatusCode},
     middleware,
     response::{IntoResponse, Json, Response},
-    routing::{get, post},
     Router,
 };
 use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
@@ -28,6 +30,8 @@ use datalib_contacts::{ContactKind, Store};
 use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
+
+use api::{Api, RouteKind, Verb};
 
 const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 const SEARCH_LIMIT: u32 = 20;
@@ -75,36 +79,156 @@ pub fn serve(port: u16) -> Result<()> {
 /// Every route, over an open store; `serve` puts the gateway's check in
 /// front of them.
 fn routes(store: Arc<Store>) -> Router {
-    Router::new()
-        .route("/resolve", post(resolve))
-        .route("/search", get(search))
-        .route("/contacts", get(list).post(create))
-        .route("/contact/{contact_id}", get(contact).delete(delete))
-        .route("/merge", post(merge))
-        .route("/link", post(link))
-        .route("/unlink", post(unlink))
-        .route("/stopped_working", post(stopped_working))
-        .route("/rename", post(rename))
-        .route("/me", post(set_me))
-        .route("/contact/{contact_id}/edit", get(edit_of))
-        .route(
-            "/contact/{contact_id}/draft",
-            post(open_draft)
-                .get(draft_view)
-                .put(autosave)
-                .delete(discard),
+    api().into_router().with_state(store)
+}
+
+/// What `datalib-applet datalib_contacts --help` prints after its flags.
+pub fn routes_help() -> String {
+    api::help_text(api().routes())
+}
+
+fn api() -> Api {
+    use RouteKind::{Person, Read};
+    use Verb::{Delete, Get, Post, Put};
+    let one = "/contact/{contact_id}";
+    let its_draft = "/contact/{contact_id}/draft";
+    let its_photo = "/photo/{contact_id}";
+    let api = Api::default()
+        .add(
+            Post,
+            "/resolve",
+            Read,
+            "`{handles}`: `{resolved: {<handle>: contact}}`, each handle's contact; a handle \
+             nobody holds is absent",
+            resolve,
         )
-        .route("/contact/{contact_id}/draft/save", post(save))
-        .route(
-            "/photo/{contact_id}",
-            get(photo)
-                .put(put_photo)
-                .delete(delete_photo)
-                .layer(DefaultBodyLimit::max(PHOTO_BODY_LIMIT)),
+        .add(
+            Get,
+            "/search",
+            Read,
+            "`?q=`: the contacts whose name contains it",
+            search,
         )
-        .route("/health", get(|| async { Json(json!({"ok": true})) }))
-        .merge(review::routes())
-        .with_state(store)
+        .add(
+            Get,
+            "/contacts",
+            Read,
+            "every contact, by name, as a typed table (`columns`, `rows`)",
+            list,
+        )
+        .add(
+            Post,
+            "/contacts",
+            Person,
+            "`{name, kind?, handles?}`: make a contact, linking the handles at once",
+            create,
+        )
+        .add(
+            Get,
+            one,
+            Read,
+            "one contact, working handles first; a merged-away id answers as its survivor",
+            contact,
+        )
+        .add(
+            Delete,
+            one,
+            Person,
+            "delete the contact and every contact merged into it",
+            delete,
+        )
+        .add(
+            Post,
+            "/merge",
+            Person,
+            "`{from, into}`: `into` survives and takes what `from` held",
+            merge,
+        )
+        .add(
+            Post,
+            "/link",
+            Person,
+            "`{handle, contact_id}`: link a handle to a contact, as the person's own link",
+            link,
+        )
+        .add(
+            Post,
+            "/unlink",
+            Person,
+            "`{handle}`: take a handle off its contact",
+            unlink,
+        )
+        .add(
+            Post,
+            "/stopped_working",
+            Person,
+            "`{handle, by}`: the date by which it stopped working; `by: null`, it works again",
+            stopped_working,
+        )
+        .add(
+            Post,
+            "/rename",
+            Person,
+            "`{contact_id, name}`: rename a contact at once",
+            rename,
+        )
+        .add(
+            Post,
+            "/me",
+            Person,
+            "`{contact_id, me}`: say the contact is the person whose library this is, or stop",
+            set_me,
+        )
+        .add(
+            Get,
+            "/contact/{contact_id}/edit",
+            Read,
+            "the contact's name, note and fields, as published",
+            edit_of,
+        )
+        .add(
+            Post,
+            its_draft,
+            Person,
+            "open the draft the contact's card edits, cut now if there is none",
+            open_draft,
+        )
+        .add(Get, its_draft, Read, "the contact's draft", draft_view)
+        .add(
+            Put,
+            its_draft,
+            Person,
+            "autosave the whole edit onto the draft, uncommitted",
+            autosave,
+        )
+        .add(Delete, its_draft, Person, "discard the draft", discard)
+        .add(
+            Post,
+            "/contact/{contact_id}/draft/save",
+            Person,
+            "`{seen}`, the published commit the card last showed: publish the draft, or \
+             answer `stale` and save nothing",
+            save,
+        )
+        .add(Get, its_photo, Read, "the contact's photo, as bytes", photo)
+        .add(
+            Put,
+            its_photo,
+            Person,
+            "the body is the image, its `Content-Type` png, jpeg, gif or webp, at most 4 MB",
+            put_photo.layer(DefaultBodyLimit::max(PHOTO_BODY_LIMIT)),
+        )
+        .add(
+            Delete,
+            its_photo,
+            Person,
+            "drop the contact's photo",
+            delete_photo,
+        )
+        .add(Get, "/health", Read, "`{ok: true}`", || async {
+            Json(json!({"ok": true}))
+        });
+    review::add_routes(api)
 }
 
 type AppState = State<Arc<Store>>;
@@ -150,9 +274,12 @@ fn refused(e: anyhow::Error) -> ApiError {
     }
 }
 
+fn not_a_handle(s: &str) -> String {
+    format!("{s:?} is not a handle: {}", datalib_handle::SPELLING)
+}
+
 fn handle(s: &str) -> Result<Handle, ApiError> {
-    Handle::parse(s)
-        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, format!("{s:?} is not a handle")))
+    Handle::parse(s).ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, not_a_handle(s)))
 }
 
 #[derive(Deserialize)]
@@ -600,6 +727,198 @@ mod tests {
             .await
             .unwrap();
         (status, serde_json::from_slice(&body).unwrap_or_default())
+    }
+
+    fn listed<'a>(about: &'a serde_json::Value, method: &str, path: &str) -> &'a serde_json::Value {
+        about["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["method"] == method && r["path"] == path)
+            .unwrap_or_else(|| panic!("{method} {path} is not listed: {about}"))
+    }
+
+    /// An agent with only the running app can learn what it serves, and that
+    /// the route named for its job is not the one to call. The rest of the
+    /// answer comes from the same calls that build the router.
+    #[tokio::test]
+    async fn get_slash_says_what_the_app_serves_and_which_routes_are_a_persons() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let (status, about) = call(&app, "GET", "/", json!(null)).await;
+        assert_eq!(status, StatusCode::OK, "{about}");
+        assert_eq!(listed(&about, "POST", "/proposals")["kind"], "propose");
+        assert_eq!(listed(&about, "POST", "/link")["kind"], "person");
+        assert_eq!(listed(&about, "POST", "/review/confirm")["kind"], "person");
+        assert_eq!(listed(&about, "GET", "/review/items")["kind"], "read");
+        assert_eq!(listed(&about, "POST", "/contacts")["kind"], "person");
+        assert_eq!(listed(&about, "GET", "/contacts")["kind"], "read");
+        for kind in ["read", "propose", "person"] {
+            assert!(about["kinds"][kind].is_string(), "{about}");
+        }
+        for r in about["routes"].as_array().unwrap() {
+            if r["method"] == "GET" {
+                assert_eq!(r["kind"], "read", "a GET changes nothing: {r}");
+            }
+        }
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
+
+    /// What the list says the kinds mean: a `person` route's link never
+    /// waits for review and names no agent, and a `propose` route's does.
+    #[tokio::test]
+    async fn a_link_through_link_skips_review_and_one_through_proposals_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let (_, made) = call(&app, "POST", "/contacts", json!({"name": "Deanna Troi"})).await;
+        let (status, body) = call(
+            &app,
+            "POST",
+            "/link",
+            json!({"handle": "email:troi@enterprise.org", "contact_id": made["contact_id"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, review) = call(&app, "GET", "/review/items", json!(null)).await;
+        assert_eq!(review["items"], json!([]), "nothing waits on a person");
+
+        let (_, got) = call(
+            &app,
+            "POST",
+            "/proposals",
+            json!({"agent": "claude-test", "contacts": [{
+                "name": "Will Riker", "handles": ["email:riker@enterprise.org"],
+            }]}),
+        )
+        .await;
+        assert_eq!(got["linked"], 1, "{got}");
+        let (_, review) = call(&app, "GET", "/review/items", json!(null)).await;
+        let link = &review["items"][0]["links"][0];
+        assert_eq!(link["linked_how"], "agent", "{review}");
+        assert_eq!(link["agent"], "claude-test", "{review}");
+        assert_eq!(link["reviewed_at_utc"], json!(null), "{review}");
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
+
+    /// Search takes a bare address and these routes do not, so each refusal
+    /// says how to spell one.
+    #[tokio::test]
+    async fn a_bare_address_is_refused_with_how_to_spell_a_handle() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+
+        let (_, made) = call(&app, "POST", "/contacts", json!({"name": "Deanna Troi"})).await;
+        let (status, err) = call(
+            &app,
+            "POST",
+            "/link",
+            json!({"handle": "troi@enterprise.org", "contact_id": made["contact_id"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{err}");
+        assert!(err["error"].as_str().unwrap().contains("email:"), "{err}");
+
+        let (status, got) = call(
+            &app,
+            "POST",
+            "/proposals",
+            json!({"agent": "claude-test", "contacts": [{
+                "name": "Will Riker", "handles": ["riker@enterprise.org"],
+            }]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{got}");
+        assert_eq!(got["skipped"][0]["what"], "riker@enterprise.org", "{got}");
+        assert!(
+            got["skipped"][0]["why"]
+                .as_str()
+                .unwrap()
+                .contains("email:"),
+            "{got}"
+        );
+
+        let (status, err) = call(
+            &app,
+            "POST",
+            "/label",
+            json!({"subjects": ["riker@enterprise.org"], "label": "real", "applies": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{err}");
+        assert!(err["error"].as_str().unwrap().contains("email:"), "{err}");
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
+
+    /// `help people` is the reference for these routes, so a route added
+    /// here has to be added to its table. `{id}` is the table's spelling.
+    #[test]
+    fn every_route_is_in_the_reference_table() {
+        let text = datalib_agent_docs::doc("people").unwrap().text;
+        let rows: Vec<&str> = text.lines().filter(|l| l.starts_with("| ")).collect();
+        let api = api();
+        let mut missing = Vec::new();
+        for r in api.routes() {
+            let path = r.path.replace("{contact_id}", "{id}");
+            let method: &'static str = r.method.into();
+            let named = rows.iter().any(|row| {
+                row.contains(&format!("`{method}"))
+                    && row
+                        .split('`')
+                        .any(|span| span.split(['?', ' ']).any(|word| word == path))
+            });
+            if !named {
+                missing.push(format!("{method} {path}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "not in docs/dev/contacts.md: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn serde_and_strum_agree_on_the_route_vocabulary() {
+        use strum::VariantArray;
+        for k in RouteKind::VARIANTS {
+            let name: &'static str = k.into();
+            assert_eq!(json!(k), json!(name));
+        }
+        for v in [Verb::Get, Verb::Post, Verb::Put, Verb::Delete] {
+            let name: &'static str = v.into();
+            assert_eq!(json!(v), json!(name));
+        }
     }
 
     /// Browse on the contacts app: every contact as a row keyed by its id,

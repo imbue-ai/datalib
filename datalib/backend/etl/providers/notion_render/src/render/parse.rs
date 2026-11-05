@@ -273,21 +273,33 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        db.upsert_pages(&[PageUpsert {
-            id: "p1".into(),
-            last_edited_time: Some("2026-05-21T19:37:00Z".into()),
-            payload: json!({"id": "p1", "object": "page"}).to_string(),
-            ..Default::default()
-        }])
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[PageUpsert {
+                id: "p1".into(),
+                last_edited_time: Some("2026-05-21T19:37:00Z".into()),
+                payload: json!({"id": "p1", "object": "page"}).to_string(),
+                ..Default::default()
+            }],
+        )
         .await
         .unwrap();
-        db.upsert_page_markdown(&[PageMarkdownUpsert {
-            id: "p1".into(),
-            markdown: "# Hello\n".into(),
-            ..Default::default()
-        }])
+        tx.commit().await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_body(
+            &mut tx,
+            &PageMarkdownUpsert {
+                id: "p1".into(),
+                markdown: "# Hello\n".into(),
+                ..Default::default()
+            },
+            &[],
+            true,
+        )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         seal_and_close(db).await;
 
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
@@ -304,14 +316,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        db.upsert_pages(&[PageUpsert {
-            id: "row1".into(),
-            parent_type: Some("data_source_id".into()),
-            payload: json!({"id": "row1"}).to_string(),
-            ..Default::default()
-        }])
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[PageUpsert {
+                id: "row1".into(),
+                parent_type: Some("data_source_id".into()),
+                payload: json!({"id": "row1"}).to_string(),
+                ..Default::default()
+            }],
+        )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         seal_and_close(db).await;
         let parsed = parse_api_dir(&db_file, RawRange::cold()).unwrap();
         assert_eq!(parsed.pages.len(), 1);

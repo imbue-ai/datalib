@@ -2,7 +2,7 @@
 //! tested without a step: a synthetic raw store, a reference renderer, and
 //! random histories of mutations cut into random runs. After every run the
 //! render store must equal one cold render of the raw store as it stands
-//! (`docs/dev/plans/one_mode.md`, §"Testing it without a provider").
+//! (`docs/dev/plans/completed/one_mode.md`, §"Testing it without a provider").
 //!
 //! The only fake here is the provider. The store, the diff scan, the
 //! driver (`render_source`) and the index (`build_grid_index`) are the

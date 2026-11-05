@@ -33,6 +33,44 @@ pub struct Doc {
 
 pub const GETTING_YOUR_DATA: &str = "docs/user/getting_your_data.md";
 
+/// One applet, as `datalib-step help` lists it. `datalib-applet`'s tests
+/// hold this list to its subcommands.
+pub struct Applet {
+    pub name: &'static str,
+    pub does: &'static str,
+    /// The doc that says more, which `datalib-step help <name>` prints.
+    pub topic: &'static str,
+}
+
+pub const APPLETS: &[Applet] = &[
+    Applet {
+        name: "unified_document_index",
+        does: "search, the grid and the documents, and what each source knows about a handle",
+        topic: "applets",
+    },
+    Applet {
+        name: "datalib_contacts",
+        does: "the contacts app: link handles to contacts, label people and senders, and \
+               review what an agent proposed",
+        topic: "contacts-app",
+    },
+    Applet {
+        name: "unified_time_series_index",
+        does: "the time series, and their points over a range",
+        topic: "applets",
+    },
+    Applet {
+        name: "photos",
+        does: "photos and videos: a page of them, one's details, its pictures",
+        topic: "applets",
+    },
+    Applet {
+        name: "slack",
+        does: "one Slack mirror's channels and their threads",
+        topic: "applets",
+    },
+];
+
 pub const DOCS: &[Doc] = &[
     Doc {
         topic: "agent",
@@ -82,6 +120,20 @@ pub const DOCS: &[Doc] = &[
         kind: Kind::Guide,
         about: "the search's query language: keys, people, `me`, free text",
         text: include_str!("../../../../docs/user/searching.md"),
+    },
+    Doc {
+        topic: "applets",
+        path: "docs/user/applets.md",
+        kind: Kind::Guide,
+        about: "the servers the app runs: what each serves, and how to call them",
+        text: include_str!("../../../../docs/user/applets.md"),
+    },
+    Doc {
+        topic: "contacts-app",
+        path: "docs/user/contacts_app.md",
+        kind: Kind::Guide,
+        about: "who a handle is: finding handles, proposing links and labels to a person",
+        text: include_str!("../../../../docs/user/contacts_app.md"),
     },
     Doc {
         topic: "step-protocol",
@@ -136,8 +188,16 @@ pub const DOCS: &[Doc] = &[
         topic: "people",
         path: "docs/dev/contacts.md",
         kind: Kind::Reference,
-        about: "who a handle is: contacts, and how an agent proposes them",
+        about: "how handles, source contacts and the contacts app fit together, every route \
+                and table",
         text: include_str!("../../../../docs/dev/contacts.md"),
+    },
+    Doc {
+        topic: "writing-applets",
+        path: "docs/dev/applets.md",
+        kind: Kind::Reference,
+        about: "writing an applet of your own: the contract its command honours",
+        text: include_str!("../../../../docs/dev/applets.md"),
     },
     Doc {
         topic: "dag-example",

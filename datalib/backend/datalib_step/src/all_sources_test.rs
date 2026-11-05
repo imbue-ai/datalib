@@ -128,6 +128,10 @@ fn generate() -> String {
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
+         # The contacts app: your own record of who a handle is, which the person\n\
+         # chips and search read. `datalib-step help contacts-app`.\n\
+         [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"datalib_contacts\"\n\
+         command = \"datalib-applet datalib_contacts\"\n\n\
          # The time-series index reads every source's time series, without copying\n\
          # the points, for the charts.\n\
          [[groups]]\nid = \"{TIME_SERIES_INDEX}\"\nname = \"Time Series Index\"\n\n\

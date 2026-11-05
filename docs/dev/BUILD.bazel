@@ -2,6 +2,7 @@
 # that its variable table and the runner agree. It and the references
 # below are compiled into `datalib-step help` (//datalib/backend/agent_docs).
 exports_files([
+    "applets.md",
     "config_model.md",
     "contacts.md",
     "doltlite.md",

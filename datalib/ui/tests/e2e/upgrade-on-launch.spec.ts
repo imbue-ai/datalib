@@ -1,4 +1,4 @@
-// What a launch on an upgraded root shows (docs/dev/plans/upgrade_on_launch.md):
+// What a launch on an upgraded root shows (dag/README.md §"Upgrading a root"):
 // the app as usual with a pill in the toolbar while every step is asked to
 // migrate, then the offer to re-render, and the pill again for a source
 // the pass could not update. The server's side — which steps are asked, the pass before

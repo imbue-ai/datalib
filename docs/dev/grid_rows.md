@@ -11,8 +11,7 @@ The index holds one more table the grid does not read: `problems`,
 every source's render-store `problems` copied in whole by `grid_index`
 and served by the applet at `/problems`, which filters, sorts, groups
 (`/problems/groups`) and pages the way `/search` does, through the keys
-declared on `ProblemRow` — see
-[`plans/problem_visibility.md`](plans/problem_visibility.md).
+declared on `ProblemRow`.
 
 ## Why a union table
 

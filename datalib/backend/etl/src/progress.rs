@@ -134,21 +134,6 @@ impl RunBar {
         }
     }
 
-    /// Raise the total to `at_least` if it is not already there. For a
-    /// phase whose size is one number repeated or refined as it goes,
-    /// where adding each reading would count the same work twice.
-    pub fn expect_at_least(&self, at_least: u64) {
-        if self
-            .announced
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
-                (at_least > cur).then_some(at_least)
-            })
-            .is_ok()
-        {
-            self.bar.set_length(Some(at_least));
-        }
-    }
-
     /// What has been announced so far, so a phase can raise the total to
     /// "everything before me, plus my own size".
     pub fn announced(&self) -> u64 {

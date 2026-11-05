@@ -533,9 +533,7 @@ The fetch-stage rows are the download side's; the rule for writing
 one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
 and how they travel is [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
 
-The design and what is still open are
-[`plans/problem_visibility.md`](plans/problem_visibility.md); the
-audit that produced it is
+The audit that produced them is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
 Several of the rules below are phrased after the `data-pipeline-builder`
@@ -1041,7 +1039,7 @@ For these `created_at` is **null**, and `before:`/`after:` exclude the row — t
 
 - [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
   — the audit and retrofit plan for §4.
-- [`plans/one_mode.md`](plans/one_mode.md) — the rule every step's
+- [`plans/completed/one_mode.md`](plans/completed/one_mode.md) — the rule every step's
   writes follow, of which §5's sweep is the render-side half.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category
   has to be written down to mean anything.

@@ -244,7 +244,8 @@ desktop app's protected libraries, which each have a store of their own
 (`datalib/tauri/README.md`, "A protected library"). To clear one, point
 `LATCHKEY_DIRECTORY` at its `system/latchkey` and
 `LATCHKEY_KEYRING_SERVICE_NAME` at its keychain item; macOS first asks
-whether your terminal may open the protected folder. Latchkey's browser keeps no
+whether your terminal may open the protected folder, unless the terminal
+has Full Disk Access. Latchkey's browser keeps no
 profile of its own, so the cookies go with that file. It leaves
 `config.json` (the browser path and the services the wizard
 registered), `plugins/` and the keychain key; to test those first-run

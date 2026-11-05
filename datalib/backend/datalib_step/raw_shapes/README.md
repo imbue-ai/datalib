@@ -7,7 +7,7 @@ build left in people's data roots.
 
 `migrate.rs`'s `every_recorded_raw_shape_migrates_to_this_build` builds a
 store from each recorded shape, puts one made-up row in every table, and
-migrates it the way a launch does (`docs/dev/plans/upgrade_on_launch.md`).
+migrates it the way a launch does (`dag/README.md` §"Upgrading a root").
 The row matters: an open rebuilds an empty table whatever shape it is
 in, so only a table with something in it shows a missing rung. The test
 fails, naming the release and the source type, when a change to a raw

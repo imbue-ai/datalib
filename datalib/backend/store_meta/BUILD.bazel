@@ -5,7 +5,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # write it — the ingest framework for raw, blob and render stores, the
 # app server for its three, the run store for itself — and any reader
 # can read it without linking an owner. See src/lib.rs and
-# docs/dev/plans/schema_migrations.md §3.1.
+# docs/dev/plans/completed/schema_migrations.md §3.1.
 rust_library(
     name = "datalib_store_meta",
     srcs = glob(["src/**/*.rs"]),
