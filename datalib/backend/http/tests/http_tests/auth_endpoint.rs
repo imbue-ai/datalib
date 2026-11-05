@@ -455,11 +455,112 @@ async fn a_request_another_page_made_is_refused_whatever_it_carries() {
         ("GET", "/", "cross-site", "navigate"),
         ("GET", "/some/card", "same-site", "navigate"),
         ("GET", "/api/health", "none", "navigate"),
+        ("GET", "/api/health", "same-origin", "navigate"),
     ] {
         assert_eq!(
             status(&app, req(method, path, site, mode)).await,
             StatusCode::OK,
             "{method} {path} from {site} ({mode})"
+        );
+    }
+}
+
+/// A link on any web page, or a frame on another port, could send the
+/// browser to a route with the session cookie attached, and `GET
+/// /api/remote_media` then fetched and kept a URL of the page's choosing.
+/// The router's named routes answer only this site now; what stays open is
+/// what a link is for: a page of the app, a document kept as data, and the
+/// agent guides.
+#[tokio::test]
+async fn a_link_from_another_site_opens_a_page_and_reaches_no_route() {
+    let (app, _) = app().await;
+    let launch = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/?token={TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = session_cookie(&set_cookies(&launch)[0]);
+    let navigate = |method: &str, path: &str, site: &str| {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::COOKIE, &cookie)
+            .header("sec-fetch-site", site)
+            .header("sec-fetch-mode", "navigate")
+            .body(Body::empty())
+            .unwrap()
+    };
+    for path in [
+        "/api/remote_media?url=https://risa.example/a.png&source=mail",
+        "/api/packages",
+        "/api/latchkey/slack",
+        "/api/config",
+        "/api/health",
+        "/api/sync/stream",
+        "/applet/unified_document_index/search?q=",
+        "/applet/datalib_contacts",
+        "/applet/datalib_contacts/",
+        "/metrics",
+        "/modules/abc",
+    ] {
+        for site in ["cross-site", "same-site"] {
+            assert_eq!(
+                status(&app, navigate("GET", path, site)).await,
+                StatusCode::FORBIDDEN,
+                "GET {path} from {site}"
+            );
+        }
+        assert_eq!(
+            status(&app, navigate("HEAD", path, "cross-site")).await,
+            StatusCode::FORBIDDEN,
+            "HEAD {path}"
+        );
+    }
+
+    // The token proves no more here than the cookie does: a query string
+    // is something the other site wrote.
+    assert_eq!(
+        status(
+            &app,
+            navigate("GET", &format!("/api/config?token={TOKEN}"), "cross-site")
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+
+    for path in ["/", "/chat/some-document", "/some/card"] {
+        assert_eq!(
+            status(&app, navigate("GET", path, "cross-site")).await,
+            StatusCode::OK,
+            "{path} is a page of the app"
+        );
+    }
+    assert_eq!(
+        status(&app, navigate("GET", "/agent/cards.md", "cross-site")).await,
+        StatusCode::OK
+    );
+    // Reached the route, which knows no such group; the gate did not refuse it.
+    assert_eq!(
+        status(
+            &app,
+            navigate("GET", "/data/mail/ingest/blob/a.html", "cross-site")
+        )
+        .await,
+        StatusCode::NOT_FOUND,
+        "a document kept as data runs sandboxed, and one can link another"
+    );
+
+    // The app's own links, and a URL typed in the address bar, still open
+    // the API in a tab.
+    for site in ["same-origin", "none"] {
+        assert_eq!(
+            status(&app, navigate("GET", "/api/config", site)).await,
+            StatusCode::OK,
+            "from {site}"
         );
     }
 }

@@ -53,6 +53,11 @@ names! { BUILT_IN_SOURCE_KEYS:
     SIGNAL_BACKUP_PASSPHRASE,
 }
 
+/// Set by the desktop app on the server of a library in the protected
+/// folder, whose latchkey store a person's terminal cannot reach. Children
+/// are not handed it.
+pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
+
 /// Names of more variables every child is handed, comma-separated: for a
 /// custom step or applet that reads one of its own, or a test harness.
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";

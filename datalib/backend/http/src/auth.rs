@@ -28,7 +28,9 @@
 //!
 //! A cookie is a credential the browser attaches by itself, so a page on
 //! the same *site* — another port of `127.0.0.1`, another app of a Studio
-//! workspace — could make it send one. [`fetch_policy`] refuses those.
+//! workspace — could make it send one, and any page at all can send it by
+//! navigating. [`fetch_policy`] refuses what another page sends from where
+//! it sits, and [`only_from_this_site`] keeps its links off the named routes.
 //!
 //! Who may frame the app is `embed::FrameAncestors`; nothing here trusts a
 //! proxy's word in place of the token.
@@ -88,21 +90,55 @@ pub(crate) enum FetchVerdict {
 /// credential check.
 ///
 /// 1. A navigation — `GET` or `HEAD` with `Sec-Fetch-Mode: navigate`,
-///    top-level or into a frame — is allowed from anywhere, so a link, or
-///    Studio's frame, opens the app. That rests on no `GET` route having a
-///    side effect, and on every document served as data carrying its
-///    `sandbox` policy.
+///    top-level or into a frame — is let on from anywhere, so a link, or
+///    Studio's frame, opens the app. Whether it may reach what it names is
+///    [`only_from_this_site`]'s to say.
 /// 2. Anything else marked `cross-site` or `same-site` is refused.
 ///    `same-origin` and `none` (typed in the address bar) are not.
 pub(crate) fn fetch_policy(method: &Method, headers: &HeaderMap) -> FetchVerdict {
-    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     let navigation = (*method == Method::GET || *method == Method::HEAD)
-        && header("sec-fetch-mode") == Some("navigate");
-    match header("sec-fetch-site") {
-        _ if navigation => FetchVerdict::Allow,
-        None | Some("same-origin") | Some("none") => FetchVerdict::Allow,
-        Some(_) => FetchVerdict::FromAnotherSite,
+        && fetch_header(headers, "sec-fetch-mode") == Some("navigate");
+    if navigation || !from_another_site(headers) {
+        FetchVerdict::Allow
+    } else {
+        FetchVerdict::FromAnotherSite
     }
+}
+
+fn fetch_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|v| v.to_str().ok())
+}
+
+fn from_another_site(headers: &HeaderMap) -> bool {
+    !matches!(
+        fetch_header(headers, "sec-fetch-site"),
+        None | Some("same-origin") | Some("none")
+    )
+}
+
+/// A navigation a page started, as opposed to one the person asked the
+/// browser for or a client that sends no fetch metadata. Its URL, query
+/// string included, is what that page wrote.
+pub(crate) fn link_a_page_wrote(headers: &HeaderMap) -> bool {
+    fetch_header(headers, "sec-fetch-mode") == Some("navigate")
+        && !matches!(fetch_header(headers, "sec-fetch-site"), None | Some("none"))
+}
+
+/// In front of every route the router names, and not its fallback: a link
+/// from another site may open a page of the app, and nothing more. Some
+/// `GET`s here do more than read (`/api/remote_media` fetches and keeps a
+/// URL, `/api/packages` starts downloads), an applet's `GET` is whatever its
+/// author made it, and a route added later is covered without anyone
+/// remembering to.
+pub async fn only_from_this_site(req: Request<Body>, next: Next) -> Response {
+    if from_another_site(req.headers()) {
+        return forbidden(
+            req.uri().path(),
+            "a link on another site or port led here. Open it from the app, \
+             or paste the address into the address bar",
+        );
+    }
+    next.run(req).await
 }
 
 fn is_url_safe(s: &str) -> bool {
@@ -582,7 +618,8 @@ mod tests {
             (Method::PUT, Some("none"), Some("navigate"), Allow),
             // `curl`, an agent: no fetch metadata at all.
             (Method::POST, None, None, Allow),
-            // A link from anywhere, and Studio's frame, open the app.
+            // A link from anywhere, and Studio's frame, get past this
+            // check; `only_from_this_site` guards the named routes.
             (Method::GET, Some("cross-site"), Some("navigate"), Allow),
             (Method::GET, Some("same-site"), Some("navigate"), Allow),
             (Method::HEAD, Some("cross-site"), Some("navigate"), Allow),

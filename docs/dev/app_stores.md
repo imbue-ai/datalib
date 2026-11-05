@@ -78,6 +78,8 @@
                                                   unpacked build each, by the first 16
                                                   hex digits of the manifest's sha256
                                                   (`packages.md`)
+<data_root>/system/latchkey/                      a protected library's sign-ins, latchkey's
+                                                  own files (`datalib/tauri/README.md`)
 <data_root>/system/library-summary.json           source count, bytes on disk and the last
                                                   sync's end, for the desktop app's list of
                                                   libraries; datalib-http rewrites it when
@@ -189,7 +191,13 @@ document's references may load (`POST /api/remote_media/check`, with
 the document's `markdown_uuid` and source id, since a `document` or
 `source` row covers only what is loaded for it) and renders under the
 answer; and `GET /api/remote_media?url=…&document=…&source=…` refuses
-a URL no row covers before it fetches or serves anything. A covered
+a URL no row covers before it fetches or serves anything. The server
+cannot check which document a URL is in: it does not read render stores,
+and a document's references exist only once the page has parsed its
+markdown. So `document` and `source` are believed from the page's own
+loads and from a client with no fetch metadata, never from a link
+someone wrote, which a `url` or `host` row still covers. A link on
+another site reaches no part of this route (`http/src/auth.rs`). A covered
 URL is fetched once (no cookie or referrer, media types only, a size
 cap, redirects re-judged per hop, private and loopback targets
 refused), its bytes kept at `system/remote_media/<sha256>` and a

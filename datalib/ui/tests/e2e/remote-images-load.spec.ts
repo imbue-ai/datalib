@@ -5,9 +5,11 @@
 // from the banner. Writes the allow store, so it runs on its own root.
 
 import { test, expect, type Page } from "@playwright/test";
+import { createServer } from "node:http";
 import { docBody, EVERY_ROW, SEARCH_ROWS, openRowByUuid } from "./grid-helpers";
 
 declare const Buffer: { from(data: string, encoding: "base64"): Uint8Array };
+declare const process: { env: Record<string, string | undefined> };
 // A 1×1 transparent PNG, standing in for the server's answer: the
 // fixture's hosts resolve to nothing, and what the server does with a
 // URL is the Rust suite's business (http/tests/remote_media.rs).
@@ -29,22 +31,40 @@ function isRemoteHost(url: string): boolean {
   }
 }
 
-/// Opens the fixture's Risa marketing email; returns its markdown uuid.
-async function openMarketingEmail(page: Page): Promise<string> {
+type EmailRow = { uuid: string; kind: string; conversation_name: string; markdown_uuid: string };
+
+async function marketingEmail(page: Page): Promise<EmailRow> {
   const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
-  const { rows } = (await resp.json()) as {
-    rows: { uuid: string; kind: string; conversation_name: string; markdown_uuid: string }[];
-  };
+  const { rows } = (await resp.json()) as { rows: EmailRow[] };
   const email = rows.find(
     (r) => r.kind === "Email" && r.conversation_name === "Your shore leave awaits!",
   );
   expect(email, "the fixture's Risa marketing email").toBeDefined();
+  return email!;
+}
+
+async function marketingEmailUuid(page: Page): Promise<string> {
+  return (await marketingEmail(page)).markdown_uuid;
+}
+
+/// Opens the fixture's Risa marketing email; returns its markdown uuid.
+async function openMarketingEmail(page: Page): Promise<string> {
+  const email = await marketingEmail(page);
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
-  await openRowByUuid(page, email!.uuid);
+  await openRowByUuid(page, email.uuid);
   await expect(docBody(page)).toBeVisible();
-  return email!.markdown_uuid;
+  return email.markdown_uuid;
+}
+
+/// This spec's tests share a root, and each starts from no rows.
+async function forgetEveryRule(page: Page): Promise<void> {
+  const resp = await page.request.get("/api/remote_media/allow");
+  const { rows } = (await resp.json()) as { rows: { allow_uuid: string }[] };
+  for (const { allow_uuid } of rows) {
+    await page.request.delete(`/api/remote_media/allow/${allow_uuid}`);
+  }
 }
 
 async function allowRows(page: Page): Promise<{ scope: string; key: string }[]> {
@@ -137,4 +157,55 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   // judge a `document` or `source` row.
   expect([...contexts]).toEqual([`${md}|tng_email`]);
   expect(remoteRequests).toEqual([]);
+});
+
+test.describe("with only the session cookie", () => {
+  test.use({ extraHTTPHeaders: {} });
+
+  /// Nothing stands in here but the sender's host, which is on this machine
+  /// (`DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE`, playwright.config.ts). An image
+  /// the document's frame loads is no navigation, so the rule that keeps a
+  /// link from another site off this route has to leave it alone.
+  test("an allowed image reaches the document's frame through the server", async ({
+    page,
+    baseURL,
+  }) => {
+    let hits = 0;
+    const sender = createServer((_req, res) => {
+      hits += 1;
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(PNG);
+    });
+    await new Promise<void>((ready) => sender.listen(0, "127.0.0.1", ready));
+    try {
+      await page.goto(`${baseURL}/?token=${process.env.DATALIB_TOKEN}`);
+      const image = `http://127.0.0.1:${sender.address().port}/lagoon.png`;
+      const md = await marketingEmailUuid(page);
+      await page.route(`**/applet/unified_document_index/chat/${md}`, async (route) => {
+        const resp = await route.fetch();
+        const body = `<img alt="Temtibi Lagoon at sunset" src="${image}">`;
+        await route.fulfill({ response: resp, json: { ...(await resp.json()), body } });
+      });
+      await page.goto(`/chat/${md}`);
+
+      const load = page.waitForResponse((r) =>
+        new URL(r.url()).pathname.endsWith("/api/remote_media"),
+      );
+      await page
+        .locator(".chat-preview .remote-banner")
+        .getByRole("button", { name: "Load all" })
+        .click();
+      const answer = await load;
+      expect(answer.request().resourceType()).toBe("image");
+      expect(answer.request().isNavigationRequest()).toBe(false);
+      expect(answer.status()).toBe(200);
+
+      const drawn = docBody(page).locator(`img[alt="Temtibi Lagoon at sunset"]`);
+      await expect.poll(() => drawn.evaluate((i) => (i as HTMLImageElement).naturalWidth)).toBe(1);
+      expect(hits).toBe(1);
+    } finally {
+      sender.close();
+      await forgetEveryRule(page);
+    }
+  });
 });

@@ -447,7 +447,8 @@
                 <strong>Keep it in a protected folder</strong>
                 <span class="tag calm">Experimental</span><br />
                 Terminal, AI agents and other apps have to ask you first, unless you've
-                given them Full Disk Access. Your latchkey sign-ins are copied in with it.
+                given them Full Disk Access. It starts with no sign-ins: you sign in to its
+                sources here in Datalib.
               </span>
             </label>
             <button class="btn primary" id="create">Create and open</button>
@@ -609,7 +610,9 @@
           const del = document.createElement("button");
           del.className = "forget";
           del.innerHTML = TRASH;
-          del.title = "Delete (the folder moves to the Trash)";
+          del.title = lib.protected
+            ? "Delete permanently (it does not go to the Trash)"
+            : "Delete (the folder moves to the Trash)";
           del.setAttribute("aria-label", `Delete ${lib.name}`);
           del.addEventListener("click", async () => {
             // The shell asks before it deletes; nothing else is clickable

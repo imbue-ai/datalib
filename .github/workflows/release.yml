@@ -72,7 +72,7 @@ jobs:
         # present. Only Linux x86_64 has prebuilt CUDA bindings.
         include:
           - triple: aarch64-apple-darwin
-            runs-on: macos-14  # Apple Silicon
+            runs-on: macos-15  # Apple Silicon; docs/dev/release_steps.md §"The mac legs' runner image"
             cuda: false
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
@@ -194,7 +194,7 @@ jobs:
         # github.com/imbue-ai/latchkey-curl-shims.
         include:
           - triple: aarch64-apple-darwin
-            runs-on: macos-14  # Apple Silicon
+            runs-on: macos-15  # Apple Silicon
             bazel-config: ""
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
@@ -425,7 +425,7 @@ jobs:
   # for them to be exported.
   macos-app-compile:
     name: macos-app (compile)
-    runs-on: macos-14  # Apple Silicon
+    runs-on: macos-15  # Apple Silicon
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -532,7 +532,7 @@ jobs:
   macos-app-sign:
     name: macos-app (sign + notarize)
     needs: macos-app-compile
-    runs-on: macos-14  # Apple Silicon
+    runs-on: macos-15  # Apple Silicon
     timeout-minutes: 60
     permissions:
       contents: read
@@ -633,7 +633,7 @@ jobs:
   macos-app-verify:
     name: macos-app (verify)
     needs: macos-app-sign
-    runs-on: macos-14  # Apple Silicon
+    runs-on: macos-15  # Apple Silicon
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
