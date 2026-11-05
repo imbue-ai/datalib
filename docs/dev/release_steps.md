@@ -141,7 +141,7 @@ cache key.** A darwin action's cache key does not cover the image, so
 the contributor cache replays another image's compiles and test results:
 `stage_runtime_test` reported `(cached) PASSED` on `macos-15` in the same
 job whose runtime step had just failed on openrsync, and a binary whose
-link was replayed reports the old image's SDK. A tag's mac legs find
+link is replayed would carry the other image's SDK. A tag's mac legs find
 nothing in the release cache anyway (`ci.md` §"Two caches"), so a cold
 run is the one that matches.
 
