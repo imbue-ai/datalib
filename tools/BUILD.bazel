@@ -1,3 +1,4 @@
+load("@py_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -280,12 +281,17 @@ py_test(
     args = [
         "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "$(rootpath //docs/dev:step_protocol.md)",
+        "$(rootpath //docs/dev:doltlite.md)",
+        "$(rootpath //third-party/doltlite:doltlite)",
     ],
     data = [
         "//datalib/backend/dag:datalib_dag_bin",
+        "//docs/dev:doltlite.md",
         "//docs/dev:step_protocol.md",
+        "//third-party/doltlite:doltlite",
     ],
     main = "step_protocol_example_test.py",
+    deps = [requirement("doltlite")],
 )
 
 # The qmd model pins (repo, revision, file, sha256) live in the build's

@@ -2,11 +2,10 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use serde::Serialize;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::qmd::lex::Fts5Query;
@@ -107,7 +106,7 @@ impl QmdIndexReader {
         // belongs to the qmd steps. Note qmd's index is a plain
         // SQLite database, unlike every `.doltlite_db` in the tree —
         // the doltlite amalgamation our binaries link reads it fine.
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
+        let opts = datalib_sqlite_open::file(&path)
             .create_if_missing(false)
             .read_only(true);
         let pool = SqlitePoolOptions::new()

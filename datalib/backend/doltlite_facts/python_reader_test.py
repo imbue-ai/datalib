@@ -1,0 +1,298 @@
+"""The reader in docs/dev/doltlite.md § "Calling the library directly", run as
+it is written, with the pinned PyPI wheel and the library a release ships,
+against stores the pinned CLI wrote.
+
+A py_test, so it runs under rules_python's interpreter: python-build-standalone,
+the build `uv python install` fetches, which compiles SQLite in. That is the
+Python the reader exists for, and the test asserts it is the one it got."""
+
+import hashlib
+import importlib
+import importlib.util
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+CLI = Path(sys.argv[1]).resolve()
+DOC = Path(sys.argv[2]).resolve()
+SHIPPED_LIBRARY = Path(sys.argv[3]).resolve()
+
+
+def reader_from_doc() -> str:
+    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
+    found = [b for b in blocks if b.startswith("# doltlite_reader.py")]
+    assert len(found) == 1, f"expected one reader in {DOC}, found {len(found)}"
+    return found[0]
+
+
+def wheel_dir() -> Path:
+    spec = importlib.util.find_spec("doltlite")
+    assert spec is not None and spec.origin is not None, "the doltlite wheel is a dep"
+    return Path(spec.origin).resolve().parent.parent
+
+
+READER_DIR = tempfile.TemporaryDirectory()
+(Path(READER_DIR.name) / "doltlite_reader.py").write_text(reader_from_doc())
+sys.path.insert(0, READER_DIR.name)
+reader = importlib.import_module("doltlite_reader")
+
+
+def cli(store: Path, statement: str) -> str:
+    done = subprocess.run(
+        [str(CLI), str(store), statement], check=True, capture_output=True, text=True
+    )
+    return done.stdout.strip()
+
+
+def seal(store: Path, value: str) -> str:
+    cli(
+        store,
+        f"INSERT INTO t VALUES ('{value}');"
+        f"SELECT dolt_commit('-A', '-m', 'added {value}');",
+    )
+    return cli(store, "SELECT dolt_hashof('HEAD');")
+
+
+def run_python(
+    tmp: Path, *args: str, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
+    env = {"PATH": os.environ.get("PATH", ""), "TMPDIR": str(tmp)}
+    env["PYTHONPATH"] = os.pathsep.join([str(wheel_dir()), READER_DIR.name])
+    env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, *args], check=False, capture_output=True, text=True, env=env
+    )
+
+
+class WithAStore(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # A data root can be named anything, and the name goes into a URI, where
+        # `#` and `?` would end the path and `%41` would read as `A`.
+        self.dir = Path(tmp.name) / "a b@c #1 %41?"
+        self.dir.mkdir()
+        self.store = self.dir / "entities.doltlite_db"
+        cli(self.store, "CREATE TABLE t(id TEXT PRIMARY KEY);")
+        self.first = seal(self.store, "a")
+        self.second = seal(self.store, "b")
+
+
+class ThisPython(WithAStore):
+    def test_compiles_sqlite_in(self) -> None:
+        self.assertIn("_sqlite3", sys.builtin_module_names)
+
+    def test_the_package_cannot_take_over_the_sqlite3_module_here(self) -> None:
+        """When this fails, upstream reads stores under this Python: drop the
+        caveat from doltlite.md."""
+        script = self.dir / "swap.py"
+        script.write_text(
+            "import doltlite\n"
+            "import sqlite3\n"
+            f"sqlite3.connect({str(self.store)!r}).execute('SELECT id FROM t')\n"
+        )
+        done = run_python(self.dir, str(script))
+        self.assertNotEqual(done.returncode, 0, "it read the store")
+        if sys.platform == "darwin":
+            self.assertIn("has no attribute '__file__'", done.stderr)
+        else:
+            self.assertIn("file is not a database", done.stderr)
+
+
+class TheReader(WithAStore):
+    def test_reads_main(self) -> None:
+        with reader.Store(self.store) as store:
+            self.assertEqual(
+                store.query("SELECT id FROM t ORDER BY id"), [("a",), ("b",)]
+            )
+
+    def test_reads_one_commit_however_far_main_moves(self) -> None:
+        with reader.Store(self.store, self.first) as store:
+            self.assertEqual(store.query("SELECT id FROM t"), [("a",)])
+            seal(self.store, "c")
+            self.assertEqual(store.query("SELECT id FROM t"), [("a",)])
+            self.assertEqual(store.query("SELECT active_branch()"), [(None,)])
+
+    def test_a_connection_kept_open_sees_a_later_seal(self) -> None:
+        with reader.Store(self.store) as store:
+            self.assertEqual(store.query("SELECT count(*) FROM t"), [(2,)])
+            seal(self.store, "c")
+            self.assertEqual(store.query("SELECT count(*) FROM t"), [(3,)])
+
+    def test_refuses_writes_on_both_kinds_of_open(self) -> None:
+        for commit in (None, self.first):
+            with (
+                reader.Store(self.store, commit) as store,
+                self.assertRaisesRegex(OSError, "readonly"),
+            ):
+                store.query("INSERT INTO t VALUES ('z')")
+
+    def test_a_missing_commit_fails_the_open(self) -> None:
+        with self.assertRaisesRegex(OSError, "not found"):
+            reader.Store(self.store, "0" * 40)
+
+    def test_binds_and_returns_every_type(self) -> None:
+        values = (None, 7, 2.5, "é\x00z", b"\x00\xff", b"")
+        with reader.Store(self.store) as store:
+            self.assertEqual(store.query("SELECT ?, ?, ?, ?, ?, ?", *values), [values])
+
+    def test_reads_history_and_diffs(self) -> None:
+        with reader.Store(self.store) as store:
+            messages = [m for (m,) in store.query("SELECT message FROM dolt_log")]
+            self.assertEqual(messages[:2], ["added b", "added a"])
+            self.assertEqual(
+                store.query(
+                    "SELECT diff_type, to_id FROM dolt_diff_t(?, ?)",
+                    self.first,
+                    self.second,
+                ),
+                [("added", "b")],
+            )
+
+    def test_leaves_the_store_byte_identical(self) -> None:
+        def state() -> tuple[str, list[str]]:
+            digest = hashlib.sha256(self.store.read_bytes()).hexdigest()
+            return digest, sorted(os.listdir(self.dir))
+
+        before = state()
+        for commit in (None, self.first):
+            with reader.Store(self.store, commit) as store:
+                store.query("SELECT * FROM t WHERE id = ?", "a")
+                store.query("SELECT count(*) FROM dolt_log")
+        self.assertEqual(state(), before)
+
+    def test_threads_each_with_a_connection(self) -> None:
+        answers: list[int] = []
+
+        def read() -> None:
+            with reader.Store(self.store) as store:
+                for _ in range(50):
+                    answers.append(store.query("SELECT count(*) FROM t")[0][0])
+
+        threads = [threading.Thread(target=read) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(answers, [2] * 400)
+
+    def test_opens_a_plain_sqlite_file(self) -> None:
+        plain = self.dir / "blobs.sqlite"
+        with sqlite3.connect(plain) as db:
+            db.execute("CREATE TABLE cas_objects(blake3 TEXT)")
+            db.execute("INSERT INTO cas_objects VALUES ('x')")
+        db.close()
+        with reader.Store(plain) as store:
+            self.assertEqual(store.query("SELECT blake3 FROM cas_objects"), [("x",)])
+
+    def test_leaves_the_sqlite3_module_stock(self) -> None:
+        db = sqlite3.connect(self.store)
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "file is not a database"):
+            db.execute("SELECT id FROM t")
+        db.close()
+
+    def test_needs_no_restart_no_temp_file_and_no_environment(self) -> None:
+        """What `import doltlite` costs on macOS, none of it paid here. `-c`
+        cannot restart, so this fails if the import starts to."""
+        shims = self.dir / "tmp"
+        shims.mkdir()
+        done = run_python(
+            shims,
+            "-c",
+            "import os\n"
+            "from doltlite_reader import Store\n"
+            f"print(Store({str(self.store)!r}).query('SELECT count(*) FROM t'))\n"
+            "print([k for k in os.environ if 'DOLTLITE' in k or k.startswith('DYLD')])",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.split("\n")[:2], ["[(2,)]", "[]"])
+        self.assertEqual(os.listdir(shims), [])
+
+
+class FindingTheLibrary(WithAStore):
+    """What the reader loads, in a Python with no install and no wheel unless
+    the test gives it one, as a release lays them out: `install.sh` unpacks the
+    tree and links `datalib-doltlite` from another directory."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tree = self.dir / "datalib"
+        (self.tree / "lib").mkdir(parents=True)
+        shutil.copy(CLI, self.tree / "datalib-doltlite")
+        self.shipped = self.tree / "lib" / SHIPPED_LIBRARY.name
+        shutil.copy(SHIPPED_LIBRARY, self.shipped)
+        self.on_path = self.dir / "bin"
+        self.on_path.mkdir()
+        (self.on_path / "datalib-doltlite").symlink_to(self.tree / "datalib-doltlite")
+        self.empty = self.dir / "empty"
+        self.empty.mkdir()
+
+    def load(self, path: Path, with_wheel: bool) -> subprocess.CompletedProcess[str]:
+        code = (
+            "import doltlite_reader as r\n"
+            "print(r._lib._name)\n"
+            f"print(r.Store({str(self.store)!r}).query('SELECT count(*) FROM t'))\n"
+            f"print(r.Store({str(self.store)!r}).query("
+            "'SELECT sqlite_version(), dolt_version()'))\n"
+        )
+        python_path = [READER_DIR.name]
+        if with_wheel:
+            python_path.append(str(wheel_dir()))
+        return run_python(
+            self.dir,
+            "-c",
+            code,
+            PATH=str(path),
+            PYTHONPATH=os.pathsep.join(python_path),
+        )
+
+    def assert_loaded(self, done: subprocess.CompletedProcess[str], lib: Path) -> None:
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(
+            Path(done.stdout.split("\n")[0]).resolve(), lib.resolve(), done.stdout
+        )
+        self.assertEqual(done.stdout.split("\n")[1], "[(2,)]")
+
+    def test_a_release_install_needs_no_wheel(self) -> None:
+        self.assert_loaded(self.load(self.on_path, False), self.shipped)
+
+    def test_a_release_install_wins_over_a_wheel(self) -> None:
+        self.assert_loaded(self.load(self.on_path, True), self.shipped)
+
+    def test_without_an_install_it_takes_the_wheel(self) -> None:
+        wheel = wheel_dir() / "doltlite" / "_lib" / SHIPPED_LIBRARY.name
+        self.assert_loaded(self.load(self.empty, True), wheel)
+
+    def test_a_shell_with_no_library_beside_it_takes_the_wheel(self) -> None:
+        """A musl tarball, or the desktop app."""
+        self.shipped.unlink()
+        wheel = wheel_dir() / "doltlite" / "_lib" / SHIPPED_LIBRARY.name
+        self.assert_loaded(self.load(self.on_path, True), wheel)
+
+    def test_with_neither_it_says_what_to_do(self) -> None:
+        done = self.load(self.empty, False)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("pip install the doltlite version", done.stderr)
+
+    def test_the_shipped_library_is_the_build_the_shell_is(self) -> None:
+        done = self.load(self.on_path, False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        versions = cli(
+            self.dir / "versions.doltlite_db",
+            "SELECT sqlite_version() || '|' || dolt_version();",
+        )
+        sqlite_version, dolt_version = versions.split("|")
+        self.assertEqual(
+            done.stdout.split("\n")[2], repr([(sqlite_version, dolt_version)])
+        )
+
+
+if __name__ == "__main__":
+    unittest.main(argv=sys.argv[:1])

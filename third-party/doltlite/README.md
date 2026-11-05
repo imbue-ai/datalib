@@ -36,6 +36,10 @@ pin brought, is [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md).
        │                     //third-party/doltlite:doltlite
        │                         (cc_binary — the CLI, for tests
        │                          and hand-inspecting raw stores)
+       │
+       │  //third-party/doltlite:libdoltlite.{so,dylib}
+       │      (cc_binary — sqlite3.c again, as a shared library; ships
+       │       in the release tarball's lib/, not on the musl platforms)
        │                             ▲
        │                             │  srcs=[shell.c]
        │                     @doltlite_autoconf//
@@ -115,8 +119,9 @@ Steps:
    single-process fact, a module per section of `doltlite.md`) and
    `//datalib/backend/etl:doltlite_two_process_test` (a writer and a
    reader in two processes), and
-   `//datalib/backend/doltlite_facts:python_package_test` (the PyPI
-   wheel at the new pin). Where a fact moved, fix
+   `//datalib/backend/doltlite_facts:python_package_test` and
+   `:python_reader_test` (the PyPI wheel at the new pin, and the shipped
+   library). Where a fact moved, fix
    [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) first, then the
    test, and add a row to its § Versions table saying what the new pin
    brought.
@@ -129,7 +134,7 @@ Steps:
 
 | Path                        | Purpose                                                                |
 |-----------------------------|------------------------------------------------------------------------|
-| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `cli_version_test`. |
+| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
 | `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` check compares `DOLTLITE_VERSION` with itself, so pin drift is `//tools:version_pins_test`'s job. |

@@ -214,9 +214,7 @@ works, read-only; a consumer that speaks only stock SQLite wants the
 export in [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite).
 
 ```rust
-let pool = sqlx::sqlite::SqlitePool::connect(
-    &format!("sqlite://{}?mode=ro", db_path.display())
-).await?;
+let pool = datalib_pin::open_reader(&db_path).await?;
 let n: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
     .fetch_one(&pool).await?;
 ```

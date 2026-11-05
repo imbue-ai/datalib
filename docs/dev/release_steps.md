@@ -32,7 +32,7 @@ workflow's `run:` blocks are one line each:
 | step | script | what it makes |
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple> <cuda>` | `runtime-<triple>.tar.gz` (+ `-cuda`) and `.sha256` sidecars, from `scripts/stage_runtime.sh` |
-| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
 
 Each script writes into the current directory, prints what it wrote,
 and takes what a test cannot supply through environment variables
@@ -71,7 +71,7 @@ to wait for.
 | `docker-publish` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
 
 A build job hands what it made to the next through an artifact.
-`scripts/lint_repo.py` check 20 holds each grant to its job, refuses a
+`scripts/lint_repo.py` check 21 holds each grant to its job, refuses a
 build command in a job that holds one, and requires every
 `actions/checkout` to say `persist-credentials: false` so the token is
 not left in `.git/config`. `cargo-update.yml`'s `pull-request` job is
@@ -115,7 +115,7 @@ key sits in `.bazelrc.user` while crates compile.
 - **`//tools:stage_tarball_test`** runs `stage_tarball.sh` for four
   triples (gnu with the CUDA overlay, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
-  and checks every binary is a regular executable, the launcher, the
+  and checks every binary is a regular executable, the library, the launcher, the
   commit, the manifest line for this triple's runtime asset, and the
   six notice files. `cargo-about` cannot run in the sandbox (it needs
   `cargo` and the crate sources), so the test hands

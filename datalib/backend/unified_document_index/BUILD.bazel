@@ -29,6 +29,7 @@ rust_library(
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
