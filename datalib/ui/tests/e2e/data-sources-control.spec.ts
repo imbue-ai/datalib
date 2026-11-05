@@ -345,8 +345,7 @@ test.describe("sources run independently", () => {
     const claudeWas = await stampsBefore(page, [ingestOf(CLAUDE), renderOf(CLAUDE)]);
     await start(page, CLAUDE);
     // Added to the config after this sync began, the second source still
-    // runs beside the first rather than behind it (plans/supervisor.md
-    // 4d), and the first is not disturbed by it.
+    // runs beside the first rather than behind it, and the first is not disturbed by it.
     await untilRunning(page, ingestOf(CLAUDE), 10_000);
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     await expect(stopBtn(page, `group:${CLAUDE.id}`)).toBeVisible();
@@ -471,7 +470,7 @@ test.describe("sources run independently", () => {
     // nothing went wrong, and not finished, the work is not done. The
     // step answered SIGINT with a `cancelled` outcome, which the loop
     // records as `stopped`, while it goes on with the other source. A stopped download is not a fence
-    // over its render (plans/supervisor.md §2.5): the held download
+    // over its render: the held download
     // sealed nothing, so the render is up to date with what it committed
     // — or, if this root has never rendered the source, it was waiting
     // for a first seal and the stop ended that wait.

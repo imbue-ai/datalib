@@ -1,9 +1,9 @@
-//! The server's side of the supervisor loop (`docs/dev/plans/supervisor.md`
-//! §2.8): it holds `runner-lock` for as long as it is up, runs the loop
+//! The server's side of the supervisor loop (`dag/README.md`
+//! §"Two locks, two files"): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request or a reset or purge is open, and between busy
 //! periods settles a step turned off or on into the record. The first time
 //! a build runs on the root it asks every step to migrate before the first
-//! request (`docs/dev/plans/upgrade_on_launch.md`).
+//! request (`dag/README.md` §"Upgrading a root").
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

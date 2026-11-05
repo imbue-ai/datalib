@@ -80,6 +80,7 @@ merge conflict waiting to happen.
 
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 - [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
+- [`docs/user/applets.md`](docs/user/applets.md), [`docs/user/contacts_app.md`](docs/user/contacts_app.md) — what the running app serves, and an agent's way into the contacts app; compiled in the same way, so a change to a route changes them.
 - [`datalib/backend/agent_docs/README.md`](datalib/backend/agent_docs/README.md) — every doc `datalib-step help` prints, how its links print, and the checks on its TOML and commands (`toml fragment`). Read before editing a doc an agent is sent to.
 
 ## Keep a forward path for existing data
@@ -770,6 +771,7 @@ upstream (block types, MIME types), free-form display text
 | a contact is a person or a group; how one is reached | `ContactKind`, `Medium` | `contact_schema/src/lib.rs` (`datalib_contact_schema`) |
 | a photo or a video; where its time's offset came from | `MediaKind`, `OffsetFrom` | `photo_schema/src/lib.rs` (`datalib_photo_schema`) |
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
+| what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 

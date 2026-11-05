@@ -3796,7 +3796,7 @@ mod tests {
         // Auth doesn't retry.
         assert_eq!(rep1.step("src/raw").attempts, 1);
         // What the failed download committed, it vouched for, so the
-        // render reads it (plans/supervisor.md §2.5).
+        // render reads it (dag/README.md §"Versions: reported by the step").
         assert!(
             matches!(
                 rep1.step("src/rendered_md").status,

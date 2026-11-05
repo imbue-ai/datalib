@@ -64,13 +64,6 @@ pub fn thousands(n: i64) -> String {
     }
 }
 
-pub fn pretty_json(raw: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(raw) {
-        Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| raw.to_string()),
-        Err(_) => raw.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

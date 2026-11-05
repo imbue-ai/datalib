@@ -71,8 +71,9 @@ The binaries a release ships:
 - `datalib-dag` — the sync runner.
 - `datalib-step` — the built-in step commands.
 - `datalib-http` — the API server and web UI.
-- `datalib-applet` — the applet host, which the http gateway spawns on
-  demand; `datalib-applet search` is the search box from the command
+- `datalib-applet` — the applets: one server for each `[[applets]]`
+  entry, which the http server starts with itself (see "Applets"
+  below); `datalib-applet search` is the search box from the command
   line.
 - `datalib-doltlite` — the shell for reading and exporting the stores
   (see "Reading the mirrored data" below).
@@ -548,19 +549,31 @@ Pick the surface that fits the question:
   server serves its own guide for this at **`GET /agent/cards.md`**
   (and one for config-editing agents at **`GET /agent/config.md`**).
 
-## Curating contacts
+## Applets
 
-An agent may group a user's handles into contacts and label people and
-senders `real` — in when not spam, out for spam — through the contacts app at `/applet/datalib_contacts/` on
-`datalib-http`, with the API token. Send one batch to `POST proposals`
-naming yourself as `agent` and the batch as `run`, with a `reason` and
-a `confidence` (0 to 1: the user reviews your least sure first) on
-each contact and label;
-read `GET review/items` and `GET not_linked` first, since what the user
-confirmed, overrode or turned down is not yours to propose again, and
-the batch says what it skipped. Nothing you send is final until the
-user confirms it on the contacts card's *Review*. Shapes and rules:
-[`docs/dev/contacts.md`](dev/contacts.md) §"Agents propose, a person decides".
+An applet is a long-lived server the app runs, one per `[[applets]]`
+entry in the config: `datalib-http` starts each when it starts and
+serves it at `/applet/<id>/`, behind the API token. Search, the
+contacts app, the time-series index, photos and the Slack browser are
+all applets. A sync needs none of them; what they serve needs the app
+up. [The applets](user/applets.md) lists what each one serves.
+
+## Who a handle is: the contacts app
+
+Sources know a person only by *handles* (`email:riker@enterprise.org`,
+`tel:+12025550101`, `slack:T01/U02`), so one person arrives as several.
+The contacts app links handles to one contact, which every chip draws
+and `with:contact:<id>` searches follow at once, with no re-render. It
+also holds labels on people and senders (`real`: in when not spam, out
+for spam).
+
+An agent **proposes**: send one batch to `POST
+/applet/datalib_contacts/proposals`, and nothing is final until the
+user confirms it on the contacts card's *Review*. **Don't reach for
+`POST /link`:** it is recorded as the user's own decision and never
+reviewed. [The contacts app](user/contacts_app.md) has the steps, from
+finding the handles to what the user sees;
+`GET /applet/datalib_contacts/` lists every route and which are whose.
 
 ## Feedback
 

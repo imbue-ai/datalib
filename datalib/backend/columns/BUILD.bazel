@@ -4,7 +4,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # shapes each type carries. Third-party deps only, so Bazel-only like
 # the `<p>_config` crates, and depended on only by what serves rows —
 # `datalib-http` and the applets — so a change here rebuilds nothing
-# that downloads. See docs/dev/plans/data_centric_ui.md §2.
+# that downloads.
 rust_library(
     name = "datalib_columns",
     srcs = [

@@ -22,7 +22,6 @@ pub const COMMENT_ANCHORS: &str = "comment_anchors";
 pub const USERS: &str = "users";
 pub const ATTACHMENTS: &str = "notion_attachments";
 pub const TREE: &str = "tree";
-pub const LISTED_PAGES: &str = "listed_pages";
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).

@@ -240,7 +240,8 @@ the host's, so this signs out everywhere. The one exception is the
 desktop app's protected libraries, which share a store of their own in
 the protected folder (`datalib/tauri/README.md`, "A protected
 library"). To clear that one, point `LATCHKEY_DIRECTORY` at it; macOS
-first asks whether your terminal may open the protected folder. Latchkey's browser keeps no
+first asks whether your terminal may open the protected folder, unless
+the terminal has Full Disk Access. Latchkey's browser keeps no
 profile of its own, so the cookies go with that file. It leaves
 `config.json` (the browser path and the services the wizard
 registered), `plugins/` and the keychain key; to test those first-run

@@ -2,33 +2,77 @@
 //! and labels in one batch; a person reads the review table and confirms,
 //! turns down or labels. `datalib_contacts::review` holds the rules.
 
-use std::sync::Arc;
-
 use axum::{
     extract::{Query, State},
     response::Json,
-    routing::{get, post},
-    Router,
 };
 use datalib_columns::{Action, Chip, ChipKind, ColumnSpec, ColumnType, Identity, Membership};
 use datalib_contacts::labels::normalize_label;
 use datalib_contacts::review::{Proposals, ReviewItem, ReviewLabel};
-use datalib_contacts::{DecidedHow, Store, REAL};
+use datalib_contacts::{DecidedHow, REAL};
 use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
 
+use super::api::{Api, RouteKind, Verb};
 use super::{refused, ApiError, AppState};
 
-pub(super) fn routes() -> Router<Arc<Store>> {
-    Router::new()
-        .route("/proposals", post(propose))
-        .route("/review", get(review_table))
-        .route("/review/items", get(review_items))
-        .route("/review/confirm", post(confirm))
-        .route("/review/reject", post(reject))
-        .route("/label", post(label))
-        .route("/not_linked", get(not_linked))
+pub(super) fn add_routes(api: Api) -> Api {
+    use RouteKind::{Person, Propose, Read};
+    use Verb::{Get, Post};
+    api.add(
+        Post,
+        "/proposals",
+        Propose,
+        "an agent's batch, one commit: `{agent, run?, contacts: [{contact_id?, name?, handles, \
+         reason?, confidence?, labels}], handles: [{handle, labels}]}`, each label `{label, \
+         applies?, reason?, confidence?}`, a confidence 0 to 1. Answers `{contacts_created, \
+         linked, labelled, skipped: [{what, why}]}`",
+        propose,
+    )
+    .add(
+        Get,
+        "/review",
+        Read,
+        "`?label=`: the review as a typed table, what the contacts card shows",
+        review_table,
+    )
+    .add(
+        Get,
+        "/review/items",
+        Read,
+        "the review as plain records: every contact or handle with anything an agent proposed \
+         or a label, and who said so",
+        review_items,
+    )
+    .add(
+        Post,
+        "/review/confirm",
+        Person,
+        "`{subjects}`, each a handle or `contact:<id>`: agree with everything an agent proposed",
+        confirm,
+    )
+    .add(
+        Post,
+        "/review/reject",
+        Person,
+        "`{subjects}`: turn down everything an agent proposed",
+        reject,
+    )
+    .add(
+        Post,
+        "/label",
+        Person,
+        "`{subjects, label, applies}`: the person's in (`true`), out (`false`) or unknown (`null`)",
+        label,
+    )
+    .add(
+        Get,
+        "/not_linked",
+        Read,
+        "every link a person turned down, newest first",
+        not_linked,
+    )
 }
 
 async fn propose(

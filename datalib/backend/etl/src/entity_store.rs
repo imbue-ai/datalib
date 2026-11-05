@@ -58,7 +58,7 @@ impl EntityStore {
     /// discard the downloader's in-flight rows, reconcile the schema and
     /// commit on the way in. The store is in this build's shape because a
     /// launch migrates every raw store before any render runs
-    /// (`docs/dev/plans/upgrade_on_launch.md`). See [`dr::open_reader`].
+    /// (`dag/README.md` §"Upgrading a root"). See [`dr::open_reader`].
     pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let Some(reader) = dr::open_reader(db_path, commit).await? else {
             return Ok(None);

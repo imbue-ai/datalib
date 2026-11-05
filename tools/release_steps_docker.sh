@@ -31,7 +31,7 @@ command -v docker >/dev/null 2>&1 || { echo "docker not found on PATH" >&2; exit
 
 image="${DATALIB_DEVCONTAINER_IMAGE:-}"
 if [[ -z "$image" ]]; then
-    image="datalib-devcontainer:local"
+    image="datalib_devcontainer:local"
     # No warm-up: it compiles the backend in opt inside the image, which
     # the tests (fastbuild) would not reuse; the volumes below hold what
     # the run itself builds.

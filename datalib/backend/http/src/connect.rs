@@ -22,9 +22,9 @@ use datalib_probe::issue::{classify, IssueKind};
 use crate::{plugins, AppState};
 
 /// How long to wait on `latchkey services info` before giving up. It
-/// makes a validation request per stored credential, so it is a network
-/// call, not a keyring read.
-const SERVICES_TIMEOUT: Duration = Duration::from_secs(45);
+/// reads the keychain, where a macOS prompt can wait on a person typing
+/// a password, then makes a validation request per stored credential.
+const SERVICES_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a browser login may stay pending before we call it lost.
 /// Long, because the clock is a person reading a consent screen.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -186,23 +186,45 @@ pub async fn get_service(
             {
                 return Ok(Json(info));
             }
-            Ok(Json(ServiceInfo {
-                service,
-                auth_options: Vec::new(),
-                set_example: None,
-                accounts: Vec::new(),
-                registered: !unknown,
-                cli: datalib_core::node_runtime::latchkey_cli_hint(),
-                issue: (!unknown).then(|| failed.issue()),
-                gateway,
-                error: (!unknown).then(|| failed.detail(&command)),
-                installs_plugin: None,
-                // Not registered yet: the wizard registers it, and a
-                // registered service names nothing. Unreachable latchkey:
-                // nothing to go on, and the box stays free to type in.
-                account_naming: AccountNaming::Chosen,
-            }))
+            Ok(Json(service_info_after_failure(
+                service, gateway, &command, &failed,
+            )))
         }
+    }
+}
+
+/// The answer is still a 200, so the request's own log line says nothing
+/// of a latchkey that could not be asked; the warning here is what does.
+fn service_info_after_failure(
+    service: String,
+    gateway: Option<String>,
+    command: &str,
+    failed: &LatchkeyFailed,
+) -> ServiceInfo {
+    let unknown = *failed == LatchkeyFailed::UnknownService;
+    if !unknown {
+        tracing::warn!(
+            service = service.as_str(),
+            issue = failed.issue().as_str(),
+            "could not ask latchkey about a service: {}",
+            failed.detail(command)
+        );
+    }
+    ServiceInfo {
+        service,
+        auth_options: Vec::new(),
+        set_example: None,
+        accounts: Vec::new(),
+        registered: !unknown,
+        cli: datalib_core::node_runtime::latchkey_cli_hint(),
+        issue: (!unknown).then(|| failed.issue()),
+        gateway,
+        error: (!unknown).then(|| failed.detail(command)),
+        installs_plugin: None,
+        // Not registered yet: the wizard registers it, and a
+        // registered service names nothing. Unreachable latchkey:
+        // nothing to go on, and the box stays free to type in.
+        account_naming: AccountNaming::Chosen,
     }
 }
 
@@ -1047,6 +1069,67 @@ pub(crate) fn err(status: StatusCode, message: &str) -> (StatusCode, Json<Value>
 #[cfg(test)]
 mod latchkey_failed_tests {
     use super::*;
+
+    fn logged_while(f: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = captured.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    /// A keychain prompt nobody answered in time used to leave only the
+    /// request's `debug` line, a 200, which the log card does not show.
+    #[test]
+    fn a_latchkey_that_timed_out_is_a_warning_and_the_wizards_error() {
+        let command = "services info github";
+        let failed = LatchkeyFailed::TimedOut(SERVICES_TIMEOUT);
+        let mut info = None;
+        let log = logged_while(|| {
+            info = Some(service_info_after_failure(
+                "github".to_string(),
+                None,
+                command,
+                &failed,
+            ));
+        });
+        let said = "latchkey services info github did not answer within 120s.";
+        assert_eq!(info.unwrap().error.as_deref(), Some(said));
+        assert!(log.contains("WARN"), "{log}");
+        assert!(log.contains(said), "{log}");
+    }
+
+    /// A name latchkey has not heard of is what the wizard registers
+    /// next, not something that went wrong.
+    #[test]
+    fn a_service_latchkey_has_not_heard_of_is_not_a_warning() {
+        let mut info = None;
+        let log = logged_while(|| {
+            info = Some(service_info_after_failure(
+                "claude-ai".to_string(),
+                None,
+                "services info claude-ai",
+                &LatchkeyFailed::UnknownService,
+            ));
+        });
+        assert!(!info.unwrap().registered);
+        assert_eq!(log, "");
+    }
 
     /// latchkey's own words are what the wizard shows and the log keeps:
     /// they say what went wrong better than any sentence of ours.
