@@ -2,13 +2,13 @@
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
 # per-triple tarball to a GitHub Release.
-# The `runtime` job publishes the Node runtime the binaries run `qmd`
-# and `latchkey` from as its own asset per platform
+# The `runtime` job stages the Node runtime the binaries run `qmd` and
+# `latchkey` from as its own asset per platform
 # (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
 # from the `runtime.manifest` the `build` job writes beside them — see
 # docs/dev/runtime_fetch.md.
-# The `macos-app` job additionally builds, signs, and notarizes the
-# Datalib desktop app and attaches its dmg to the same release.
+# The `macos-app-*` jobs additionally build, sign, and notarize the
+# Datalib desktop app and attach its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
 # origin v0.1.0`). Each tarball is published with a stable,
 # un-versioned filename so the install script's
@@ -23,6 +23,14 @@
 # Read docs/dev/release_steps.md before changing this file: the steps
 # that assemble a release are scripts under `scripts/release/`, tested on
 # every `bazel test //...`, and a new one goes there rather than inline.
+#
+# A job that builds holds nothing worth stealing. GitHub grants a token's
+# permissions per job, never per step, and a hosted runner's passwordless
+# sudo lets any process read the runner's memory, so only a separate job
+# on its own machine keeps a write token or the signing key from a crate's
+# build script. Every build job here is read-only and hands what it made
+# to a publish job through an artifact; §"Who holds what" in that doc is
+# the table, and `scripts/lint_repo.py` holds each grant to its job.
 name: release
 
 on:
@@ -31,8 +39,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write  # needed to create the GitHub Release
-  packages: write  # needed for the docker-publish job to push to ghcr.io
+  contents: read
 
 # Don't cancel in progress — tag runs publish a release and must
 # complete. (No main-branch races to serialize anymore now that the
@@ -76,6 +83,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Same cache layering as the build job below; see its comment.
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
@@ -116,38 +125,47 @@ jobs:
           CUDA: ${{ matrix.cuda }}
         run: |
           set -euo pipefail
-          files="$(scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}" | tr '\n' ' ')"
-          echo "files=${files}" >> "$GITHUB_OUTPUT"
+          {
+              echo "files<<FILES"
+              scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}"
+              echo "FILES"
+          } >> "$GITHUB_OUTPUT"
 
-      # Plain `gh`, create-if-missing, retry once: see the build job's
-      # publish step.
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
-          FILES: ${{ steps.stage.outputs.files }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          # shellcheck disable=SC2086
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber $FILES; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+      # compression-level 0: every file is a gzip or a checksum already.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-${{ matrix.triple }}
+          path: ${{ steps.stage.outputs.files }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # `!cancelled()`, as on the `build` job below: the legs that succeeded
+  # still publish when another failed.
+  publish-runtime:
+    name: publish runtime assets
+    needs: runtime
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create the release and attach the assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/publish-release-assets
+        with:
+          pattern: runtime-*
 
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    # After the runtime assets, whose sha256s the manifest below
-    # carries. `!cancelled()` rather than the default `success()`: a
-    # runtime leg that failed costs the tarballs that name it (their
-    # manifest step fails), not every tarball.
-    needs: runtime
+    # After the runtime assets are on the release, whose sha256s the
+    # manifest below carries. `!cancelled()` rather than the default
+    # `success()`: a runtime leg that failed costs the tarballs that name
+    # it (their manifest step fails), not every tarball.
+    needs: publish-runtime
     if: ${{ !cancelled() }}
     strategy:
       # One platform failing shouldn't cancel the others: a successful
@@ -198,6 +216,7 @@ jobs:
           # default shallow clone has no tag history, so describe would
           # always fall back to a bare sha.
           fetch-depth: 0
+          persist-credentials: false
 
       # BuildBuddy serves the remote action cache (the big win — skips
       # the multi-minute tokio / sqlx / doltlite compiles), but
@@ -344,7 +363,7 @@ jobs:
       # The step is a script so //tools:stage_tarball_test runs the same
       # lines before a tag does (docs/dev/release_steps.md): the binaries
       # `:bin` laid out above, the `latchkey` launcher, the commit, the
-      # manifest of the runtime asset the `runtime` job published (read
+      # manifest of the runtime asset `publish-runtime` published (read
       # back through `gh`, with its sha256 and size), and the third-party
       # notices — then the tarball and its sha256.
       - name: Stage tarball
@@ -359,81 +378,59 @@ jobs:
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
-      # Plain `gh` instead of softprops/action-gh-release (an
-      # individually-owned action; see the macos-app job's SUPPLY CHAIN
-      # note). The matrix legs — and the macos-app job — race to create
-      # the tag's release; create-if-missing with `|| true` lets the
-      # losers fall through to the upload, which targets the same
-      # release either way. `gh release upload` fails on a missing file,
-      # preserving the old fail_on_unmatched_files behavior.
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
-          TARBALL: ${{ steps.stage.outputs.tarball }}
-          SHA256: ${{ steps.stage.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          files=("$TARBALL" "$SHA256")
-          # Once more on failure — see the macos-app job's publish step.
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber "${files[@]}"; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-${{ matrix.triple }}
+          path: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.sha256 }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
 
-  # Build, sign, and notarize the Datalib desktop app (Tauri) and
-  # attach the dmg to the GitHub Release. Deliberately NOT gated on the
-  # `build` matrix job: the tauri crate is a standalone cargo workspace
-  # (not owned by bazel — see datalib/tauri/README.md), so a dist
-  # failure shouldn't block shipping the app, and vice versa.
-  #
-  # The signing certs + notarization key live under
-  # restricted/datalib-release/* in Vault, read via the
-  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
-  # The role binds on this repository plus a glob on the OIDC ref claim
-  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
-  # PR workflows are denied, and no GitHub Environment setup is needed.
-  # The gate is therefore "who can push a v* tag"; see the vault repo's
-  # module comment for the residual exposure and how to tighten further.
-  #
-  # All signing/notarization mechanics live in
-  # datalib/tauri/build-signed-app.sh, which is the same script you
-  # run locally — CI only differs in where the secrets come from.
-  #
-  # SUPPLY CHAIN: this job holds the org's Developer ID signing key, and
-  # use-vault-secrets exports it via $GITHUB_ENV — meaning every later
-  # step can read it. So the job uses no individually-owned third-party
-  # actions (only GitHub/pnpm/bazel-contrib org actions + our own), and
-  # every step after the secrets export is plain `run:` shell — no
-  # third-party action code executes with the certs in scope. Keep it
-  # that way: rustup replaces dtolnay/rust-toolchain, `gh release`
-  # replaces softprops/action-gh-release, and there's deliberately no
-  # cargo cache (Swatinem/rust-cache) — a cold compile only costs a few
-  # minutes on a rare tag build and doesn't eat the 10 GB cache quota.
-  #
-  # The same rule for what the build FETCHES: everything that talks to
-  # a registry or a cache — the pinned Tauri CLI from pnpm-lock.yaml,
-  # the cargo crates, the Bazel actions the beforeBuildCommand and the
-  # runtime staging run — is fetched or built in the steps BEFORE the
-  # secrets export, so the signing step itself is a cache hit that
-  # downloads nothing. The export is the last setup step, on purpose.
-  macos-app:
-    name: macos-app (signed + notarized)
-    runs-on: macos-14  # Apple Silicon
-    timeout-minutes: 90
+  # One platform failing still publishes the others: the matrix comment
+  # above, and `!cancelled()` for the same reason as `publish-runtime`.
+  publish-tarballs:
+    name: publish tarballs
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
-      id-token: write  # OIDC token for Vault (signing certs + notary key)
-      contents: write  # attach the dmg to the GitHub Release
-    env:
-      VAULT_AUTH_ROLE: datalib_release_gh
+      contents: write  # create the release and attach the assets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/publish-release-assets
+        with:
+          pattern: tarball-*
+
+  # Build, sign, and notarize the Datalib desktop app (Tauri) and attach
+  # the dmg to the GitHub Release: four jobs, four machines, so that the
+  # job holding the signing key runs no build and the jobs running a build
+  # cannot ask for the key. Deliberately NOT gated on the `build` matrix
+  # job: the tauri crate is a standalone cargo workspace (not owned by
+  # bazel — see datalib/tauri/README.md), so a dist failure shouldn't block
+  # shipping the app, and vice versa.
+  #
+  # All the mechanics are the phases of datalib/tauri/build-signed-app.sh,
+  # which is what you run locally too — CI differs in where the secrets
+  # come from and in running each phase on its own machine.
+  #
+  # macos-app-compile runs every crate's build script and proc macro, the
+  # beforeBuildCommand's bazel build and cargo-about. No `id-token` here:
+  # that permission puts the means to mint the Vault token in every step's
+  # environment, so a build script could read the certs without waiting
+  # for them to be exported.
+  macos-app-compile:
+    name: macos-app (compile)
+    runs-on: macos-14  # Apple Silicon
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The tauri beforeBuildCommand bazel-builds the bundled
       # datalib-http / datalib-dag / datalib-step binaries; same cache layering
@@ -466,18 +463,13 @@ jobs:
       # The tauri crate is built by cargo (not bazel's hermetic rust
       # toolchain), so make sure a current stable toolchain is default
       # instead of trusting whatever the runner image ships (Cargo.toml
-      # says rust-version = "1.83"). Plain rustup, no third-party action;
-      # the runner image carries rustup, with the official installer as
-      # fallback in case a future image drops it.
+      # says rust-version = "1.83"). Plain rustup, no third-party action.
+      # GitHub's macOS images carry rustup; if a future one drops it this
+      # fails here, and the fix is a change of image, not an installer
+      # piped into a shell.
       - name: Install Rust (1.99.1, the version Bazel builds with)
         run: |
           set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
-              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                  | sh -s -- -y --profile minimal --default-toolchain none
-              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-              export PATH="$HOME/.cargo/bin:$PATH"
-          fi
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
           rustup default 1.99.1
           rustc --version
@@ -490,11 +482,83 @@ jobs:
         with:
           package_json_file: datalib/ui/package.json
 
+      # DATALIB_APP_VERSION stamps the tag's version into the shell, as
+      # the sign and verify jobs do into the bundle (tauri.conf.json's
+      # checked-in version is not kept in sync with the backend Cargo.toml
+      # version the tag asserts on). The tag goes through env, never
+      # ${{ }}-interpolated into run: (see verify-version in sculptor's
+      # build-desktop.yml for why).
+      - name: Compile the app and stage what it bundles
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          ./datalib/tauri/build-signed-app.sh compile
+
+      # A tar, since an artifact keeps no file modes and these are programs.
+      - name: Pack what the sign job needs
+        run: |
+          tar -C datalib/tauri -czf macos-app-compiled.tar.gz \
+              binaries runtime licenses target/release/datalib-tauri
+          ls -la macos-app-compiled.tar.gz
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-compiled
+          path: macos-app-compiled.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Holds the org's Developer ID signing key. The certs + notarization key
+  # live under restricted/datalib-release/* in Vault, read via the
+  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
+  # The role binds on this repository plus a glob on the OIDC ref claim
+  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
+  # PR workflows are denied, and no GitHub Environment setup is needed.
+  # The gate is therefore "who can push a v* tag"; see the vault repo's
+  # module comment for the residual exposure and how to tighten further.
+  #
+  # SUPPLY CHAIN: `tauri bundle` cannot compile, and nothing else here
+  # builds: no bazel, no cargo beyond `cargo metadata`, no cache restored,
+  # no BuildBuddy key. use-vault-secrets exports through $GITHUB_ENV, so
+  # every later step can read the certs. So the job uses no
+  # individually-owned third-party actions (only GitHub/pnpm org actions +
+  # our own), everything is fetched BEFORE the export, which is the last
+  # setup step on purpose, and each step until the certs are blanked is
+  # plain `run:` shell. Third-party code that still runs with the certs in
+  # reach: the Tauri CLI at the version pnpm-lock.yaml names.
+  macos-app-sign:
+    name: macos-app (sign + notarize)
+    needs: macos-app-compile
+    runs-on: macos-14  # Apple Silicon
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write  # OIDC token for Vault (signing certs + notary key)
+    env:
+      VAULT_AUTH_ROLE: datalib_release_gh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `tauri bundle` asks `cargo metadata` where the target directory is,
+      # and rust-toolchain.toml would have rustup fetch this toolchain then.
+      - name: Install Rust (1.99.1, the version Bazel builds with)
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc --version
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: datalib/ui/package.json
+
       # The Tauri CLI at the version pnpm-lock.yaml names, from the
-      # tarballs it names, install scripts off. build-signed-app.sh runs
-      # the same install (a no-op here) and then `pnpm exec tauri`, never
-      # `pnpm dlx`, which resolved whatever 2.x was current at signing
-      # time.
+      # tarballs it names, install scripts off.
       - name: Install the pinned Tauri CLI
         run: |
           set -euo pipefail
@@ -502,44 +566,21 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm exec tauri --version
 
-      # Every fetch the build will make, made now: the shell's crates
-      # and the backend's (`cargo fetch` against the committed
-      # Cargo.locks — cargo-about reads license files out of the
-      # backend's crate sources), and the Bazel targets the
-      # beforeBuildCommand copies out and stage-runtime.sh rsyncs — so
-      # the signing step's bazel invocations are analysis + cache hits
-      # with no network, and no crate lands after the certs are in
-      # scope. Each list mirrors its caller, flags included: the
-      # binaries are tauri.conf.json's beforeBuildCommand as
-      # build-signed-app.sh runs it (`-c opt`, stamped, as the tarballs
-      # are); the rest is scripts/stage_runtime.sh and
-      # scripts/third_party_notices.sh, which build in the default mode.
-      - name: Prebuild the bundled binaries and runtime
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-compiled
+
+      - name: Unpack what the compile job made
         run: |
-          set -euo pipefail
-          (cd datalib/tauri && cargo fetch --locked)
-          (cd datalib/backend && cargo fetch --locked)
-          bazel build -c opt --config=release --build_metadata=ROLE=CI \
-              //datalib/backend/http:datalib_http_bin \
-              //datalib/backend/dag:datalib_dag_bin \
-              //datalib/backend/datalib_step:datalib_step \
-              //datalib/backend/applets:datalib_applet \
-              //datalib/backend/migrate_config:datalib_migrate_config_bin \
-              //third-party/latchkey-curl-shims \
-              //third-party/doltlite:doltlite
-          bazel build --build_metadata=ROLE=CI \
-              //datalib/tauri:bundled_node \
-              //datalib/ui:dist \
-              //third-party:bundled_licenses \
-              //third-party/qmd/runtime:qmd_tree \
-              //third-party/latchkey/runtime:latchkey_tree
+          tar -C datalib/tauri -xzf macos-app-compiled.tar.gz
+          rm macos-app-compiled.tar.gz
 
       - name: Export signing credentials
         # CERTS_TAR_GZ is the base64 certs tarball; APPLE_API_KEY_ID /
         # APPLE_API_ISSUER identify the notarization key inside it. The
-        # action leaves all three in $GITHUB_ENV for the build step,
-        # where build-signed-app.sh picks them up. LAST of the setup
-        # steps — see the SUPPLY CHAIN note on the job.
+        # action leaves all three in $GITHUB_ENV for the next step, where
+        # build-signed-app.sh picks them up. LAST of the setup steps — see
+        # the SUPPLY CHAIN note on the job.
         uses: imbue-ai/use-vault-secrets@38aac6d2f537009c6e58849f8fdd34ea16084103 # main, 2026-09-17
         with:
           role: ${{ env.VAULT_AUTH_ROLE }}
@@ -548,18 +589,21 @@ jobs:
             restricted/datalib-release/APPLE_API_KEY_ID
             restricted/datalib-release/APPLE_API_ISSUER
 
-      - name: Build, sign, notarize
-        # DATALIB_APP_VERSION stamps the tag's version into the
-        # bundle (tauri.conf.json's checked-in version is not kept in
-        # sync with the backend Cargo.toml version the tag asserts on).
-        # The tag goes through env, never ${{ }}-interpolated into run:
-        # (see verify-version in sculptor's build-desktop.yml for why).
+      - name: Sign, bundle, notarize
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           export DATALIB_APP_VERSION="${REF_NAME#v}"
-          ./datalib/tauri/build-signed-app.sh
+          ./datalib/tauri/build-signed-app.sh sign
+
+      # Before the upload action and every post-step, on failure too.
+      - name: Blank the signing credentials
+        if: always()
+        run: |
+          for name in CERTS_TAR_GZ APPLE_API_KEY_ID APPLE_API_ISSUER; do
+              echo "${name}=" >> "$GITHUB_ENV"
+          done
 
       - name: Stage dmg
         env:
@@ -574,37 +618,57 @@ jobs:
           cp "$dmg" "$out"
           shasum -a 256 "$out" > "$out.sha256"
 
-      # Plain `gh` instead of softprops/action-gh-release: no third-party
-      # action code runs after the signing secrets land in $GITHUB_ENV
-      # (see the SUPPLY CHAIN note in the job comment). Create-if-missing
-      # tolerates the race with the build matrix's publish step — if the
-      # create loses the race, the upload still targets the same release.
-      - name: Publish release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-dmg
+          path: |
+            Datalib-aarch64-apple-darwin.dmg
+            Datalib-aarch64-apple-darwin.dmg.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Runs the signed app, and with it the node and JS trees it bundles, on a
+  # machine that never held the key. Checks the dmg a person downloads.
+  macos-app-verify:
+    name: macos-app (verify)
+    needs: macos-app-sign
+    runs-on: macos-14  # Apple Silicon
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+
+      - name: Check the dmg
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          # Once more on failure. The dmg is 175 MB, and a slow upload
-          # that succeeded server-side can still come back as a client
-          # error; the retry's `--clobber` replaces what landed
-          # (v0.34.0: HTTP 422 "ReleaseAsset.name already exists", with
-          # the asset sitting on the release).
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber \
-                  Datalib-aarch64-apple-darwin.dmg \
-                  Datalib-aarch64-apple-darwin.dmg.sha256; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          ./datalib/tauri/build-signed-app.sh verify Datalib-aarch64-apple-darwin.dmg
+
+  publish-macos-app:
+    name: publish macos-app
+    needs: macos-app-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create the release and attach the dmg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/publish-release-assets
+        with:
+          pattern: macos-app-dmg
 
   # Build and push the multi-arch runtime image to ghcr.io. Runs after
-  # the matrix `build` job has uploaded both Linux tarballs to the
+  # `publish-tarballs` has uploaded both Linux tarballs to the
   # GitHub Release so we can fetch them by their stable
   # `releases/download/<tag>/...` URLs from inside the docker build
   # context.
@@ -616,10 +680,15 @@ jobs:
   # shouldn't block publishing the Linux image.
   docker-publish:
     name: docker-publish (ghcr.io)
-    needs: [runtime, build]
+    needs: [runtime, publish-runtime, build, publish-tarballs]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push the image to ghcr.io
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
       # fit a buildx run of our ~2.7 GB image × two architectures plus

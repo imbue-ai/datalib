@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The `runtime` job of release.yml, minus the upload: stage the Node
+# The `runtime` job of release.yml, minus handing the files on: stage the Node
 # runtime for this host into `runtime/` (and `runtime-cuda/` when asked),
 # prove node and qmd run out of it, and tar each tree into the asset the
 # binaries fetch on first use (docs/dev/runtime_fetch.md). Writes

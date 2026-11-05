@@ -108,7 +108,7 @@ rm -f "$stage/.docs"
 
 # `runtime.manifest`: which runtime asset of THIS release the binaries
 # fetch on first use, with its sha256 and size read back from what the
-# `runtime` job published. The musl legs name their gnu sibling's
+# `publish-runtime` job published. The musl legs name their gnu sibling's
 # asset: the Node in it is a glibc build (nodejs.org ships no musl
 # one), and a musl datalib on a glibc host — the common case — runs it
 # fine; a musl host is refused by the resolver with the reason named.

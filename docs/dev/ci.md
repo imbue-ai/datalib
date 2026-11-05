@@ -92,7 +92,8 @@ Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
 the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 #469). It does not build the CI image. The steps that
 assemble the assets are scripts under `scripts/release/`, run by
-`bazel test //...` before any tag runs them — `release_steps.md`.
+`bazel test //...` before any tag runs them, and no job that builds
+holds a write token or the signing key: `release_steps.md`.
 
 **`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
