@@ -226,9 +226,12 @@ on stealing from you.
 - **What opens the library's servers stays in the folder too.** The API
   token and the applets' secret are each in a file in `system/`, and in
   no process's environment or arguments, where `ps eww` would show them
-  to any program running as you. A credential pasted into the wizard is
-  the one exception: it is on `latchkey`'s command line for the second
-  that runs (`docs/dev/latchkey.md`).
+  to any program running as you. A file is fine here because of where it
+  is: a program that can read it is already in the library, and can read
+  the data and the sign-ins without it. So neither file may ever move or
+  be copied outside the library. A credential pasted into the wizard is
+  the one exception to all this: it is on `latchkey`'s command line for
+  the second that runs (`docs/dev/latchkey.md`).
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
   programs an app starts as that app, so `datalib-http` and everything

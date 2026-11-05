@@ -1,7 +1,10 @@
 //! A secret one of datalib's processes hands another. It goes through a
 //! private file, never an environment variable or an argument: `ps eww`
-//! shows both to any other process of the same user. In a protected library
-//! the file sits behind the folder's guard, along with what it opens.
+//! shows both to any other process of the same user. A file is safe only
+//! beside what the secret opens: whoever can read it could already read that
+//! directly, so it gives them nothing new. Keep it in the data root, and in
+//! a protected library macOS guards both. A temp dir would be a way around
+//! the folder.
 
 use std::fs::OpenOptions;
 use std::io::{Error, ErrorKind, Result, Write};
