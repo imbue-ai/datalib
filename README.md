@@ -49,11 +49,13 @@ look before you hand it anything of yours.
 ## Read this before you point an agent at it
 
 datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
-agent, and nothing leaves your machine: the only network traffic is
-datalib reading from the services you configured, plus one-time
-downloads the first time they are needed: the search models, and (for
-the command-line install) the Node runtime that search and latchkey run
-on.
+agent, and sends no telemetry: the only network traffic is datalib reading
+from the services you configured, which means sending them your sign-in and
+your requests, plus one-time downloads the first time they are needed: the
+search models, and (for the command-line install) the Node runtime that search
+and latchkey run on. A sign-in that opens a browser also loads that service's
+pages, and may first download the browser. A package you add is fetched from
+the URL you gave it, and runs as you.
 
 What it produces, though, is a very valuable pile of private data in one
 place — and most of it was written by other people. Three things follow:

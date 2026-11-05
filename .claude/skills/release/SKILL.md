@@ -160,12 +160,14 @@ published from a local machine — the tag is the trigger.
     `gh run list --workflow=release.yml --limit 1`, then
     `gh run watch <run-id> --exit-status`. It's slow (multi-platform
     matrix + notarization). `fail-fast` is off, so one broken leg
-    doesn't cancel the others — a partial release can be repaired by
-    re-running just the failed job.
+    doesn't cancel the others. The release stays a draft until every job
+    has succeeded, and a re-run of just the failed jobs finishes it.
+    Once published it is immutable: its assets can never change
+    (`docs/dev/release_steps.md` §"Draft, then publish").
 11. Confirm the artifacts landed: `gh release view vX.Y.Z` should list
-    the per-triple tarballs and the macOS dmg. Tarball filenames are
-    stable/un-versioned on purpose — the install script fetches
-    `releases/latest/download/<name>`.
+    the per-triple tarballs and the macOS dmg, and not say `draft: true`.
+    Tarball filenames are stable/un-versioned on purpose — the install
+    script fetches `releases/latest/download/<name>`.
 
     Then give the release its notes. The workflow creates it with an
     empty body, and apps that read the raw stores learn of a change

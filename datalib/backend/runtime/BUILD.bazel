@@ -51,3 +51,25 @@ rust_test(
         "@datalib_crates//:tempfile",
     ],
 )
+
+# What a run of the pinned latchkey does when datalib starts it.
+rust_test(
+    name = "latchkey_counting_test",
+    size = "small",
+    srcs = ["tests/latchkey_counting.rs"],
+    data = [
+        "//third-party/latchkey/runtime:latchkey_package_dir",
+        "//third-party/latchkey/runtime:latchkey_tree",
+        "@nodejs_host//:node_bin",
+    ],
+    edition = "2021",
+    env = {
+        "LATCHKEY_PACKAGE_RLOC": "$(rlocationpath //third-party/latchkey/runtime:latchkey_package_dir)",
+        "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    },
+    deps = [
+        ":datalib_runtime",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)

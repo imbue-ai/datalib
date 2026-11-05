@@ -2049,7 +2049,7 @@ class DACTAL {
                 }
                 calculation = calculation.replaceAll(/\b=\b/g, '==');
                 try {
-                    val = eval(calculation);
+                    val = dactalCalc(calculation);
                 } catch (error) {
                     val = calculation;
                 }

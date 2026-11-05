@@ -490,6 +490,7 @@ copy_to_bin(
     name = "vitest_inputs",
     srcs = glob(
         [
+            "public/dactal/**",
             "src/**",
             "tests/**",
         ],

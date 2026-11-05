@@ -35,6 +35,11 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   item protects nothing by itself:** any program running as you can get
   the key by running the app's Node. Only the protected folder keeps the
   sign-ins from it.
+- **Its usage count is off.** Left alone, latchkey pings
+  `latchkey.goatcounter.com` once a day from any run, and the README says a
+  sync sends no telemetry. `latchkey_command` and the wrapper we ship both set
+  `LATCHKEY_DISABLE_COUNTING=1`; `latchkey_counting_test` runs the pinned
+  package to show that it holds.
 - **Node starts with `--disable-sigusr1`**, from `bundled_command` and
   from the `latchkey` wrapper we ship (`scripts/latchkey-wrapper.sh`).
   Without it, any program running as the same user can send Node the

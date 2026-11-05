@@ -8,8 +8,8 @@ Source for the multi-arch image published to
   image and how it is built:** [`docs/dev/docker.md`](/docs/dev/docker.md).
 - **CI publish path:** the `docker-image` job in
   [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-  downloads the per-triple Linux tarballs from the just-created GitHub
-  Release and feeds them into the build context this directory expects,
+  takes the per-triple Linux tarballs from that run's artifacts and feeds
+  them into the build context this directory expects,
   and `docker-publish` tags what it pushes.
 
 This README is for working on the image itself.

@@ -76,8 +76,8 @@ it is the commit they came from, for the log view's source links —
 [`logging.md`](logging.md) § "Every line has an author".)
 
 The `build` job writes `runtime.manifest` beside the binaries, reading
-each asset's sha256 back from the sidecar `publish-runtime` published
-and its size from the release. One asset per line:
+each asset's sha256 from its sidecar and its size from the file, in the
+`runtime` job's artifact. One asset per line:
 
 ```
 cpu  runtime-x86_64-unknown-linux-gnu.tar.gz       <sha256> <bytes> https://github.com/…/releases/download/v0.35.0/runtime-x86_64-unknown-linux-gnu.tar.gz

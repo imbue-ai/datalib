@@ -218,6 +218,10 @@ jobs:
 
   bazel-test:
     name: bazel test //...
+    # Only `main` may use this environment, and only it holds the release
+    # org's key, so a workflow edited on a branch cannot name the key
+    # (docs/dev/ci.md § "Two caches"). Everything else runs with no environment.
+    environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}
     runs-on: ubuntu-latest
     # A cold run's test step has reached 51 minutes; a wedged one would
     # otherwise hold a runner for GitHub's default of six hours.
@@ -422,6 +426,10 @@ jobs:
   # not cached yet both jobs compile them: neither waits for the other.
   e2e:
     name: bazel test //datalib/ui:e2e_test
+    # Only `main` may use this environment, and only it holds the release
+    # org's key, so a workflow edited on a branch cannot name the key
+    # (docs/dev/ci.md § "Two caches"). Everything else runs with no environment.
+    environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -696,6 +704,10 @@ jobs:
   # logic, and stays tag-time-only.)
   musl-dist:
     name: bazel build :dist (musl static)
+    # Only `main` may use this environment, and only it holds the release
+    # org's key, so a workflow edited on a branch cannot name the key
+    # (docs/dev/ci.md § "Two caches"). Everything else runs with no environment.
+    environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 

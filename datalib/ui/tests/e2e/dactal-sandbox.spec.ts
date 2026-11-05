@@ -1,15 +1,17 @@
 // The DACTAL card runs its page in a sandboxed iframe (issue #146) and
 // the page keeps its own CSP against the vendored engine's dactal.org
-// paths (issue #138, mitigation 4). Both are checked from inside the
-// running app, because the sandbox is the property under test: the page
-// on its own no longer does anything.
+// paths (issue #138, mitigation 4) and against any query running as code.
+// All of it is checked from inside the running app, because the sandbox is
+// the property under test: the page on its own no longer does anything.
 
 import { test, expect, type Frame, type Page } from "@playwright/test";
 
 declare const process: { env: Record<string, string | undefined> };
 const TOKEN = process.env.DATALIB_TOKEN;
 
-const CARD = "/" + encodeURIComponent('dactalView({ q: "rows/source" })');
+const cardFor = (query: string) =>
+  "/" + encodeURIComponent(`dactalView({ q: ${JSON.stringify(query)} })`);
+const CARD = cardFor("rows/source");
 
 // Authenticate the way a browser does — `?token=` once, then the cookie
 // — rather than through the suite's ambient `Authorization` header.
@@ -22,9 +24,9 @@ test.use({ extraHTTPHeaders: {} });
 
 /** The DACTAL frame once it has drawn a table — the engine ran a query
  *  over rows the host handed it. */
-async function loadedFrame(page: Page): Promise<Frame> {
+async function loadedFrame(page: Page, card = CARD): Promise<Frame> {
   expect(TOKEN, "playwright.config.ts should have pinned DATALIB_TOKEN").toBeTruthy();
-  await page.goto(`${CARD}?token=${TOKEN}`);
+  await page.goto(`${card}?token=${TOKEN}`);
   const frame = page.frameLocator('iframe[src="/dactal/index.html"]');
   await expect(frame.locator("#queryoutput table").first()).toBeVisible({
     timeout: 20_000,
@@ -80,7 +82,32 @@ test("the page opened on its own does nothing", async ({ page }) => {
   expect(await page.evaluate(() => window.origin)).toBe("null");
 });
 
-test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
+test("a query in a link does math and runs no code", async ({ page }) => {
+  // Every letter comes from the words the engine's math filter allows: it
+  // rewrites `cos` to `Math.cos` even inside a string. Before the filter
+  // stopped being the only guard, this reached `Function` and ran.
+  const letter = (c: string) => {
+    if (c === ".") return "'cos'[4]";
+    if ("=1".includes(c)) return `'${c}'`;
+    const word = ["acos", "atan", "cbrt", "exp", "fround", "pow", "sinh"].find((w) =>
+      w.includes(c),
+    );
+    if (!word) throw new Error(`no math word has ${c}`);
+    return `'${word}'[${`Math.${word}`.indexOf(c, 5)}]`;
+  };
+  const text = (s: string) => [...s].map(letter).join("+");
+  const ctor = text("constructor");
+  const code = text("this.pwned=1");
+  const attack = `rows.[=[][${ctor}][${ctor}](${code})()]`.replace(/\](?=.)/g, "]]");
+
+  const frame = await loadedFrame(page, cardFor(attack));
+  expect(await frame.evaluate(() => "pwned" in window)).toBe(false);
+
+  const math = await loadedFrame(page, cardFor("rows.[=(1+2)*3]"));
+  await expect(math.locator("#queryoutput table").first()).toContainText("9");
+});
+
+test("the CSP blocks the dactal.org paths and refuses eval", async ({ page }) => {
   const frame = await loadedFrame(page);
 
   const result = await frame.evaluate(async () => {
@@ -115,14 +142,17 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
     // injection, and a fetch()-then-new Function().
     const scriptTag = await blocked(() => w.loadscript("dactal_assist.js"));
     const fetched = await blocked(() => w.loadscript_namespaced("anything.js", "ns"));
-    // …and `eval`, which must still work — it is load-bearing for the
-    // query language, which is why 'unsafe-eval' stays in the policy.
-    let evalWorks = false;
-    try {
-      evalWorks = eval("1 + 1") === 2;
-    } catch {
-      evalWorks = false;
-    }
+    // …and no string can become code here, by either route.
+    const refused = (fn: () => unknown) => {
+      try {
+        fn();
+        return false;
+      } catch (e) {
+        return e instanceof EvalError;
+      }
+    };
+    const evalRefused = refused(() => (0, eval)("1 + 1"));
+    const functionRefused = refused(() => new Function("return 1"));
     // A CSP violation report is dispatched asynchronously, after the
     // load it blocked has already rejected — so the `blocked()` calls
     // above can finish before the events arrive, and something has to
@@ -130,12 +160,13 @@ test("the CSP blocks the dactal.org paths and keeps eval", async ({ page }) => {
     // expires when the events never come, and then the assertion below
     // says which one was missing.
     await Promise.race([settled, new Promise((r) => setTimeout(r, 5_000))]);
-    return { scriptTag, fetched, evalWorks, violations };
+    return { scriptTag, fetched, evalRefused, functionRefused, violations };
   });
 
   expect(result.scriptTag, "loadscript() must not reach dactal.org").toBe(true);
   expect(result.fetched, "loadscript_namespaced() must not fetch from dactal.org").toBe(true);
-  expect(result.evalWorks, "'unsafe-eval' must stay — the engine needs it").toBe(true);
+  expect(result.evalRefused, "the page must have no 'unsafe-eval'").toBe(true);
+  expect(result.functionRefused, "the page must have no 'unsafe-eval'").toBe(true);
   // The failures have to come from the policy, not from the network
   // happening to be down in CI.
   expect(result.violations).toEqual(expect.arrayContaining(["script-src-elem", "connect-src"]));

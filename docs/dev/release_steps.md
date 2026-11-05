@@ -41,9 +41,39 @@ files, the commit, a stand-in for `cargo-about`). The header of each
 script lists them. A script calls another through `"$BASH"`, so the
 bash that runs the outer one runs the inner one too.
 
-The publish steps — `gh release create` / `gh release upload` — stay
-out of the scripts, in `.github/actions/publish-release-assets`. They
-are the part that cannot run anywhere else.
+The publish steps — `gh release create`, `upload` and `edit` — stay
+out of the scripts, in `release.yml` and
+`.github/actions/publish-release-assets`. They are the part that cannot
+run anywhere else.
+
+## Draft, then publish
+
+A release is a draft until every job has succeeded, and then it is
+published once, whole. `create-release` makes the one draft, each
+`publish-*` job attaches its assets, and `publish-release`, which needs
+every job that makes an asset, publishes it.
+
+The repository's immutable-releases setting is on, so from that moment
+GitHub refuses any change to the assets or the tag, to anyone. That is what
+makes `.sha256` beside a tarball worth checking: nobody with write access
+can replace both. It also means nothing can be added later, so:
+
+- **A failed job holds the whole release back.** `releases/latest` still
+  points at the previous release. Re-run the failed jobs (`gh run rerun
+  <id> --failed`); they attach to the same draft, replacing what they had
+  uploaded, and `publish-release` runs after them.
+- **A leg that cannot be fixed soon** leaves a choice: publish what is on
+  the draft by hand (`gh release edit vX.Y.Z --draft=false`), knowing the
+  missing asset can never join it, or cut a patch release.
+- **The title and notes stay editable**, as GitHub's docs say, so the notes
+  can still be written after publishing.
+
+A job reads what an earlier one made from this run's artifacts, not from
+the release: a `contents: read` token cannot be counted on to see a draft,
+and no build job should need more than that. The manifest's URLs do name
+the tag, so a runtime fetch works only once the release is published, and
+nothing in the workflow fetches one: the Docker image and the Mac app carry
+theirs.
 
 ## Who holds what
 
@@ -64,7 +94,7 @@ to wait for.
 | job | runs on it | holds |
 |---|---|---|
 | `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
-| `publish-runtime`, `publish-tarballs`, `publish-macos-app` | `gh release`, nothing built | `contents: write` |
+| `create-release`, `publish-runtime`, `publish-tarballs`, `publish-macos-app`, `publish-release` | `gh release`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |

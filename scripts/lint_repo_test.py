@@ -9,6 +9,7 @@ from lint_repo import (
     floating_images,
     floating_npx,
     release_grant_problems,
+    release_key_problems,
     unliteral_opens,
 )
 
@@ -86,6 +87,12 @@ jobs:
     runs-on: x
     steps:
       - run: bazel build //...
+  create-release:
+    permissions:
+      contents: write
+  publish-release:
+    permissions:
+      contents: write
   publish-runtime:
     permissions:
       contents: write  # upload
@@ -181,6 +188,26 @@ jobs:
                 problems = release_grant_problems(text)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("a release reads no cache", problems[0])
+
+    def test_the_release_orgs_key_stays_in_the_environment_main_alone_may_use(
+        self,
+    ) -> None:
+        """As a plain repository secret, a workflow on any branch could name it."""
+        key = "      - run: x\n        env:\n          K: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}\n"
+        outside = "jobs:\n  test:\n    runs-on: x\n    steps:\n" + key
+        self.assertEqual(
+            release_key_problems(outside),
+            [
+                "job test names BUILD_BUDDY_RELEASE_API_KEY outside the main-ci environment"
+            ],
+        )
+        inside = (
+            "jobs:\n  test:\n    runs-on: x\n"
+            "    environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}\n"
+            "    steps:\n" + key
+        )
+        self.assertEqual(release_key_problems(inside), [])
+        self.assertEqual(release_key_problems("jobs:\n  test:\n    runs-on: x\n"), [])
 
     def test_a_third_party_image_is_pinned_by_digest(self) -> None:
         """Whoever controls a moved tag runs code in a job that can push the image."""

@@ -84,6 +84,11 @@ if [ -z "${LATCHKEY_CURL:-}" ] && [ -x "$here/latchkey-curl-router" ]; then
     export LATCHKEY_CURL
 fi
 
+# Left unset, latchkey pings its own usage counter once a day. datalib says
+# nothing leaves the machine but what a person configured, so it does not ask.
+LATCHKEY_DISABLE_COUNTING=1
+export LATCHKEY_DISABLE_COUNTING
+
 # Without the flag, any program running as you can signal this Node to
 # open its debugger and read the sign-ins out of its memory (#1515).
 exec "$node" --disable-sigusr1 "$entry" "$@"
