@@ -363,6 +363,10 @@ async function whatIsInFrame(page: Page): Promise<Record<string, string | null>>
  *  windows of their own, in an order the engines do not agree on. */
 async function clickEverything(page: Page, context: BrowserContext): Promise<void> {
   const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
+  const apiTab = context.waitForEvent(
+    "response",
+    (r) => new URL(r.url()).pathname === "/api/config" && r.request().isNavigationRequest(),
+  );
   for (const text of ["Unsubscribe", "Ask Quark", "Review your account"]) {
     await body.getByText(text).last().click();
   }
@@ -375,12 +379,15 @@ async function clickEverything(page: Page, context: BrowserContext): Promise<voi
   };
   await expect.poll(refused, { timeout: 10_000 }).toBe(true);
   // "Review your account" is a plain GET of the API, which the app opens in a tab of its
-  // own; nothing guards it but that a GET never writes.
+  // own. It is a same-origin link, so the rule against a link from another site lets it by.
   await expect
     .poll(() =>
       context.pages().some((p) => new URL(p.url(), "http://x").pathname === "/api/config"),
     )
     .toBe(true);
+  const opened = await apiTab;
+  expect((await opened.request().allHeaders())["sec-fetch-site"]).toBe("same-origin");
+  expect(opened.status()).toBe(200);
 }
 
 test.describe("Quark's prize email", () => {

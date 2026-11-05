@@ -273,7 +273,9 @@ a same-origin cookie, which it attaches to the component's own
 it. An applet author therefore writes no auth code — but the corollary
 is that a component may only reach the gateway from the page's own
 origin. Fetching a `/applet/` URL from an iframe on another origin, or from
-outside the browser without a token, gets a `401`.
+outside the browser without a token, gets a `401`, and a link to one from
+another site gets a `403` (`only_from_this_site` in `auth.rs`), so an applet's
+routes are the page's to call and never a page a link can open.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the
