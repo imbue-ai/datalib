@@ -359,6 +359,9 @@ the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row
 in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
 file (a size and no blocks).
 
+A file over `max_bytes` is a `record:files:<path>` warning until it is read,
+whether or not an earlier scan stored it.
+
 ## Interrupting a scan
 
 The path-keyed tables are reconciled at the **end** of a scan, not

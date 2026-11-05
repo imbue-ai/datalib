@@ -519,7 +519,7 @@ Reading a download's problem (`stage = 'fetch'`):
   `warning` where an earlier fetch left a copy that may be stale, or
   where a limit in the config kept the record out on purpose.
 - **`reason`** is why: `fetch_failed`; `over_size_limit` (the source's
-  size limit kept an attachment or `.eml` out); `not_found` or
+  size limit kept an attachment, an `.eml` or a local file out); `not_found` or
   `forbidden` for something the config names that the service does not
   have or will not show (a misspelled label or channel, reported every
   run until the config is fixed).

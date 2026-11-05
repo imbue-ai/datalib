@@ -34,11 +34,13 @@ pub async fn ingest(
         if cells.is_empty() {
             return Err(super::unknown_layout(FILE_REL, "holds no activity cells"));
         }
+        let mut no_link = 0;
         for &cell in &cells {
             let anchors = mdl_html::iter_anchors(cell);
             // The first anchor is the video; channel anchor is second
             // when present. We tolerate cells that only have a video.
             let Some((video_url, video_title)) = anchors.first().cloned() else {
+                no_link += 1;
                 continue;
             };
             let video_id = video_id_from_url(&video_url).unwrap_or_default();
@@ -88,6 +90,19 @@ pub async fn ingest(
                 when_ts,
                 video_id: Some(video_id),
                 channel_id,
+            });
+        }
+        // Takeout writes such an entry for a video since removed, and a long
+        // history holds many, so they share one row.
+        if no_link > 0 {
+            skipped.push(SkippedRecord {
+                entry: "no_link".to_string(),
+                problem: Problem::lossy(
+                    "youtube_watch_no_link",
+                    None,
+                    &format!("{no_link} entries name no video, as for one since removed"),
+                )
+                .severity(Severity::Warning),
             });
         }
         super::require_some_read(FILE_REL, cells.len(), rows.len())?;

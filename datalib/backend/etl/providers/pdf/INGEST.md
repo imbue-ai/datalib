@@ -28,7 +28,8 @@ rescan hashes nothing and still retries the corrupt fixture.
 A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
 deletions fall out; content already in `pdf_documents` is not
 identified again. A file over `max_bytes` is there and not read, so it
-keeps the path row the last scan wrote. Once the paths are rebuilt
+keeps the path row the last scan wrote, if one did, and is a
+`record:files:<path>` warning until it is read. Once the paths are rebuilt
 after a clean walk, a document no path names goes with its bookkeeping
 (`documents_removed`); a file moved within the tree is named at its new
 path by then and keeps its document.
@@ -63,6 +64,14 @@ The scan goes on, and what it could not do is a `problems` row:
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
   carries it: a document that never identified never renders. A file refused
   for what it would cost to read is one too (§"A PDF can be made by anyone").
+- **A document that renders nothing** is identified and stored, and is not
+  searchable. Every such document in the tree shares one warning,
+  `skipped:documents_without_text:<hash>`, which gives the count and names one
+  of them. One row rather than one each, because a folder of scans is thousands
+  of documents, and what a person needs to know is that they are absent; the
+  query under §"Inspecting a scan" lists them. It goes the scan that finds none
+  left, and an unchanged tree rewrites nothing
+  (`documents_that_never_render_are_one_warning_with_a_count`).
 - **A file that changed after its hash was taken.** The scan's hash only
   decides whether to look; a document read is named by the hash of the
   bytes it was classified from
@@ -124,7 +133,8 @@ object no parser can read and `pdf-inspector` does not repair, is one warning on
 the document: a render `problems` row saying how many parts could not be read, so
 a person knows the document is short of what the file holds, though not exactly
 what is gone (`a_document_missing_part_of_itself_says_so`). A document that does
-not render, such as a fully scanned one, has no page for this row to sit on.
+not render, such as a fully scanned one, has no page for this row to sit on, and
+is counted in the warning under §"When part of a scan fails".
 
 ### What this does not stop
 
@@ -152,9 +162,9 @@ this decision:
 
 - **Classification is reliable.** 21/21 correctly sorted; born-digital
   files came back `text_based` at confidence 1.0, scans at 0.95. That is
-  what makes "record it and skip it" a safe default — nothing is
-  silently dropped, and the work list for a future OCR pass is exactly
-  `SELECT … WHERE needs_ocr = 1`.
+  what makes "record it and skip it" a safe default: a document skipped
+  is counted in one warning (§"When part of a scan fails"), and the work
+  list for a future OCR pass is exactly `SELECT … WHERE needs_ocr = 1`.
 - **Conversion is effectively free.** 277 pages in ~3.4 s, single
   threaded (~6 ms/page).
 - **OCR's failure mode is silent, not loud.** With PP-OCRv6 Small (50

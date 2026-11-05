@@ -33,13 +33,14 @@ use async_trait::async_trait;
 use chrono::{Duration, NaiveDate};
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
-use tracing::{info, warn};
+use tracing::info;
 
 use datalib_etl::blob_cas::{blake3_hex, BlobCas, CasInsert};
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
+use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::expansion::Allowance;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
@@ -697,12 +698,10 @@ impl Walk<'_> {
             }
         };
         let mut rows = Vec::with_capacity(list.len());
+        let mut no_id = Vec::new();
         for d in &list {
             let Some(id) = id_of(d, &["deviceId", "unitId"]) else {
-                warn!(
-                    event = "garmin_device_without_id",
-                    "skipping a device with no deviceId"
-                );
+                no_id.push(listed_with_no_id(d, "a device"));
                 continue;
             };
             rows.push(DeviceRow {
@@ -713,6 +712,7 @@ impl Walk<'_> {
                 product_display_name: str_of(d, &["productDisplayName"]),
             });
         }
+        self.found.skipped("devices", no_id);
         let keep: HashSet<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
         upsert(self.db, &rows).await?;
         self.db.prune_devices(&keep).await?;
@@ -769,6 +769,7 @@ impl Walk<'_> {
     async fn weight(&self, s: &mut FetchSummary) -> Result<()> {
         let mut chunk_start = self.since;
         let mut seen: HashSet<String> = HashSet::new();
+        let mut no_id = Vec::new();
         let mut complete = true;
         while chunk_start <= self.end && !self.stopping() {
             let chunk_end = (chunk_start + Duration::days(WEIGHT_CHUNK_DAYS - 1)).min(self.end);
@@ -779,7 +780,7 @@ impl Walk<'_> {
             );
             let listed = match self.client.get_json(&path).await {
                 Ok(Fetched::Some(v)) => match v["dailyWeightSummaries"].as_array() {
-                    Some(summaries) => Ok(weigh_in_rows(summaries)),
+                    Some(summaries) => Ok(weigh_in_rows(summaries, &mut no_id)),
                     None => {
                         let preview: String = v.to_string().chars().take(120).collect();
                         Err(format!("no dailyWeightSummaries array: {preview}"))
@@ -811,6 +812,7 @@ impl Walk<'_> {
         if !complete || self.stopping() {
             return Ok(());
         }
+        self.found.skipped("weigh_ins", no_id);
         let keep: HashSet<&str> = seen.iter().map(String::as_str).collect();
         s.weigh_ins_pruned = self
             .db
@@ -850,8 +852,10 @@ impl Walk<'_> {
         s.activities_listed = listed.len();
 
         let mut rows = Vec::with_capacity(listed.len());
+        let mut no_id = Vec::new();
         for a in listed {
             let Some(id) = id_of(&a, &["activityId"]) else {
+                no_id.push(listed_with_no_id(&a, "an activity"));
                 continue;
             };
             let payload = a.to_string();
@@ -862,6 +866,11 @@ impl Walk<'_> {
                 listing_hash: Some(blake3_hex(payload.as_bytes())),
                 id_and_payload: WirePayload { id, payload },
             });
+        }
+        // A listing that began at a later date has no verdict on what came
+        // before it, so it clears nothing.
+        if incomplete.is_none() && (start == self.since || !no_id.is_empty()) {
+            self.found.skipped("activities", no_id);
         }
         // A listing that reached its end names every activity from
         // `start` on, so one dated clearly inside it that it did not name
@@ -999,13 +1008,10 @@ impl Walk<'_> {
                 self.listing_failed(s, kind.name, why);
             }
             let mut rows = Vec::with_capacity(list.len());
+            let mut no_id = Vec::new();
             for item in &list {
                 let Some(upstream_id) = id_of(item, kind.id_keys) else {
-                    warn!(
-                        event = "garmin_item_without_id",
-                        kind = kind.name,
-                        "skipping an item with no id"
-                    );
+                    no_id.push(listed_with_no_id(item, kind.name));
                     continue;
                 };
                 rows.push(ItemRow {
@@ -1021,6 +1027,7 @@ impl Walk<'_> {
             upsert(self.db, &rows).await?;
             s.items += rows.len();
             if incomplete.is_none() {
+                self.found.skipped(kind.name, no_id);
                 s.items_pruned += self.db.prune_items(kind.name, &keep).await?;
             }
             self.wrote(rows.len() as u64).await;
@@ -1328,10 +1335,21 @@ pub fn daily_path(metric: &str, display_name: &str, d: &str) -> String {
     }
 }
 
+/// What became of a thing upstream listed with nothing to key it on.
+fn listed_with_no_id(listed: &Value, what: &str) -> SkippedRecord {
+    SkippedRecord {
+        entry: listed.to_string(),
+        problem: datalib_problems::Problem::record(
+            datalib_problems::Reason::NoIdentity,
+            &format!("{what} listed with no id, so it was not stored"),
+        ),
+    }
+}
+
 /// `dailyWeightSummaries[].allWeightMetrics[]` flattened, one row per
 /// weigh-in. The caller has already established that the summaries
 /// array is there: its absence is not an empty range.
-pub fn weigh_in_rows(summaries: &[Value]) -> Vec<WeighInRow> {
+pub fn weigh_in_rows(summaries: &[Value], no_id: &mut Vec<SkippedRecord>) -> Vec<WeighInRow> {
     let mut out = Vec::new();
     for summary in summaries {
         let Some(metrics) = summary["allWeightMetrics"].as_array() else {
@@ -1339,10 +1357,7 @@ pub fn weigh_in_rows(summaries: &[Value]) -> Vec<WeighInRow> {
         };
         for m in metrics {
             let Some(id) = id_of(m, &["samplePk"]) else {
-                warn!(
-                    event = "garmin_weigh_in_without_pk",
-                    "skipping a weigh-in with no samplePk"
-                );
+                no_id.push(listed_with_no_id(m, "a weigh-in"));
                 continue;
             };
             out.push(WeighInRow {
@@ -1544,11 +1559,13 @@ mod tests {
                     {"samplePk": 1, "calendarDate": "2026-09-13", "weight": 80000, "timestampGMT": 1_757_700_000_000i64, "sourceType": "INDEX_SCALE"},
                     {"samplePk": 2, "calendarDate": "2026-09-13", "weight": 80100, "timestampGMT": 1_757_760_000_000i64, "sourceType": "MANUAL"}
                 ]},
-                {"summaryDate": "2026-09-14", "allWeightMetrics": []}
+                {"summaryDate": "2026-09-14", "allWeightMetrics": [{"weight": 79000}]}
             ]
         });
-        let rows = weigh_in_rows(v["dailyWeightSummaries"].as_array().unwrap());
+        let mut no_id = Vec::new();
+        let rows = weigh_in_rows(v["dailyWeightSummaries"].as_array().unwrap(), &mut no_id);
         assert_eq!(rows.len(), 2);
+        assert_eq!(no_id.len(), 1);
         assert_eq!(rows[0].id_and_payload.id, "1");
         assert_eq!(rows[1].weight_g, Some(80100.0));
         assert_eq!(rows[1].source_type.as_deref(), Some("MANUAL"));
