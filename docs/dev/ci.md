@@ -113,7 +113,8 @@ pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
 with other people's jobs, so the quota can be spent before a run starts
 (v0.42.0's `docker-publish` failed on `toomanyrequests`). Both
 workflows take Docker Hub images through Google's pull-through mirror,
-`mirror.gcr.io`: the QEMU and BuildKit images by name, and the
+`mirror.gcr.io`: the BuildKit image by name and digest (`lint_repo.py`
+check 21 refuses a tag alone), and the
 Dockerfiles' `FROM` lines through a registry mirror in
 `setup-buildx-action`'s `buildkitd-config-inline`, so the Dockerfiles
 themselves still name Docker Hub and build the same way on a laptop. A
@@ -165,10 +166,9 @@ checking them ([`threat_models.md`](threat_models.md)). A release's
 downloads come from their origins, each pinned by sha256, so a download
 an origin refuses fails the leg rather than being served from a copy.
 
-**`docker-publish` keeps no layer cache.** Its two builds share only what
-the job's own builder holds, and the job takes about ten minutes. A
-release's other actions that would cache by default, `setup-qemu-action`
-and `setup-buildx-action`, are told not to.
+**`docker-image` keeps no layer cache.** Its two builds share only what
+the job's own builder holds. `setup-buildx-action`, which would cache by
+default, is told not to.
 
 **What holds the write key.** `test.yml`'s three jobs that run on a push
 to `main` compile with it in `.bazelrc.user`. Their actions run under

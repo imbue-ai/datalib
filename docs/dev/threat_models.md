@@ -126,15 +126,12 @@ That does nothing about the build scripts that run once one starts.
 | A release reads no cache: no BuildBuddy key, no restored repository cache, no Docker layer cache (check 21) | An entry written on `main`, or with a stolen key, reaching what a release ships. On the mac legs this was the repository cache: v0.49.0's restored an entry saved on `main` by `latchkey-auth.yml`'s daily run, while BuildBuddy gave them no hits | Bad code a release compiles itself (item 1) |
 | Two BuildBuddy orgs | A laptop or a PR run writing what `main`'s CI replays | Anything that runs on `main` |
 | The write key only on a push to `main` | A PR's code getting the key before it merges | A workflow edited on a branch: only `test.yml`'s own expression holds the key to `main` |
+| BuildKit pinned by digest, and each image built on its own architecture, so no emulator image runs (check 21) | Whoever controls a tag on Docker Hub running code in a job that can push the image, or changing what assembles it | A bad version someone pins deliberately, and the runner image itself |
 | Publish and sign jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, or rewriting a published release | Bad code in what it builds |
 | The `v*` tag ruleset | Anyone outside the team starting or moving a release | What a release does once started |
 
 ### What is still open
 
-- **`docker-publish` builds with two floating images.** It takes
-  `moby/buildkit:latest` and `tonistiigi/binfmt:latest` through a mirror,
-  and the job holds `packages: write`. Whoever controls either tag runs
-  code there, and BuildKit is what assembles the image.
 - **Bad code a release compiles itself** (item 1 above). The burn-in and
   `cargo deny` are all that stand in front of it.
 - **The write key sits where crates compile.** `test.yml`'s three jobs

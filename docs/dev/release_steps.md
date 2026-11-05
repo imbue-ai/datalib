@@ -68,7 +68,8 @@ to wait for.
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
-| `docker-publish` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
+| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
+| `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
 
 A build job hands what it made to the next through an artifact.
 `scripts/lint_repo.py` check 21 holds each grant to its job, refuses a
@@ -222,7 +223,7 @@ matches.
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
-- `docker-publish`'s pulls. Its Docker Hub images come through
-  `mirror.gcr.io` (`ci.md` §"What runs where"), and only a tag runs
-  that job, so a change to how it pulls is first tried by the next
-  release.
+- The Docker jobs' pushes. Their builds and the tagging can be tried on a
+  branch with a release's published tarballs and `imagetools create
+  --dry-run`, but only a tag pushes. Their Docker Hub images come through
+  `mirror.gcr.io` (`ci.md` §"What runs where").

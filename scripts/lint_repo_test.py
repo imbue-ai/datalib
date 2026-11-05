@@ -6,6 +6,7 @@ import unittest
 
 from lint_repo import (
     checkout_token_settings,
+    floating_images,
     floating_npx,
     release_grant_problems,
     unliteral_opens,
@@ -101,6 +102,10 @@ jobs:
     steps:
       # no bazel here
       - run: ./datalib/tauri/build-signed-app.sh sign
+  docker-image:
+    permissions:
+      contents: read
+      packages: write
   docker-publish:
     permissions:
       contents: read
@@ -176,6 +181,23 @@ jobs:
                 problems = release_grant_problems(text)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("a release reads no cache", problems[0])
+
+    def test_a_third_party_image_is_pinned_by_digest(self) -> None:
+        """Whoever controls a moved tag runs code in a job that can push the image."""
+        text = """
+# image=mirror.gcr.io/moby/buildkit:latest in a comment is fine
+driver-opts: image=mirror.gcr.io/moby/buildkit:v1@sha256:abc
+image: mirror.gcr.io/tonistiigi/binfmt:latest
+driver-opts: image=mirror.gcr.io/moby/buildkit:v1
+image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+"""
+        self.assertEqual(
+            floating_images(text),
+            [
+                "mirror.gcr.io/tonistiigi/binfmt:latest",
+                "mirror.gcr.io/moby/buildkit:v1",
+            ],
+        )
 
     def test_a_comment_may_say_why_there_is_no_cache(self) -> None:
         text = self.GOOD.replace("# no bazel here", "# no BuildBuddy, no .bazelrc.user")

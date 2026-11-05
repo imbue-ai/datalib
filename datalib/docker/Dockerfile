@@ -22,8 +22,8 @@
 #
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
-# docker-publish job in `release.yml` stages the assets from the
-# just-created GitHub Release and the demo from the checkout.
+# docker-image job in `release.yml` stages its architecture's assets from
+# the just-created GitHub Release and the demo from the checkout.
 #
 # Bind mounts at runtime (see docs/user/docker.md):
 #   /root/.latchkey                latchkey credentials store
@@ -176,9 +176,8 @@ RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 # Each source's keyword (BM25) index is built here too, so free-text
 # search works the moment the demo starts. The embed steps and the
 # aggregator sit below a BUILD-TIME CUT marker and are dropped for this
-# run (embedding under the arm64 leg's QEMU emulation would cost every
-# release tens of minutes); the shipped config keeps them, so the first
-# sync in a container adds the embeddings.
+# run (the slim build has no models to embed with); the shipped config
+# keeps them, so the first sync in a container adds the embeddings.
 # `--now` is pinned to the fixture's own era so the bookkeeping reads
 # in fixture time rather than in build time, like the test fixture.
 #

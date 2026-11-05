@@ -590,60 +590,41 @@ jobs:
         with:
           pattern: macos-app-dmg
 
-  # Build and push the multi-arch runtime image to ghcr.io. Runs after
-  # `publish-tarballs` has uploaded both Linux tarballs to the
-  # GitHub Release so we can fetch them by their stable
-  # `releases/download/<tag>/...` URLs from inside the docker build
-  # context.
+  # Build the runtime image for one architecture and push it to ghcr.io by
+  # digest, with no tag yet; `docker-publish` joins the two. Runs after
+  # `publish-tarballs` has uploaded the Linux tarballs to the GitHub Release,
+  # which the docker build context is staged from.
+  #
+  # Each leg builds on a runner of its own architecture, so nothing is
+  # emulated and the job runs no emulator image.
   #
   # This image is the user-facing way to run datalib on Linux
   # without trusting the bare binaries to your host shell — see
   # docs/dev/docker.md for the bind-mount + security model. The build is
   # NOT gated on the macOS matrix entry: a darwin-only build failure
   # shouldn't block publishing the Linux image.
-  docker-publish:
-    name: docker-publish (ghcr.io)
+  docker-image:
+    name: docker-image (${{ matrix.arch }})
     needs: [runtime, publish-runtime, build, publish-tarballs]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
-      packages: write  # push the image to ghcr.io
+      packages: write  # push this architecture's image to ghcr.io
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+          - arch: arm64
+            triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
-      # fit a buildx run of our ~2.7 GB image × two architectures. v0.5.0
-      # / v0.5.1 both filled the runner's disk before docker-publish could
-      # finish.
-      # Deleting the preinstalled Android SDK, .NET runtimes, Haskell
-      # GHC, large apt packages we don't use, and swap reclaims ~30 GB —
-      # from ~14 GB to ~44 GB free, comfortable headroom for the build.
-      # PATH-installed tools (gh, docker, node, etc.) that the rest of
-      # this job uses are left alone.
-      #
-      # Inlined shell doing what jlumbroso/free-disk-space@main used to
-      # do here (an individually-owned action pinned to a mutable
-      # branch; see macos-app-sign's SUPPLY CHAIN note). Best-effort
-      # `|| true` throughout: runner images shed packages over time, and
-      # a missing one shouldn't fail a release — the docker build's own
-      # disk usage is the real check.
-      - name: Free up runner disk
-        run: |
-          set -euo pipefail
-          echo "Free disk before:" && df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
-              /opt/ghc /usr/local/.ghcup || true
-          sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
-              '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
-              google-chrome-stable firefox powershell mono-devel \
-              libgl1-mesa-dri >/dev/null || true
-          sudo apt-get autoremove -y >/dev/null || true
-          sudo apt-get clean || true
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile || true
-          echo "Free disk after:" && df -h /
+      - uses: ./.github/actions/free-runner-disk
 
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout datalib/docker/Dockerfile
@@ -655,48 +636,41 @@ jobs:
       # inputs come from the checkout (datalib/docker/stage_demo.sh).
       - name: Stage tarballs and the demo into docker build context
         env:
+          ARCH: ${{ matrix.arch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
+          TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
-          mkdir -p ctx/dist/amd64 ctx/dist/arm64
+          mkdir -p "ctx/dist/${ARCH}"
           cp datalib/docker/Dockerfile ctx/Dockerfile
           cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
           datalib/docker/stage_demo.sh ctx
-          for pattern in 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
-                         'runtime-x86_64-unknown-linux-gnu.tar.gz*'; do
+          for pattern in "datalib-${TRIPLE}.tar.gz" \
+                         "runtime-${TRIPLE}.tar.gz*"; do
               gh release download "${REF_NAME}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --pattern "${pattern}" \
-                  --clobber --dir ctx/dist/amd64
+                  --clobber --dir "ctx/dist/${ARCH}"
           done
-          for pattern in 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
-                         'runtime-aarch64-unknown-linux-gnu.tar.gz*'; do
-              gh release download "${REF_NAME}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --pattern "${pattern}" \
-                  --clobber --dir ctx/dist/arm64
-          done
-          ls -la ctx/dist/amd64 ctx/dist/arm64
+          ls -la "ctx/dist/${ARCH}"
 
-      # Every Docker Hub image this job needs — binfmt, BuildKit, and the
+      # Every Docker Hub image this job needs — BuildKit and the
       # Dockerfile's `FROM`s — comes through Google's pull-through mirror
       # instead. Anonymous Docker Hub pulls are rate-limited per IP, and
       # a hosted runner shares its IP with strangers' jobs, so the quota
       # can be gone before we start (`toomanyrequests` at this step).
-      # The first two name the mirror; the build's
-      # `FROM`s reach it through `buildkitd-config-inline`, which falls
-      # back to Docker Hub only for an image the mirror cannot serve.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          image: mirror.gcr.io/tonistiigi/binfmt:latest
-          cache-image: false
-
+      # BuildKit names the mirror, and the build's `FROM`s reach it through
+      # `buildkitd-config-inline`, which falls back to Docker Hub only for
+      # an image the mirror cannot serve.
+      #
+      # BuildKit assembles what ships, so it is pinned by digest (check 21).
+      # To move it, take a version and its digest from Docker Hub's tags page
+      # and change devcontainer.yml with it.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:latest
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
           cache-binary: false
           buildkitd-config-inline: |
             [registry."docker.io"]
@@ -709,8 +683,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push the multi-arch image in one go. We previously had
-      # a separate `--load` amd64 build that ran a latchkey
+      # We previously had a separate `--load` amd64 build that ran a latchkey
       # services-register / auth-set / auth-list roundtrip against the
       # loaded image before this step pushed; that doubled wall time
       # (the amd64 build was effectively done twice — once for smoke,
@@ -726,39 +699,49 @@ jobs:
       #
       # No layer cache, as in the build job: each tag builds these layers
       # itself, so nothing another run wrote ships in the image.
-      - name: Build and push multi-arch image
+      - name: Build this architecture and push it by digest
         env:
-          REF_NAME: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
           # Plain-text progress, so each step is readable in the log.
           BUILDKIT_PROGRESS: plain
         run: |
           set -euo pipefail
-          version="${REF_NAME#v}"
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --tag "${image}:${version}" \
-              --tag "${image}:latest" \
+              --platform "linux/${ARCH}" \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --push \
+              --output "type=image,name=${image},push-by-digest=true,name-canonical=true,push=true" \
+              --metadata-file "${RUNNER_TEMP}/metadata.json" \
               ctx
+          mkdir -p "${RUNNER_TEMP}/digests"
+          jq --exit-status --raw-output '."containerimage.digest"' "${RUNNER_TEMP}/metadata.json" \
+              > "${RUNNER_TEMP}/digests/${ARCH}"
 
-          # The same image without qmd's 2.2 GB of GGUFs, for the
-          # devcontainer below to build on. Only CI pulls the
-          # devcontainer image, and CI's one consumer of those models
-          # (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit
-          # on almost every run, so it was downloading them for nothing:
-          # measured 6.45 GB -> 3.78 GB, cold pull 80s -> 37s, and the
-          # whole CI job 218s -> 133s.
-          #
-          # Deliberately NOT tagged `:latest` and deliberately amd64
-          # only: this is a build input for the devcontainer, not a
-          # product image, and the only thing that consumes it runs on
-          # x86_64 runners. Every layer up to the qmd step is identical
-          # to the build above, and this job's builder still holds them,
-          # so this costs one extra qmd/npm layer, not a second image.
+      # The same image without qmd's 2.2 GB of GGUFs, for the
+      # devcontainer to build on. Only CI pulls the
+      # devcontainer image, and CI's one consumer of those models
+      # (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit
+      # on almost every run, so it was downloading them for nothing:
+      # measured 6.45 GB -> 3.78 GB, cold pull 80s -> 37s, and the
+      # whole CI job 218s -> 133s.
+      #
+      # Deliberately NOT tagged `:latest` and deliberately amd64
+      # only: this is a build input for the devcontainer, not a
+      # product image, and the only thing that consumes it runs on
+      # x86_64 runners. Every layer up to the qmd step is identical
+      # to the build above, and this job's builder still holds them,
+      # so this costs one extra qmd/npm layer, not a second image.
+      - name: Build and push the slim image
+        if: ${{ matrix.arch == 'amd64' }}
+        env:
+          BUILDKIT_PROGRESS: plain
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
           docker buildx build \
               --platform linux/amd64 \
               --build-arg QMD_PREFETCH_MODELS=false \
@@ -766,6 +749,58 @@ jobs:
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
               --push \
               ctx
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # Give the two architectures' images one tag, and check the result. Builds
+  # nothing. An architecture that failed leaves the version and `:latest`
+  # untouched.
+  docker-publish:
+    name: docker-publish (ghcr.io)
+    needs: docker-image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # tag the image on ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: docker-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          amd64="$(cat "${RUNNER_TEMP}/digests/amd64")"
+          arm64="$(cat "${RUNNER_TEMP}/digests/arm64")"
+          docker buildx imagetools create \
+              --tag "${image}:${version}" \
+              --tag "${image}:latest" \
+              "${image}@${amd64}" \
+              "${image}@${arm64}"
 
       # Run the user-facing Docker walkthrough (docs/user/docker.md)
       # against the image just pushed: pull it back, serve the baked

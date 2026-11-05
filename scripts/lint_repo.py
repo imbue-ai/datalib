@@ -394,6 +394,7 @@ _RELEASE_WRITE_GRANTS = {
     "publish-tarballs": {"contents"},
     "publish-macos-app": {"contents"},
     "macos-app-sign": {"id-token"},
+    "docker-image": {"packages"},
     "docker-publish": {"packages"},
 }
 _CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
@@ -409,6 +410,7 @@ _CACHE_USE = re.compile(
     r"|--cache-from|--cache-to|type=gha",
     re.IGNORECASE,
 )
+_MIRRORED_IMAGE = re.compile(r"\bimage[:=]\s*[\"']?(mirror\.gcr\.io/[^\s\"']+)")
 _ACTION_CACHE_INPUTS = {
     "setup-bazel": [
         "bazelisk-cache",
@@ -513,9 +515,24 @@ def release_grant_problems(text: str) -> list[str]:
     return problems
 
 
+def floating_images(text: str) -> list[str]:
+    """Third-party images a workflow names by a tag someone else can move."""
+    return [
+        image.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        and (image := _MIRRORED_IMAGE.search(line))
+        and "@sha256:" not in image.group(1)
+    ]
+
+
 def _check_workflow_tokens(root: Path) -> int:
     problems: list[str] = []
     for rel in _git_ls_files(root, ".github/workflows/*.yml"):
+        problems += [
+            f"{rel}: {image} is not pinned by digest"
+            for image in floating_images((root / rel).read_text())
+        ]
         for lineno, setting in checkout_token_settings((root / rel).read_text()):
             if setting is None:
                 problems.append(
