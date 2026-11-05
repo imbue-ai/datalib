@@ -77,8 +77,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
-- `datalib-applet` — serves the search grid inside the app, and
-  searches from the terminal with no app running:
+- `datalib-applet` — serves the search grid and your contacts inside
+  the app, and searches from the terminal with no app running:
   `datalib-applet search ~/datalib 'from:picard warp core'` prints what
   the search box would find, as JSON. [Searching your
   mirror](searching.md) is the query language both take.
@@ -195,7 +195,9 @@ What that means for datalib today:
   protected folder**. The library then lives in a folder macOS guards
   for the Datalib app, signed by Imbue, so that permission lasts
   through upgrades: Terminal, an AI agent's shell, Finder or any other
-  app that reaches in makes macOS ask you first. Your latchkey
+  app that reaches in makes macOS ask you first. The exception is an
+  app with Full Disk Access: a Terminal holding it got in with no
+  prompt. Your latchkey
   sign-ins are copied in with it, so `latchkey curl` run anywhere else
   no longer finds them once you sign out of the originals
   (`latchkey auth clear <service>`). Saying **Allow** lets that app in
@@ -210,6 +212,58 @@ What that means for datalib today:
   service offers it ([Fastmail](getting_your_data.md#fastmail) does,
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
+
+#### Which apps have you let in? (macOS)
+
+A protected folder is only as closed as the permissions you've handed
+out. macOS makes it easy to leave a door unlocked and hard to remember
+that you did: most file permissions never expire, nothing shows when
+an app last used one, and the list is spread across several panes of
+System Settings → Privacy & Security (**Full Disk Access**, **Files &
+Folders**, **App Management**, **Automation**).
+
+To see them all in one place, run this in a terminal that has Full
+Disk Access, because the lists it reads are themselves protected. It
+prints the file permissions from both of the lists macOS keeps, one for
+your account and one for the whole computer, and changes nothing:
+
+```sh
+for db in "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "/Library/Application Support/com.apple.TCC/TCC.db"; do
+  echo "== $db"
+  sqlite3 -readonly -header -column "$db" "
+    SELECT replace(service,'kTCCService','') AS service, client,
+           CASE auth_value WHEN 0 THEN 'denied' WHEN 2 THEN 'allowed' WHEN 3 THEN 'limited' ELSE auth_value END AS auth,
+           datetime(last_modified,'unixepoch','localtime') AS changed
+    FROM access
+    WHERE service LIKE 'kTCCServiceSystemPolicy%' OR service LIKE 'kTCCServiceFileProvider%'
+    ORDER BY service, client;"
+done
+```
+
+Reading the result:
+
+- **`SystemPolicyAllFiles` with `allowed` is the row to check first.**
+  That app has Full Disk Access, so a protected folder won't stop it: a
+  Terminal holding that permission got in with no prompt.
+- **A terminal on that list passes its access on.** Everything you run
+  from that terminal gets it too, including an AI agent and any script
+  a build happens to run, so assume they can reach a protected folder
+  as well. Once you've read the list, consider switching the terminal
+  off again.
+- **`SystemPolicyAppData` is the permission that guards a protected
+  folder.** A row there records how macOS last answered that app. The
+  `auth` column can show a plain number here: Apple doesn't document
+  these values, and we haven't confirmed what `5` means.
+- **`denied` is a door that is shut.** The app asked and was refused,
+  or you switched it off.
+- **A `client` that is a path rather than an app id** is a program with
+  no app id of its own: a command-line tool, or a build of your own.
+  Its permission stays on the list after the program is gone.
+
+The list doesn't show everything an app can read. macOS guards only
+some places, and an app that isn't sandboxed can read the rest of your
+home folder, such as `~/.ssh`, without ever asking, so it has no row
+for them. A short list doesn't mean your files are locked down.
 
 ### Option 1: A Google Takeout export (no credentials needed)
 
@@ -369,7 +423,8 @@ you write after a `[…]` header belongs to that header's table until the
 next one.
 
 You normally don't write this by hand. The app's first-run screen
-writes the index steps and the applet for an empty folder, and the
+writes the index steps and the applets (search, and your contacts)
+for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
 step). From a terminal, two commands do the same:
 

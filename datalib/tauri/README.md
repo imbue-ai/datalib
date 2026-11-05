@@ -187,7 +187,9 @@ opens without asking: the app group container
 `~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
 macOS guards a group container: any other app that reaches in
 (Terminal, an AI agent's shell, Finder) makes it ask the person first,
-and a yes lasts as long as that app runs. An app gets into its own
+and a yes lasts as long as that app runs. An app with Full Disk Access
+is the exception: a Terminal holding it got in with no prompt, and so
+can whatever that Terminal runs. An app gets into its own
 group container without asking when the group's name starts with the
 Team ID that signed it, so only the Imbue-signed app can use this; a
 build from source is asked too, or refused. The option is marked
@@ -211,6 +213,9 @@ on stealing from you.
   copy of `~/.latchkey` (`protected::seed_latchkey`), so the library's
   sources keep their sign-ins; the originals stay until the person
   signs out of them. Every protected library shares that one store.
+  The key that encrypts it does not move: it stays in the login
+  keychain, shared with `~/.latchkey`, so the first latchkey run from
+  the app's Node can put up macOS's password prompt.
 - **Nothing hands it to another app.** The folder button is disabled on
   a protected row, and Browse refuses a protected library's raw stores
   (`refuse_if_protected`): Finder or Terminal would have to be let in,
@@ -224,7 +229,11 @@ What the first release with it should be checked for, on a Mac
 syncs and sign-ins work in it; from Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
-everything that Terminal runs until it quits.
+everything that Terminal runs until it quits. Run those checks from a
+Terminal without Full Disk Access: one that holds it got in with no
+prompt (macOS 26.7.2), so it proves nothing. A person can list what they have
+granted with the query in `docs/user/first_time_user.md`, "Which apps
+have you let in?".
 
 ## Behaviour worth knowing
 

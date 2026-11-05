@@ -42,8 +42,10 @@ const EXAMPLES: &[Example] = &[
                   search box does, as JSON, with no server; `datalib-step help search` \
                   has its query language. The other commands are \
                   applets: datalib-http's gateway starts one for each [[applets]] entry \
-                  in the config and reads the port it prints, and you run one yourself \
-                  only to work on it (docs/dev/applets.md).",
+                  in the config and reads the port it prints, and you reach each through \
+                  it, at /applet/<id>/. `datalib-step help applets` says what each serves; \
+                  you run one yourself only to work on it (`datalib-step help \
+                  writing-applets`).",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Cli {
@@ -81,9 +83,9 @@ enum Which {
     /// a range, downsampled to a budget.
     #[command(name = "unified_time_series_index")]
     UnifiedTimeSeriesIndex,
-    /// The contacts app: create contacts and link handles to them, and
-    /// resolve a document's handles for its chips.
-    #[command(name = "datalib_contacts")]
+    /// The contacts app: who a handle is. Link handles to contacts, label
+    /// people and senders, and review what an agent proposed.
+    #[command(name = "datalib_contacts", after_help = datalib_contacts::routes_help())]
     DatalibContacts,
     /// Photos and videos: a contact sheet, one photo's details, and its
     /// pictures from the source's own previews.
@@ -271,6 +273,39 @@ mod cli_tests {
         let commands = datalib_agent_docs::commands_running("datalib-applet");
         assert!(!commands.is_empty(), "no doc runs datalib-applet");
         datalib_cli_help::assert_argvs_parse(super::Cli::command(), &commands);
+    }
+
+    /// `help applets` and the overview list the applets from
+    /// `datalib_agent_docs::APPLETS`, so one added here has to be added there.
+    #[test]
+    fn every_applet_is_in_the_list_the_help_prints() {
+        let mut commands: Vec<String> = super::Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .filter(|name| name != "search" && name != "help")
+            .collect();
+        let mut listed: Vec<String> = datalib_agent_docs::APPLETS
+            .iter()
+            .map(|a| a.name.to_string())
+            .collect();
+        commands.sort();
+        listed.sort();
+        assert_eq!(commands, listed);
+    }
+
+    /// With no server to ask, `--help` lists what the contacts app serves.
+    #[test]
+    fn the_contacts_apps_help_lists_its_routes_and_who_each_is_for() {
+        let mut cli = super::Cli::command();
+        let help = cli
+            .find_subcommand_mut("datalib_contacts")
+            .expect("the applet")
+            .render_help()
+            .to_string();
+        for line in ["POST /proposals", "POST /link", "GET /review/items"] {
+            assert!(help.contains(line), "{line} is not in:\n{help}");
+        }
+        assert!(help.contains("Routes that are `person`"), "{help}");
     }
 
     #[test]

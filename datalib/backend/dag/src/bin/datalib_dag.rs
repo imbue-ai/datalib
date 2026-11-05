@@ -367,7 +367,7 @@ async fn main() -> Result<()> {
         }
         // The first time this build runs on the root, every step that takes
         // the verb is asked to migrate before anything else runs
-        // (docs/dev/plans/upgrade_on_launch.md); the http server does the
+        // (dag/README.md §"Upgrading a root"); the http server does the
         // same when it takes the lock.
         let build = datalib_dag::supervisor::upgrade::this_build();
         if !store.launch_pass_done(&build).await? {

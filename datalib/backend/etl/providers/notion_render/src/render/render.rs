@@ -721,15 +721,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        db.upsert_pages(&[PageUpsert {
-            id: "p1".into(),
-            payload: json!({"id": "p1", "object": "page",
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[PageUpsert {
+                id: "p1".into(),
+                payload: json!({"id": "p1", "object": "page",
                 "properties": {"title": {"type": "title", "title": [{"plain_text": "Bridge"}]}}})
-            .to_string(),
-            ..Default::default()
-        }])
+                .to_string(),
+                ..Default::default()
+            }],
+        )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         // Stored as the fetcher stores it: the body with its link already
         // the unsigned slot, and the slot listed as an attachment.
         let mut tx = db.pool().begin().await.unwrap();

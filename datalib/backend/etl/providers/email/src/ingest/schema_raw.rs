@@ -34,12 +34,6 @@ pub const DATA_TABLES: &[&str] = &[
     super::listed::LISTED,
 ];
 
-/// Many-to-many join tables. Not in [`DATA_TABLES`] because they're
-/// refreshed delete-then-insert per parent email upsert; per-row
-/// retry state would be noise. `RawDb::reset` truncates them
-/// alongside [`DATA_TABLES`].
-pub const JOIN_TABLES: &[&str] = &["email_mailboxes", "email_keywords"];
-
 /// `blobs.kind` discriminator for the RFC5322 `.eml` source of an
 /// email, stored in the shared `blobs` table keyed by JMAP
 /// `Email.blobId` (or `sha256(eml_bytes)` for Mbox).

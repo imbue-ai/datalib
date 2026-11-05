@@ -180,6 +180,13 @@ group = "unified_document_index"
 id = "unified_document_index"
 command = "datalib-applet unified_document_index"
 
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
+
 # The time-series index reads every source's time series, without copying
 # the points, for the charts.
 [[groups]]

@@ -14,7 +14,7 @@ follow with its own authority, or as a capability.
 
 | found | what it was |
 |---|---|
-| [2026-09-17](../audits/2026-09-17.md) §1 | Message bodies drawn as raw HTML in the page that holds the session: a stored XSS, and from there a config step whose `command` runs. |
+| 2026-09-17 | Message bodies drawn as raw HTML in the page that holds the session: a stored XSS, and from there a config step whose `command` runs. |
 | 2026-09-17 | DACTAL's `?dq=` reached `eval`, and a cross-site top-level navigation carries the `SameSite=Lax` cookie. |
 | [2026-10-02](../audits/2026-10-02.md) | A body `<iframe>` pointing at our own `blobs/` route; own-path `/api/remote_media?…&source=<other>` URLs in a body. |
 | 2026-10-19 | The URL path is card source. `router/columns.ts` `decodeColumns` turns each path segment into source, `ContainersView.vue` `routeNode` opens a card on it, and `cards/cardSource.ts` runs it with `new Function`. A relative link in an email reaches it (`DocCard.ce.vue` `onFrameLink` opens any same-origin link), and so does any web page, by navigating to `127.0.0.1:8731/<code>`. |

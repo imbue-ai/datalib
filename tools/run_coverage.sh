@@ -104,6 +104,11 @@ LCOV_OUT="${LCOV_OUT:-/tmp/datalib_coverage.lcov}"
 # the crate that awaits it. A rust_test that drives a library's async
 # code runs the body from the test crate, which bazel otherwise leaves
 # uninstrumented, and every line after the signature reads 0.
+#
+# DATALIB_CHILD_ENV because datalib_env::inherit_only hands a step only
+# the variables it names, so a step datalib-dag or datalib-http spawns
+# otherwise loses LLVM_PROFILE_FILE and writes its profile nowhere. Its
+# own name is on the list so that a step's children keep the setting.
 echo "==> bazelisk coverage (filter=$INSTRUMENT)" >&2
 bazelisk coverage \
     "${TARGETS[@]}" \
@@ -114,7 +119,8 @@ bazelisk coverage \
     --experimental_fetch_all_coverage_outputs \
     --noremote_upload_local_results \
     --test_env=LLVM_PROFDATA \
-    --test_env=LLVM_COV
+    --test_env=LLVM_COV \
+    --test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV
 
 # `bazelisk coverage` above has already built instrumented versions of
 # all the rust_binaries the test brings in as `data` deps, and the
@@ -140,13 +146,17 @@ PROFRAWS=()
 for label in "${TARGETS[@]}"; do
     pkg="${label#//}"; pkg="${pkg%%:*}"
     name="${label##*:}"
-    dir="$TESTLOGS/$pkg/$name/_coverage"
-    found=("$dir"/*.profraw)
-    if [[ ! -e "${found[0]}" ]]; then
+    dir="$TESTLOGS/$pkg/$name"
+    # A sharded test keeps one `_coverage/` per shard, under `shard_*/`.
+    count=0
+    while IFS= read -r profraw; do
+        PROFRAWS+=("$profraw")
+        count=$((count + 1))
+    done < <(find "$dir" -path '*/_coverage/*' -name '*.profraw')
+    if (( count == 0 )); then
         echo "error: no .profraw for $label under $dir — did it run an instrumented binary?" >&2
         exit 1
     fi
-    PROFRAWS+=("${found[@]}")
 done
 
 MERGED="$(mktemp -t datalib_merged.profdata.XXXXXX)"

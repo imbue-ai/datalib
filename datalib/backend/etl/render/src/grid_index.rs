@@ -1740,23 +1740,6 @@ pub(crate) async fn delete_document_rows(
     Ok(gone)
 }
 
-pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query(
-        "SELECT markdown_uuid, upstream_cursor \
-         FROM markdowns WHERE upstream_cursor IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_cursors")?;
-    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let uuid: String = r.try_get("markdown_uuid")?;
-        let cur: String = r.try_get("upstream_cursor")?;
-        out.insert(uuid, cur);
-    }
-    Ok(out)
-}
-
 async fn apply_markdown(
     write_lock: &WriteLock,
     md: &RenderedMarkdown,

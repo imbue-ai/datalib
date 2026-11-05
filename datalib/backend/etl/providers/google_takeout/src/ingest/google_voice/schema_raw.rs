@@ -5,13 +5,6 @@ use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-/// Entity (wire-payload) tables — each gets a `_bookkeeping` sidecar via
-/// the crate's `full_ddl()` loop.
-pub const VOICE_DATA_TABLES: &[&str] = &["voice_messages", "voice_bills", "voice_greetings"];
-
-/// CAS edge tables (image / audio / recording / greeting blobs).
-pub const VOICE_EDGE_TABLES: &[&str] = &["voice_attachments"];
-
 fn voice_ns() -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"google-voice.datalib")
 }
