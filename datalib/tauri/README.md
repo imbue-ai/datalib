@@ -184,7 +184,9 @@ opens without asking: the app group container
 `~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
 macOS guards a group container: any other app that reaches in
 (Terminal, an AI agent's shell, Finder) makes it ask the person first,
-and a yes lasts as long as that app runs. An app gets into its own
+and a yes lasts as long as that app runs. An app with Full Disk Access
+is the exception: a Terminal holding it got in with no prompt, and so
+can whatever that Terminal runs. An app gets into its own
 group container without asking when the group's name starts with the
 Team ID that signed it, so only the Imbue-signed app can use this; a
 build from source is asked too, or refused. The option is marked
@@ -222,9 +224,8 @@ syncs and sign-ins work in it; from Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
 everything that Terminal runs until it quits. Run those checks from a
-Terminal without Full Disk Access: whether that permission opens the
-folder too has not been checked, so a Terminal that holds it may get in
-without a prompt and prove nothing. A person can list what they have
+Terminal without Full Disk Access: one that holds it got in with no
+prompt (macOS 26.7.2), so it proves nothing. A person can list what they have
 granted with the query in `docs/user/first_time_user.md`, "Which apps
 have you let in?".
 

@@ -195,7 +195,9 @@ What that means for datalib today:
   protected folder**. The library then lives in a folder macOS guards
   for the Datalib app, signed by Imbue, so that permission lasts
   through upgrades: Terminal, an AI agent's shell, Finder or any other
-  app that reaches in makes macOS ask you first. Your latchkey
+  app that reaches in makes macOS ask you first. The exception is an
+  app with Full Disk Access: a Terminal holding it got in with no
+  prompt. Your latchkey
   sign-ins are copied in with it, so `latchkey curl` run anywhere else
   no longer finds them once you sign out of the originals
   (`latchkey auth clear <service>`). Saying **Allow** lets that app in
@@ -241,12 +243,13 @@ done
 Reading the result:
 
 - **`SystemPolicyAllFiles` with `allowed` is the row to check first.**
-  That app has Full Disk Access. We have not checked whether that also
-  opens a protected folder without asking, so assume it does.
+  That app has Full Disk Access, so a protected folder won't stop it: a
+  Terminal holding that permission got in with no prompt.
 - **A terminal on that list passes its access on.** Everything you run
   from that terminal gets it too, including an AI agent and any script
-  a build happens to run. Once you've read the list, consider switching
-  the terminal off again.
+  a build happens to run, so assume they can reach a protected folder
+  as well. Once you've read the list, consider switching the terminal
+  off again.
 - **`SystemPolicyAppData` is the permission that guards a protected
   folder.** A row there records how macOS last answered that app. The
   `auth` column can show a plain number here: Apple doesn't document
