@@ -1327,6 +1327,12 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
         before,
         "every file is over max_bytes, none is gone"
     );
+    let warned: Vec<String> = sqlx::query_scalar(
+        "SELECT scope_key FROM problems WHERE reason = 'over_size_limit' AND severity = 'warning'",
+    )
+    .fetch_all(h.db.pool())
+    .await?;
+    assert!(warned.contains(&"record:files:music/ode_to_spot.mp3".to_string()));
 
     let evicted = h.root.join("music/ode_to_spot.mp3");
     let size = std::fs::metadata(&evicted)?.len();

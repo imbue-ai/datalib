@@ -185,7 +185,7 @@ async fn scan_tree(
         prev.playlists.remove(rel);
     }
     summary.entries_scanned = scan.files.len();
-    summary.too_large = scan.stats.too_large;
+    summary.too_large = scan.over_max_bytes.len();
     summary.hashed = scan.stats.hashed;
     summary.reused = scan.stats.reused;
     opts.progress.set_length(Some(scan.files.len() as u64));

@@ -25,6 +25,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",

@@ -66,6 +66,13 @@ impl Harness {
         Self { root, ..h }
     }
 
+    async fn head(&self) -> Result<Option<String>> {
+        let db = self.db().await;
+        let head = datalib_etl::doltlite_raw::head_commit(db.pool()).await?;
+        db.close().await;
+        Ok(head)
+    }
+
     async fn scan(&self) -> Result<ingest::FetchSummary> {
         self.scan_at(NOW).await
     }
@@ -652,6 +659,29 @@ async fn problems(h: &Harness) -> Result<Vec<(String, String)>> {
     Ok(rows)
 }
 
+/// The rows about one path or listing, without the one summing up the tree.
+async fn problem_keys(h: &Harness) -> Result<Vec<String>> {
+    let rows = problems(h).await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| r.0)
+        .filter(|key| !key.starts_with("skipped:documents_without_text:"))
+        .collect())
+}
+
+/// The severity, reason, outcome and sample of the row on this key.
+async fn problem_row(h: &Harness, key: &str) -> Result<Option<(String, String, String, String)>> {
+    let db = h.db().await;
+    let row = sqlx::query_as(
+        "SELECT severity, reason, outcome, sample FROM problems WHERE scope_key = ?",
+    )
+    .bind(key)
+    .fetch_optional(db.pool())
+    .await?;
+    db.close().await;
+    Ok(row)
+}
+
 async fn paths(h: &Harness) -> Result<Vec<String>> {
     let db = h.db().await;
     let rows = sqlx::query_scalar("SELECT id FROM pdf_paths ORDER BY id")
@@ -687,6 +717,10 @@ async fn a_document_that_will_not_identify_is_a_row_until_it_does() -> Result<()
     let h = Harness::on_a_copy();
     h.scan().await?;
     let rows = problems(&h).await?;
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|r| r.0.starts_with("record:"))
+        .collect();
     assert_eq!(
         rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
         ["record:pdf_paths:holodeck/corrupt.pdf"]
@@ -704,7 +738,7 @@ async fn a_document_that_will_not_identify_is_a_row_until_it_does() -> Result<()
     )?;
     let s = h.scan().await?;
     assert_eq!(s.errors, 0, "{s:?}");
-    assert_eq!(problems(&h).await?, Vec::<(String, String)>::new());
+    assert_eq!(problem_keys(&h).await?, Vec::<String>::new());
     Ok(())
 }
 
@@ -718,7 +752,7 @@ async fn an_unseen_document_keeps_its_row() -> Result<()> {
     std::fs::remove_file(&corrupt)?;
     std::os::unix::fs::symlink(h.root.join("nowhere.pdf"), &corrupt)?;
     h.scan().await?;
-    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    let keys: Vec<String> = problem_keys(&h).await?;
     assert_eq!(
         keys,
         ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
@@ -740,7 +774,7 @@ async fn a_walk_with_errors_drops_no_path() -> Result<()> {
 
     h.scan().await?;
     assert_eq!(paths(&h).await?, before);
-    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    let keys: Vec<String> = problem_keys(&h).await?;
     assert_eq!(
         keys,
         ["listing:files", "record:pdf_paths:holodeck/corrupt.pdf"]
@@ -751,7 +785,7 @@ async fn a_walk_with_errors_drops_no_path() -> Result<()> {
     let after = paths(&h).await?;
     assert!(!after.contains(&"engineering/hull_survey.pdf".to_string()));
     assert_eq!(after.len(), before.len() - 1);
-    let keys: Vec<String> = problems(&h).await?.into_iter().map(|r| r.0).collect();
+    let keys: Vec<String> = problem_keys(&h).await?;
     assert_eq!(keys, ["record:pdf_paths:holodeck/corrupt.pdf"]);
     Ok(())
 }
@@ -769,6 +803,99 @@ async fn a_file_over_max_bytes_keeps_its_path() -> Result<()> {
     let s = h.scan_with(NOW, Some(1900)).await?;
     assert_eq!(s.too_large, 1, "{s:?}");
     assert_eq!(paths(&h).await?, before);
+    Ok(())
+}
+
+/// A file over `max_bytes` that no scan had read left no row of any kind:
+/// it was only a count in a summary string, so nothing a person sees said
+/// it was missing from the mirror. The warning goes when the limit rises,
+/// when the file shrinks and when the file goes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_over_max_bytes_says_so_until_it_is_read() -> Result<()> {
+    const OVER: &str = "record:files:captains_log_v2.pdf";
+    let h = Harness::on_a_copy();
+
+    // `captains_log_v2.pdf` is the one fixture over 1900 bytes.
+    h.scan_with(NOW, Some(1900)).await?;
+    assert!(
+        !paths(&h)
+            .await?
+            .contains(&"captains_log_v2.pdf".to_string()),
+        "no scan has read it, so nothing else says it is here"
+    );
+    let row = problem_row(&h, OVER).await?.expect("a row for the file");
+    assert_eq!(
+        (row.0.as_str(), row.1.as_str()),
+        ("warning", "over_size_limit")
+    );
+    assert!(row.3.contains("max_bytes"), "{}", row.3);
+
+    let before = h.head().await?;
+    h.scan_with(NOW, Some(1900)).await?;
+    assert_eq!(h.head().await?, before, "a standing row commits nothing");
+
+    h.scan_with(NOW, None).await?;
+    assert_eq!(problem_row(&h, OVER).await?, None, "the limit rose");
+
+    h.scan_with(NOW, Some(1900)).await?;
+    assert!(problem_row(&h, OVER).await?.is_some());
+    let small = std::fs::read(h.root.join("captains_log.pdf"))?;
+    assert!(small.len() as u64 <= 1900);
+    std::fs::write(h.root.join("captains_log_v2.pdf"), small)?;
+    h.scan_with(NOW, Some(1900)).await?;
+    assert_eq!(problem_row(&h, OVER).await?, None, "the file shrank");
+
+    std::fs::write(h.root.join("captains_log_v2.pdf"), vec![b' '; 4096])?;
+    h.scan_with(NOW, Some(1900)).await?;
+    assert!(problem_row(&h, OVER).await?.is_some());
+    std::fs::remove_file(h.root.join("captains_log_v2.pdf"))?;
+    h.scan_with(NOW, Some(1900)).await?;
+    assert_eq!(problem_row(&h, OVER).await?, None, "the file is gone");
+    Ok(())
+}
+
+/// A fully scanned document, or one whose fonts do not decode, renders
+/// nothing, so it was absent from search with nothing on any screen to
+/// say so. It is one warning for the whole tree, with a count: a folder
+/// of scans is thousands of documents and should not be thousands of
+/// warnings.
+#[tokio::test(flavor = "multi_thread")]
+async fn documents_that_never_render_are_one_warning_with_a_count() -> Result<()> {
+    async fn unrendered(h: &Harness) -> Result<Vec<String>> {
+        let db = h.db().await;
+        let rows = sqlx::query_scalar(
+            "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:documents_without_text:%'",
+        )
+        .fetch_all(db.pool())
+        .await?;
+        db.close().await;
+        Ok(rows)
+    }
+    let h = Harness::on_a_copy();
+    h.scan().await?;
+
+    let rows = unrendered(&h).await?;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].starts_with("2 PDFs "), "{}", rows[0]);
+    assert!(
+        rows[0].contains("holodeck/scanned_blueprint"),
+        "{}",
+        rows[0]
+    );
+
+    let before = h.head().await?;
+    h.scan().await?;
+    assert_eq!(h.head().await?, before, "a standing row commits nothing");
+
+    std::fs::remove_file(h.root.join("holodeck/scanned_blueprint_retitled.pdf"))?;
+    h.scan().await?;
+    let rows = unrendered(&h).await?;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].starts_with("1 PDF "), "{}", rows[0]);
+
+    std::fs::remove_file(h.root.join("holodeck/scanned_blueprint.pdf"))?;
+    h.scan().await?;
+    assert_eq!(unrendered(&h).await?, Vec::<String>::new());
     Ok(())
 }
 
