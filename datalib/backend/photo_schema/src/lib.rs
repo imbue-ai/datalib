@@ -119,14 +119,6 @@ impl OffsetFrom {
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
     }
-
-    /// Whether the offset is the photo's own rather than assumed.
-    pub fn is_recorded(self) -> bool {
-        match self {
-            OffsetFrom::DateTimeOriginal | OffsetFrom::CreateDate => true,
-            OffsetFrom::ConfiguredZone | OffsetFrom::AssumedUtc => false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

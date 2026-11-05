@@ -1,7 +1,7 @@
 //! The first launch of a build on a root: the server asks every step that
 //! takes the verb to `--migrate` before its loop takes any request, offers
 //! to run the ones that answer `needs_rerun`, and asks nobody on the next
-//! launch of the same build (`docs/dev/plans/upgrade_on_launch.md`).
+//! launch of the same build (`dag/README.md` §"Upgrading a root").
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

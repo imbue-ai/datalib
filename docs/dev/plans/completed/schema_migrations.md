@@ -624,7 +624,7 @@ side.
   before any mirror table is dropped, so a missing source fails the
   run and leaves the mirror as it was. Worth a test that says so.
 - **How much of this does the supervisor plan absorb?**
-  `plans/supervisor.md` makes sinks first-class with one writer at a
+  `plans/shared_sinks.md` makes sinks first-class with one writer at a
   time. A sink's open is the natural home for §3.2–3.4; if that plan
   lands first, this one's PRs become its sink contract rather than
   changes to `doltlite_raw::open`.

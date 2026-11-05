@@ -1,5 +1,5 @@
 // What the launch's upgrade indicator and dialog say about a step
-// (docs/dev/plans/upgrade_on_launch.md).
+// (dag/README.md §"Upgrading a root").
 
 import type { MigrateState, Upgrade } from "@/api";
 

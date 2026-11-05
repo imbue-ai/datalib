@@ -5,7 +5,7 @@
 //! (`record.rs`). Plain SQLite in rollback-journal mode, several writing
 //! processes at once; its schema only grows, because two builds may share
 //! it. Every commit is announced (`announce.rs`), which is how the loop
-//! and the server hear of it. `docs/dev/plans/supervisor.md` §2.7–§2.8.
+//! and the server hear of it. `dag/README.md` §"The record".
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -59,8 +59,6 @@ pub const ENTITIES_DB: &str = "entities.doltlite_db";
 /// `cas_objects` table keyed by blake3 hash, in a plain SQLite file.
 pub const BLOBS_DB: &str = "blobs.sqlite";
 
-/// Directory of server-served attachment bytes, relative to `system/`.
-pub const MEDIA_DIR: &str = "media";
 /// Filed feedback, relative to `system/`. Its own file because it has a
 /// different writer from every other store and, unlike the indexes, it
 /// cannot be regenerated.
@@ -89,7 +87,7 @@ pub const RUNS_DIR_REL: &str = "system/runs";
 /// The supervisor's store, relative to `system/`: open requests, the
 /// steps turned off, and what the loop decided about them. Plain SQLite,
 /// and the mailbox through which the UI and the CLI steer one root at
-/// once (`docs/dev/plans/supervisor.md` §2.8).
+/// once (`dag/README.md` §"The record").
 pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are
@@ -162,10 +160,6 @@ pub fn time_series_index_db(data_root: &Path) -> PathBuf {
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
     unified_document_index_dir(data_root).join(QMD_DIR)
-}
-
-pub fn media_dir(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(MEDIA_DIR)
 }
 
 pub fn feedback_db(data_root: &Path) -> PathBuf {

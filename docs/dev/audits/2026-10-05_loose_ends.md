@@ -27,7 +27,7 @@ Paths are under `datalib/backend/` unless they start with `docs/`,
 `scripts/` or `datalib/`; `P/` is `etl/providers/`.
 
 An item already in [`2026-10-02.md`](2026-10-02.md) or
-[`2026-10-05_whack_a_mole.md`](2026-10-05_whack_a_mole.md) is marked
+`2026-10-05_whack_a_mole.md` is marked
 **recorded** and kept short.
 
 ## The short version

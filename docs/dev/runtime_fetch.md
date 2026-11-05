@@ -5,8 +5,6 @@ The code is
 for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
 (the fetch), `scripts/stage_runtime.sh` (what a runtime holds) and the
 `runtime` job in `.github/workflows/release.yml` (how it is published).
-The plan this came from is
-[`plans/completed/runtime_fetched_on_first_use.md`](plans/completed/runtime_fetched_on_first_use.md).
 
 `qmd` (semantic search) and `latchkey` (credentials) are Node programs.
 datalib runs them from a **runtime**: a pinned Node plus the two

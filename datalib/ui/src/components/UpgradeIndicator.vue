@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The toolbar's upgrade pill, where the sync indicator sits: amber while
 // the first launch of a build asks every step to migrate
-// (docs/dev/plans/upgrade_on_launch.md), red once the pass is over with a
+// (dag/README.md §"Upgrading a root"), red once the pass is over with a
 // source it could not update. The app stays usable throughout; only
 // syncing waits, and the Sources card's Sync buttons say so.
 import { computed, onBeforeUnmount, ref, watch } from "vue";

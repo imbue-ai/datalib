@@ -13,7 +13,7 @@
 //! in it. How many documents share one transaction is a throughput choice
 //! ([`IndexedMarkdownStore::begin_batch`]): each transaction rewrites every
 //! page it touched (docs/dev/doltlite.md#what-a-write-costs). See
-//! `docs/dev/plans/one_mode.md`.
+//! `docs/dev/plans/completed/one_mode.md`.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

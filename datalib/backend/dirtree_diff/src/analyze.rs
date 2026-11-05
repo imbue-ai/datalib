@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{
-    Diff, DiffResult, DupGroup, DupInfo, Entry, Inputs, Node, Side, SideResult, Status, Summary,
+    Diff, DiffResult, DupGroup, DupInfo, Entry, Inputs, Node, SideResult, Status, Summary,
 };
 
 pub fn basename(path: &str) -> &str {
@@ -724,8 +724,4 @@ pub fn analyze(inputs: &Inputs) -> DiffResult {
         },
         summary,
     }
-}
-
-pub fn side_of(result: &DiffResult, side: Side) -> &SideResult {
-    result.side(side)
 }
