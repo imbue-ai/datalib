@@ -101,9 +101,9 @@ below makes it work.
 ┌──────────────────┐   At test time the test spawns the
 │  datalib_dag +   │   instrumented binaries. Each process writes a
 │  datalib_step    │   .profraw on clean exit, at the path bazel sets
-│  (rust_binary,   │   in LLVM_PROFILE_FILE (COVERAGE_DIR/%h-%p-%m),
-│  -Cinstrument-   │   which children inherit.
-│  coverage on)    │
+│  (rust_binary,   │   in LLVM_PROFILE_FILE (COVERAGE_DIR/%h-%p-%m).
+│  -Cinstrument-   │   DATALIB_CHILD_ENV carries that variable to
+│  coverage on)    │   every step.
 └────────┬─────────┘
          │ profraw
          ▼
@@ -124,7 +124,7 @@ coverage mapping, the export says "no coverage data found", and
 `coverage.dat` comes out empty. Without split post-processing the
 profraws lived in the sandbox and were gone by then.
 
-### Five things had to be true
+### Six things had to be true
 
 1. **`-Cinstrument-coverage` reaches the binaries that run.** The
    `data` deps from the test to `datalib_dag` / `datalib_step` carry
@@ -173,6 +173,15 @@ profraws lived in the sandbox and were gone by then.
    the body at all. The wrapper passes `--instrument_test_targets`, so
    to see library code a `rust_test` exercises in-process, list the
    test itself after `--` as well.
+
+6. **A step keeps its profile path.** `datalib-dag` and `datalib-http`
+   hand a step only the environment variables on an allowlist
+   (`datalib_env::inherit_only`), and `LLVM_PROFILE_FILE` is not on it.
+   Without help a step writes no profile, and the report still looks
+   complete: download code simply reads near 0%. The wrapper passes
+   `--test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV`,
+   which adds the variable to the list. Check a run you did not make
+   through the wrapper by looking at a provider's download `processor.rs`.
 
 ### Why `data` and not `deps`?
 
