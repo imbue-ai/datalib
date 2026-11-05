@@ -470,9 +470,9 @@
     </main>
 
     <script>
-      // What `@tauri-apps/api`'s own `invoke` calls; the launcher has no
-      // bundler and no module graph to import it through.
-      const invoke = window.__TAURI_INTERNALS__.invoke;
+      // `withGlobalTauri` (tauri.conf.json) is what puts this here; the
+      // launcher has no bundler and no module graph.
+      const invoke = window.__TAURI__.core.invoke;
       const $ = (id) => document.getElementById(id);
 
       const BOOK =

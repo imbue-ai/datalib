@@ -42,7 +42,7 @@ task in the file manager, not a spelling task in a form.
 Three pieces, one per layer:
 
 1. **A Tauri capability** —
-   [`library-capabilities/pick-local-paths.json`](../../datalib/tauri/library-capabilities/pick-local-paths.json)
+   [`capabilities/pick-local-paths.json`](../../datalib/tauri/capabilities/pick-local-paths.json)
    grants `dialog:allow-open` (and nothing else from the dialog plugin)
    to the `main` and `card-*` windows, plus
    `core:path:allow-resolve-directory` so the page can expand a `~`. `tauri-plugin-dialog` is
@@ -62,16 +62,13 @@ Two details in there are load-bearing and easy to get wrong:
 **The capability needs a `remote` block, with the trailing `/**`.**
 This app does not bundle its frontend: it serves the UI from
 `datalib-http` and loads it as an external URL, and Tauri withholds IPC
-from a remote origin unless a capability lists it. The open library's
-server is only known once it has started, so these capabilities are
-granted then, with its origin in place of `{{origin}}`
-(`datalib/tauri/src/library_capabilities.rs`). The origin without the
-trailing `/**` constrains the pathname to empty and matches no route.
-**An unmatched pattern denies the call silently** — a button that does
-nothing — so verify in the app, not in a browser tab. Every capability
-the UI reaches goes in
-[`datalib/tauri/library-capabilities/`](../../datalib/tauri/library-capabilities/)
-with the same block, and is named in that file's list.
+from a remote origin unless a capability lists it. `http://127.0.0.1:*`
+without the trailing `/**` constrains the pathname to empty and matches
+no route. **An unmatched pattern denies the call silently** — a button
+that does nothing — so verify in the app, not in a browser tab. Every
+capability in
+[`datalib/tauri/capabilities/`](../../datalib/tauri/capabilities/)
+that the UI reaches needs the same block.
 
 **Cancel and denial are different outcomes.** A caller that only gets
 `string | null` cannot tell "the user changed their mind" from "the

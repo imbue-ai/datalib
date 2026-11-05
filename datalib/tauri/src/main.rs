@@ -3,7 +3,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod launcher;
-mod library_capabilities;
 mod navigation;
 mod protected;
 mod raw_store;
@@ -639,11 +638,11 @@ fn main() {
         // outlink and any link inside a rendered document). The webview
         // is granted those two commands and no others — notably not
         // `open_path`, which launches a local file's default
-        // application. See `library-capabilities/reveal-local-files.json`
-        // and `library-capabilities/open-external-urls.json`, which also
-        // explain why both need a `remote` block at all (this app loads
-        // its UI from localhost as an external URL, and Tauri withholds
-        // IPC from remote origins by default).
+        // application. See `capabilities/reveal-local-files.json` and
+        // `capabilities/open-external-urls.json`, which also explain
+        // why both need a `remote` block at all (this app loads its UI
+        // from localhost as an external URL, and Tauri withholds IPC
+        // from remote origins by default).
         // Without `open_js_links_on_click(false)` the plugin injects a
         // click handler that sends every `target="_blank"` link to the OS
         // browser, same-origin included, so `on_new_window` never runs and
@@ -808,8 +807,7 @@ fn launcher_page_url() -> Url {
 }
 
 /// The app's one window: the libraries screen, or the open library's
-/// page. Its label is what `capabilities/` and `library-capabilities/`
-/// grant commands to — a window
+/// page. Its label is what `capabilities/` grant commands to — a window
 /// missing from every capability gets no IPC, and the page's first
 /// `invoke` fails with nothing on screen to say why.
 const MAIN_WINDOW: &str = "main";
@@ -867,11 +865,6 @@ async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     let Ok(url) = url.parse::<Url>() else {
         return boot_failed(&app, format!("backend produced an unusable URL: {url}"));
     };
-    for capability in library_capabilities::for_server(&url) {
-        if let Err(e) = app.add_capability(capability) {
-            return boot_failed(&app, format!("could not grant the library's page: {e}"));
-        }
-    }
     *app.state::<AppOrigin>().0.lock().expect("app origin lock") = Some(url.clone());
     let shown = match app.get_webview_window(MAIN_WINDOW) {
         Some(window) => window.navigate(url),
@@ -919,7 +912,7 @@ static OPENED_WINDOWS: AtomicUsize = AtomicUsize::new(0);
 /// and the three window buttons sit centred in the toolbar's 40px row.
 /// The y is set by eye: the buttons' middle lands about 1pt above it.
 /// The UI leaves them room and marks the toolbar as a drag region
-/// (`App.vue`, library-capabilities/window-drag.json).
+/// (`App.vue`, capabilities/window-drag.json).
 fn under_title_bar<'a>(
     builder: WebviewWindowBuilder<'a, Wry, AppHandle>,
 ) -> WebviewWindowBuilder<'a, Wry, AppHandle> {

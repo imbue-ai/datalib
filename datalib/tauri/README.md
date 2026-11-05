@@ -134,7 +134,7 @@ starts with `--init`, so it opens on the Dashboard.
 The app's top bar leads back here: "Data Liberation ✊" closes the
 library and opens this screen, and the library's name opens a menu of
 the other libraries to switch to (`library_menu`, `library_switch`, `libraries_show`, granted to the
-app's page by `library-capabilities/switch-libraries.json`).
+app's page by `capabilities/switch-libraries.json`).
 
 `src/launcher.rs` holds every decision the screen makes — which
 libraries it lists, whether a directory is a data library at all,
@@ -147,9 +147,7 @@ bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
 folder, below) for `//datalib/tauri:protected_test`, and
 `src/navigation.rs` (where a window may go) for
-`//datalib/tauri:navigation_test`, and `src/library_capabilities.rs`
-(what a library's page may do) for
-`//datalib/tauri:library_capabilities_test`. Those
+`//datalib/tauri:navigation_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
 not build. Anything in those files that reaches for `tauri` breaks its
