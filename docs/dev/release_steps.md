@@ -102,7 +102,7 @@ A compromised build can still put bad code in what it builds, and
 the jobs prevent is the build taking the key, or rewriting a release.
 
 No job holds a cache key or restores a cache (`ci.md` §"Two caches",
-[`threat_models.md`](threat_models.md)), so nothing `main`'s CI saved
+[`security_posture.md`](security_posture.md)), so nothing `main`'s CI saved
 reaches what a release builds, and a build script in a release has no
 cache to leave anything in.
 

@@ -162,7 +162,7 @@ different machines. A mac leg takes 25 to 30 minutes.
 restored `setup-bazel`'s repository cache from an entry saved on `main`
 by `latchkey-auth.yml`'s daily run, whose job compiles crates, and
 bazel uses the extracted trees under that cache's `contents/` without
-checking them ([`threat_models.md`](threat_models.md)). A release's
+checking them ([`security_posture.md`](security_posture.md)). A release's
 downloads come from their origins, each pinned by sha256, so a download
 an origin refuses fails the leg rather than being served from a copy.
 

@@ -387,7 +387,7 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 # memory, so the only boundary is the job. docs/dev/release_steps.md
 # §"Who holds what" has the table this holds the workflow to. A release
 # also reads no cache anything on `main` can write: bazel verifies no entry,
-# so a cache would decide what ships (docs/dev/threat_models.md).
+# so a cache would decide what ships (docs/dev/security_posture.md).
 _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
     "publish-runtime": {"contents"},
