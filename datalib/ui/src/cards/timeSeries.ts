@@ -5,7 +5,7 @@
 // it has already read (docs/dev/time_series.md).
 
 import { UTC, timeView, wallClock } from "@/config/timeView";
-import { DEFAULT_WINDOW } from "./timeWindow";
+import { DEFAULT_WINDOW, UNSAID_WINDOW } from "./timeWindow";
 
 export const TIME_SERIES_APPLET = "/applet/unified_time_series_index";
 
@@ -411,11 +411,11 @@ export function nearest(line: XY[], x: number, within = Infinity): XY | null {
 export type CardState = { ids: string[]; range: string; aligned: boolean };
 
 /// The card's state string: the picked ids in order, the time window,
-/// and whether starts are aligned.
+/// always, and whether starts are aligned.
 export function encodeState({ ids, range, aligned }: CardState): string {
   const q = new URLSearchParams();
   if (ids.length) q.set("ids", ids.join(","));
-  if (range !== DEFAULT_WINDOW) q.set("range", range);
+  q.set("range", range);
   if (aligned) q.set("align", "start");
   return q.toString();
 }
@@ -425,7 +425,7 @@ export function decodeState(state: string): CardState {
   const range = q.get("range");
   return {
     ids: (q.get("ids") ?? "").split(",").filter(Boolean),
-    range: range || DEFAULT_WINDOW,
+    range: range || (state ? UNSAID_WINDOW : DEFAULT_WINDOW),
     aligned: q.get("align") === "start",
   };
 }

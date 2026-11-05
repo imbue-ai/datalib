@@ -112,7 +112,12 @@ test("the window box takes a preset, a typed duration and two dates", async ({ p
   const card = page.locator(".ts-card");
   await card.locator(".ts-item", { hasText: "Saturday run" }).locator("input").check();
   const box = card.getByRole("combobox", { name: "Time window" });
-  await expect(box).toHaveValue("90d");
+  await expect(box).toHaveValue("all");
+  // The box is as wide as its text and on Align starts' line.
+  const boxAt = (await box.boundingBox())!;
+  const alignAt = (await card.getByRole("button", { name: "Align starts" }).boundingBox())!;
+  expect(boxAt.width).toBeLessThan(100);
+  expect(Math.abs(boxAt.y + boxAt.height / 2 - (alignAt.y + alignAt.height / 2))).toBeLessThan(3);
   const newest = SATURDAY + LENGTH;
   const askedFor = (from: number, to: number) =>
     expect.poll(() => asked.some((a) => a.from === from && a.to === to)).toBe(true);

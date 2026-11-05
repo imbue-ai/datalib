@@ -287,16 +287,25 @@ describe("scales", () => {
 });
 
 describe("the card's state", () => {
-  it("round-trips the picks, the range and alignment, and is empty when pristine", () => {
-    expect(encodeState({ ids: [], range: "90d", aligned: false })).toBe("");
+  it("round-trips the picks, the range and alignment", () => {
+    expect(encodeState({ ids: [], range: "all", aligned: false })).toBe("range=all");
     const s = encodeState({ ids: ["a", "b"], range: "1y", aligned: true });
     expect(decodeState(s)).toEqual({ ids: ["a", "b"], range: "1y", aligned: true });
-    expect(decodeState("")).toEqual({ ids: [], range: "90d", aligned: false });
+  });
+
+  it("opens a new card on all of it", () => {
+    expect(decodeState("")).toEqual({ ids: [], range: "all", aligned: false });
   });
 
   /** A layout saved before alignment existed has no `align` and opens on clock time. */
   it("reads a state string from before alignment as not aligned", () => {
     expect(decodeState("ids=a&range=30d")).toEqual({ ids: ["a"], range: "30d", aligned: false });
+  });
+
+  /** Until all became the default, a state left the window out when it
+   *  was 90 days; such a layout must still open on 90 days. */
+  it("reads a saved state with no window as the 90 days it meant", () => {
+    expect(decodeState("ids=a")).toEqual({ ids: ["a"], range: "90d", aligned: false });
   });
 });
 

@@ -6,7 +6,7 @@ import { computed, ref, watch } from "vue";
 import { timeView } from "@/config/timeView";
 import { PRESETS, parseWindow, windowLabel, windowText, type TimeWindow } from "./timeWindow";
 
-const props = defineProps<{ window: TimeWindow; note?: string | null }>();
+const props = defineProps<{ window: TimeWindow }>();
 const emit = defineEmits<{ pick: [window: TimeWindow] }>();
 
 const zone = computed(() => timeView.value.zone);
@@ -31,6 +31,10 @@ const error = computed(() =>
     ? "Type a duration (15m, 6h, 7d, 1y), all, or two dates: 2369-04-14 07:00 to 2369-04-14 09:00"
     : null,
 );
+
+/// The box is as wide as its text, so `90d` takes little room beside the
+/// card's other controls and two dates still fit.
+const width = computed(() => `${Math.min(36, Math.max(5, text.value.length + 2))}ch`);
 
 function choose(w: TimeWindow) {
   emit("pick", w);
@@ -64,6 +68,7 @@ function move(by: number) {
     <input
       v-model="text"
       class="tw-input"
+      :style="{ width }"
       type="text"
       role="combobox"
       aria-label="Time window"
@@ -87,6 +92,7 @@ function move(by: number) {
       @keydown.up.prevent="move(-1)"
     />
     <ul v-if="open" id="tw-list" class="tw-list" role="listbox" aria-label="Time windows">
+      <li v-if="error" class="tw-error" role="presentation">{{ error }}</li>
       <li
         v-for="(p, i) in presets"
         :key="p.text"
@@ -103,8 +109,6 @@ function move(by: number) {
         Or type one: <code>45m</code>, <code>2w</code>, or two dates with <code>to</code>
       </li>
     </ul>
-    <div v-if="error" class="tw-error">{{ error }}</div>
-    <div v-else-if="note" class="tw-note">{{ note }}</div>
   </div>
 </template>
 
@@ -115,9 +119,8 @@ function move(by: number) {
 .tw-input {
   font: inherit;
   font-size: var(--datalib-font-size-small);
-  width: 17rem;
   max-width: 100%;
-  box-sizing: border-box;
+  box-sizing: content-box;
   padding: 0.15rem 0.45rem;
   border: 1px solid var(--datalib-border);
   border-radius: var(--datalib-radius);
@@ -131,7 +134,9 @@ function move(by: number) {
   position: absolute;
   right: 0;
   z-index: 5;
+  width: max-content;
   min-width: 100%;
+  max-width: 20rem;
   margin: 0.2rem 0 0;
   padding: 0.25rem 0;
   list-style: none;
@@ -154,8 +159,7 @@ function move(by: number) {
 .tw-code {
   color: var(--datalib-muted);
 }
-.tw-hint,
-.tw-note {
+.tw-hint {
   color: var(--datalib-muted);
   font-size: var(--datalib-font-size-small);
 }
@@ -167,6 +171,8 @@ function move(by: number) {
 .tw-error {
   color: var(--datalib-error-fg);
   font-size: var(--datalib-font-size-small);
-  max-width: 17rem;
+  padding: 0.15rem 0.6rem 0.3rem;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  margin-bottom: 0.2rem;
 }
 </style>

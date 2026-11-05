@@ -714,7 +714,8 @@ besides components:
   (`TimeWindowPicker.ce.vue`, rules in `cards/timeWindow.ts`): focusing it
   lists presets from `5m` to `1y` and `all`, and a person can type a
   duration (`45m`, `2w`), `all`, or two dates joined by `to`, read in
-  the clock's zone. A duration ends at the newest point picked. The
+  the clock's zone. A duration ends at the newest point picked. A new
+  card shows all of it. The
   points are asked for at about one per pixel: past that the applet
   answers buckets, drawn as each bucket's mean with a band from its
   minimum to its maximum. Hovering reads every line at that time. The

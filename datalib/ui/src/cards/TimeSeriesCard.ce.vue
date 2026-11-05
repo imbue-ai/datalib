@@ -337,17 +337,20 @@ onBeforeUnmount(() => {
             ? "Drag across the chart to zoom; double-click to go back."
             : "Tick a time series to draw it."
         }}</span>
-        <button
-          type="button"
-          class="ts-range"
-          :aria-pressed="aligned"
-          title="Draw each line from its own start, so they all begin at 0"
-          @click="toggleAligned"
-        >
-          Align starts
-        </button>
-        <TimeWindowPicker :window="shownWindow" :note="windowNote" @pick="pickWindow" />
+        <div class="ts-controls">
+          <button
+            type="button"
+            class="ts-range"
+            :aria-pressed="aligned"
+            title="Draw each line from its own start, so they all begin at 0"
+            @click="toggleAligned"
+          >
+            Align starts
+          </button>
+          <TimeWindowPicker :window="shownWindow" @pick="pickWindow" />
+        </div>
       </div>
+      <div v-if="windowNote" class="ts-notice">{{ windowNote }}</div>
       <div v-if="notice" class="ts-notice">{{ notice }}</div>
       <div v-if="error" class="ts-error">{{ error }}</div>
       <TimeSeriesChart
@@ -478,6 +481,15 @@ onBeforeUnmount(() => {
 }
 .ts-hint {
   flex: 1 1 auto;
+}
+/* Align starts and the window box stay together on one line, at the
+   right; the hint wraps above them when the card is narrow. */
+.ts-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  margin-left: auto;
 }
 .ts-range {
   font: inherit;
