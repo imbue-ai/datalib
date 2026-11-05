@@ -5,6 +5,7 @@
 // it has already read (docs/dev/time_series.md).
 
 import { UTC, timeView, wallClock } from "@/config/timeView";
+import { DEFAULT_WINDOW } from "./timeWindow";
 
 export const TIME_SERIES_APPLET = "/applet/unified_time_series_index";
 
@@ -55,26 +56,6 @@ export function toMs(kind: TimeKind, t: number): number {
 
 export function fromMs(kind: TimeKind, ms: number): number {
   return kind === "day" ? Math.floor(ms / DAY_MS) : Math.round(ms);
-}
-
-export type RangeKey = "30d" | "90d" | "1y" | "all";
-
-export const RANGES: { key: RangeKey; label: string; days: number | null }[] = [
-  { key: "30d", label: "30 d", days: 30 },
-  { key: "90d", label: "90 d", days: 90 },
-  { key: "1y", label: "1 y", days: 365 },
-  { key: "all", label: "All", days: null },
-];
-
-/// The span a range shows, ending at the newest point of what is picked;
-/// null for all of it.
-export function rangeBounds(
-  key: RangeKey,
-  newestMs: number,
-): { fromMs: number; toMs: number } | null {
-  const days = RANGES.find((r) => r.key === key)?.days ?? null;
-  if (days === null) return null;
-  return { fromMs: newestMs - days * DAY_MS, toMs: newestMs };
 }
 
 /// The newest point any of `picked` holds, in milliseconds; null when
@@ -425,14 +406,16 @@ export function nearest(line: XY[], x: number, within = Infinity): XY | null {
   return best && Math.abs(best.x - x) <= within ? best : null;
 }
 
-export type CardState = { ids: string[]; range: RangeKey; aligned: boolean };
+/// `range` is the time window as `storedText` writes it (timeWindow.ts);
+/// the card reads one it cannot parse as the default.
+export type CardState = { ids: string[]; range: string; aligned: boolean };
 
-/// The card's state string: the picked ids in order, the range, and
-/// whether starts are aligned.
+/// The card's state string: the picked ids in order, the time window,
+/// and whether starts are aligned.
 export function encodeState({ ids, range, aligned }: CardState): string {
   const q = new URLSearchParams();
   if (ids.length) q.set("ids", ids.join(","));
-  if (range !== "90d") q.set("range", range);
+  if (range !== DEFAULT_WINDOW) q.set("range", range);
   if (aligned) q.set("align", "start");
   return q.toString();
 }
@@ -442,7 +425,7 @@ export function decodeState(state: string): CardState {
   const range = q.get("range");
   return {
     ids: (q.get("ids") ?? "").split(",").filter(Boolean),
-    range: RANGES.some((r) => r.key === range) ? (range as RangeKey) : "90d",
+    range: range || DEFAULT_WINDOW,
     aligned: q.get("align") === "start",
   };
 }

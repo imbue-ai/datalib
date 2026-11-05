@@ -57,27 +57,23 @@ test("aligned starts draw two runs from 0 and one hover reads both", async ({ pa
   }
   await expect(card.locator(".ts-chart .uplot")).toBeVisible();
 
-  asked.length = 0;
   await card.getByRole("button", { name: "Align starts" }).click();
   await expect(card.getByRole("button", { name: "Align starts" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  // Each run is asked for its own half hour, not one span across both.
+  // Each run is asked for its own half hour, not one span across both. A
+  // clock-time call scheduled before the click may still arrive, so this
+  // waits for the two aligned calls rather than for exactly two.
+  const key = (ids: string, from: number, to: number) => `${ids} ${from} ${to}`;
   await expect
-    .poll(() =>
-      asked
-        .map((a) => [a.ids.join(","), a.from, a.to])
-        .sort()
-        .map(String),
-    )
+    .poll(() => asked.map((a) => key(a.ids.join(","), a.from, a.to)))
     .toEqual(
-      [
-        ["sat", SATURDAY, SATURDAY + LENGTH],
-        ["tue", TUESDAY, TUESDAY + LENGTH],
-      ].map(String),
+      expect.arrayContaining([
+        key("tue", TUESDAY, TUESDAY + LENGTH),
+        key("sat", SATURDAY, SATURDAY + LENGTH),
+      ]),
     );
-  await expect(card.locator(".ts-range", { hasText: "90 d" })).toBeDisabled();
 
   // Halfway along the axis is fifteen minutes into both runs.
   const over = card.locator(".u-over");
@@ -90,4 +86,58 @@ test("aligned starts draw two runs from 0 and one hover reads both", async ({ pa
   await over.dispatchEvent("mousemove", { ...at, movementX: 1 });
   await expect(card.locator(".ts-when")).toHaveText("+15:00.000");
   await expect(card.locator(".ts-tooltip > div:not(.ts-when)")).toHaveCount(2);
+});
+
+test("the window box takes a preset, a typed duration and two dates", async ({ page }) => {
+  await page.addInitScript(() => {
+    const view = { zone: { kind: "named", name: "UTC" }, days: "iso", hours: "h23" };
+    localStorage.setItem("datalib-time-view", JSON.stringify(view));
+  });
+  await page.route("**/applet/unified_time_series_index/time_series", (r: Route) =>
+    r.fulfill({ json: { time_series: RUNS } }),
+  );
+  const asked: { from: number; to: number }[] = [];
+  await page.route("**/applet/unified_time_series_index/points", async (r: Route) => {
+    const body = r.request().postDataJSON() as { ids: string[]; from: number; to: number };
+    asked.push(body);
+    const time_series = RUNS.filter((s) => body.ids.includes(s.time_series_id)).map((s) => ({
+      ...s,
+      kind: "raw",
+      points: [{ t: s.first_t, value: 120, text: null }],
+    }));
+    await r.fulfill({ json: { time_series, missing: [], unreadable: [] } });
+  });
+
+  await page.goto("/timeSeriesView()");
+  const card = page.locator(".ts-card");
+  await card.locator(".ts-item", { hasText: "Saturday run" }).locator("input").check();
+  const box = card.getByRole("combobox", { name: "Time window" });
+  await expect(box).toHaveValue("90d");
+  const newest = SATURDAY + LENGTH;
+  const askedFor = (from: number, to: number) =>
+    expect.poll(() => asked.some((a) => a.from === from && a.to === to)).toBe(true);
+
+  // Focus offers the presets; a click on one applies it.
+  await box.focus();
+  await expect(card.getByRole("option", { name: /Last 1 hour/ })).toBeVisible();
+  await card.getByRole("option", { name: /Last 15 minutes/ }).click();
+  await expect(box).toHaveValue("15m");
+  await askedFor(newest - 15 * MIN, newest);
+
+  // A typed duration, applied with Enter.
+  await box.fill("45m");
+  await box.press("Enter");
+  await expect(box).toHaveValue("45m");
+  await askedFor(newest - 45 * MIN, newest);
+
+  // Something that is not a window says so and changes nothing.
+  await box.fill("soon");
+  await expect(card.locator(".tw-error")).toBeVisible();
+  await box.press("Escape");
+  await expect(box).toHaveValue("45m");
+
+  // Two dates, read in the clock's zone.
+  await box.fill("2369-04-18 07:10 to 2369-04-18 07:20");
+  await box.press("Enter");
+  await askedFor(SATURDAY + 10 * MIN, SATURDAY + 20 * MIN);
 });

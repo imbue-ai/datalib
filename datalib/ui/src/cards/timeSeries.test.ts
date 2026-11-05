@@ -20,7 +20,6 @@ import {
   nearest,
   newestMs,
   niceTicks,
-  rangeBounds,
   refusal,
   toMs,
   unalignedSpan,
@@ -192,15 +191,10 @@ describe("line labels", () => {
 });
 
 describe("ranges", () => {
-  it("end at the newest point picked, and All has no bounds", () => {
+  it("end at the newest point picked", () => {
     const day = listed({ time_kind: "day", last_t: 10 });
     const instant = listed({ time_kind: "instant", last_t: 5 * 86_400_000 });
     expect(newestMs([day, instant])).toBe(10 * 86_400_000);
-    expect(rangeBounds("30d", 100 * 86_400_000)).toEqual({
-      fromMs: 70 * 86_400_000,
-      toMs: 100 * 86_400_000,
-    });
-    expect(rangeBounds("all", 1)).toBeNull();
   });
 });
 
@@ -297,7 +291,7 @@ describe("the card's state", () => {
     expect(encodeState({ ids: [], range: "90d", aligned: false })).toBe("");
     const s = encodeState({ ids: ["a", "b"], range: "1y", aligned: true });
     expect(decodeState(s)).toEqual({ ids: ["a", "b"], range: "1y", aligned: true });
-    expect(decodeState("range=bogus")).toEqual({ ids: [], range: "90d", aligned: false });
+    expect(decodeState("")).toEqual({ ids: [], range: "90d", aligned: false });
   });
 
   /** A layout saved before alignment existed has no `align` and opens on clock time. */

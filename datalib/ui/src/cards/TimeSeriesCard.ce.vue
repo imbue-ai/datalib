@@ -6,24 +6,31 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { subscribeLive } from "@/live";
 import {
-  RANGES,
   alignedSpan,
   decodeState,
   emptyListNote,
   encodeState,
   grouped,
   newestMs,
-  rangeBounds,
   refusal,
   toMs,
   unitText,
   type Answered,
   type Listed,
-  type RangeKey,
 } from "./timeSeries";
 import { fetchAlignedPoints, fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import { seriesColor } from "./plot/plot";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
+import TimeWindowPicker from "./TimeWindowPicker.vue";
+import {
+  DEFAULT_WINDOW,
+  alignedWindowSpan,
+  parseWindow,
+  storedText,
+  windowSpan,
+  type TimeWindow,
+} from "./timeWindow";
+import { UTC } from "@/config/timeView";
 import EntityChip from "./EntityChip.ce.vue";
 import { uriFromEntity } from "./chipLinks";
 import type { CardCtx } from "./types";
@@ -44,17 +51,27 @@ every point. Hover the chart to read each line's value at that time.</p>
 show it alone, and again to show them all. Drag across the chart to zoom
 in, which reads that stretch again in finer detail; double-click the
 chart to go back.</p>
+<p>The box at the top right is the time window. Focus it for a list of
+windows, or type one and press Enter: a duration such as <code>15m</code>,
+<code>6h</code>, <code>7d</code> or <code>1y</code> (the stretch ending at the newest
+point picked), <code>all</code>, or two dates such as <code>2369-04-14 07:00 to
+2369-04-14 09:00</code>, read in the clock's time zone. A bare date is its
+whole day.</p>
 <p><b>Align starts</b> draws each line against the time since its own
 first point, so two runs on different days start together at 0 and the
-axis reads time since start. The range buttons do not apply then: each
-line is drawn whole.</p>
+axis reads time since start. A duration is then the first that much of
+each line; two dates do not apply, and each line is drawn whole.</p>
 `);
 
 const restored = decodeState(props.ctx.initialState);
 const listed = ref<Listed[] | null>([]);
 const all = computed(() => listed.value ?? []);
 const ids = ref<string[]>(restored.ids);
-const range = ref<RangeKey>(restored.range);
+/// A state string is stored in UTC (`storedText`), so it reads the same
+/// whatever the clock's zone; one this build cannot read is the default.
+const shownWindow = ref<TimeWindow>(
+  parseWindow(restored.range, UTC) ?? parseWindow(DEFAULT_WINDOW, UTC)!,
+);
 const aligned = ref(restored.aligned);
 const filter = ref("");
 const answered = ref<Map<string, Answered>>(new Map());
@@ -77,7 +94,7 @@ const colorOf = (id: string) => seriesColor(Math.max(0, ids.value.indexOf(id)));
 
 function persist() {
   props.ctx.host.setState(
-    encodeState({ ids: ids.value, range: range.value, aligned: aligned.value }),
+    encodeState({ ids: ids.value, range: storedText(shownWindow.value), aligned: aligned.value }),
   );
 }
 
@@ -96,10 +113,17 @@ function toggle(s: Listed) {
   persist();
 }
 
-function pickRange(key: RangeKey) {
-  range.value = key;
+function pickWindow(w: TimeWindow) {
+  shownWindow.value = w;
   persist();
 }
+
+/// Why the window box's window is not what the chart shows, or null.
+const windowNote = computed(() =>
+  aligned.value && shownWindow.value.kind === "between"
+    ? "Two dates do not apply while starts are aligned; each line is drawn whole."
+    : null,
+);
 
 function toggleAligned() {
   aligned.value = !aligned.value;
@@ -124,13 +148,17 @@ async function loadList() {
 }
 
 /// What the chart spans, in milliseconds: with starts aligned, from 0 to
-/// the end of the longest line; else the range ending at the newest point
-/// picked, or everything the picked time series hold.
+/// the window's length or the end of the longest line; else the window,
+/// a duration ending at the newest point picked, or everything the
+/// picked time series hold.
 const span = computed<{ fromMs: number; toMs: number } | null>(() => {
-  if (aligned.value) return alignedSpan(picked.value);
+  if (aligned.value) {
+    const whole = alignedSpan(picked.value);
+    return whole && alignedWindowSpan(shownWindow.value, whole.toMs);
+  }
   const newest = newestMs(picked.value);
   if (newest === null) return null;
-  const bounded = rangeBounds(range.value, newest);
+  const bounded = windowSpan(shownWindow.value, newest);
   if (bounded) return bounded;
   const firsts = picked.value.flatMap((p) =>
     p.first_t === null ? [] : [toMs(p.time_kind, p.first_t)],
@@ -169,7 +197,7 @@ function schedulePoints() {
   if (pointsTimer) clearTimeout(pointsTimer);
   pointsTimer = setTimeout(() => void loadPoints(), 120);
 }
-watch([ids, range, aligned, () => Math.round(chartWidth.value / 50), all], schedulePoints);
+watch([ids, shownWindow, aligned, () => Math.round(chartWidth.value / 50), all], schedulePoints);
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -288,19 +316,7 @@ onBeforeUnmount(() => {
         >
           Align starts
         </button>
-        <div role="group" aria-label="Range" class="ts-ranges">
-          <button
-            v-for="r in RANGES"
-            :key="r.key"
-            type="button"
-            class="ts-range"
-            :disabled="aligned"
-            :aria-pressed="!aligned && range === r.key"
-            @click="pickRange(r.key)"
-          >
-            {{ r.label }}
-          </button>
-        </div>
+        <TimeWindowPicker :window="shownWindow" :note="windowNote" @pick="pickWindow" />
       </div>
       <div v-if="notice" class="ts-notice">{{ notice }}</div>
       <div v-if="error" class="ts-error">{{ error }}</div>
@@ -433,10 +449,6 @@ onBeforeUnmount(() => {
 .ts-hint {
   flex: 1 1 auto;
 }
-.ts-ranges {
-  display: flex;
-  gap: 0.25rem;
-}
 .ts-range {
   font: inherit;
   font-size: var(--datalib-font-size-small);
@@ -446,10 +458,6 @@ onBeforeUnmount(() => {
   background: var(--datalib-surface);
   color: var(--datalib-fg);
   cursor: pointer;
-}
-.ts-range:disabled {
-  cursor: default;
-  opacity: 0.5;
 }
 .ts-range[aria-pressed="true"] {
   background: var(--datalib-accent);
