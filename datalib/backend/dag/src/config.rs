@@ -778,6 +778,12 @@ fn valid_folder_segment(seg: &str) -> bool {
     valid_id_segment(seg) && !seg.chars().any(|c| c.is_ascii_uppercase())
 }
 
+/// Whether `function` could be a step's function: one folder name, so
+/// `<group>/<function>` stays directly under the group's folder.
+pub fn usable_function(function: &str) -> bool {
+    valid_folder_segment(function)
+}
+
 /// Whether `id` is a group id a config may name: one folder segment,
 /// never a reserved directory. What makes `<root>/<id>` that group's tree.
 pub fn usable_group_id(id: &str) -> bool {
