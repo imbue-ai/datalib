@@ -146,13 +146,17 @@ PROFRAWS=()
 for label in "${TARGETS[@]}"; do
     pkg="${label#//}"; pkg="${pkg%%:*}"
     name="${label##*:}"
-    dir="$TESTLOGS/$pkg/$name/_coverage"
-    found=("$dir"/*.profraw)
-    if [[ ! -e "${found[0]}" ]]; then
+    dir="$TESTLOGS/$pkg/$name"
+    # A sharded test keeps one `_coverage/` per shard, under `shard_*/`.
+    count=0
+    while IFS= read -r profraw; do
+        PROFRAWS+=("$profraw")
+        count=$((count + 1))
+    done < <(find "$dir" -path '*/_coverage/*' -name '*.profraw')
+    if (( count == 0 )); then
         echo "error: no .profraw for $label under $dir — did it run an instrumented binary?" >&2
         exit 1
     fi
-    PROFRAWS+=("${found[@]}")
 done
 
 MERGED="$(mktemp -t datalib_merged.profdata.XXXXXX)"
