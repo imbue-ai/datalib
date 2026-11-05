@@ -173,7 +173,8 @@ or stamped with its problem. Each kind is a `problems` row:
   a `cid`, or for a pin dropped on an address, its `q=` query), a
   subscription row short of columns or with no channel id, a
   watch-history entry that is not a video, a Gemini entry with no date
-  line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`).
+  line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`). Watch-history
+  entries with no link, as for a video since removed, share one row with a count.
   A feed replaces only its own rows, and only when it read its file, so
   an unchanged file keeps last run's rows. A Maps file with no
   `features` list is one `file:google_takeout/<feed>:<path>` row,
