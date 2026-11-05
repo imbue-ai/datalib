@@ -396,7 +396,8 @@ jobs:
           version="$(sed -n -E 's/^version = "([^"]+)"$/\1/p' datalib/backend/Cargo.toml)"
           stage="datalib-${version}-x86_64-unknown-linux-gnu"
           mkdir -p "artifact/${stage}"
-          cp -L "${bindir}"/* "artifact/${stage}/"
+          cp -RL "${bindir}/." "artifact/${stage}/"
+          chmod -R u+w "artifact/${stage}"
           chmod +x "artifact/${stage}"/*
           tar -C artifact -czf "artifact/datalib-x86_64-unknown-linux-gnu.tar.gz" "${stage}"
           ls -la artifact

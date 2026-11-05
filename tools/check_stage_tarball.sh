@@ -44,6 +44,10 @@ done
 # "Permission denied". Stage it read-only, as bazel hands it over.
 echo 1111111111111111111111111111111111111111 > "$tree/datalib/backend/bin/git-hash"
 chmod 0444 "$tree/datalib/backend/bin/git-hash"
+# `lib/` the same way: bazel-bin holds it read-only, a runfiles tree may not.
+rm "$tree/datalib/backend/bin/lib"
+cp -RL "$runfiles/datalib/backend/bin_unstamped/lib" "$tree/datalib/backend/bin/lib"
+chmod -R a-w "$tree/datalib/backend/bin/lib"
 ln -s "$runfiles/datalib/ui" "$tree/datalib/ui"
 ln -s "$runfiles/third-party" "$tree/third-party"
 
@@ -89,6 +93,11 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
              datalib-file-inventory latchkey-curl-router curl-impersonate latchkey; do
         [[ -f "$dir/$f" && -x "$dir/$f" && ! -L "$dir/$f" ]] || { echo "ERROR: $f is not a regular executable in the tarball" >&2; ls -la "$dir" >&2; exit 1; }
     done
+    # A bazel output directory is read-only and `cp -R` keeps that, and the
+    # next install's `rm -rf` of the old tree cannot empty a read-only one.
+    local stuck
+    stuck="$(find "$dir" -type d ! -perm -u+w)"
+    [[ -z "$stuck" ]] || { echo "ERROR: directories an upgrade could not remove: $stuck" >&2; exit 1; }
     if [[ "$triple" != *-musl ]]; then
         local library
         library="$(find "$dir/lib" -type f -name 'libdoltlite.*')"

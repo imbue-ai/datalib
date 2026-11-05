@@ -68,6 +68,9 @@ mkdir -p "$stage"
 [[ -d "$bin/datalib/backend/bin" ]] || fail "no $bin/datalib/backend/bin — build //datalib/backend:bin first"
 log "copying the binaries from $bin/datalib/backend/bin"
 cp -RL "$bin/datalib/backend/bin/." "$stage/"
+# A bazel output directory is read-only and `cp -R` keeps that, and the next
+# install's `rm -rf` of the old tree could not empty it.
+chmod -R u+w "$stage"
 chmod +x "$stage"/*
 for required in datalib-dag datalib-step datalib-http datalib-doltlite latchkey-curl-router curl-impersonate; do
     [[ -x "$stage/$required" ]] || fail "$required missing from //datalib/backend:bin"
