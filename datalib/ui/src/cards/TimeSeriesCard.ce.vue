@@ -90,6 +90,35 @@ const picked = computed(() =>
   }),
 );
 const groups = computed(() => grouped(all.value, filter.value));
+
+/// The documents whose time series are unfolded in the list, by uuid. A
+/// pick unfolds its document and taking it off folds nothing; only the
+/// person folds a document.
+const unfolded = ref(new Set<string>());
+watch(
+  [picked],
+  () => {
+    const add = picked.value.flatMap((p) =>
+      p.about_uuid && !unfolded.value.has(p.about_uuid) ? [p.about_uuid] : [],
+    );
+    if (add.length) unfolded.value = new Set([...unfolded.value, ...add]);
+  },
+  { immediate: true },
+);
+/// A filter unfolds every document it matches, without touching what the
+/// person unfolded.
+const isUnfolded = (uuid: string) => filter.value.trim() !== "" || unfolded.value.has(uuid);
+
+/// The `toggle` event fires for our own changes to `open` too; only one
+/// that disagrees with `isUnfolded` was the person's click.
+function onFold(uuid: string, e: Event) {
+  const open = (e.target as HTMLDetailsElement).open;
+  if (open === isUnfolded(uuid)) return;
+  const next = new Set(unfolded.value);
+  if (open) next.add(uuid);
+  else next.delete(uuid);
+  unfolded.value = next;
+}
 const colorOf = (id: string) => seriesColor(Math.max(0, ids.value.indexOf(id)));
 
 function persist() {
@@ -271,7 +300,8 @@ onBeforeUnmount(() => {
             v-for="a in g.abouts"
             :key="a.uuid"
             class="ts-about"
-            :open="filter.trim() !== '' || a.items.some((s) => ids.includes(s.time_series_id))"
+            :open="isUnfolded(a.uuid)"
+            @toggle="onFold(a.uuid, $event)"
           >
             <summary class="ts-about-name">{{ a.name }} · {{ a.items.length }}</summary>
             <label
