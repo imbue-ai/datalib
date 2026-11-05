@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend_output;
 mod launcher;
 mod navigation;
 mod protected;
@@ -108,6 +109,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
     let dir = libraries_dir(&app);
     let dirs = libraries_dirs(&app);
     let container = protected_container(&app);
+    let guarded = macos_guards_the_container();
     let home = home_dir(&app).unwrap_or_default();
     // TODO(after 2026-12-09): drop `legacy` and `move_from_documents`
     // with `launcher::move_from_documents`.
@@ -133,6 +135,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "path": l.path.to_string_lossy(),
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
                     "protected": protected,
+                    "unguarded": protected && !guarded,
                     "forgettable": launcher::forgettable(&l.path, &dirs),
                     "deletable": launcher::deletable(&l.path, &dirs),
                     "found": l.found,
@@ -153,7 +156,8 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
         "libraries_dir": launcher::tilde(&dir, &home),
         "move_from_documents": move_from,
         "suggested_name": launcher::suggested_name(&dir),
-        "protected_available": container.is_some(),
+        "protected_available": container.is_some() && guarded,
+        "protected_needs_newer_macos": container.is_some() && !guarded,
     })
 }
 
@@ -631,10 +635,26 @@ fn protected_container(app: &AppHandle) -> Option<PathBuf> {
     Some(protected::container(&home_dir(app)?))
 }
 
+#[cfg(target_os = "macos")]
+fn macos_guards_the_container() -> bool {
+    let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
+    protected::macos_guards_the_container(version.majorVersion)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_guards_the_container() -> bool {
+    false
+}
+
 /// Ask macOS for the protected folder, which it makes the first time.
 #[cfg(target_os = "macos")]
 fn make_protected_container() -> Result<PathBuf, String> {
     use objc2_foundation::{NSFileManager, NSString};
+    if !macos_guards_the_container() {
+        return Err("A protected library needs macOS 15 or later. On this version, \
+                    macOS does not keep other apps out of the folder."
+            .into());
+    }
     let url = NSFileManager::defaultManager()
         .containerURLForSecurityApplicationGroupIdentifier(&NSString::from_str(protected::GROUP_ID))
         .ok_or("macOS gave Datalib no protected folder. Only a copy of Datalib signed by Imbue has one.")?;
@@ -1076,11 +1096,8 @@ fn app_origin(app: &AppHandle) -> Option<Url> {
 }
 
 /// Spawn the bundled `datalib-http` against `root` on an ephemeral
-/// localhost port and wait (≤15s) for it to announce its URL via
-/// `--url-file`. The child's output goes to a log file in the temp dir
-/// so startup failures can quote it in the error dialog (a
-/// Finder-launched app has no terminal). Blocking: run on a worker
-/// thread, not the event loop.
+/// localhost port and wait for it to announce its URL. Blocking: run on a
+/// worker thread, not the event loop.
 fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<String> {
     let http_bin = resolve_bundled(app, "datalib-http", "DATALIB_HTTP_BIN").ok_or_else(|| {
         anyhow::anyhow!(
@@ -1089,35 +1106,13 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         )
     })?;
 
-    let tmp = std::env::temp_dir();
-    let pid = std::process::id();
-    let url_file = tmp.join(format!("datalib-http-{pid}.url"));
-    let log_file = tmp.join(format!("datalib-http-{pid}.log"));
-    // Remove a stale url-file from a recycled PID so we can't read a
-    // dead server's address.
-    let _ = std::fs::remove_file(&url_file);
-
-    let log = std::fs::File::create(&log_file)
-        .map_err(|e| anyhow::anyhow!("create backend log {}: {e}", log_file.display()))?;
-    // The backend announces its launch URL — which carries the API
-    // token — on stderr, and that lands in this file, in a temp dir
-    // that is shared between users on Linux. Owner-only. (The url-file
-    // itself is tightened by the backend for the same reason.)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&log_file, std::fs::Permissions::from_mode(0o600));
-    }
-    let log_err = log
-        .try_clone()
-        .map_err(|e| anyhow::anyhow!("clone backend log handle: {e}"))?;
+    backend_output::remove_left_behind(&std::env::temp_dir());
     let latchkey_env = protected_latchkey_env(app, &root)?;
 
     let mut child = Command::new(&http_bin)
         .arg(&root)
         .arg("--no-open")
-        .arg("--url-file")
-        .arg(&url_file)
+        .arg("--url-stdout")
         .args(init.then_some("--init"))
         .env("DATALIB_BIND", "127.0.0.1:0")
         // The backend exits when this pipe hits EOF, which the kernel
@@ -1127,41 +1122,13 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         .env("DATALIB_PARENT_PIPE", "0")
         .envs(latchkey_env)
         .stdin(Stdio::piped())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| anyhow::anyhow!("spawn {}: {e}", http_bin.display()))?;
 
-    // Poll for the URL announcement, watching for an early child death
-    // so a bad data root fails with the backend's own message instead
-    // of a timeout.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let url = loop {
-        if let Ok(url) = std::fs::read_to_string(&url_file) {
-            let url = url.trim().to_string();
-            if !url.is_empty() {
-                break url;
-            }
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            anyhow::bail!(
-                "datalib-http exited during startup ({status}):\n{}",
-                log_tail(&log_file)
-            );
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!(
-                "datalib-http did not announce its URL within 15s \
-                 (log: {}):\n{}",
-                log_file.display(),
-                log_tail(&log_file)
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    let _ = std::fs::remove_file(&url_file);
+    let url = backend_output::await_url(&mut child, &root, std::time::Duration::from_secs(15))
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     *app.state::<HttpChild>().0.lock().expect("http child lock") = Some(child);
     *app.state::<DataRoot>().0.lock().expect("data root lock") = Some(root);
@@ -1184,15 +1151,6 @@ fn protected_latchkey_env(
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("follow {}: {e}", root.display()))?;
     Ok(protected::latchkey_env(&real_root))
-}
-
-fn log_tail(path: &std::path::Path) -> String {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return String::from("(no backend log captured)");
-    };
-    let lines: Vec<&str> = content.lines().collect();
-    let start = lines.len().saturating_sub(20);
-    lines[start..].join("\n")
 }
 
 fn fatal(app: &AppHandle, msg: String) {

@@ -254,7 +254,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         .counts
         .forbidden_retry_recoveries
         .load(Ordering::Relaxed) as u64;
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result?;
     Ok(summary)
 }
@@ -1339,6 +1339,7 @@ async fn upsert_users(db: &RawDb, payloads: &[Value], now: &IsoOffsetTimestamp) 
 /// The export's `users.json`, `None` when there is none.
 fn read_export_users(export_dir: &Path) -> Result<Option<Vec<Value>>> {
     let path = export_dir.join("users.json");
+    export::refuse_link(&path)?;
     if !path.exists() {
         return Ok(None);
     }

@@ -380,7 +380,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // type is the same on both paths; on error its fields will simply
     // be the defaults populated up to the failure point.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
-    run.finish(&result, &summary_for_bookkeeping).await;
+    run.finish(found.ended_early(), &result, &summary_for_bookkeeping)
+        .await;
     result
 }
 

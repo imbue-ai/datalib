@@ -2,6 +2,7 @@ load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
 exports_files([
+    "build-signed-app.sh",  # read by //tools:build_signed_app_test
     "deny.toml",  # read by //tools:license_lists_test
     "rust-toolchain.toml",  # read by //tools:version_pins_test
 ])
@@ -52,6 +53,18 @@ rust_test(
     size = "small",
     srcs = ["src/raw_store.rs"],
     crate_root = "src/raw_store.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# Same arrangement for `src/backend_output.rs`: how the URL and the output
+# of the shell's backend reach it, and what is left of neither on disk.
+# Nothing in it may reference `tauri`.
+rust_test(
+    name = "backend_output_test",
+    size = "small",
+    srcs = ["src/backend_output.rs"],
+    crate_root = "src/backend_output.rs",
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
 )

@@ -1,7 +1,6 @@
 # Setup every bazel job in this repo needs, in one place: room on the
-# runner's disk, and bazel pointed at the BuildBuddy cache. Both `test.yml` jobs use it; `release.yml`'s matrix legs
-# do their own thing because they run on bare runners rather than in the
-# devcontainer.
+# runner's disk, and bazel pointed at the BuildBuddy cache. Both `test.yml`
+# jobs use it. `release.yml` does not: it reads no cache.
 #
 # Callers must run `actions/checkout` first — a local composite action is
 # loaded from the checked-out workspace, so it cannot check itself out.

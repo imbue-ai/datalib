@@ -37,6 +37,12 @@ read again until its part changes, which for the same bytes would fail
 the same way. A rung that has feeds read their files again
 (`read_again`, below) also clears this cursor.
 
+An export can be made by anyone (`etl/files/README.md` § "An export can be
+made by anyone"). A part that expands too far is refused, and the run fails
+before any feed reads it. A link in an unpacked export is not read, as a
+feed's file or as an attachment. It is a `listing:files` problem naming it,
+and like any walk error it keeps the cursor from being written.
+
 ## A config turns each feed on; the form ticks them all
 
 `SyncFlags` (`src/ingest/mod.rs`) is one boolean per feed, mirrored by

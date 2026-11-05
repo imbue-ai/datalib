@@ -262,6 +262,7 @@ async fn read_tree(
         &opts.cache,
         root,
         &file_changes_scan::ScanOptions {
+            links: datalib_etl_files::fswalk::Links::Refused,
             progress: opts.progress.clone(),
             ..Default::default()
         },

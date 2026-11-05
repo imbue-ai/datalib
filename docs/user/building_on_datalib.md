@@ -298,6 +298,34 @@ The `_bookkeeping` and listing tables are the download's own records.
 Their shape can change with a migration, and the test that keeps
 [raw_stores.md](raw_stores.md) honest will say so when it does.
 
+**As of when does it know?** "There is nothing newer" needs a time, and
+the data does not hold one. The newest row says what the newest thing
+was, and so does a cursor: Slack's `coverage.hi` and Linear's and
+Notion's are the newest stamp a walk saw, and stay put through every walk
+that finds nothing, so a quiet channel looks like one nobody has read in
+a day. Ask the record of when the download looked instead:
+
+- **A whole source:** the start of its newest `ok` run. As of then, the
+  mirror holds what the service listed, apart from what `problems` names:
+  a record that would not fetch, or a part of the listing that failed
+  (`scope_key` `listing:…` or `phase:…`).
+
+  ```sql
+  SELECT started_at_utc FROM sync_runs
+   WHERE status = 'ok' ORDER BY run_id DESC LIMIT 1;
+  ```
+
+  Read this on `main`. The commit `DATALIB_READS` hands a step is the last
+  one whose content moved, so its `sync_runs` stops there, however many
+  syncs have since found nothing. A source with no `sync_runs` rows
+  (Garmin, YoLink, contacts, most that read local files) has
+  `last_success_at_utc` in the loop's record above, which is when the run
+  ended rather than when it began.
+
+- **One Slack conversation:** `checked_at_utc` in `coverage_checked`,
+  since a conversation can fall behind the rest of its source. The rule
+  for one message is in [raw_stores.md](raw_stores.md) § "Slack".
+
 ## Reading from your program
 
 Stock SQLite cannot open a raw store, so your program needs one of two

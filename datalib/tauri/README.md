@@ -21,16 +21,17 @@ launcher are Bazel-built (fully cached) and shipped under the .app's
 (`stage-runtime.sh`); see `tauri.conf.json`'s
 `beforeBuildCommand` + `bundle.resources` and `resolve_bundled` in
 `src/main.rs`. Port handshake: the child gets
-`DATALIB_BIND=127.0.0.1:0` and `--url-file <tmp>` and announces its
-bound URL there; the shell polls for the file, opens the window, and
-kills the child on exit. That announced URL carries the backend's
-per-process API token as `?token=…` (every route requires it — see
-`datalib/backend/http/src/auth.rs`); the webview trades it for an
-HttpOnly session cookie on the first load and is redirected to the
-clean URL, so nothing else in the shell has to know about auth. The
-url-file (tightened by the backend) and the child's log (by the shell)
-are both mode 0600, since both end up holding that token in a shared
-temp dir.
+`DATALIB_BIND=127.0.0.1:0` and `--url-stdout`, and announces its bound
+URL as the first line of its stdout, a pipe only the shell holds; the
+shell reads it, opens the window, and kills the child on exit. That
+announced URL carries the backend's per-process API token as `?token=…`
+(every route requires it — see `datalib/backend/http/src/auth.rs`); the
+webview trades it for an HttpOnly session cookie on the first load and
+is redirected to the clean URL, so nothing else in the shell has to know
+about auth. The URL never goes through a file. A file's mode does not
+keep out another process of the same user, and with the token that
+process could read a library through the server without opening its
+folder (`src/backend_output.rs`).
 
 **Not owned by Bazel** — this crate is a standalone cargo workspace (see
 the `[workspace]` table in `Cargo.toml`) so that Bazel's crate_universe,
@@ -49,12 +50,12 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
-# resolves from the live registry — the signing job runs this with the
-# Developer ID certificate in its environment).
+# resolves from the live registry — the signing job runs this CLI with
+# the Developer ID certificate in its environment).
 pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
-# release workflow's macos-app job runs in CI. It also stamps the
+# release workflow's macos-app-* jobs run in CI, a phase each. It also stamps the
 # binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-dag
 # --version` names the tag rather than `dev`) and refuses a bundle whose
 # binaries are not optimized and stamped
@@ -62,6 +63,9 @@ pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 # Vault (restricted/datalib-release/*); they're under restricted/, so log
 # in with the all-secrets role first:
 #   vault login -method oidc role=employee_all_secrets
+# It runs compile, sign and verify in turn; the release runs each on its
+# own machine, so no build has the key in reach
+# (docs/dev/release_steps.md §"Who holds what").
 ./build-signed-app.sh
 
 # Compile-only inner loop (no bundling), for a fast type/borrow check —
@@ -145,8 +149,9 @@ purpose: it is compiled a second time, as its own crate, by
 with a raw store: open it read-only in DB Browser for SQLite or the
 bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
-folder, below) for `//datalib/tauri:protected_test`, and
-`src/navigation.rs` (where a window may go) for
+folder, below) for `//datalib/tauri:protected_test`,
+`src/backend_output.rs` (the backend's URL and output) for
+`//datalib/tauri:backend_output_test`, and `src/navigation.rs` (where a window may go) for
 `//datalib/tauri:navigation_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
@@ -165,9 +170,14 @@ point it at a fresh Bazel build without rebundling) → the bundled
 `Resources/binaries/datalib-http`. The child finds the pipeline
 binaries itself: `$DATALIB_BINARY_DIR` (inherited) → a sibling of its
 own executable, which is exactly where
-the bundle puts them. The spawned backend logs to
-`$TMPDIR/datalib-http-<pid>.log`;
-startup failures quote the log tail in the error dialog.
+the bundle puts them. Once the spawned backend has taken its library,
+the shell keeps the backend's output in the library, in
+`system/server-output.log`, and the previous run's in
+`system/server-output.previous.log`. That is the only record of a panic.
+Startup failures quote the output's last lines in the error dialog. An
+earlier build kept this output in `$TMPDIR/datalib-http-<pid>.log`, with
+the token in it; the shell removes any such file, and any
+`datalib-http-<pid>.url`, when it starts a backend.
 
 `app-icon.png` is ✊ on a rounded tile: `app-icon/app-icon.html` drawn
 at 1024×1024 by headless Chromium. The fist is "Raised fist" from
@@ -179,8 +189,8 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 
 ## A protected library
 
-On macOS, "New library" can put the library in a folder only Datalib
-opens without asking: the app group container
+On macOS 15 or later, "New library" can put the library in a folder only
+Datalib opens without asking: the app group container
 `~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
 macOS guards a group container: any other app that reaches in
 (Terminal, an AI agent's shell, Finder) makes it ask the person first,
@@ -206,6 +216,24 @@ on stealing from you.
 > That is why deleting a protected library skips the Trash. Check any
 > change to where this store lives, or who may read it, against this.
 
+- **Before macOS 15 the folder is not offered.** macOS only guards a group
+  container from 15 on, so on an earlier version the option is greyed out
+  and says why, and the shell refuses to make one
+  (`make_protected_container`). A library already in the folder, made by
+  an earlier build or on a newer macOS, still opens with its own latchkey
+  store, and its row says "Not protected on this macOS".
+- **The server's output stays in the library** (`system/server-output.log`),
+  since a log line can quote what a library holds. The URL with the token
+  stays out of it. The server prints that URL to stderr only at a terminal,
+  and hands it to the shell over a pipe.
+- **What opens the library's servers stays in the folder too.** The API
+  token and the applets' secret are each in a file in `system/`, and in
+  no process's environment or arguments, where `ps eww` would show them
+  to any program running as you. Neither file may ever move or be copied
+  outside the library. Why, and what still reaches outside the folder:
+  [`security_posture.md`](../../docs/dev/security_posture.md) §"Another
+  program running as you". Read it before adding a secret, a log, a temp
+  file or a cache that a protected library's server writes.
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
   programs an app starts as that app, so `datalib-http` and everything
@@ -295,7 +323,7 @@ have you let in?".
 - No blocking model download at startup: qmd's models are fetched on
   first need by the steps and the search applet (`datalib_qmd_models`),
   the same as the web packaging — the shell passes nothing besides
-  `--no-open` and the `--url-file` handshake.
+  `--no-open` and the `--url-stdout` handshake.
 - There is no `datalib:` link handler; the shell does not link
   `tauri-plugin-deep-link`. So the `datalib:doc/…` name a 🆔 button
   becomes in a copied selection opens nothing outside the app yet.

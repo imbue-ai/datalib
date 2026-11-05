@@ -42,7 +42,69 @@ script lists them. A script calls another through `"$BASH"`, so the
 bash that runs the outer one runs the inner one too.
 
 The publish steps — `gh release create` / `gh release upload` — stay
-in the workflow. They are the part that cannot run anywhere else.
+out of the scripts, in `.github/actions/publish-release-assets`. They
+are the part that cannot run anywhere else.
+
+## Who holds what
+
+A release compiles a great deal of other people's code: on a cache miss
+`bazel build` runs every crate's build script, and `cargo` runs the
+desktop shell's build scripts and proc macros. Any of them could be
+compromised, so none of them runs where it could take a write token or
+the signing key.
+
+The boundary has to be a job. GitHub grants a token's permissions per
+job and never per step, and a hosted runner has passwordless sudo, so
+any process in a job can read the runner's memory, where every secret
+that job holds is kept. `id-token: write` also puts the variables that
+mint an OIDC token into every step's environment, so a build script in
+a job with that grant could get the Vault token itself, with no export
+to wait for.
+
+| job | runs on it | holds |
+|---|---|---|
+| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
+| `publish-runtime`, `publish-tarballs`, `publish-macos-app` | `gh release`, nothing built | `contents: write` |
+| `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
+| `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
+| `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
+| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
+| `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
+
+A build job hands what it made to the next through an artifact.
+`scripts/lint_repo.py` check 21 holds each grant to its job, refuses a
+build command in a job that holds one, and requires every
+`actions/checkout` to say `persist-credentials: false` so the token is
+not left in `.git/config`. `cargo-update.yml`'s `pull-request` job is
+the one checkout that keeps it, because it pushes.
+
+**Compile, sign and verify are phases of
+`datalib/tauri/build-signed-app.sh`**, and `compile` and `verify` refuse
+to start with signing material in their environment
+(`//tools:build_signed_app_test`). The split rests on what the Tauri CLI
+measurably does (2.12.4):
+
+- `tauri build` always runs `cargo build --bins --features
+  tauri/custom-protocol --release`. After a plain `cargo build --release`
+  that recompiles 24 crates, `tauri`, `wry` and `tauri-macros` among
+  them. With the flags matched it still recompiles `datalib-tauri`, and
+  so runs `tauri-build` and the `tauri-macros` proc macro, because the
+  shell's `build.rs` deletes a file the build then finds changed.
+- `tauri bundle` runs no compiler at all. Its only calls are `cargo
+  metadata --no-deps` and `rustc -vV`. So `macos-app-sign` signs the
+  staged tree with `sign-staged.sh` and runs `tauri bundle`, and has no
+  way to compile.
+
+What can still run with the certs in reach: the Tauri CLI at the version
+`pnpm-lock.yaml` names, Apple's tools, and `imbue-ai/use-vault-secrets`.
+A compromised build can still put bad code in what it builds, and
+`macos-app-sign` would sign it; that is true of any signed build. What
+the jobs prevent is the build taking the key, or rewriting a release.
+
+No job holds a cache key or restores a cache (`ci.md` §"Two caches",
+[`security_posture.md`](security_posture.md)), so nothing `main`'s CI saved
+reaches what a release builds, and a build script in a release has no
+cache to leave anything in.
 
 ## What runs on every `bazel test //...`
 
@@ -63,9 +125,11 @@ in the workflow. They are the part that cannot run anywhere else.
   the behaviour a wrong working directory breaks.
 - **`…_bash32_test`** — on a mac, both again under `/bin/bash`, the
   3.2 the macOS runner has, where an empty array is "unbound
-  variable" under `-u`. Bazel skips them on Linux
-  (`target_compatible_with`); `scripts/lint_repo.py` check 10 refuses
-  an empty bash array in any workflow step, since CI has no mac leg.
+  variable" under `-u`. The runtime's also runs under `/usr/bin/rsync`,
+  which a laptop's Homebrew rsync would otherwise stand in for. Bazel
+  skips them on Linux (`target_compatible_with`);
+  `scripts/lint_repo.py` check 10 refuses an empty bash array in any
+  workflow step, since CI has no mac leg.
 
 The workflow's other checks are assertions over a built artifact, made
 on its own runner before anything is published:
@@ -75,7 +139,7 @@ on its own runner before anything is published:
   --version` is not the tag. Bazel's default mode leaves the Rust
   unoptimized and a sync about twice as slow, and the app shipped that
   way through v0.47.0, unstamped too. The `build` job runs it on the
-  tarball's binaries; the `macos-app` job, through
+  tarball's binaries; the `macos-app-verify` job, through
   `build-signed-app.sh`, on the ones inside `Datalib.app`. It tells the
   mode from the Bazel output directory (`darwin_arm64-opt`,
   `k8-fastbuild`) that generated-source paths compile into a binary,
@@ -113,6 +177,37 @@ CI runs in).
 The release procedure (`.claude/skills/release/SKILL.md`) runs this
 before the version bump.
 
+## The mac legs' runner image
+
+The mac legs name one GitHub-hosted image, `macos-26` (Xcode 26.6), and
+GitHub retires an image about once a year. `latchkey-auth.yml` runs on
+the same one, so the sign-in suite tries it every night. A tag runs its
+own tree, so a retired label costs that release its mac assets and a
+re-run cannot fix it. What the image decides:
+
+- **The SDK our own binaries link against**, which sets what AppKit and
+  WebKit do for the app: 26.5 on this image. `xcrun vtool -show-build
+  <binary>` prints it. The minimum macOS (11.0) is not the image's: it
+  comes from `.bazelrc`, and rustc's floor for Apple Silicon for the
+  Tauri shell. The two curl shims and Node arrive prebuilt, so their
+  SDK is whatever built them.
+- **The system tools the scripts call**: `/usr/bin/rsync`, which since
+  macOS 15 is openrsync and accepts `--chmod` but ignores it on a tree;
+  `/bin/bash` 3.2; `hdiutil`, `codesign` and `notarytool`.
+- **The Chrome `datalib/tauri/check-app.sh` needs.**
+
+Rust and Bazel are pinned by the repo, whatever the image carries.
+
+To move to another image, try these steps first in a throwaway workflow
+triggered by a push to a branch, with no write grants. **Run it with no
+cache key.** A darwin action's cache key does not cover the image, so
+the contributor cache replays another image's compiles and test results:
+`stage_runtime_test` reported `(cached) PASSED` on the first image with
+openrsync, in the same job whose runtime step had just failed, and a
+binary whose link is replayed would carry the other image's SDK. A tag
+reads no cache (`ci.md` §"Two caches"), so a cold run is the one that
+matches.
+
 ## What stays release-only
 
 - The `runtime` legs on the real runners, with their own bash and
@@ -123,8 +218,12 @@ before the version bump.
   `licenses/rust-crates.md` from the crate sources, so it needs `cargo`
   and the network. The release runner and the tauri bundle both make
   this same call.
-- Signing, notarization, and the asset uploads.
-- `docker-publish`'s pulls. Its Docker Hub images come through
-  `mirror.gcr.io` (`ci.md` §"What runs where"), and only a tag runs
-  that job, so a change to how it pulls is first tried by the next
-  release.
+- Signing, notarization, and the asset uploads. `macos-app-sign` can
+  be tried on a branch with an ad-hoc identity (`-`), which proves the
+  artifact hand-off and that the bundle compiles nothing; Vault refuses
+  anything but a tag, so the real certificate and `notarytool` are first
+  tried by the next release.
+- The Docker jobs' pushes. Their builds and the tagging can be tried on a
+  branch with a release's published tarballs and `imagetools create
+  --dry-run`, but only a tag pushes. Their Docker Hub images come through
+  `mirror.gcr.io` (`ci.md` §"What runs where").

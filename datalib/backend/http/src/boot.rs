@@ -19,7 +19,7 @@ use crate::{auth::ApiToken, embed::FrameAncestors, supervisor, usage, AppState};
 /// own `binary_dir`; `now`, when given, stands in for the clock in every
 /// sync the loop runs (`--now`); `frame_ancestors` names who may frame the
 /// app page (`crate::embed`). Presentation
-/// concerns (browser opening, the `--url-file` handshake) live in the
+/// concerns (browser opening, telling a parent the URL) live in the
 /// binary's main, not here.
 pub async fn build_state(
     root: PathBuf,

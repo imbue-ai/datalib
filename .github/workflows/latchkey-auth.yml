@@ -19,18 +19,20 @@ concurrency:
 jobs:
   e2e-auth:
     name: e2e_auth (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-cache: false
           disk-cache: false
           repository-cache: true
           external-cache: false
-      # The contributor org, as a PR run uses: this is never what a
-      # release replays. `.bazelrc`'s BuildBuddy block has the reasoning.
+      # The contributor org, as a PR run uses. `.bazelrc`'s BuildBuddy
+      # block has the reasoning.
       - name: Configure BuildBuddy remote cache
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}

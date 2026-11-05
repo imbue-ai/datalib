@@ -71,7 +71,10 @@ sh_test(
     size = "large",
     srcs = ["check_stage_runtime.sh"],
     data = STAGE_RUNTIME_DATA,
-    env = {"RELEASE_SHELL": "/bin/bash"},
+    env = {
+        "RELEASE_RSYNC": "/usr/bin/rsync",
+        "RELEASE_SHELL": "/bin/bash",
+    },
     target_compatible_with = ["@platforms//os:macos"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -121,6 +124,24 @@ sh_test(
     name = "check_binaries_bash32_test",
     srcs = ["check_binaries_test.sh"],
     data = ["//:scripts/release/check_binaries.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "build_signed_app_test",
+    size = "small",
+    srcs = ["build_signed_app_test.sh"],
+    data = ["//datalib/tauri:build-signed-app.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "build_signed_app_bash32_test",
+    size = "small",
+    srcs = ["build_signed_app_test.sh"],
+    data = ["//datalib/tauri:build-signed-app.sh"],
     env = {"RELEASE_SHELL": "/bin/bash"},
     target_compatible_with = ["@platforms//os:macos"],
     deps = ["@bazel_tools//tools/bash/runfiles"],

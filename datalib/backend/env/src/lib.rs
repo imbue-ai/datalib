@@ -6,6 +6,8 @@
 //! No dependencies, so every binary can link it. What each variable
 //! carries is in `docs/dev/step_protocol.md` and `docs/dev/applets.md`.
 
+pub mod secret_file;
+
 macro_rules! names {
     ($list:ident: $($name:ident),* $(,)?) => {
         $(pub const $name: &str = stringify!($name);)*
@@ -36,7 +38,7 @@ names! { STEP_PROTOCOL:
 names! { APPLET_PROTOCOL:
     DATALIB_APPLET_ID,
     DATALIB_APPLET_BASE,
-    DATALIB_APPLET_SECRET,
+    DATALIB_APPLET_SECRET_FILE,
 }
 
 names! { LATCHKEY:

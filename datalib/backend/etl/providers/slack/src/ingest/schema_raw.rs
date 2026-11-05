@@ -471,6 +471,7 @@ pub fn full_ddl() -> Vec<String> {
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
         THREADS_DDL.to_string(),
         datalib_etl_web::coverage::DDL.to_string(),
+        datalib_etl_web::coverage::CHECKED_DDL.to_string(),
         ChannelReadStateRow::ddl(),
         BookmarkRow::ddl(),
         BOOKMARKS_BY_CHANNEL_INDEX_DDL.to_string(),

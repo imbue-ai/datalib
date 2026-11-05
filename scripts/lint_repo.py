@@ -40,6 +40,11 @@ instead from `bazel run //:precommit` and as a plain step in
  15. Every crate datalib/backend/Cargo.toml lists is named by some
      BUILD.bazel, so the list cannot keep a crate nothing links.
 
+ 21. A build cannot reach a write token or the signing key: every
+     `actions/checkout` says what it does with the token, and each write
+     grant in release.yml sits on the one job allowed it, none of which
+     runs a build.
+
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
 were regexes standing in for types. The types exist now: a writer's
@@ -330,6 +335,7 @@ def main() -> int:
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_source_grid(root)
     rc |= _check_workflows_no_empty_arrays(root)
+    rc |= _check_workflow_tokens(root)
     rc |= _check_no_floating_npx(root)
     rc |= _check_pools_never_recycle(root)
     rc |= _check_icons(root)
@@ -369,6 +375,186 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
         "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 21: a build cannot reach a write token or the signing key ----
+#
+# GitHub grants a token's permissions per job, never per step, and a hosted
+# runner's passwordless sudo lets a job's processes read the runner's
+# memory, so the only boundary is the job. docs/dev/release_steps.md
+# §"Who holds what" has the table this holds the workflow to. A release
+# also reads no cache anything on `main` can write: bazel verifies no entry,
+# so a cache would decide what ships (docs/dev/security_posture.md).
+_CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
+_RELEASE_WRITE_GRANTS = {
+    "publish-runtime": {"contents"},
+    "publish-tarballs": {"contents"},
+    "publish-macos-app": {"contents"},
+    "macos-app-sign": {"id-token"},
+    "docker-image": {"packages"},
+    "docker-publish": {"packages"},
+}
+_CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
+_PERSIST = re.compile(r"^\s*persist-credentials:\s*(true|false)\b")
+_JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
+_PERMISSIONS = re.compile(r"^(\s*)permissions:\s*([^\s#]*)")
+_WRITE_GRANT = re.compile(r"^\s*([a-z-]+):\s*write\b")
+_BUILD_COMMAND = re.compile(
+    r"\bbazel\b|setup-bazel|cargo build|tauri build|build-signed-app\.sh compile"
+)
+_CACHE_USE = re.compile(
+    r"build.?buddy|bazelrc\.user|remote_cache|remote_header|actions/cache"
+    r"|--cache-from|--cache-to|type=gha",
+    re.IGNORECASE,
+)
+_MIRRORED_IMAGE = re.compile(r"\bimage[:=]\s*[\"']?(mirror\.gcr\.io/[^\s\"']+)")
+_ACTION_CACHE_INPUTS = {
+    "setup-bazel": [
+        "bazelisk-cache",
+        "disk-cache",
+        "repository-cache",
+        "external-cache",
+    ],
+    "setup-qemu-action": ["cache-image"],
+    "setup-buildx-action": ["cache-binary"],
+}
+
+
+def checkout_token_settings(text: str) -> list[tuple[int, str | None]]:
+    """Each checkout's line number and its `persist-credentials`, if it has one."""
+    lines = text.splitlines()
+    found: list[tuple[int, str | None]] = []
+    for index, line in enumerate(lines):
+        checkout = _CHECKOUT.match(line)
+        if not checkout:
+            continue
+        setting = None
+        for following in lines[index + 1 :]:
+            indent = len(following) - len(following.lstrip())
+            if following.strip() and indent <= len(checkout.group(1)):
+                break
+            persist = _PERSIST.match(following)
+            if persist:
+                setting = persist.group(1)
+        found.append((index + 1, setting))
+    return found
+
+
+def workflow_write_grants(
+    text: str,
+) -> tuple[dict[str | None, set[str]], dict[str, list[str]]]:
+    """What each job is granted (None: the workflow's default), and each job's lines."""
+    grants: dict[str | None, set[str]] = {}
+    bodies: dict[str, list[str]] = {}
+    job: str | None = None
+    in_jobs = False
+    permissions_indent: int | None = None
+    for line in text.splitlines():
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        job_header = _JOB.match(line) if in_jobs else None
+        if job_header:
+            name: str = job_header.group(1)
+            job = name
+            bodies[name] = []
+            permissions_indent = None
+            continue
+        if job is not None and not line.lstrip().startswith("#"):
+            bodies[job].append(line)
+        indent = len(line) - len(line.lstrip())
+        if permissions_indent is not None:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if indent <= permissions_indent:
+                permissions_indent = None
+            else:
+                write = _WRITE_GRANT.match(line)
+                if write:
+                    grants.setdefault(job, set()).add(write.group(1))
+                continue
+        permissions = _PERMISSIONS.match(line)
+        if permissions:
+            if permissions.group(2) == "write-all":
+                grants.setdefault(job, set()).add("write-all")
+            permissions_indent = len(permissions.group(1))
+    return grants, bodies
+
+
+def release_grant_problems(text: str) -> list[str]:
+    grants, bodies = workflow_write_grants(text)
+    problems: list[str] = []
+    for job, granted in grants.items():
+        allowed = _RELEASE_WRITE_GRANTS.get(job, set()) if job else set()
+        for permission in sorted(granted - allowed):
+            where = f"job {job}" if job else "the workflow's default"
+            problems.append(f"{where} grants {permission}: write")
+    for job, allowed in _RELEASE_WRITE_GRANTS.items():
+        for permission in sorted(allowed - grants.get(job, set())):
+            problems.append(f"job {job} needs {permission}: write to do its work")
+        for line in bodies.get(job, []):
+            if _BUILD_COMMAND.search(line):
+                problems.append(
+                    f"job {job} holds a write grant and runs a build: {line.strip()}"
+                )
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    for line in code:
+        if _CACHE_USE.search(line):
+            problems.append(f"a release reads no cache, but: {line.strip()}")
+    for action, inputs in _ACTION_CACHE_INPUTS.items():
+        uses = sum(f"/{action}@" in line for line in code)
+        for name in inputs:
+            turned_off = sum(line.strip() == f"{name}: false" for line in code)
+            if turned_off < uses:
+                problems.append(
+                    f"a release reads no cache: {action} needs {name}: false"
+                )
+    return problems
+
+
+def floating_images(text: str) -> list[str]:
+    """Third-party images a workflow names by a tag someone else can move."""
+    return [
+        image.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        and (image := _MIRRORED_IMAGE.search(line))
+        and "@sha256:" not in image.group(1)
+    ]
+
+
+def _check_workflow_tokens(root: Path) -> int:
+    problems: list[str] = []
+    for rel in _git_ls_files(root, ".github/workflows/*.yml"):
+        problems += [
+            f"{rel}: {image} is not pinned by digest"
+            for image in floating_images((root / rel).read_text())
+        ]
+        for lineno, setting in checkout_token_settings((root / rel).read_text()):
+            if setting is None:
+                problems.append(
+                    f"{rel}:{lineno}: a checkout without `persist-credentials: false`"
+                )
+            elif setting == "true" and rel not in _CHECKOUTS_THAT_PUSH:
+                problems.append(
+                    f"{rel}:{lineno}: `persist-credentials: true` in a workflow that does not push"
+                )
+    release = ".github/workflows/release.yml"
+    problems += [
+        f"{release}: {p}" for p in release_grant_problems((root / release).read_text())
+    ]
+    if not problems:
+        print(
+            "OK: no build can reach a write token or the signing key, and a release reads no cache."
+        )
+        return 0
+    print(
+        "ERROR: a workflow leaves a token or a grant where a build can reach it:\n\n"
+        + "\n".join(f"  {p}" for p in problems)
+        + '\n\n  See docs/dev/release_steps.md, "Who holds what".',
         file=sys.stderr,
     )
     return 1

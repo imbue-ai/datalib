@@ -151,7 +151,7 @@ FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "|warning|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||not_found|media file not in the export: No such file or directory (os error 2)"
+    "|||not_found|media file not in the export"
 )
 # Facebook's render reports every field it leaves unread, by its shape
 # alone, on the document and at the item's section, so a run over a real

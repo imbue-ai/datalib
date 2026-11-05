@@ -336,7 +336,7 @@ pub const CONTENT_BRANCH: &str = "datalib_content";
 /// every table `datalib_history::holds_records` counts, plus `problems`,
 /// so a new problem reaches the index, and `ingested_files`, which a
 /// render may read. The sidecars, the run log, the cursors and the
-/// coverage are the sync's own.
+/// coverage and when it was last checked are the sync's own.
 pub fn moves_version(table: &str) -> bool {
     datalib_history::holds_records(table) || table == "problems" || table == "ingested_files"
 }

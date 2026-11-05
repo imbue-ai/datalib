@@ -14,6 +14,7 @@ use datalib_etl::download_problems::{RunProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::export_files::is_regular_file;
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_problems::{Problem, Reason, Severity};
@@ -763,7 +764,7 @@ fn audio_beside(html_path: &Path) -> Option<PathBuf> {
     ["mp3", "m4a", "amr", "ogg", "wav"]
         .iter()
         .map(|ext| html_path.with_extension(ext))
-        .find(|p| p.is_file())
+        .find(|p| is_regular_file(p))
 }
 
 fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
@@ -772,13 +773,13 @@ fn resolve_sibling(html_path: &Path, src: &str) -> Option<PathBuf> {
     }
     let dir = html_path.parent()?;
     let exact = dir.join(src);
-    if exact.is_file() {
+    if is_regular_file(&exact) {
         return Some(exact);
     }
     // Stem match: a sibling whose name minus its extension equals `src`.
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let p = entry.path();
-        if !p.is_file() {
+        if !is_regular_file(&p) {
             continue;
         }
         let n = p.file_name().and_then(|s| s.to_str()).unwrap_or("");

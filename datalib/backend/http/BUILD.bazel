@@ -311,6 +311,22 @@ rust_test(
     ],
 )
 
+# Where the launch URL goes, which is where the token goes.
+rust_test(
+    name = "launch_url_test",
+    size = "small",
+    srcs = ["tests/launch_url.rs"],
+    crate_root = "tests/launch_url.rs",
+    data = [":datalib_http_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_HTTP_BIN": "$(rootpath :datalib_http_bin)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
 # A relative data root, given from the server's own working directory:
 # every step is handed it absolute.
 rust_test(

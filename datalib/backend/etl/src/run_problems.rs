@@ -219,6 +219,12 @@ impl RunProblems {
         });
     }
 
+    /// Whether the run ended before it reached everything: told to stop,
+    /// given up, or cut short. `sync_runs.status` says so.
+    pub fn ended_early(&self) -> bool {
+        self.stop.requested() || self.lock().cut_short
+    }
+
     /// The configured entries upstream does not have, once every one has
     /// been looked up: the whole set, an empty one included, so an entry
     /// the config no longer names or upstream now has loses its row.

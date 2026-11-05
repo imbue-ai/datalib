@@ -245,6 +245,11 @@ file_<id>.dat                  # attached and generated files, no extension
 conversation_asset_file_names.json, library_files.json, chat.html, …
 ```
 
+An export can be made by anyone (`etl/files/README.md` § "An export can
+be made by anyone"). A zip that expands too far, or a symbolic link
+anywhere in the unzipped folder, fails the run before the store is
+touched, and the message says which.
+
 The root is the folder holding the shallowest `export_manifest.json`
 (`sites/` has one of its own), or, in an export without one,
 `conversations.json`; so a zip of the unzipped folder reads too
