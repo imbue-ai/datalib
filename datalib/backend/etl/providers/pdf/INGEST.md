@@ -61,7 +61,8 @@ The scan goes on, and what it could not do is a `problems` row:
   scan that cannot see it (under an entry its walk could not read) keeps
   it.
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
-  carries it: a document that never identified never renders.
+  carries it: a document that never identified never renders. A file refused
+  for what it would cost to read is one too (§"A PDF can be made by anyone").
 - **A file that changed after its hash was taken.** The scan's hash only
   decides whether to look; a document read is named by the hash of the
   bytes it was classified from
@@ -72,6 +73,67 @@ The scan goes on, and what it could not do is a `problems` row:
   (`a_document_whose_file_changed_since_the_download_is_a_stand_in`).
   A cold render produces the same stand-in, so nothing depends on what
   an earlier run left behind.
+
+## A PDF can be made by anyone
+
+A person may be handed a PDF, and two kilobytes of one can ask a parser for
+gigabytes. `max_bytes` says nothing about that: it caps the file on disk, and a
+stream inflates a thousand times, or a million behind two layers of Flate.
+`pdf-inspector` limits what it loads and a page's content, but it takes bytes
+and no limit and inflates fonts, CMaps and forms without one. So
+[`src/ingest/expansion.rs`](src/ingest/expansion.rs) measures a file before
+either parser reads it: `identify` here and `convert` in render, which also
+catches a document identified by an earlier build. Past a limit, the file is
+refused and is a `record:pdf_paths:<path>` problem saying why; the rest of the
+tree syncs. It is measured again each scan, like any file that did not identify.
+
+| what is measured | limit | why that much |
+|---|---|---|
+| one stream, decoded | 1 GiB | A stream is held once or twice while it is read. Page content and fonts are far smaller. |
+| every stream together | 64 GiB | Bounds the time measuring takes. |
+| the objects in the object streams a loader expands | 64,000,000 | About 70 bytes each in memory, and two bytes of stream can be one. |
+| an object stream's index | no entry overlaps the next | Otherwise a loader reads what they share again for each entry: 2 KiB of file, one 1 MiB array, gigabytes held. |
+
+Measured on a sync (`rss_peak_bytes`): the most a file inside these limits made
+a step hold was 2.1 GiB for a stream just under 1 GiB, and 3.6 GiB for 50 million
+objects.
+
+The measuring itself costs little: one layer of Flate is counted as it comes out
+and never held, so a real scan's big image costs what it did when nothing inflated
+it. Every other chain of filters is held once, up to the limit.
+
+**A Flate image past 1 GiB is refused too**, though neither parser would ever
+inflate it. Its dictionary calling it an image proves nothing: a stream that says
+`/Subtype /Image` and is named as a font's program gets inflated as one. Such an
+image is a colour sheet about 80 cm square at 600 dpi, with no text to index unless
+the document has another page; a JPEG of any size costs nothing, since nothing
+inflates it.
+
+**An object stream past 8 MiB is left out, not refused**, as `pdf-inspector`
+leaves it out: a tagged PDF's structure tree can reach hundreds of MB. Its
+`content_blake3` is then `None`, since a hash over part of a document could agree
+with a different one. This bound is `pdf-inspector`'s and it does not export it;
+`the_bound_on_object_streams_is_the_one_pdf_inspector_loads_with` fails if it moves.
+
+An object the cross-reference table lists and the loader cannot parse is measured
+from its raw bytes, because `pdf-inspector` may repair it and read it after all
+(`an_object_the_loader_drops_is_measured_from_its_bytes`).
+
+### What this does not stop
+
+The check has to load the file, so what `lopdf` does while loading is out of its
+reach, and `lopdf` has no setting for these:
+
+- **A chain of cross-reference streams.** Each `/Prev` adds its entries to one
+  table, and `max_decompressed_size` caps each stream, not the sum. Measured: a
+  63 KiB file held 6.2 GiB, a 250 KiB one 24 GiB.
+- **An encrypted document's object streams**, which `lopdf` expands before any
+  filter runs. Read from its source, not staged.
+- **A file that is simply large.** Objects in the open cost tens of times what
+  they take on disk, up to `max_bytes`.
+
+Stopping the first two takes a cap in `lopdf`, or reading each new PDF in a child
+process that can be killed, which would also catch whatever nobody has thought of.
 
 ## Why no OCR yet
 

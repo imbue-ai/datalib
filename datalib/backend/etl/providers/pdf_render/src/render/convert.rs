@@ -44,6 +44,8 @@ pub fn note_for_page(number: u32) -> String {
 
 /// `bytes` are the PDF; `path` is where they were read, for messages.
 pub fn convert(bytes: &[u8], path: &Path) -> Result<Vec<Page>> {
+    datalib_etl_pdf::ingest::expansion::check(bytes)?;
+
     let md = pdf_inspector::MarkdownOptions {
         // We split on these markers to build per-page sections, so they
         // are required, not cosmetic.
