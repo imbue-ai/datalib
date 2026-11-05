@@ -80,6 +80,30 @@ rust_test(
     deps = ["@datalib_crates//:url"],
 )
 
+# Same arrangement for `src/library_capabilities.rs`: what a library's
+# page may do, and that only that library's server gets it. Nothing in it
+# may reference `tauri`. The test also reads what the shell's webview is
+# configured with, which no other test sees.
+rust_test(
+    name = "library_capabilities_test",
+    size = "small",
+    srcs = ["src/library_capabilities.rs"],
+    compile_data = glob(["library-capabilities/*.json"]),
+    crate_root = "src/library_capabilities.rs",
+    data = glob([
+        "capabilities/*.json",
+        "library-capabilities/*.json",
+    ]) + [
+        "launcher-dist/index.html",
+        "tauri.conf.json",
+    ],
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:url",
+    ],
+)
+
 # The Node runtime that ships inside the .app, copied out of the
 # rules_nodejs toolchain repo so it lands at a predictable
 # `bazel-bin/datalib/tauri/` path — the same convention
