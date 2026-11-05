@@ -194,6 +194,18 @@ experimental, and is meant to stop an agent running shell commands as
 you from reading the library or using its sign-ins, not a program set
 on stealing from you.
 
+> **The keychain does not protect a protected library's sign-ins. Only
+> the folder does.** A library's keychain item lets in the app's Node,
+> and macOS judges a program by who signed it, not by who started it. So
+> any program running as you, an AI agent's shell included, can run that
+> Node and get the key without a prompt. All that stands between that
+> program and the sign-ins is macOS keeping it out of
+> `<library>/system/latchkey`. So anything that lets a program reach
+> those files gives it the sign-ins too: saying **Allow** for that
+> program, Full Disk Access, or any copy of the files outside the folder.
+> That is why deleting a protected library skips the Trash. Check any
+> change to where this store lives, or who may read it, against this.
+
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
   programs an app starts as that app, so `datalib-http` and everything
@@ -204,15 +216,35 @@ on stealing from you.
 - **macOS makes the folder**, the first time the app asks for it
   (`make_protected_container`, `NSFileManager`); the shell only ever
   creates libraries inside the one it names.
-- **latchkey's store moves in too.** The server of a protected library
-  starts with `LATCHKEY_DIRECTORY` naming `<container>/latchkey`, and
-  every latchkey it runs inherits it. The first time, that store is a
-  copy of `~/.latchkey` (`protected::seed_latchkey`), so the library's
-  sources keep their sign-ins; the originals stay until the person
-  signs out of them. Every protected library shares that one store.
-  The key that encrypts it does not move: it stays in the login
-  keychain, shared with `~/.latchkey`, so the first latchkey run from
-  the app's Node can put up macOS's password prompt.
+- **Each library has a latchkey store of its own, and starts empty.**
+  The server of a protected library starts with `LATCHKEY_DIRECTORY`
+  naming `<library>/system/latchkey` and
+  `LATCHKEY_KEYRING_SERVICE_NAME` naming a keychain item of its own,
+  `Datalib Latchkey - <folder name>`, and every latchkey it runs
+  inherits both (`protected::latchkey_env`). Nothing comes from
+  `~/.latchkey` or latchkey's shared `latchkey` item, which stay as they
+  were; a person signs in through the wizard. latchkey makes the item
+  the first time it needs a key, and the program that makes an item is
+  on its list, so macOS has no reason to ask.
+- **The wizard offers no terminal command in one.** A latchkey run from
+  a terminal has neither variable, so it signs in to `~/.latchkey`. The
+  server tells the wizard through `protected_library` in `/api/health`,
+  set by `DATALIB_PROTECTED_LIBRARY`. A source whose only sign-in is
+  those commands (CalDAV and CardDAV on a server of your own) says it
+  cannot sign in here yet.
+- **Deleting one is permanent.** After a confirmation that says so, the
+  app removes the folder, then the keychain item with
+  `/usr/bin/security`, and nothing goes to the Trash, because there the
+  sign-ins would sit outside the folder with the key still available
+  (`launcher_delete`). If only the item is left, the app says so and
+  names it.
+- **The item goes by the folder's name.** A folder given a new name
+  looks for a new item, and latchkey refuses its store until the old
+  name is back.
+- **An earlier build copied `~/.latchkey` to `<container>/latchkey`.**
+  Nothing reads that copy now, so a library that used it signs in again;
+  its raw stores are untouched. The copy stays where it is until someone
+  removes it from Terminal, and macOS asks first.
 - **Nothing hands it to another app.** The folder button is disabled on
   a protected row, and Browse refuses a protected library's raw stores
   (`refuse_if_protected`): Finder or Terminal would have to be let in,
@@ -223,7 +255,9 @@ on stealing from you.
 
 What the first release with it should be checked for, on a Mac
 (#1525): the app makes and opens a protected library with no prompt;
-syncs and sign-ins work in it; from Terminal, `ls` of the folder and
+syncs and sign-ins work in it, with no keychain prompt, and the item
+`Datalib Latchkey - <folder name>` appears in Keychain Access; from
+Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
 everything that Terminal runs until it quits. Run those checks from a

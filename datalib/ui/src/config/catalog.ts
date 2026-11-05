@@ -231,8 +231,9 @@ export type CatalogEntry = {
   intro?: string;
   /// "Before you start": what the person has to have in hand, for a
   /// source that cannot be set up from this dialog alone. A `needs`
-  /// item may hold `code` in backticks.
-  before?: { text: string; needs: string[] };
+  /// item may hold `code` in backticks. `terminalSignIn` says the steps
+  /// are latchkey commands, which cannot reach a protected library.
+  before?: { text: string; needs: string[]; terminalSignIn?: boolean };
   /// The form, top to bottom. A field no section names is an advanced
   /// one, drawn under its own label in Advanced options.
   sections?: Section[];
@@ -1268,6 +1269,7 @@ export const CATALOG: CatalogEntry[] = [
     // the Connect flow cannot do. The help text says how.
     canProbe: true,
     before: {
+      terminalSignIn: true,
       text: "The sign-in for this server is set up in a terminal, with latchkey:",
       needs: [
         "`latchkey services register` a service for this host.",
@@ -1564,6 +1566,7 @@ export const CATALOG: CatalogEntry[] = [
     // app password, which the Connect flow cannot do.
     canProbe: true,
     before: {
+      terminalSignIn: true,
       text: "The sign-in for this server is set up in a terminal, with latchkey:",
       needs: [
         "`latchkey services register` a service for this host.",
