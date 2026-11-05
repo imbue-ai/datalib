@@ -29,7 +29,7 @@ import {
   type Shown,
   type TimeKind,
 } from "./timeSeries";
-import { fetchPoints } from "./timeSeriesApi";
+import { fetchAlignedPoints, fetchPoints } from "./timeSeriesApi";
 import { axis, withAlpha, type Theme } from "./plot/plot";
 import { t0TickTexts, t0Ticks } from "./plot/t0Axis";
 import { usePlot, type Range } from "./plot/usePlot";
@@ -39,6 +39,9 @@ const props = defineProps<{
   picked: Listed[];
   answered: Map<string, Answered>;
   span: { fromMs: number; toMs: number } | null;
+  /// Each line drawn against the time since its own first point, so all
+  /// of them start at 0: `answered` and `span` are already in that time.
+  aligned?: boolean;
   /// A line's colour, as CSS.
   colorOf: (id: string) => string;
   /// Where given, the legend offers to take a line off the chart.
@@ -72,7 +75,7 @@ async function zoomed(range: Range | null) {
   try {
     const u = plot.value;
     const plotWidth = u ? u.bbox.width / uPlot.pxRatio : width.value;
-    const got = await fetchPoints(
+    const got = await (props.aligned ? fetchAlignedPoints : fetchPoints)(
       props.picked,
       { fromMs: range[0], toMs: range[1] },
       Math.max(50, Math.round(plotWidth)),
@@ -123,6 +126,15 @@ const baseRange = (): Range => {
 const timeKind = computed<TimeKind>(() =>
   props.picked.every((p) => p.time_kind === "day") ? "day" : "instant",
 );
+/// Where the time axis counts from: 0 when starts are aligned, else T0
+/// when one is set; null when it shows the clock.
+const origin = computed<number | null>(() => (props.aligned ? 0 : (timeView.value.t0?.ms ?? null)));
+/// The time under the cursor as the tooltip writes it.
+function whenText(ms: number, kind: TimeKind, spanMs: number): string {
+  if (props.aligned) return sinceT0(ms, 0);
+  const t0 = timeView.value.t0;
+  return t0 ? sinceT0(ms, t0.ms) : formatTime(ms, kind, spanMs);
+}
 
 // ── Legend ─────────────────────────────────────────────────────────
 
@@ -200,14 +212,17 @@ function options(theme: Theme) {
         size: M.bottom,
         splits: (u: uPlot, _axis: number, min: number, max: number) => {
           const k = Math.max(2, Math.min(6, Math.floor(u.bbox.width / uPlot.pxRatio / 140)));
-          const t0 = timeView.value.t0;
-          if (t0) return t0Ticks(min, max, t0.ms, k);
+          const o = origin.value;
+          if (o !== null) return t0Ticks(min, max, o, k);
           return Array.from({ length: k + 1 }, (_, i) => min + ((max - min) * i) / k);
         },
         values: (u: uPlot, splits: number[]) => {
           const spanMs = (u.scales.x.max ?? 1) - (u.scales.x.min ?? 0);
-          const t0 = timeView.value.t0;
-          if (t0) return t0TickTexts(splits, t0.ms, spanMs);
+          const o = origin.value;
+          if (o !== null) {
+            const texts = t0TickTexts(splits, o, spanMs);
+            return props.aligned ? texts.map((t) => (t === "T0" ? "0" : t)) : texts;
+          }
           return splits.map((ms, i) => formatTimeTick(ms, timeKind.value, spanMs, i === 0));
         },
       }),
@@ -255,8 +270,10 @@ const { plot, resetZoom } = usePlot(box, {
     JSON.stringify([
       drawn.value.map((d) => [d.listed.time_series_id, props.colorOf(d.listed.time_series_id)]),
       quantities.value,
-      // The time axis is labelled in the clock's zone, or from T0.
+      // The time axis is labelled in the clock's zone, or from T0, or
+      // from each line's start.
       timeView.value,
+      props.aligned,
     ]),
   data,
   options,
@@ -271,7 +288,7 @@ const { plot, resetZoom } = usePlot(box, {
 // What is drawn changed under the zoom: the card's answer is the one to
 // show again.
 watch(
-  () => JSON.stringify([props.picked.map((p) => p.time_series_id), props.span]),
+  () => JSON.stringify([props.picked.map((p) => p.time_series_id), props.span, props.aligned]),
   () => {
     if (zoomedTo.value === null) return;
     void zoomed(null);
@@ -309,9 +326,7 @@ const hover = computed(() => {
   const left = plotLeft + u.valToPos(x, "x");
   return {
     x: left,
-    when: timeView.value.t0
-      ? sinceT0(x, timeView.value.t0.ms)
-      : formatTime(x, rows[0]!.kind, hi - lo),
+    when: whenText(x, rows[0]!.kind, hi - lo),
     rows,
     flip: left > width.value / 2,
   };

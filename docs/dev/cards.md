@@ -720,8 +720,13 @@ besides components:
   Dragging across the chart zooms in and asks the applet for that
   stretch again at one point per pixel of the plot, so a zoom shows
   finer data rather than stretched buckets; a double-click goes back to
-  the range. The picks and the range are the card's state, the zoom
-  and the lines turned off are not; it reads again on the root's
+  the range. **Align starts** draws each line against the time since
+  its own first point, so two runs on different days start together at
+  0 and the axis reads `+10m` rather than a date; each time series is
+  then asked for its own stretch (`fetchAlignedPoints`), drawn whole,
+  and the range buttons are off. The picks, the range and whether
+  starts are aligned are the card's state, the zoom and the lines
+  turned off are not; it reads again on the root's
   `time_series_index_changed` frame. The time-series applet's row on the
   Manage screen opens it with Browse, and the card gallery lists it. Its
   chart (`TimeSeriesChart.vue`) also draws the charts inside documents

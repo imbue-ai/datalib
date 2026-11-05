@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { subscribeLive } from "@/live";
 import {
   RANGES,
+  alignedSpan,
   decodeState,
   emptyListNote,
   encodeState,
@@ -20,7 +21,7 @@ import {
   type Listed,
   type RangeKey,
 } from "./timeSeries";
-import { fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
+import { fetchAlignedPoints, fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import { seriesColor } from "./plot/plot";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
 import EntityChip from "./EntityChip.ce.vue";
@@ -43,6 +44,10 @@ every point. Hover the chart to read each line's value at that time.</p>
 show it alone, and again to show them all. Drag across the chart to zoom
 in, which reads that stretch again in finer detail; double-click the
 chart to go back.</p>
+<p><b>Align starts</b> draws each line against the time since its own
+first point, so two runs on different days start together at 0 and the
+axis reads time since start. The range buttons do not apply then: each
+line is drawn whole.</p>
 `);
 
 const restored = decodeState(props.ctx.initialState);
@@ -50,6 +55,7 @@ const listed = ref<Listed[] | null>([]);
 const all = computed(() => listed.value ?? []);
 const ids = ref<string[]>(restored.ids);
 const range = ref<RangeKey>(restored.range);
+const aligned = ref(restored.aligned);
 const filter = ref("");
 const answered = ref<Map<string, Answered>>(new Map());
 const error = ref<string | null>(null);
@@ -70,7 +76,9 @@ const groups = computed(() => grouped(all.value, filter.value));
 const colorOf = (id: string) => seriesColor(Math.max(0, ids.value.indexOf(id)));
 
 function persist() {
-  props.ctx.host.setState(encodeState(ids.value, range.value));
+  props.ctx.host.setState(
+    encodeState({ ids: ids.value, range: range.value, aligned: aligned.value }),
+  );
 }
 
 function toggle(s: Listed) {
@@ -93,6 +101,11 @@ function pickRange(key: RangeKey) {
   persist();
 }
 
+function toggleAligned() {
+  aligned.value = !aligned.value;
+  persist();
+}
+
 // ── Loading ────────────────────────────────────────────────────────
 
 let listAsked = 0;
@@ -110,9 +123,11 @@ async function loadList() {
   }
 }
 
-/// What the chart spans, in milliseconds: the range ending at the newest
-/// point picked, else everything the picked time series hold.
+/// What the chart spans, in milliseconds: with starts aligned, from 0 to
+/// the end of the longest line; else the range ending at the newest point
+/// picked, or everything the picked time series hold.
 const span = computed<{ fromMs: number; toMs: number } | null>(() => {
+  if (aligned.value) return alignedSpan(picked.value);
   const newest = newestMs(picked.value);
   if (newest === null) return null;
   const bounded = rangeBounds(range.value, newest);
@@ -132,7 +147,8 @@ async function loadPoints() {
     return;
   }
   try {
-    const got = await fetchPoints(picked.value, s, Math.max(50, Math.round(chartWidth.value)));
+    const ask = aligned.value ? fetchAlignedPoints : fetchPoints;
+    const got = await ask(picked.value, s, Math.max(50, Math.round(chartWidth.value)));
     if (mine !== pointsAsked) return;
     answered.value = got.answered;
     error.value = got.unreadable.length
@@ -153,7 +169,7 @@ function schedulePoints() {
   if (pointsTimer) clearTimeout(pointsTimer);
   pointsTimer = setTimeout(() => void loadPoints(), 120);
 }
-watch([ids, range, () => Math.round(chartWidth.value / 50), all], schedulePoints);
+watch([ids, range, aligned, () => Math.round(chartWidth.value / 50), all], schedulePoints);
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -263,13 +279,23 @@ onBeforeUnmount(() => {
             ? "Drag across the chart to zoom; double-click to go back."
             : "Tick a time series to draw it."
         }}</span>
+        <button
+          type="button"
+          class="ts-range"
+          :aria-pressed="aligned"
+          title="Draw each line from its own start, so they all begin at 0"
+          @click="toggleAligned"
+        >
+          Align starts
+        </button>
         <div role="group" aria-label="Range" class="ts-ranges">
           <button
             v-for="r in RANGES"
             :key="r.key"
             type="button"
             class="ts-range"
-            :aria-pressed="range === r.key"
+            :disabled="aligned"
+            :aria-pressed="!aligned && range === r.key"
             @click="pickRange(r.key)"
           >
             {{ r.label }}
@@ -282,6 +308,7 @@ onBeforeUnmount(() => {
         :picked="picked"
         :answered="answered"
         :span="span"
+        :aligned="aligned"
         :color-of="colorOf"
         :remove="(id) => toggle(byId.get(id)!)"
         @resize="(w) => (chartWidth = w)"
@@ -419,6 +446,10 @@ onBeforeUnmount(() => {
   background: var(--datalib-surface);
   color: var(--datalib-fg);
   cursor: pointer;
+}
+.ts-range:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 .ts-range[aria-pressed="true"] {
   background: var(--datalib-accent);
