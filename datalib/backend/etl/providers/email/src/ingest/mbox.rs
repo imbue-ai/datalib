@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -704,6 +704,12 @@ impl Reading {
 /// Messages read ahead of the store's writes, per file.
 const READ_AHEAD: usize = 64;
 
+/// The most of one message read out of an archive. A message is held whole
+/// in memory, and one of no line breaks at all costs a compressed archive
+/// next to nothing. Gmail stops at 50 MB; a `.mbox` on disk has no limit,
+/// since it can hold no more than it takes up.
+const LARGEST_PACKED_MESSAGE: u64 = 1 << 30;
+
 /// Read every `.mbox` of `input` on a blocking thread, a file at a time,
 /// a few messages ahead of the caller. Dropping a file's receiver stops
 /// the read of that file, and dropping the outer one stops the read.
@@ -714,7 +720,7 @@ fn read_in_background(input: Input) -> (mpsc::Receiver<Opened>, Reading) {
         Input::Files(files) => {
             for file in files {
                 let handed = match open_mbox(&file.path) {
-                    Ok(reader) => hand_over(&tx, file, iter_mbox_messages(reader)),
+                    Ok(reader) => hand_over(&tx, file, iter_mbox_messages(reader, u64::MAX)),
                     Err(e) => hand_over(&tx, file, std::iter::once(Err(e))),
                 };
                 if !handed {
@@ -741,7 +747,11 @@ fn read_in_background(input: Input) -> (mpsc::Receiver<Opened>, Reading) {
                         size: e.size,
                     };
                     let reader = BufReader::with_capacity(1 << 16, e.bytes);
-                    if !hand_over(&tx, file, iter_mbox_messages(reader)) {
+                    if !hand_over(
+                        &tx,
+                        file,
+                        iter_mbox_messages(reader, LARGEST_PACKED_MESSAGE),
+                    ) {
                         gone = true;
                         anyhow::bail!("the read was dropped");
                     }
@@ -976,9 +986,14 @@ fn open_mbox(path: &Path) -> Result<BufReader<File>> {
 }
 
 /// Iterate `reader` yielding one RFC 5322 message at a time, ending after
-/// the first read error. Envelope `From ` lines are stripped and `>From `
-/// escapes unquoted. Streams, so peak RSS stays bounded.
-fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<MboxMessage>> {
+/// the first read error or the first message over `largest` bytes. Envelope
+/// `From ` lines are stripped and `>From ` escapes unquoted. Streams, so peak
+/// RSS stays bounded by the largest message.
+fn iter_mbox_messages<R: BufRead>(
+    mut reader: R,
+    largest: u64,
+) -> impl Iterator<Item = Result<MboxMessage>> {
+    let too_large = move || anyhow::anyhow!("a message is larger than {largest} bytes");
     let mut pending: Option<(Vec<u8>, Option<GmailId>)> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
@@ -988,7 +1003,11 @@ fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<
     let mut bytes_since_yield: u64 = 0;
     let it = std::iter::from_fn(move || loop {
         buf.clear();
-        let n = match reader.read_until(b'\n', &mut buf) {
+        let n = match (&mut reader)
+            .take(largest.saturating_add(1))
+            .read_until(b'\n', &mut buf)
+        {
+            Ok(n) if n as u64 > largest => return Some(Err(too_large())),
             Ok(0) => {
                 // EOF; flush any pending message together with the
                 // remaining bytes counted on this last `read_until`
@@ -1034,6 +1053,9 @@ fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<
         }
         let (target, _) = pending.as_mut().expect("started => Some");
         let unescaped = unescape_from_line(line);
+        if (target.len() + unescaped.len()) as u64 >= largest {
+            return Some(Err(too_large()));
+        }
         target.extend_from_slice(&unescaped);
         target.push(b'\n');
     });
@@ -1770,10 +1792,33 @@ mod tests {
         (d, path)
     }
 
+    /// A message is held whole in memory, so out of an archive one that
+    /// would not fit ends the read, whether it is one enormous line or many.
+    #[test]
+    fn a_message_past_the_limit_ends_the_read() {
+        let items = |body: String, largest: u64| -> Vec<Result<MboxMessage>> {
+            let (_d, path) = write_tmp_mbox(&body);
+            iter_mbox_messages(open_mbox(&path).unwrap(), largest).collect()
+        };
+        let from = "From 1@xxx Thu Jan 01 00:00:00 +0000 2026\n";
+        let line = format!("{from}{}\n", "x".repeat(99));
+        assert!(items(line.clone(), 100)[0].is_ok(), "exactly the limit");
+        for body in [
+            format!("{from}{}\n", "x".repeat(200)),
+            format!("{from}{}", "x\n".repeat(100)),
+        ] {
+            let got = items(body, 100);
+            assert_eq!(got.len(), 1);
+            let e = got[0].as_ref().err().expect("the read stops").to_string();
+            assert!(e.contains("larger than 100 bytes"), "{e}");
+        }
+        assert!(items(line, u64::MAX)[0].is_ok(), "no limit on a real file");
+    }
+
     #[test]
     fn streaming_iter_yields_each_message() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
-        let msgs: Vec<MboxMessage> = iter_mbox_messages(open_mbox(&path).unwrap())
+        let msgs: Vec<MboxMessage> = iter_mbox_messages(open_mbox(&path).unwrap(), u64::MAX)
             .collect::<Result<Vec<_>>>()
             .unwrap();
         assert_eq!(msgs.len(), 2);
@@ -1810,7 +1855,7 @@ mod tests {
         let body =
             "From 1@x Wed Jun 03 22:30:48 +0000 2026\nSubject: t\n\n>From the desk of...\nbody\n";
         let (_d, path) = write_tmp_mbox(body);
-        let msgs: Vec<Vec<u8>> = iter_mbox_messages(open_mbox(&path).unwrap())
+        let msgs: Vec<Vec<u8>> = iter_mbox_messages(open_mbox(&path).unwrap(), u64::MAX)
             .collect::<Result<Vec<_>>>()
             .unwrap()
             .into_iter()
@@ -2306,9 +2351,10 @@ mod tests {
     fn a_read_error_ends_the_stream() {
         let d = tempfile::tempdir().unwrap();
         // Opening a directory works; reading it does not.
-        let items: Vec<Result<MboxMessage>> = iter_mbox_messages(open_mbox(d.path()).unwrap())
-            .take(3)
-            .collect();
+        let items: Vec<Result<MboxMessage>> =
+            iter_mbox_messages(open_mbox(d.path()).unwrap(), u64::MAX)
+                .take(3)
+                .collect();
         assert_eq!(items.len(), 1);
         assert!(items[0].is_err());
     }

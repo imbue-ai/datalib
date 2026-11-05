@@ -21,6 +21,7 @@ pub mod entity_store;
 pub mod event_store;
 pub mod event_tape;
 pub mod events;
+pub mod expansion;
 pub mod ids;
 pub mod indicatif_progress;
 pub mod layout;

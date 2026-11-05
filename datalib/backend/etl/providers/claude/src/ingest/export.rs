@@ -150,10 +150,23 @@ async fn ingest_all(
     Ok(())
 }
 
+/// An error when `path` is a symbolic link. An export holds none, and
+/// following one could read any file on the machine as part of it.
+pub(super) fn refuse_link(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!(
+            "{} is a symbolic link, which an export does not hold; it was not followed",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 /// Read one top-level JSON array file. `Ok(None)` when the file is
 /// absent; an error when it is present but unreadable or not an array
 /// (a corrupt export should fail loudly, not ingest half of itself).
 fn read_json_array(path: &Path) -> Result<Option<Vec<Value>>> {
+    refuse_link(path)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -172,6 +185,7 @@ fn read_json_array(path: &Path) -> Result<Option<Vec<Value>>> {
 /// because this export didn't include any.
 fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     let projects_dir = dir.join("projects");
+    refuse_link(&projects_dir)?;
     if !projects_dir.is_dir() {
         return Ok(None);
     }
@@ -184,6 +198,7 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     files.sort();
     let mut out = Vec::with_capacity(files.len());
     for f in files {
+        refuse_link(&f)?;
         let txt = std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
         let v: Value =
             serde_json::from_str(&txt).with_context(|| format!("parse {}", f.display()))?;
@@ -457,6 +472,43 @@ mod tests {
                  "content": [{"type": "text", "text": "hi", "flags": null}]}
             ],
         })
+    }
+
+    /// A link could hand over any file on the machine as a part of the
+    /// export, so it fails the run before the store is touched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_in_the_export_is_refused() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "p.json", &json!({"uuid": "p1"}));
+        write(outside.path(), "c.json", &json!([conv("c1", "First")]));
+        let db = open_raw(raw.path()).await;
+        let link = |target: &Path, at: &str| {
+            std::os::unix::fs::symlink(target, ex.path().join(at)).unwrap();
+        };
+        let refused = |e: anyhow::Error| {
+            assert!(format!("{e:#}").contains("symbolic link"), "{e:#}");
+        };
+
+        link(&outside.path().join("c.json"), "conversations.json");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        std::fs::remove_file(ex.path().join("conversations.json")).unwrap();
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First")]),
+        );
+        link(outside.path(), "projects");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        std::fs::remove_file(ex.path().join("projects")).unwrap();
+
+        std::fs::create_dir(ex.path().join("projects")).unwrap();
+        link(&outside.path().join("p.json"), "projects/p.json");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        assert!(db.load_conversations().await.unwrap().is_empty());
     }
 
     /// The whole point of the ingest: an export directory becomes rows

@@ -234,3 +234,38 @@ a reader. An entry nobody reads is skipped (a zip) or read past (a
 wherever it lands. `google_takeout` unpacks the entries its feeds read
 into a temporary folder; the `email` source streams a Takeout's `.mbox`
 entries straight into its reader.
+
+## An export can be made by anyone
+
+A person may be handed an export, or unpack one they did not make. So a
+source that reads one assumes its contents are hostile, however it reads
+them. A person's own live folder (a tree of PDFs, a Claude Code projects
+folder) is not an export: a link there is one they made, a link to a file
+is that file, and [`fswalk::walk_files`] says so.
+
+**A link in an export is not followed**, to a file or to a folder. It could
+read anything on the machine into the store, and one back to a folder above
+it would have the walk go round. `ExportFiles::walk` puts a link in
+`errors`, and `ScanOptions { links: Links::Refused, .. }` makes it a walk
+error, so the person sees a problem row saying which, and because what it
+stood for was not seen, nothing is deleted that run. A reader that stops at
+an export it cannot see whole takes `ExportFiles::walk_whole`. The path a
+person configured is theirs to choose, and may itself be a link. A tree bazel
+stages is all links, so a test copies its fixture first, as a person's
+unpacked export is real files.
+
+**A name from inside an export is never joined to a path and opened.** A
+record's `uri` is the export's own text. Look it up in the walk
+(`ExportFiles::file`): what the walk did not find is not in the export,
+however the name is spelled. Checking the name for `..` is not enough; it
+says nothing about the links on the way.
+
+**A compressed file is counted as it comes out**, by
+`datalib_etl::expansion::Allowance`, because what an archive says about its
+own sizes may be false, and entries may share their compressed bytes. One
+archive may expand to 200 times its own size, or 256 MiB if that is more, and
+hold 5,000,000 entries. `Allowance::read_all` also takes the most of one entry
+a reader will hold in memory, since a part the allowance lets through can
+still be more than a machine has. A real archive that is refused is one more
+step for the person: the message says to unpack it and point the source at
+the folder, where a file can be no larger than it takes up on disk.

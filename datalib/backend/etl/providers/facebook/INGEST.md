@@ -110,6 +110,12 @@ it — so where an `fbid` names records that differ, each is keyed by
 its content instead, and neither overwrites the other. `schema_raw.rs`
 names the tables render reads and pins each to the path it comes from.
 
+An export can be made by anyone (`etl/files/README.md` § "An export can
+be made by anyone"). A symbolic link under `export.path` is not followed:
+it is a `listing:files` problem naming it, and nothing is deleted that
+run. A `uri` is read only if the walk found that file, so one that
+reaches past a link is a media file "not in the export".
+
 Messenger is the exception (`ingest/messenger.rs`): every conversation
 lands in two tables, not a table each. `messenger_threads` has a row
 per conversation, keyed by the digits its directory ends in, holding

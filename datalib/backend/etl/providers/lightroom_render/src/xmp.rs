@@ -16,14 +16,23 @@ pub struct XmpFields {
     pub headline: Option<String>,
 }
 
+/// Far more than a packet with a long edit history. Every photo of a catalog
+/// comes through here, and the catalog may have been made by anyone.
+const LARGEST_PACKET: u64 = 64 << 20;
+
 /// The packet's text, `None` when the blob is not one Lightroom wrote.
 pub fn decompress(blob: &[u8]) -> Option<String> {
+    decompress_up_to(blob, LARGEST_PACKET)
+}
+
+fn decompress_up_to(blob: &[u8], largest: u64) -> Option<String> {
     let body = blob.get(4..)?;
     let mut text = String::new();
     flate2::read::ZlibDecoder::new(body)
+        .take(largest.saturating_add(1))
         .read_to_string(&mut text)
         .ok()?;
-    Some(text)
+    (text.len() as u64 <= largest).then_some(text)
 }
 
 /// XMP writes a simple property either as an attribute of its
@@ -125,6 +134,14 @@ mod tests {
             fields(packet).date_time_original.as_deref(),
             Some("2364-03-02T07:59:12")
         );
+    }
+
+    #[test]
+    fn a_packet_past_the_limit_is_no_packet() {
+        let b = blob(PACKET);
+        let size = PACKET.len() as u64;
+        assert_eq!(decompress_up_to(&b, size).as_deref(), Some(PACKET));
+        assert_eq!(decompress_up_to(&b, size - 1), None);
     }
 
     #[test]

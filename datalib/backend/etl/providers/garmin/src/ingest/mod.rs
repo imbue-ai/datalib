@@ -40,6 +40,7 @@ use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx, BulkUpserta
 use datalib_etl::control::DownloadControl;
 use datalib_etl::doltlite_raw::WirePayload;
 use datalib_etl::download_problems::RunProblem;
+use datalib_etl::expansion::Allowance;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
@@ -1359,12 +1360,20 @@ pub fn weigh_in_rows(summaries: &[Value]) -> Vec<WeighInRow> {
     out
 }
 
+/// Far more than a day's recording at one point a second.
+const LARGEST_FIT: u64 = 256 << 20;
+
 /// `/download-service/files/activity/<id>` is a zip holding one
 /// `<id>_ACTIVITY.fit`; the FIT file is what gets stored.
 pub fn fit_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
-    use std::io::Read;
+    fit_from_zip_up_to(bytes, LARGEST_FIT)
+}
+
+fn fit_from_zip_up_to(bytes: &[u8], largest: u64) -> Result<Vec<u8>> {
     let cursor = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(cursor).context("activity download is not a zip")?;
+    let allowance = Allowance::for_archive(bytes.len() as u64, "the activity download");
+    allowance.spend_entries(zip.len() as u64)?;
     let mut names: BTreeMap<String, usize> = BTreeMap::new();
     for i in 0..zip.len() {
         let name = zip
@@ -1380,11 +1389,12 @@ pub fn fit_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
         .or_else(|| names.iter().next())
         .map(|(n, i)| (n.clone(), *i))
         .ok_or_else(|| anyhow!("activity zip is empty"))?;
-    let mut out = Vec::new();
-    zip.by_index(idx)
-        .with_context(|| format!("read {name} from activity zip"))?
-        .read_to_end(&mut out)?;
-    Ok(out)
+    let entry = zip
+        .by_index(idx)
+        .with_context(|| format!("read {name} from activity zip"))?;
+    allowance
+        .read_all(entry, largest)
+        .with_context(|| format!("read {name} from activity zip"))
 }
 
 #[cfg(test)]
@@ -1542,6 +1552,23 @@ mod tests {
         assert_eq!(rows[0].id_and_payload.id, "1");
         assert_eq!(rows[1].weight_g, Some(80100.0));
         assert_eq!(rows[1].source_type.as_deref(), Some("MANUAL"));
+    }
+
+    #[test]
+    fn a_fit_past_the_limit_is_refused() {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            w.start_file("123_ACTIVITY.fit", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            w.write_all(b".FIT-bytes").unwrap();
+            w.finish().unwrap();
+        }
+        let zip = buf.into_inner();
+        assert_eq!(fit_from_zip_up_to(&zip, 10).unwrap(), b".FIT-bytes");
+        let e = format!("{:#}", fit_from_zip_up_to(&zip, 9).unwrap_err());
+        assert!(e.contains("larger than 9 bytes"), "{e}");
     }
 
     #[test]

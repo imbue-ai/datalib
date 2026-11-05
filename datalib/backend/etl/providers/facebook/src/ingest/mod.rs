@@ -259,15 +259,7 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
     // photo that fails to read costs its edge's problem, never the rows.
     // Through the handle's own CAS, so nothing here opens a second store.
     if let Some(cas) = db.cas() {
-        store_media(
-            &db,
-            cas,
-            &opts.input_path,
-            &by_table,
-            &opts.progress,
-            &mut summary,
-        )
-        .await?;
+        store_media(&db, cas, &export, &by_table, &opts.progress, &mut summary).await?;
     }
     found.extend(problems);
     Ok(summary)
@@ -396,11 +388,12 @@ fn chunk_scope(table: &str) -> String {
 /// is export-relative (`your_facebook_activity/posts/media/…`), and one
 /// file can be reached from several records — an album and the post
 /// that added its photos — so the edge is per (record, uri) and the
-/// bytes are stored once.
+/// bytes are stored once. A `uri` is the export's own text, so only a file
+/// the walk found is read: one it names past a link is not in the export.
 async fn store_media(
     db: &RawDb,
     cas: &BlobCas,
-    root: &Path,
+    export: &ExportFiles,
     by_table: &Tables,
     progress: &Progress,
     summary: &mut FetchSummary,
@@ -436,25 +429,21 @@ async fn store_media(
                     continue;
                 }
                 if !unread.contains_key(&uri) {
-                    match std::fs::read(root.join(&uri)) {
-                        Ok(bytes) => {
+                    let why = match export.file(&uri).map(std::fs::read) {
+                        Some(Ok(bytes)) => {
                             pending_bytes += bytes.len();
                             acc.add_fetched(id, &uri, bytes, guess_content_type(&uri));
                             pending.insert(uri);
                             summary.media_stored += 1;
                             continue;
                         }
-                        Err(e) => {
-                            let not_found = e.kind() == std::io::ErrorKind::NotFound;
-                            let detail = if not_found {
-                                format!("media file not in the export: {e}")
-                            } else {
-                                format!("media file would not read: {e}")
-                            };
-                            unread.insert(uri.clone(), (not_found, detail));
-                            summary.media_missing += 1;
+                        Some(Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
+                            (false, format!("media file would not read: {e}"))
                         }
-                    }
+                        None | Some(Err(_)) => (true, "media file not in the export".to_string()),
+                    };
+                    unread.insert(uri.clone(), why);
+                    summary.media_missing += 1;
                 }
                 let (not_found, detail) = &unread[&uri];
                 if *not_found {

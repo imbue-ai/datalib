@@ -7,14 +7,6 @@ use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::{parse, shred};
 use datalib_etl_render::inputs::RawRange;
 use std::collections::HashSet;
-use std::path::PathBuf;
-
-fn fixture_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("CLAUDE_FIXTURE_DIR") {
-        return PathBuf::from(d);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude_export")
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn parses_tng_api_fixture() {
@@ -28,9 +20,10 @@ async fn parses_tng_api_fixture() {
     ))
     .await
     .expect("open raw store");
+    let export = crate::claude_render::unpacked_fixture();
     ingest(IngestOptions {
         db: db.clone(),
-        input_path: fixture_dir(),
+        input_path: export.path().to_path_buf(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
         progress: Default::default(),
         control: Default::default(),

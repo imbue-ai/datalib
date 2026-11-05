@@ -3,6 +3,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use datalib_etl_files::export_files::is_regular_file;
+
 /// Outcome of resolving a referenced attachment name against a directory.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolved {
@@ -37,7 +39,7 @@ pub fn resolve(dir: &Path, referenced: &str) -> Resolved {
         return Resolved::Missing;
     }
     let exact = dir.join(referenced);
-    if exact.is_file() {
+    if is_regular_file(&exact) {
         return Resolved::Exact(exact);
     }
 
@@ -54,7 +56,7 @@ pub fn resolve(dir: &Path, referenced: &str) -> Resolved {
     let mut candidates: Vec<(usize, PathBuf)> = Vec::new();
     for entry in rd.flatten() {
         let p = entry.path();
-        if !p.is_file() {
+        if !is_regular_file(&p) {
             continue;
         }
         let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
@@ -196,6 +198,20 @@ mod tests {
         }
         let inside = touch(&export, "Worf - Text.jpg");
         assert_eq!(resolve(&export, "Worf - Text.jpg"), Resolved::Exact(inside));
+    }
+
+    /// A link in an unpacked export could hand over any file on the machine
+    /// as an attachment, by its exact name or by a truncated one.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_not_an_attachment() {
+        let top = tempdir().unwrap();
+        let export = top.path().join("export");
+        fs::create_dir(&export).unwrap();
+        let outside = touch(top.path(), "outside.jpg");
+        std::os::unix::fs::symlink(&outside, export.join("File-abc.jpg")).unwrap();
+        assert_eq!(resolve(&export, "File-abc.jpg"), Resolved::Missing);
+        assert_eq!(resolve(&export, "File-abcdef.jpg"), Resolved::Missing);
     }
 
     #[test]

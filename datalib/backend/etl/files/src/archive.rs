@@ -9,6 +9,7 @@ use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use datalib_etl::expansion::Allowance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -111,13 +112,23 @@ pub struct Entry<'a> {
 
 /// Every file in `part`, in the order the archive holds them; folders and
 /// links are passed over. An entry `visit` does not read is skipped
-/// without being decompressed in a zip, and read past in a `.tgz`.
-pub fn for_each_entry(part: &Path, mut visit: impl FnMut(Entry<'_>) -> Result<()>) -> Result<()> {
+/// without being decompressed in a zip, and read past in a `.tgz`. A part
+/// that expands too far ([`Allowance`]) fails the read that reaches the
+/// limit.
+pub fn for_each_entry(part: &Path, visit: impl FnMut(Entry<'_>) -> Result<()>) -> Result<()> {
+    for_each_entry_within(part, &Allowance::of_file(part)?, visit)
+}
+
+fn for_each_entry_within(
+    part: &Path,
+    allowance: &Allowance,
+    mut visit: impl FnMut(Entry<'_>) -> Result<()>,
+) -> Result<()> {
     let name = part.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let file = File::open(part).with_context(|| format!("open {}", part.display()))?;
     match kind_of(name) {
-        Some(Kind::Zip) => zip_entries(part, file, &mut visit),
-        Some(Kind::Tgz) => tgz_entries(part, file, &mut visit),
+        Some(Kind::Zip) => zip_entries(part, file, allowance, &mut visit),
+        Some(Kind::Tgz) => tgz_entries(part, file, allowance, &mut visit),
         None => bail!("{} is not a .zip or a .tgz", part.display()),
     }
 }
@@ -125,10 +136,12 @@ pub fn for_each_entry(part: &Path, mut visit: impl FnMut(Entry<'_>) -> Result<()
 fn zip_entries(
     part: &Path,
     file: File,
+    allowance: &Allowance,
     visit: &mut dyn FnMut(Entry<'_>) -> Result<()>,
 ) -> Result<()> {
     let mut archive = zip::ZipArchive::new(BufReader::new(file))
         .with_context(|| format!("{} is not a readable zip", part.display()))?;
+    allowance.spend_entries(archive.len() as u64)?;
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -144,7 +157,7 @@ fn zip_entries(
         visit(Entry {
             name: &name,
             size,
-            bytes: &mut entry,
+            bytes: &mut allowance.meter(&mut entry),
         })?;
     }
     Ok(())
@@ -153,14 +166,19 @@ fn zip_entries(
 fn tgz_entries(
     part: &Path,
     file: File,
+    allowance: &Allowance,
     visit: &mut dyn FnMut(Entry<'_>) -> Result<()>,
 ) -> Result<()> {
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(BufReader::new(file)));
+    // Metered under `tar`: headers and the entries read past count too, since
+    // they cost the same to decompress.
+    let gz = flate2::read::GzDecoder::new(BufReader::new(file));
+    let mut archive = tar::Archive::new(allowance.meter(gz));
     let entries = archive
         .entries()
         .with_context(|| format!("{} is not a readable .tgz", part.display()))?;
     for entry in entries {
         let mut entry = entry.with_context(|| format!("read {}", part.display()))?;
+        allowance.count_entry()?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
@@ -312,6 +330,94 @@ mod tests {
         let tgz = d.path().join("takeout-1-001.tgz");
         tgz_with(&tgz, entries);
         assert_eq!(read_all(&tgz), want);
+    }
+
+    fn read_within(part: &Path, allowance: &Allowance) -> Result<usize> {
+        let mut read = 0;
+        for_each_entry_within(part, allowance, |e| {
+            read += std::io::copy(e.bytes, &mut std::io::sink())? as usize;
+            Ok(())
+        })?;
+        Ok(read)
+    }
+
+    /// A zip whose entries each stay under the limit still spends one
+    /// allowance between them, and a `.tgz` the same.
+    #[test]
+    fn a_part_stops_where_it_expands_past_its_allowance() {
+        let d = tempfile::tempdir().unwrap();
+        let entries: &[(&str, &[u8])] = &[("a", &[0; 600]), ("b", &[0; 600])];
+        let zip = d.path().join("bomb.zip");
+        zip_with(&zip, entries);
+        let tgz = d.path().join("bomb.tgz");
+        tgz_with(&tgz, entries);
+        for part in [&zip, &tgz] {
+            let big_enough = Allowance::new(1 << 20, 10, part.display());
+            assert_eq!(read_within(part, &big_enough).unwrap(), 1200);
+            let too_small = Allowance::new(1000, 10, part.display());
+            let e = format!("{:#}", read_within(part, &too_small).unwrap_err());
+            assert!(e.contains("more than 1000 bytes"), "{e}");
+        }
+    }
+
+    /// A `.tgz` entry nobody reads is still decompressed to get past it, so
+    /// it spends the allowance; a zip's is skipped and does not.
+    #[test]
+    fn only_a_tgz_pays_for_an_entry_nobody_reads() {
+        let d = tempfile::tempdir().unwrap();
+        let entries: &[(&str, &[u8])] = &[("big", &[0; 1 << 16]), ("small", b"x")];
+        let unread =
+            |part: &Path, allowance: &Allowance| for_each_entry_within(part, allowance, |_| Ok(()));
+        let zip = d.path().join("skip.zip");
+        zip_with(&zip, entries);
+        unread(&zip, &Allowance::new(1024, 10, "zip")).unwrap();
+        let tgz = d.path().join("skip.tgz");
+        tgz_with(&tgz, entries);
+        let e = format!(
+            "{:#}",
+            unread(&tgz, &Allowance::new(1024, 10, "tgz")).unwrap_err()
+        );
+        assert!(e.contains("more than 1024 bytes"), "{e}");
+    }
+
+    #[test]
+    fn a_part_of_too_many_entries_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let entries: &[(&str, &[u8])] = &[("a", b"x"), ("b", b"x"), ("c", b"x")];
+        let zip = d.path().join("many.zip");
+        zip_with(&zip, entries);
+        let tgz = d.path().join("many.tgz");
+        tgz_with(&tgz, entries);
+        for part in [&zip, &tgz] {
+            let few = Allowance::new(1 << 20, 2, part.display());
+            let e = format!("{:#}", read_within(part, &few).unwrap_err());
+            assert!(e.contains("too many entries"), "{e}");
+        }
+    }
+
+    /// Through the public door, with the limits production runs under: a
+    /// few hundred kilobytes that would come out at over 256 MiB.
+    #[test]
+    fn a_small_zip_bomb_is_refused_at_the_floor() {
+        let d = tempfile::tempdir().unwrap();
+        let zip = d.path().join("bomb.zip");
+        let mut w = zip::ZipWriter::new(File::create(&zip).unwrap());
+        w.start_file("All mail.mbox", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        let chunk = vec![0u8; 1 << 20];
+        for _ in 0..=(datalib_etl::expansion::MIN_BYTES >> 20) {
+            w.write_all(&chunk).unwrap();
+        }
+        w.finish().unwrap();
+        assert!(std::fs::metadata(&zip).unwrap().len() < 2 << 20);
+
+        let e = for_each_entry(&zip, |e| {
+            std::io::copy(e.bytes, &mut std::io::sink())?;
+            Ok(())
+        })
+        .unwrap_err();
+        let e = format!("{e:#}");
+        assert!(e.contains("too far for a real archive"), "{e}");
     }
 
     #[test]

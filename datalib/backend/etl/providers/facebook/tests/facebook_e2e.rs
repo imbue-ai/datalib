@@ -33,7 +33,8 @@ async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
 #[test]
 fn ingests_the_export_and_renders_every_feed() -> Result<()> {
     let tmp = tempfile::tempdir()?;
-    let export = fixture();
+    let export = tmp.path().join("export");
+    copy_tree(&fixture(), &export);
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
 
@@ -522,6 +523,43 @@ impl Export {
 /// siblings unpruned — its rows are not in this run's set, and that says
 /// nothing about whether they went — and is a `listing:` row until it
 /// reads again.
+/// A `uri` is the export's own text. One that reaches a file through a
+/// link in the export must not put that file in the store, nor may the
+/// link make the run read as if everything it hid had gone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_uri_through_a_link_in_the_export_stores_nothing() {
+    const LEAK: &str = "your_facebook_activity/posts/leak/secret.png";
+    let e = Export::new().await;
+    let outside = e._tmp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.png"), b"not from the export").unwrap();
+    std::os::unix::fs::symlink(&outside, e.root.join("your_facebook_activity/posts/leak")).unwrap();
+    assert!(e.root.join(LEAK).is_file(), "the link must really reach it");
+    fs::write(
+        e.root.join(ALBUM_1),
+        format!(r#"{{"name": "Holodeck Three", "photos": [{{"uri": "{LEAK}"}}]}}"#),
+    )
+    .unwrap();
+
+    e.sync().await;
+
+    let edges: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT blake3 FROM media_blobs WHERE uri = ?")
+            .bind(LEAK)
+            .fetch_all(e.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(edges, [None], "the edge says the file is not in the export");
+    let problems = e.problems().await;
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.0 == "listing:files" && p.3.contains("symbolic link")),
+        "{problems:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chunk_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_reads() {
     let e = Export::new().await;
@@ -585,10 +623,7 @@ async fn a_media_file_the_export_left_out_is_a_warning() {
         (severity.as_str(), reason.as_str()),
         ("warning", "not_found")
     );
-    assert!(
-        sample.starts_with("media file not in the export: "),
-        "{sample}"
-    );
+    assert!(sample == "media file not in the export", "{sample}");
     e.db.clone().close().await;
 }
 
