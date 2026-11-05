@@ -117,13 +117,14 @@ before the version bump.
 
 ## The mac legs' runner image
 
-The mac legs name one GitHub-hosted image, `macos-15` (Xcode 16.4), and
-GitHub retires an image about once a year. A tag runs its own tree, so
-a retired label costs that release its mac assets and a re-run cannot
-fix it. What the image decides:
+The mac legs name one GitHub-hosted image, `macos-26` (Xcode 26.6), and
+GitHub retires an image about once a year. `latchkey-auth.yml` runs on
+the same one, so the sign-in suite tries it every night. A tag runs its
+own tree, so a retired label costs that release its mac assets and a
+re-run cannot fix it. What the image decides:
 
 - **The SDK our own binaries link against**, which sets what AppKit and
-  WebKit do for the app: 15.5 on this image. `xcrun vtool -show-build
+  WebKit do for the app: 26.5 on this image. `xcrun vtool -show-build
   <binary>` prints it. The minimum macOS (11.0) is not the image's: it
   comes from `.bazelrc`, and rustc's floor for Apple Silicon for the
   Tauri shell. The two curl shims and Node arrive prebuilt, so their
@@ -139,11 +140,11 @@ To move to another image, try these steps first in a throwaway workflow
 triggered by a push to a branch, with no write grants. **Run it with no
 cache key.** A darwin action's cache key does not cover the image, so
 the contributor cache replays another image's compiles and test results:
-`stage_runtime_test` reported `(cached) PASSED` on `macos-15` in the same
-job whose runtime step had just failed on openrsync, and a binary whose
-link is replayed would carry the other image's SDK. A tag's mac legs find
-nothing in the release cache anyway (`ci.md` §"Two caches"), so a cold
-run is the one that matches.
+`stage_runtime_test` reported `(cached) PASSED` on the first image with
+openrsync, in the same job whose runtime step had just failed, and a
+binary whose link is replayed would carry the other image's SDK. A tag's
+mac legs find nothing in the release cache anyway (`ci.md` §"Two
+caches"), so a cold run is the one that matches.
 
 ## What stays release-only
 
