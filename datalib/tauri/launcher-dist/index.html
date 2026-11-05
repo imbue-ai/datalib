@@ -446,9 +446,15 @@
               <span>
                 <strong>Keep it in a protected folder</strong>
                 <span class="tag calm">Experimental</span><br />
-                Terminal, AI agents and other apps have to ask you first, unless you've
-                given them Full Disk Access. It starts with no sign-ins: you sign in to its
-                sources here in Datalib.
+                <span id="protect-says">
+                  Terminal, AI agents and other apps have to ask you first, unless you've
+                  given them Full Disk Access. It starts with no sign-ins: you sign in to its
+                  sources here in Datalib.
+                </span>
+                <span id="protect-needs-macos" hidden>
+                  Needs macOS 15 or later. On this version, macOS does not keep other apps
+                  out of the folder.
+                </span>
               </span>
             </label>
             <button class="btn primary" id="create">Create and open</button>
@@ -559,7 +565,8 @@
         strong.textContent = lib.name;
         const tags = [];
         if (lib.legacy) tags.push(["tag", "Legacy location"]);
-        if (lib.protected) tags.push(["tag calm", "Protected"]);
+        if (lib.unguarded) tags.push(["tag", "Not protected on this macOS"]);
+        else if (lib.protected) tags.push(["tag calm", "Protected"]);
         if (tags.length) {
           const title = document.createElement("span");
           title.className = "title";
@@ -784,7 +791,11 @@
         const name = $("name");
         if (!name.value || name.value === suggested) name.value = state.suggested_name;
         suggested = state.suggested_name;
-        $("protect-row").hidden = !state.protected_available;
+        $("protect-row").hidden =
+          !state.protected_available && !state.protected_needs_newer_macos;
+        $("protect").disabled = !state.protected_available;
+        $("protect-says").hidden = state.protected_needs_newer_macos;
+        $("protect-needs-macos").hidden = !state.protected_needs_newer_macos;
         const move = state.move_from_documents;
         $("moved").hidden = !move;
         if (move) {

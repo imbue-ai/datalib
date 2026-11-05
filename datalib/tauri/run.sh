@@ -44,8 +44,8 @@ pnpm exec tauri build --debug
 # `open` registers and activates it like a normal double-click.
 #   -n          fresh instance (don't reattach to a stale one)
 #   --args "$@" forward an optional data root (skips the picker)
-# The spawned backend's output goes to a log file in $TMPDIR
-# (datalib-http-<pid>.log — see `start_backend` in src/main.rs).
+# The spawned backend's output goes to <library>/system/server-output.log
+# (see src/backend_output.rs).
 # For inline shell logs while debugging, run the binary directly with
 # a data root instead: `cargo run -- ~/root`.
 # The target dir may be redirected (e.g. a shared CARGO_TARGET_DIR or a

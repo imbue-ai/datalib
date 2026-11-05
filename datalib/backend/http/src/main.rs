@@ -3,7 +3,7 @@
 use clap::Parser;
 use datalib_cli_help::Example;
 use datalib_http::{router, ApiToken, FrameAncestors};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
@@ -53,13 +53,19 @@ struct Args {
     #[arg(long)]
     no_open: bool,
 
-    /// After binding, write the base URL (e.g. `http://127.0.0.1:53829`)
-    /// to this file. With `DATALIB_BIND=127.0.0.1:0` this is the
-    /// race-free way for a parent process (the Tauri shell, scripts) to
-    /// learn the ephemeral port: poll for the file instead of parsing
-    /// log output or pre-allocating a port.
+    /// After binding, write the launch URL, token included, to this file.
+    /// With `DATALIB_BIND=127.0.0.1:0` this is the race-free way for a
+    /// script to learn the ephemeral port: poll for the file instead of
+    /// parsing log output or pre-allocating a port. Any process of the same
+    /// user can read the file while it exists, whatever its mode.
     #[arg(long)]
     url_file: Option<PathBuf>,
+
+    /// After binding, write the launch URL, token included, as the first
+    /// line of stdout, for a parent holding the other end of a pipe (the
+    /// desktop app). Nothing lands on disk, so no other process can read it.
+    #[arg(long)]
+    url_stdout: bool,
 
     /// Run every sync as if it were this instant (RFC 3339, with an
     /// offset) rather than the clock's, as `datalib-dag --now` does for
@@ -163,13 +169,16 @@ async fn main() -> anyhow::Result<()> {
     root_lock.announce(&base_url);
     tracing::info!("datalib-http listening on {base_url}");
     tracing::info!("api token: {}", api_token.token_file().display());
-    // The one line that stays off the record: the URL carries the token,
-    // and the store is readable by anything that can read the root. A
-    // person at a terminal still gets it to click; there are no bars in
-    // this process for it to collide with.
-    #[allow(clippy::disallowed_macros)]
-    {
-        eprintln!("open: {url}");
+    // Only to a terminal, for a person to click. Stderr anywhere else may be
+    // kept (a supervisor's log, a file), and what keeps it is readable by
+    // any process of this user, however tight its mode: that is a way to
+    // the library that a protected folder does not guard. There are no bars
+    // in this process for it to collide with.
+    if std::io::stderr().is_terminal() {
+        #[allow(clippy::disallowed_macros)]
+        {
+            eprintln!("open: {url}");
+        }
     }
 
     // Announce the bound URL to a waiting parent process as soon as it
@@ -182,6 +191,10 @@ async fn main() -> anyhow::Result<()> {
         // The URL now carries the API token, and this file usually
         // lands in a shared /tmp. Same 0600 the token file gets.
         datalib_http::auth::restrict_to_owner(url_file)?;
+    }
+    if args.url_stdout {
+        writeln!(std::io::stdout(), "{url}")
+            .map_err(|e| anyhow::anyhow!("write the url to stdout: {e}"))?;
     }
 
     if !args.no_open && std::io::stdout().is_terminal() {

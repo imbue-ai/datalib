@@ -193,8 +193,8 @@ What that means for datalib today:
   Node not on the list yet. Once one is on it, any program running as
   you can use your sign-ins.
 - **The desktop app can keep a library in a protected folder
-  (experimental).** When you make a new library, tick **Keep it in a
-  protected folder**. The library then lives in a folder macOS guards
+  (experimental), on macOS 15 or later.** When you make a new library,
+  tick **Keep it in a protected folder**. The library then lives in a folder macOS guards
   for the Datalib app, signed by Imbue, so that permission lasts
   through upgrades: Terminal, an AI agent's shell, Finder or any other
   app that reaches in makes macOS ask you first. The exception is an
@@ -519,7 +519,8 @@ token for a session cookie on that first load and drops it from the
 address bar. If you want to open the app in a *different* browser (or
 you closed the tab and lost the URL), the line the server printed is
 still in your terminal, and the token is on disk at
-`<data_root>/system/api-token`.
+`<data_root>/system/api-token`. The server prints that line only to a
+terminal, so the token stays out of any log that keeps its output.
 
 Prefer the terminal? Run the pipeline directly on your config:
 
