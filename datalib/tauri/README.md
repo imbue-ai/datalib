@@ -226,6 +226,11 @@ on stealing from you.
   since a log line can quote what a library holds. The URL with the token
   stays out of it. The server prints that URL to stderr only at a terminal,
   and hands it to the shell over a pipe.
+- **Its temp files stay in the folder too.** The server of a protected
+  library starts with `TMPDIR` naming `<library>/system/tmp`, and every
+  program it runs inherits that: a web response on its way in, a decrypted
+  database, a browser's sign-in state. The server empties the folder when it
+  starts, since macOS only clears its own temp dir.
 - **What opens the library's servers stays in the folder too.** The API
   token and the applets' secret are each in a file in `system/`, and in
   no process's environment or arguments, where `ps eww` would show them
@@ -249,7 +254,7 @@ on stealing from you.
   naming `<library>/system/latchkey` and
   `LATCHKEY_KEYRING_SERVICE_NAME` naming a keychain item of its own,
   `Datalib Latchkey - <folder name>`, and every latchkey it runs
-  inherits both (`protected::latchkey_env`). Nothing comes from
+  inherits both (`protected::server_env`). Nothing comes from
   `~/.latchkey` or latchkey's shared `latchkey` item, which stay as they
   were; a person signs in through the wizard. latchkey makes the item
   the first time it needs a key, and the program that makes an item is

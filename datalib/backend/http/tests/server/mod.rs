@@ -44,12 +44,21 @@ pub fn wait_for_file(path: &Path, what: &str) -> String {
 }
 
 pub fn start(root: &Path) -> Server {
-    start_in(Path::new("."), root)
+    start_with_env(root, &[])
+}
+
+/// As the desktop app starts a protected library's server, for one.
+pub fn start_with_env(root: &Path, env: &[(&str, &str)]) -> Server {
+    spawn(Path::new("."), root, env)
 }
 
 /// The server started from `cwd`, given `root` as it is: relative to
 /// `cwd`, if relative.
 pub fn start_in(cwd: &Path, root: &Path) -> Server {
+    spawn(cwd, root, &[])
+}
+
+fn spawn(cwd: &Path, root: &Path, env: &[(&str, &str)]) -> Server {
     let abs_root = cwd.join(root);
     let url_file = abs_root.parent().unwrap().join("url");
     let mut child = Command::new(bin())
@@ -59,6 +68,7 @@ pub fn start_in(cwd: &Path, root: &Path) -> Server {
         .arg(&url_file)
         .arg(root)
         .env("DATALIB_BIND", "127.0.0.1:0")
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
