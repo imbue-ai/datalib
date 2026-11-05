@@ -1,8 +1,8 @@
 //! Two `datalib-dag` invocations on one data root: the second hands its
 //! request to the loop the first is running, instead of failing on the
 //! lock, and each exits with its own request's outcome. This is how an
-//! agent's sync runs while the app's does (`docs/dev/plans/supervisor.md`
-//! §2.8). Each step holds until the test writes `go`, so "beside" is
+//! agent's sync runs while the app's does (`dag/README.md`
+//! §"Two locks, two files"). Each step holds until the test writes `go`, so "beside" is
 //! observed, not timed.
 
 use std::path::Path;

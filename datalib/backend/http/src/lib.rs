@@ -896,7 +896,7 @@ pub struct ConfigResponse {
     pub upgrade: UpgradeView,
 }
 
-/// `docs/dev/plans/upgrade_on_launch.md`, as the page needs it.
+/// `dag/README.md` §"Upgrading a root", as the page needs it.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct UpgradeView {
     #[serde(flatten)]
@@ -1602,7 +1602,7 @@ async fn pipeline_disk(State(s): State<AppState>) -> Json<disk_free::DiskFree> {
     Json(s.usage.free.snapshot(floor).await)
 }
 
-// --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, switches, resets (`dag/README.md` §"What wakes the loop") --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]

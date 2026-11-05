@@ -1357,7 +1357,7 @@ impl Runner {
             }
             Err(step_err) => {
                 // What a failed or stopped step reports it committed, its
-                // consumers read (plans/supervisor.md §2.5). One that reports
+                // consumers read (dag/README.md §"Versions: reported by the step"). One that reports
                 // nothing moves nothing: its tree may be mid-write.
                 if let Ok(Some(v)) = reported_version(spec, fingerprint, &step_err.outputs) {
                     facts.sinks[i] = Some(v.clone());

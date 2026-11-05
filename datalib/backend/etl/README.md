@@ -96,8 +96,7 @@ nowhere: nothing failed, and the problems grid is where it is seen. A
 download reports them at every seal as well, right after it has written
 the problems its run has found so far (`run_problems::collecting_sealed`),
 and again when it ends, failed or not: a checkpoint's rows, its
-problems and its count move together. Design
-and surfaces: `docs/dev/plans/problem_visibility.md`.
+problems and its count move together.
 
 A download's problem names only its raw entity (`<table>:<id>`): the
 grid row it is about has an id minted under the source's id, which the
@@ -701,8 +700,7 @@ page is next written.
 content-addressed table is its own history — a hash is present or it is
 not, and a row never changes — so nothing ever read its doltlite log,
 diffs or pins, while every checkpoint's pages stayed in the file: on
-two real stores a doltlite CAS was 2.1× and 4.7× its payload
-(`docs/dev/plans/completed/blob_cas_plain_sqlite.md`). So the one-writer
+two real stores a doltlite CAS was 2.1× and 4.7× its payload. So the one-writer
 lock, the writer branch, the seal and the pin do not apply here.
 
 **Bytes commit before the rows that name them, by construction.**

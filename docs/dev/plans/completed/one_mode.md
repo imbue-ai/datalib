@@ -1,35 +1,14 @@
 # One mode: how every step writes its store
 
-**Status: agreed design (2026-09-14); the render side is built, the
-ingest side is not.** Of §"What changes in the tree", items 1, 3, 5,
-6 and the render half of 8 landed on 2026-09-14 — the crash test, the
-render store's transactions and in-store cursor, the index's cold-path
-prune, the slack applet on `open_reader`. Items 2 and 4 (the mirror
-measurement, wipe-at-end for ingest, `Policy::Never`,
-`always_clear_before_ingest`, `--start-over`) and 7 (`render_inputs`)
-are still to do; each item below says which. §"Testing it without a
-provider" is how to check the rule without a real source, also not
-built. This is the design that `render_inputs`
-([`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md))
-turned out to be reaching for: that table is the mechanism for one of
-its rules.
-
-**Revised 2026-09-22: the reset half of item 4 landed as
-`datalib-dag --reset`** — a standalone operation that drops a step's
-store in a commit of its own, with no provider code behind it
-(`doltlite_raw::reset_store`) — and `Policy::Never` is gone: nothing
-chose it once the reset stopped, so the checkpointer takes a cadence
-and nothing else. `always_clear_before_ingest` is now that same reset,
-run by the ingest driver before the wave. The wipe-at-end for the
-every-run truncators is still to do.
-
-**Revised 2026-09-20: the rescue commit and the Ctrl-C commit are
-gone.** A writer's `open` discards a dirty working set and starts from
-HEAD, and SIGINT commits nothing; the dolt commit at a seal is the only
-boundary a reader is promised, and a SQL transaction is durability, not
-consistency. Where this doc says "rescue" or "seal on Ctrl-C", read the
-tree instead (`doltlite_raw::discard_dirty_working_tree`,
-`step_protocol.md` § Signals). The rest of the design stands.
+**Status: landed, kept as the record; §"The one mode" is still the rule
+every step writes its store by.** The render side landed on 2026-09-14.
+On the ingest side, `Policy::Never` and `always_clear_before_ingest` are
+retired, the mirrors upsert, `render_inputs` exists, and both test layers
+are built (`render_model_test.rs`, `tests/fixtures/render_contract_test.py`).
+Two things are not built: a `--start-over` beyond email's, and a per-run
+"seen" mark. Where this doc says "rescue" or "seal on Ctrl-C", read the
+tree instead: a writer's `open` discards a dirty working set, and SIGINT
+commits nothing.
 
 ## The problem, in one paragraph
 
@@ -57,7 +36,7 @@ A store has two kinds of commit and they do different work:
   store's working set from then on. It is also how writes are batched
   — outside one, every statement is a transaction of its own and
   rewrites the pages it touches
-  ([`doltlite.md`](../doltlite.md#what-a-write-costs)). **Superseded on
+  ([`doltlite.md`](../../doltlite.md#what-a-write-costs)). **Superseded on
   doltlite 0.50.13:** this said about 50 ms per statement; it is now
   under a millisecond, so batching is about pages, not time.
 - A **doltlite commit** is the *publication* unit. It names a snapshot
@@ -134,7 +113,7 @@ them off.
    source holds nothing — and a consumer of it deletes accordingly.
    The only thing a consumer skips is a store it *cannot read*: no
    file, no commit, no doltlite extension. That is P1 of the
-   [sink contract](../../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers), and it
+   [sink contract](../../../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers), and it
    is the one guard that stays.
 
 Two things stop being modes:
@@ -279,7 +258,7 @@ and small.
    t_staging RENAME TO t` in one transaction diffs as only the rows that
    changed, because the diff goes by table name. Renaming to a name that
    did not exist before shows every row as added
-   ([`doltlite.md`](../doltlite.md#diffs)).
+   ([`doltlite.md`](../../doltlite.md#diffs)).
 3. **Render: documents in transactions, cursor in the store.** *Built.*
    the documents between two checkpoints share one SQL transaction
    (`begin_batch`/`commit_batch`, closed right before each

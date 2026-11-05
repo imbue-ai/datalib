@@ -1,6 +1,6 @@
 //! What is owed is what upstream listed minus what the store holds, and
-//! nothing else stands in for it (docs/dev/plans/completed/sync_state.md §6, the
-//! Notion rows). Each test here was written against the old code and
+//! nothing else stands in for it (data_architecture_ingestion.md
+//! § "What is left to fetch"). Each test here was written against the old code and
 //! watched failing before the mechanism it names was replaced.
 
 use datalib_etl::stop::StopFlag;

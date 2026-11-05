@@ -72,8 +72,8 @@ The most useful single coverage target is
 `//tests/fixtures:ingested_tng_test`. It's a `py_test` wrapper around
 the same `run_sync_pipeline.py` invocation as the `:ingested_tng`
 genrule, exercising the **entire ETL pipeline** end-to-end across every
-provider's TNG fixtures. With the wrapper above it measured **489
-source files** covered, all of them first-party, including:
+provider's TNG fixtures. Together with `render_contract_test`, it
+reached **677 first-party source files**, including:
 
   - the per-provider download + render (`claude`, `chatgpt`,
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
@@ -145,7 +145,7 @@ profraws lived in the sandbox and were gone by then.
    wrapper merges only the ones for the targets you passed. Because
    they are now outputs, a remote cache would take them too, so the
    wrapper also passes `--noremote_upload_local_results`. For
-   `ingested_tng_test` they are 564 files and 1.0 GB, and on a slow
+   `ingested_tng_test` they are about 470 files and 0.9 GB, and on a slow
    link the upload held a finished test in "Testing" for over ten
    minutes.
 
@@ -221,15 +221,16 @@ have not wired that in. It would rebuild every crate under a flag
 Rust makes no promises about, and a Rust bump does not help until the
 option is stabilized.
 
-## Future: Playwright / UI e2e coverage
+## Playwright: the backend, not the UI
 
 The Playwright e2e suite at `//datalib/ui:e2e_test` drives the
 backend through the HTTP server, which is a `rust_binary` already in
-the e2e test's `data`. The same mechanism should in principle work:
+the e2e test's `data`, so the same mechanism counts the Rust it reaches:
 `tools/run_coverage.sh //datalib/ui:e2e_test --
-//datalib/backend/http:datalib_http_bin`. Untested. It
-would cover the request-path code the unit tests don't reach (HTTP
-routing, response serialization, auth middleware).
+//datalib/backend/http:datalib_http_bin`. That covers request-path code
+the unit tests don't reach (HTTP routing, response serialization, auth
+middleware). It counts nothing in the browser: what Playwright runs of
+the UI's own code is not measured.
 
 ## Limitations and gotchas
 
@@ -249,6 +250,11 @@ routing, response serialization, auth middleware).
     output path with an *un-instrumented* binary, and `llvm-cov
     export` then fails with `no coverage data found`. The runner
     script deliberately does not do a second build.
+  - **A test can pass and still read as failed.** Bazel's own collection
+    step failed `//datalib/ui:e2e_auth_test` and
+    `//datalib/backend/http:applet_tests` with every test in them
+    passing. Read the test log before looking for a bug. Timing tests can
+    also fail under instrumentation and pass on a plain build.
   - **A failed BuildBuddy upload stops the wrapper.** `bazelisk
     coverage` exits non-zero when the build-event upload fails
     (`No route to host`), even though the test passed. Re-run it.

@@ -1,8 +1,6 @@
 # Logging — one store, every process, and how to add a line
 
-The design record, with the arguments for each decision, is
-[`plans/completed/logs_and_metrics.md`](plans/completed/logs_and_metrics.md);
-the step-side details (pipes, envelopes, flushing, the error tail) are
+The step-side details (pipes, envelopes, flushing, the error tail) are
 in [`step_protocol.md`](step_protocol.md) § "stderr: logging". This
 page is the map.
 
@@ -234,7 +232,7 @@ says `where the render's time went`, in `load_ms` (the store's answer),
 
 - **Anything about a record** — a fetch that failed, a render that
   could not project a field — goes through `problems`
-  ([`plans/problem_visibility.md`](plans/problem_visibility.md)), which
+  ([`etl/README.md`](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data)), which
   travels with the data and reaches the Manage counts and the document
   banner. A `warn!` reaches nobody who is not reading the log, so do
   not write one beside a problem: the step logs what is new, once, at

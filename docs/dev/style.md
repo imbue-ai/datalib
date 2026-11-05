@@ -125,8 +125,7 @@ against a store, a tempdir, a subprocess — and there should be few of
 them, because a shell has few branches. If a shell test is asserting
 on a decision, the decision is on the wrong side of the line.
 
-The audit that measured the tree against this rule and lists what to
-move is [`audits/2026-09-21_fcis.md`](audits/2026-09-21_fcis.md).
+Issue #633 lists what is still to move.
 
 ## Auditing the tree for drift and repetition
 

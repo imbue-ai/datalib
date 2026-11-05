@@ -1,5 +1,5 @@
 //! What a launch does before the loop takes any request, the first time a
-//! build runs on a root (`docs/dev/plans/upgrade_on_launch.md`): ask every
+//! build runs on a root (`dag/README.md` §"Upgrading a root"): ask every
 //! step that takes the `--migrate` verb to bring what it wrote to this
 //! build's shape. The runner knows nothing of any store; each step answers
 //! for its own (`step_protocol.md` § Migrate).
