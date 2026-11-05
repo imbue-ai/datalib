@@ -25,10 +25,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::qmd::mapping::{parse_section_uuid, Place};
@@ -54,7 +53,7 @@ pub async fn read_document_vectors(root: &Path) -> Result<Option<DocumentVectors
         return Ok(None);
     }
     // Read-only: the file belongs to the qmd steps.
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))?
+    let opts = datalib_sqlite_open::file(&path)
         .create_if_missing(false)
         .read_only(true);
     let pool = SqlitePoolOptions::new()

@@ -798,7 +798,10 @@ came out byte-identical to the writer's alone.
 ### Opening a revision by path
 
 `sqlite3_open` — and so sqlx — takes a revision after the file name:
-`<file>@<rev>` or `<file>/<rev>`.
+`<file>@<rev>` or `<file>/<rev>`. A name that does not begin `file:` is
+otherwise literal: a `%`, a `?`, a `#` or an `@` in a directory is that
+character on disk.
+`revision_by_path::a_name_without_file_is_literal_and_still_takes_a_revision`.
 
 - **A branch** opens that branch, working set and all; opened read-only,
   it refuses writes.

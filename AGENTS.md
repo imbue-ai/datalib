@@ -250,6 +250,8 @@ datalib/
                    media, apple_photos and linear have no <p>_render.
     etl/sqlite_mirror/ the table-for-table SQLite→doltlite mirror engine.
     table/         `BulkUpsertable`, alone.
+    sqlite_open/   the options that open one file by its literal path;
+                   every open of a store starts here.
     packages/      `datalib_packages`: a package's manifest, the lookup
                    and the pinned fetch that unpacks it under
                    `system/packages/` (docs/dev/packages.md).

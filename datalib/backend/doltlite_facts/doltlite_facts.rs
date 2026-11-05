@@ -463,6 +463,29 @@ mod read_only {
 mod revision_by_path {
     use super::*;
 
+    /// A name that does not begin `file:` is a file name, whatever is in it,
+    /// and the revision is still found after it.
+    #[tokio::test]
+    async fn a_name_without_file_is_literal_and_still_takes_a_revision() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("x%41y?z#w@v");
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::create_dir(root.path().join("xAy")).expect("mkdir");
+        let store = dir.join("store.doltlite_db");
+        let name = store.display().to_string();
+
+        let mut w = connect(&name, false, Duration::from_secs(5)).await;
+        ok(&mut w, "CREATE TABLE t (id TEXT PRIMARY KEY)").await;
+        ok(&mut w, "INSERT INTO t VALUES ('a')").await;
+        let hash = commit(&mut w, "a row").await;
+        w.close().await.expect("close");
+        assert!(store.is_file(), "nothing at {name}");
+
+        let mut d = connect(&format!("{name}@{hash}"), true, Duration::from_secs(5)).await;
+        assert_eq!(int(&mut d, "SELECT COUNT(*) FROM t").await, 1);
+        assert_eq!(text(&mut d, "SELECT active_branch()").await, None);
+    }
+
     #[tokio::test]
     async fn a_commit_opens_detached_read_only_and_indexed() {
         let (s, first) = store_with_rows().await;

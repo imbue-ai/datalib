@@ -2,15 +2,13 @@
 //! SQLite file (`disk_stats`). A reader of somebody else's store opens
 //! through `datalib_pin` instead.
 
-use std::str::FromStr;
-
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 pub async fn open_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Error> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+    let opts = datalib_sqlite_open::file(db_path)
         .create_if_missing(true)
         // Meant for stock-libsqlite3 builds. On doltlite `journal_mode`
         // is inert (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility),
