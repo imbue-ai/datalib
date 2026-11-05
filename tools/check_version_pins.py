@@ -134,8 +134,8 @@ FAMILIES: list[Family] = [
             "is built from these same archives and so cannot drift. The "
             "PyPI `doltlite` wheel is the one docs/dev/doltlite.md tells "
             "a Python program to install, and "
-            "//datalib/backend/doltlite_facts:python_package_test runs it "
-            "against stores the pinned CLI wrote."
+            "//datalib/backend/doltlite_facts:python_package_test and "
+            ":python_reader_test run it against stores the pinned CLI wrote."
         ),
         canonical="third-party/doltlite/BUILD.bazel",
         sites=[

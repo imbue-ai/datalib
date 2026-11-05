@@ -494,6 +494,9 @@ export type Health = {
   // to. Used to tell a coding agent where to read it (see handoff.ts) —
   // the token itself never enters the UI.
   token_file: string;
+  // A person's terminal cannot reach this library's sign-ins, so the
+  // wizard offers no command to run.
+  protected_library: boolean;
 };
 
 // Last successful /api/health payload. `fetchHealth` fills it; consumers
@@ -799,7 +802,7 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
-  // The launch's upgrade (docs/dev/plans/upgrade_on_launch.md): the raw
+  // The launch's upgrade (dag/README.md §"Upgrading a root"): the raw
   // stores being migrated, then what is offered for a re-render.
   upgrade: Upgrade;
 };

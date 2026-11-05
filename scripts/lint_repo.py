@@ -339,6 +339,7 @@ def main() -> int:
     rc |= _check_try_get_ok_is_flattened(root)
     rc |= _check_no_playback_set_var(root)
     rc |= _check_no_ui_code_sinks(root)
+    rc |= _check_stores_open_by_literal_path(root)
     return rc
 
 
@@ -1343,6 +1344,49 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         "  For HTML, set `textContent` instead; if the string\n"
         "  really is the app's own markup, add the file to _UI_SINK_ALLOWED in\n"
         "  scripts/lint_repo.py with the reason it is not someone else's data.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 20: a store opens by its literal path ------------------------
+#
+# sqlx's `SqliteConnectOptions::from_str` reads a URL: it percent-decodes
+# the path and cuts it at the first `?`. A data root under `x%41y` wrote
+# its stores under a sibling `xAy` if there was one, and one holding a `?`
+# could not open anything. `datalib_sqlite_open` is the one way to name a
+# file, and `plain_sqlite::uri` the one URI, for the one thing that needs
+# it: a new plain SQLite file. Tests may spell an open by hand.
+_SQLITE_URL = re.compile(r'"sqlite:(?!:memory:")')
+_FILENAME_NOT_URI = re.compile(r"\.filename\((?!\s*(?:\w+::)*plain_sqlite::uri\()")
+_SQLITE_OPEN_HOME = "datalib/backend/sqlite_open/src/lib.rs"
+_RUST_TEST_FILE = re.compile(r"(?:^|/)tests/|_tests?\.rs$|/doltlite_facts/")
+
+
+def unliteral_opens(text: str) -> list[int]:
+    """The 1-based lines of `text` that open a store by anything but its path."""
+    hits = [*_SQLITE_URL.finditer(text), *_FILENAME_NOT_URI.finditer(text)]
+    return sorted(text.count("\n", 0, m.start()) + 1 for m in hits)
+
+
+def _check_stores_open_by_literal_path(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if _RUST_TEST_FILE.search(rel) or rel == _SQLITE_OPEN_HOME:
+            continue
+        text = _without_test_module((root / rel).read_text(encoding="utf-8"))
+        lines = text.splitlines()
+        for lineno in unliteral_opens(text):
+            hits.append(f"  {rel}:{lineno}: {lines[lineno - 1].strip()}")
+    if not hits:
+        print("OK: every store opens by its literal path.")
+        return 0
+    print(
+        "ERROR: a store opened by something other than its path:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Use `datalib_sqlite_open::file(path)`, or `::revision(path, rev)`.\n"
+        "  A `sqlite://` URL is percent-decoded and cut at the first `?`.\n"
+        "  See lint_repo.py check 20.",
         file=sys.stderr,
     )
     return 1

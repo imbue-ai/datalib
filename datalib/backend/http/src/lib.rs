@@ -157,6 +157,9 @@ pub struct Health {
     /// can tell a coding agent where to read it (see `handoff.ts`);
     /// reaching this response already required holding the token.
     pub token_file: String,
+    /// A latchkey run from a person's terminal signs in to `~/.latchkey`,
+    /// not this library, so the wizard offers no command to run.
+    pub protected_library: bool,
 }
 
 /// Client-supplied portion of a feedback submission. The server stamps the
@@ -237,14 +240,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/api/lib/{name}/rename", post(rename_lib))
-        .route("/agent/cards.md", get(agent_cards_guide))
-        .route("/agent/config.md", get(agent_config_guide))
-        // The pre-split guide URL; wayfinders copied before the split
-        // may still reference it.
-        .route(
-            "/agent.md",
-            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
-        )
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/pipeline/storage", get(pipeline_storage))
         .route(
@@ -294,16 +289,29 @@ pub fn router(state: AppState) -> Router {
         // namespace, so byte-identical components resolve to one URL
         // and the browser evaluates them once. See frontend.rs.
         .route("/modules/{hash}", get(get_module))
-        // What a step keeps, by the address a page links it with
-        // (data.rs): its blob store's rows, and nothing else of the step.
-        .route(
-            "/data/{group}/{function}/{kind}/{*rest}",
-            get(data::get_data),
-        )
         // The applet proxy. `{*rest}` keeps the whole remaining path,
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
         .route("/applet/{id}/", any(proxy_applet_root))
+        .route("/applet/{id}", any(proxy_applet_root))
+        // Everything above answers this site alone. What is below may be
+        // linked to from anywhere, so it must only read and must run nothing.
+        .route_layer(axum::middleware::from_fn(auth::only_from_this_site))
+        .route("/agent/cards.md", get(agent_cards_guide))
+        .route("/agent/config.md", get(agent_config_guide))
+        // The pre-split guide URL; wayfinders copied before the split
+        // may still reference it.
+        .route(
+            "/agent.md",
+            get(|| async { axum::response::Redirect::permanent("/agent/cards.md") }),
+        )
+        // What a step keeps, by the address a page links it with
+        // (data.rs): its blob store's rows, and nothing else of the step.
+        // Served sandboxed, and one document kept as data can link another.
+        .route(
+            "/data/{group}/{function}/{kind}/{*rest}",
+            get(data::get_data),
+        )
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
         // into `index.html`.
@@ -342,6 +350,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
         token_file: s.api_token.token_file().display().to_string(),
+        protected_library: std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some(),
     })
 }
 
@@ -896,7 +905,7 @@ pub struct ConfigResponse {
     pub upgrade: UpgradeView,
 }
 
-/// `docs/dev/plans/upgrade_on_launch.md`, as the page needs it.
+/// `dag/README.md` §"Upgrading a root", as the page needs it.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct UpgradeView {
     #[serde(flatten)]
@@ -1602,7 +1611,7 @@ async fn pipeline_disk(State(s): State<AppState>) -> Json<disk_free::DiskFree> {
     Json(s.usage.free.snapshot(floor).await)
 }
 
-// --- Intent: requests, switches, resets (`docs/dev/plans/supervisor.md` §2.9) --
+// --- Intent: requests, switches, resets (`dag/README.md` §"What wakes the loop") --
 
 /// A request as the API serves it.
 #[derive(Debug, Serialize)]

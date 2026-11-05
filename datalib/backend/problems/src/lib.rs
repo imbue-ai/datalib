@@ -3,8 +3,8 @@
 //! with the data until it reaches the unified document index and the screen.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
-//! literal. The design — ids, severity, the copy rule, what reads the
-//! table — is `docs/dev/plans/problem_visibility.md`.
+//! literal. How the rows travel, and what reads them: `etl/README.md`
+//! §"Problems flow downstream with the data".
 
 mod recorded;
 pub use recorded::{log_recorded, note_recorded};

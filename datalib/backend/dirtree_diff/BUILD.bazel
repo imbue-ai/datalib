@@ -13,6 +13,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",

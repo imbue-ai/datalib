@@ -221,8 +221,7 @@ that the step ever succeeded. The app then opens a request: a reset
 step that reads something is rebuilt at once, and a reset download is
 not refilled — what reads it runs instead, so its documents leave the
 grid, and its next Sync downloads everything again. The app's reset
-does not wait for a sync to end (§"Resets and purges"). The design is
-[`plans/supervisor.md`](../../../docs/dev/plans/supervisor.md).
+does not wait for a sync to end (§"Resets and purges").
 
 ## When the disk runs low
 
@@ -440,7 +439,7 @@ and sometimes wasteful; the loop says so on the event stream when it
 happens, and a step that wants its readers to skip reports a version.
 
 **A failed or stopped step's reported version stands**: what it committed
-before it ended, its consumers read (`plans/supervisor.md` §2.5).
+before it ended, its consumers read.
 `datalib-step` reports its store's version however it ends, so a commit
 its writer published at open, or at the stop, reaches them. One that reports
 nothing moves nothing, since its tree may be half-written. The one thing
@@ -522,7 +521,7 @@ naming no step) looks exactly like one it did.
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
-  first (`docs/dev/plans/supervisor.md` §2.8). Only `--reset`, which empties
+  first. Only `--reset`, which empties
   stores, needs the root to itself and is refused while a loop runs —
   always, with the app up; the app's resets are rows the loop carries out
   (§"Resets and purges").

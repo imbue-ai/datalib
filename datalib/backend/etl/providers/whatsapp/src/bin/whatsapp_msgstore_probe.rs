@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use datalib_whatsapp_backup::{decode_hex_key, decrypt_file};
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
 }
 
 async fn open(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::new().filename(path).read_only(true);
+    let opts = datalib_sqlite_open::file(path).read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)

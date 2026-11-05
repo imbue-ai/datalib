@@ -1,5 +1,8 @@
 # Writing an applet
 
+What the applets datalib ships serve, and how to call them, is
+[`docs/user/applets.md`](../user/applets.md). This page is how to write one.
+
 An **applet** is a config-declared program that contributes a piece of
 the app: card components for the frontend, and the HTTP endpoints
 those components read. It is an `[[applets]]` entry in `config.toml`,
@@ -7,9 +10,9 @@ beside `[[groups]]` and `[[steps]]`.
 
 | | step | applet |
 | --- | --- | --- |
-| Lifetime | runs to completion during a sync | long-lived server, spawned on demand |
+| Lifetime | runs to completion during a sync | long-lived server, started with `datalib-http` |
 | Produces | artifacts on disk | HTTP responses and card components |
-| Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, from an incoming request |
+| Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, one for each entry in the config |
 | Declares | `group` + `function` (or `id`), `command`, `inputs`, `params` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
 
 An applet declares no `inputs` because it is never scheduled and owns
@@ -273,7 +276,9 @@ a same-origin cookie, which it attaches to the component's own
 it. An applet author therefore writes no auth code — but the corollary
 is that a component may only reach the gateway from the page's own
 origin. Fetching a `/applet/` URL from an iframe on another origin, or from
-outside the browser without a token, gets a `401`.
+outside the browser without a token, gets a `401`, and a link to one from
+another site gets a `403` (`only_from_this_site` in `auth.rs`), so an applet's
+routes are the page's to call and never a page a link can open.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the
@@ -444,7 +449,9 @@ only writer of the contacts store under `datalib_curated/`
 (`app_stores.md`), and like `unified_document_index` it contributes endpoints
 only, which the document view calls; one of them,
 `/photo/<contact_id>`, serves the photo a person put on a contact (and
-takes one with `PUT`, drops it with `DELETE`). One
+takes one with `PUT`, drops it with `DELETE`). Its routes are registered
+together with what each says about itself (`datalib_contacts/api.rs`), and
+`GET /` and `--help` list them. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

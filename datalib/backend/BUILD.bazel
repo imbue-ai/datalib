@@ -48,7 +48,7 @@ sh_test(
 )
 
 # Set of binaries bundled into the install.sh release tarball (all of
-# them Rust, except the doltlite shell at the bottom of the list).
+# them Rust, except the doltlite shell and library at the bottom of the list).
 # Adding a binary here gets it shipped to users on the next tagged release;
 # .github/workflows/release.yml renames each bazel output to its public
 # `datalib-<name>` form before tarring, and scripts/install.sh drops
@@ -101,6 +101,11 @@ filegroup(
         # linking the same amalgamation the pipeline writes with means
         # the shell and the store can never disagree about the format.
         "//third-party/doltlite:doltlite",
+        # The same engine as a library, for a program of someone else's to
+        # keep a store open (docs/dev/doltlite.md § "Reading a store from
+        # Python"). Under `lib/`, because install.sh links every top-level
+        # executable onto the PATH. None on the musl platforms.
+        "//third-party/doltlite:shipped_library",
     ],
     visibility = ["//visibility:public"],
 )
@@ -144,6 +149,7 @@ _BIN_RENAMES = {
     # what makes this key `doltlite/doltlite` and not
     # `third-party/doltlite/doltlite`.
     "doltlite/doltlite": "datalib-doltlite",
+    "doltlite/libdoltlite": "lib/libdoltlite",
     "etl/providers/file_inventory/file_inventory": "datalib-file-inventory",
     "datalib_step/datalib_step": "datalib-step",
     "applets/datalib_applet": "datalib-applet",

@@ -1,7 +1,8 @@
 //! The reconcile tick: from the graph, the open requests and the facts,
 //! each step's state and the starts, stops and request closures to make.
 //! Pure — no clock, no I/O; the host turns events into [`Facts`] and acts
-//! on the [`Tick`]. The rules are `docs/dev/plans/supervisor.md` §2.2–§2.4.
+//! on the [`Tick`]. The rules are `dag/README.md`
+//! §"What the loop runs, and what makes a step stale".
 
 use std::collections::{BTreeMap, BTreeSet};
 

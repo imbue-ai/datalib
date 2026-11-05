@@ -128,7 +128,7 @@ tables.
 The whole run is one snapshot in one transaction: every row is upserted,
 then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
-run's, never an emptied one — the rule in `docs/dev/plans/one_mode.md`.
+run's, never an emptied one — the rule in `docs/dev/plans/completed/one_mode.md`.
 What holds the deletions back is under "When part of a run fails"
 below.
 

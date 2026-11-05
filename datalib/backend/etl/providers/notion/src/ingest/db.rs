@@ -18,8 +18,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, tree_rows_of_pages_sql, NotionAttachmentRow, TreeKind, ATTACHMENTS, COMMENTS, LADDER,
-    PAGES, PAGE_MARKDOWN, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_ROW_OF_PLACED_PAGE_SQL,
-    TREE_UPDATE,
+    PAGES, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_ROW_OF_PLACED_PAGE_SQL, TREE_UPDATE,
 };
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
@@ -904,53 +903,6 @@ impl RawDb {
         Ok(())
     }
 
-    // ── one transaction each: for tests and fixtures ───────────────────
-
-    pub async fn upsert_pages(&self, rows: &[PageUpsert]) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool().begin().await.context("begin pages tx")?;
-        self.store_pages(&mut tx, rows).await?;
-        tx.commit().await.context("commit pages tx")
-    }
-
-    /// Each body held at its page's `last_edited_time`, as a fetch of
-    /// it would be.
-    pub async fn upsert_page_markdown(&self, rows: &[PageMarkdownUpsert]) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self
-            .pool()
-            .begin()
-            .await
-            .context("begin page_markdown tx")?;
-        for r in rows {
-            let (_, slots) = super::slots::rewrite(&r.markdown);
-            self.store_body(&mut tx, r, &slots, true).await?;
-            let version: Option<String> =
-                sqlx::query_scalar("SELECT last_edited_time FROM pages WHERE id = ?")
-                    .bind(&r.id)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .context("read the page a body is of")?
-                    .flatten();
-            owed::hold(&mut tx, PAGE_MARKDOWN, &r.id, version.as_deref()).await?;
-        }
-        tx.commit().await.context("commit page_markdown tx")
-    }
-
-    /// The comment rows alone: no listing is held, nothing is pruned.
-    pub async fn upsert_comments(&self, rows: &[CommentUpsert]) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool().begin().await.context("begin comments tx")?;
-        upsert_comments_in_tx(&mut tx, rows).await?;
-        tx.commit().await.context("commit comments tx")
-    }
-
     // ── what render reads ──────────────────────────────────────────────
 
     pub async fn load_pages(&self) -> Result<Vec<Value>> {
@@ -1133,7 +1085,7 @@ async fn upsert_comments_in_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::schema_raw::PAGE_COMMENTS;
+    use crate::ingest::schema_raw::{PAGE_COMMENTS, PAGE_MARKDOWN};
     use serde_json::json;
 
     fn page(id: &str, edited: &str, payload: Value) -> PageUpsert {
@@ -1166,9 +1118,14 @@ mod tests {
     async fn a_stored_page_lists_its_body_and_its_comments() {
         let dir = tempfile::tempdir().unwrap();
         let db = open(&dir).await;
-        db.upsert_pages(&[page("p1", "2026-05-21T19:37:00.000Z", json!({"id": "p1"}))])
-            .await
-            .unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[page("p1", "2026-05-21T19:37:00.000Z", json!({"id": "p1"}))],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         let listed = db.pages_listed().await.unwrap();
         assert_eq!(
             listed,
@@ -1188,13 +1145,28 @@ mod tests {
                 .len(),
             1
         );
-        db.upsert_page_markdown(&[PageMarkdownUpsert {
-            id: "p1".into(),
-            markdown: "# hi\n".into(),
-            ..Default::default()
-        }])
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_body(
+            &mut tx,
+            &PageMarkdownUpsert {
+                id: "p1".into(),
+                markdown: "# hi\n".into(),
+                ..Default::default()
+            },
+            &[],
+            true,
+        )
         .await
         .unwrap();
+        owed::hold(
+            &mut tx,
+            PAGE_MARKDOWN,
+            "p1",
+            Some("2026-05-21T19:37:00.000Z"),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         assert!(owed::owed(db.pool(), PAGE_MARKDOWN, listed)
             .await
             .unwrap()
@@ -1208,32 +1180,43 @@ mod tests {
     async fn the_users_listed_are_those_pages_and_comments_name() {
         let dir = tempfile::tempdir().unwrap();
         let db = open(&dir).await;
-        db.upsert_pages(&[page(
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[page(
+                "p1",
+                "2026-05-21T19:37:00.000Z",
+                json!({
+                    "id": "p1",
+                    "created_by": {"object": "user", "id": "picard"},
+                    "last_edited_by": {"object": "user", "id": "riker"},
+                    "properties": {
+                        "Crew": {"type": "people", "people": [
+                            {"object": "user", "id": "data"}, {"object": "user", "id": "picard"}]},
+                        "Ship": {"type": "rich_text", "rich_text": [{"plain_text": "id"}]},
+                        "Relation": {"type": "relation", "relation": [{"id": "not-a-user"}]},
+                    },
+                }),
+            )],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_comments(
+            &mut tx,
             "p1",
-            "2026-05-21T19:37:00.000Z",
-            json!({
-                "id": "p1",
-                "created_by": {"object": "user", "id": "picard"},
-                "last_edited_by": {"object": "user", "id": "riker"},
-                "properties": {
-                    "Crew": {"type": "people", "people": [
-                        {"object": "user", "id": "data"}, {"object": "user", "id": "picard"}]},
-                    "Ship": {"type": "rich_text", "rich_text": [{"plain_text": "id"}]},
-                    "Relation": {"type": "relation", "relation": [{"id": "not-a-user"}]},
-                },
-            }),
-        )])
+            &[CommentUpsert {
+                id: "c1".into(),
+                page_id: Some("p1".into()),
+                payload: json!({"id": "c1", "created_by": {"object": "user", "id": "worf"}})
+                    .to_string(),
+                ..Default::default()
+            }],
+        )
         .await
         .unwrap();
-        db.upsert_comments(&[CommentUpsert {
-            id: "c1".into(),
-            page_id: Some("p1".into()),
-            payload: json!({"id": "c1", "created_by": {"object": "user", "id": "worf"}})
-                .to_string(),
-            ..Default::default()
-        }])
-        .await
-        .unwrap();
+        tx.commit().await.unwrap();
         let users: Vec<String> = db
             .users_listed()
             .await
@@ -1347,13 +1330,18 @@ mod tests {
         // someone unwraps the `jsonb()` call from an INSERT.
         let dir = tempfile::tempdir().unwrap();
         let db = open(&dir).await;
-        db.upsert_pages(&[page(
-            "p1",
-            "2026-01-01T00:00:00Z",
-            json!({"a": [1, 2, 3], "b": "hi"}),
-        )])
+        let mut tx = db.pool().begin().await.unwrap();
+        db.store_pages(
+            &mut tx,
+            &[page(
+                "p1",
+                "2026-01-01T00:00:00Z",
+                json!({"a": [1, 2, 3], "b": "hi"}),
+            )],
+        )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         let t: String = sqlx::query_scalar("SELECT typeof(payload) FROM pages WHERE id='p1'")
             .fetch_one(db.pool())
             .await

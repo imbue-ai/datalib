@@ -1599,7 +1599,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # A Slack mention is a chip link: the viewer resolves the href to
         # the person, and any other markdown viewer shows a link whose
-        # title says who it names (docs/dev/plans/chips.md).
+        # title says who it names (docs/dev/chips.md).
         self.assertIn(
             "[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
             '"@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object',
@@ -1726,7 +1726,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             worf,
             "a word edit inside a chat message",
         )
-        # The reactor is a chip link (docs/dev/plans/chips.md), so the
+        # The reactor is a chip link (docs/dev/chips.md), so the
         # added reaction carries Picard's Slack handle.
         self.assertIn(
             "<ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "

@@ -12,7 +12,6 @@
 //! has no commits, and says where it is with a [`generation`] instead.
 
 use std::path::Path;
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
@@ -181,7 +180,7 @@ pub fn acquire_timeout() -> Duration {
 /// connection, never recycled: doltlite's session state is per
 /// connection. The acquire timeout is [`acquire_timeout`].
 pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+    let opts = datalib_sqlite_open::file(db_path)
         .read_only(true)
         .create_if_missing(false);
     reader_pool(opts).await
@@ -195,9 +194,7 @@ pub async fn open_reader(db_path: &Path) -> Result<SqlitePool, sqlx::Error> {
 /// Its `sqlite_master` is the commit's schema: a table that commit does
 /// not have is `no such table`, the same as one never created.
 pub async fn open_at(db_path: &Path, pin: &Pin) -> Result<SqlitePool, sqlx::Error> {
-    // `filename`, not a `sqlite://` URL: the `@` would parse as userinfo.
-    let opts = SqliteConnectOptions::new()
-        .filename(format!("{}@{}", db_path.display(), pin.commit()))
+    let opts = datalib_sqlite_open::revision(db_path, pin.commit())
         .read_only(true)
         .create_if_missing(false);
     reader_pool(opts).await
@@ -290,9 +287,7 @@ mod tests {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     async fn writer(db: &Path) -> SqlitePool {
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
-            .unwrap()
-            .create_if_missing(true);
+        let opts = datalib_sqlite_open::file(db).create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(1)
             .idle_timeout(None)

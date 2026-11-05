@@ -182,11 +182,7 @@ async fn copy_doltlite_cas(old: &Path, cas_path: &Path) -> Result<()> {
         .max_lifetime(None)
         // `ATTACH` opens with this connection's flags, and the copy it
         // attaches does not exist yet. `old` does, so nothing is created here.
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(old)
-                .create_if_missing(true),
-        )
+        .connect_with(datalib_sqlite_open::file(old).create_if_missing(true))
         .await
         .with_context(|| format!("open {}", old.display()))?;
     let copied = async {

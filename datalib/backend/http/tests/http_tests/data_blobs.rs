@@ -171,6 +171,34 @@ async fn only_a_groups_store_is_read() {
     }
 }
 
+/// The router decodes `%2F` inside one path segment, so a function can
+/// arrive holding a `/`: it must be one folder name, or the path climbs
+/// out of the group to any file named `blobs.sqlite`.
+#[tokio::test]
+async fn a_function_cannot_climb_out_of_its_group() {
+    let td = tempfile::tempdir().unwrap();
+    std::fs::write(td.path().join("config.toml"), CONFIG).unwrap();
+    let kept = blob_store(&td.path().join("pdfs/ingest"), &[(None, b"kept")]).await;
+    let stray = blob_store(&td.path().join("system/runs"), &[(None, b"stray")]).await;
+    let app = router(state(td.path()).await);
+
+    for uri in [
+        format!(
+            "/data/pdfs/ingest%2F..%2F..%2Fsystem%2Fruns/blob/{}",
+            stray[0]
+        ),
+        format!("/data/pdfs/..%2F..%2Fsystem%2Fruns/blob/{}", stray[0]),
+        format!("/data/pdfs/ingest%2F.%2F/blob/{}", kept[0]),
+        format!("/data/pdfs/Ingest/blob/{}", kept[0]),
+    ] {
+        assert_eq!(
+            get(&app, &uri).await.status(),
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+}
+
 /// An attachment is whatever a sender wrote: an HTML page or an SVG gets
 /// the sandbox that runs nothing, and script goes out as plain bytes.
 #[tokio::test]

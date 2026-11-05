@@ -4,12 +4,16 @@ most of them learn what DATALIB_DAG_CHANGED_INPUTS and
 DATALIB_DAG_FAILED_INPUTS hold; nothing ran it, so it could drift from
 the runner unnoticed.
 
-Two producer steps feed it. Three syncs: the first names every input as
-changed, the second only the producer that moved, and the third, where
-one producer failed, makes the example warn that it is reading a
-partial input.
+Two producer steps feed it, each a real doltlite store whose version is
+its commit, as a download's is. The example opens that commit with the
+reader in docs/dev/doltlite.md and logs the commit's message, the version
+the producer was told to write. Three syncs: the first names every input
+as changed, the second only the producer that moved, and the third, where
+one producer failed, makes the example warn that it is reading a partial
+input.
 """
 
+import importlib.util
 import json
 import re
 import sqlite3
@@ -22,30 +26,48 @@ from pathlib import Path
 
 DAG = Path(sys.argv[1]).resolve()
 DOC = Path(sys.argv[2]).resolve()
+DOLTLITE_DOC = Path(sys.argv[3]).resolve()
+CLI = Path(sys.argv[4]).resolve()
 
 PRODUCER = textwrap.dedent(
     """\
-    import json, os, pathlib, sys
-    control = pathlib.Path(sys.argv[1])
+    import json, os, pathlib, subprocess, sys
+    control, cli = pathlib.Path(sys.argv[1]), sys.argv[2]
     name = os.environ["DATALIB_DAG_STEP"].split("/")[0]
     if (control / f"fail_{name}").exists():
         sys.exit(1)
     version = (control / f"version_{name}").read_text().strip()
     out = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"]) / os.environ["DATALIB_DAG_STEP"]
     out.mkdir(parents=True, exist_ok=True)
-    (out / "data.txt").write_text(version)
+    def sql(statement):
+        done = subprocess.run([cli, str(out / "entities.doltlite_db"), statement],
+                              check=True, capture_output=True, text=True)
+        return done.stdout.strip()
+    sql("CREATE TABLE IF NOT EXISTS seen(version TEXT PRIMARY KEY)")
+    if not sql(f"SELECT version FROM seen WHERE version = '{version}'"):
+        sql(f"INSERT INTO seen VALUES ('{version}');"
+            f"SELECT dolt_commit('-A', '-m', '{version}');")
     print(json.dumps({"event": "outcome",
-                      "outputs": [{"path": os.environ["DATALIB_DAG_STEP"], "version": version}]}),
+                      "outputs": [{"path": os.environ["DATALIB_DAG_STEP"],
+                                   "version": sql("SELECT dolt_hashof('main')")}]}),
           flush=True)
     """
 )
 
 
-def example_from_doc() -> str:
-    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
-    steps = [b for b in blocks if b.startswith("#!/usr/bin/env python3")]
-    assert len(steps) == 1, f"expected one step example in {DOC}, found {len(steps)}"
-    return steps[0]
+def block_from_doc(doc: Path, first_line: str) -> str:
+    blocks = re.findall(r"```python\n(.*?)```", doc.read_text(), flags=re.DOTALL)
+    found = [b for b in blocks if b.startswith(first_line)]
+    assert len(found) == 1, (
+        f"expected one {first_line!r} block in {doc}, found {len(found)}"
+    )
+    return found[0]
+
+
+def wheel_dir() -> Path:
+    spec = importlib.util.find_spec("doltlite")
+    assert spec is not None and spec.origin is not None, "the doltlite wheel is a dep"
+    return Path(spec.origin).resolve().parent.parent
 
 
 class StepProtocolExample(unittest.TestCase):
@@ -57,9 +79,14 @@ class StepProtocolExample(unittest.TestCase):
         self.root.mkdir()
         self.control.mkdir()
         (base / "producer.py").write_text(PRODUCER)
-        (base / "example.py").write_text(example_from_doc())
+        (base / "example.py").write_text(block_from_doc(DOC, "#!/usr/bin/env python3"))
+        (base / "doltlite_reader.py").write_text(
+            block_from_doc(DOLTLITE_DOC, "# doltlite_reader.py")
+        )
         py = sys.executable
-        producer = f"{py} {base / 'producer.py'} {self.control}"
+        producer = f"{py} {base / 'producer.py'} {self.control} {CLI}"
+        # A step's environment is an allowlist, so the wheel goes on the command.
+        example = f"/usr/bin/env PYTHONPATH={wheel_dir()} {py} {base / 'example.py'}"
         self.config = self.root / "config.toml"
         self.config.write_text(
             textwrap.dedent(
@@ -84,7 +111,7 @@ class StepProtocolExample(unittest.TestCase):
                 [[steps]]
                 group = "report"
                 function = "build"
-                command = "{py} {base / "example.py"}"
+                command = "{example}"
                 inputs = ["a/make", "b/make"]
                 """
             )
@@ -126,18 +153,24 @@ class StepProtocolExample(unittest.TestCase):
         self.set_version("a", "a1")
         self.set_version("b", "b1")
         first = self.sync()
-        self.assertIn(("info", "a/make moved"), first, "a first run names every input")
-        self.assertIn(("info", "b/make moved"), first, "a first run names every input")
+        self.assertIn(
+            ("info", "a/make moved: a1"), first, "a first run names every input"
+        )
+        self.assertIn(
+            ("info", "b/make moved: b1"), first, "a first run names every input"
+        )
 
         self.set_version("a", "a2")
         second = self.sync()
-        self.assertIn(("info", "a/make moved"), second)
-        self.assertNotIn(("info", "b/make moved"), second, "b did not move")
+        self.assertIn(("info", "a/make moved: a2"), second)
+        self.assertFalse(
+            any(msg.startswith("b/make moved") for _, msg in second), "b did not move"
+        )
 
         (self.control / "fail_a").write_text("")
         self.set_version("b", "b2")
         third = self.sync()
-        self.assertIn(("info", "b/make moved"), third)
+        self.assertIn(("info", "b/make moved: b2"), third)
         self.assertTrue(
             any(
                 level == "warn" and msg.startswith("a/make did not finish its last run")

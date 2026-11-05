@@ -28,10 +28,13 @@ sign-in, the wizard's account row, or a provider's HTTP client.
 - **One store, `~/.latchkey`**, shared by every library and by the
   `latchkey` command a person runs. The exception is a protected
   library in the desktop app: its server starts with
-  `LATCHKEY_DIRECTORY` naming a store inside the protected folder, a
-  copy of `~/.latchkey` made the first time one opens, and every
-  latchkey it runs inherits that (`datalib/tauri/README.md`, "A
-  protected library").
+  `LATCHKEY_DIRECTORY` naming a store inside the library, which starts
+  empty, and `LATCHKEY_KEYRING_SERVICE_NAME` naming a keychain item of
+  that library's own. Every latchkey it runs inherits both
+  (`datalib/tauri/README.md`, "A protected library"). **That keychain
+  item protects nothing by itself:** any program running as you can get
+  the key by running the app's Node. Only the protected folder keeps the
+  sign-ins from it.
 - **Node starts with `--disable-sigusr1`**, from `bundled_command` and
   from the `latchkey` wrapper we ship (`scripts/latchkey-wrapper.sh`).
   Without it, any program running as the same user can send Node the
@@ -237,10 +240,12 @@ With no service name it deletes `credentials.json.enc` and
 unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
 machine shares that directory, and under Minds the gateway's store is
 the host's, so this signs out everywhere. The one exception is the
-desktop app's protected libraries, which share a store of their own in
-the protected folder (`datalib/tauri/README.md`, "A protected
-library"). To clear that one, point `LATCHKEY_DIRECTORY` at it; macOS
-first asks whether your terminal may open the protected folder. Latchkey's browser keeps no
+desktop app's protected libraries, which each have a store of their own
+(`datalib/tauri/README.md`, "A protected library"). To clear one, point
+`LATCHKEY_DIRECTORY` at its `system/latchkey` and
+`LATCHKEY_KEYRING_SERVICE_NAME` at its keychain item; macOS first asks
+whether your terminal may open the protected folder, unless the terminal
+has Full Disk Access. Latchkey's browser keeps no
 profile of its own, so the cookies go with that file. It leaves
 `config.json` (the browser path and the services the wizard
 registered), `plugins/` and the keychain key; to test those first-run

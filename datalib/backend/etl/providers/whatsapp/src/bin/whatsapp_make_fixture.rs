@@ -3,11 +3,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use datalib_whatsapp_backup::encrypt_to_crypt15;
@@ -309,9 +308,7 @@ async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
 }
 
 async fn open_writable_sqlite(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .create_if_missing(true);
+    let opts = datalib_sqlite_open::file(path).create_if_missing(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)

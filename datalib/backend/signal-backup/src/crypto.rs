@@ -20,9 +20,6 @@ pub const BACKUP_KEY_INFO: &[u8] = b"20240801_SIGNAL_BACKUP_KEY";
 /// HKDF info-prefix for the message-backup (main) keys — the actual
 /// info passed to HKDF is `MESSAGE_BACKUP_INFO || backup_id`.
 pub const MESSAGE_BACKUP_INFO: &[u8] = b"20241007_SIGNAL_BACKUP_ENCRYPT_MESSAGE_BACKUP:";
-/// HKDF info-prefix for media IDs (consumed by `datalib-etl-signal`,
-/// not by this crate).
-pub const MEDIA_ID_INFO: &[u8] = b"20241007_SIGNAL_BACKUP_MEDIA_ID:";
 
 const IV_LENGTH: usize = 16;
 const MAC_LENGTH: usize = 32;

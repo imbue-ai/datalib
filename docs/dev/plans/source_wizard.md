@@ -121,12 +121,6 @@ message saying so. Which account a sync runs as is
 confirm names the ingest step and the render step that has to go with
 it, the data stays on disk, and re-adding resumes from it.
 
-**The Manage screen itself** — the table, its status column, the log
-behind it — is designed in
-[`completed/data_centric_ui.md`](completed/data_centric_ui.md) and
-[`completed/logs_and_metrics.md`](completed/logs_and_metrics.md), not
-here.
-
 ## Still open
 
 Proposed, checked against the tree on 2026-09-17, and not built:
