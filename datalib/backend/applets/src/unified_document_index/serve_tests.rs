@@ -1,11 +1,12 @@
 //! The `unified_document_index` applet as the gateway runs it: the real binary, on
-//! port 0, with the data root and the secret in its environment and the
-//! parent pipe on stdin.
+//! port 0, with the data root and the secret's file in its environment and
+//! the parent pipe on stdin.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::time::{Duration, Instant};
 
 const SECRET: &str = "a-test-secret";
@@ -19,10 +20,21 @@ fn applet_bin() -> Command {
     cmd
 }
 
+fn secret_file() -> &'static Path {
+    static FILE: OnceLock<tempfile::TempPath> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let file = tempfile::NamedTempFile::new()
+            .expect("temp file")
+            .into_temp_path();
+        datalib_env::secret_file::write(&file, SECRET).expect("write the secret");
+        file
+    })
+}
+
 fn applet() -> Command {
     let mut cmd = applet_bin();
     cmd.args(["unified_document_index", "-p", "0"])
-        .env(crate::gate::ENV_SECRET, SECRET);
+        .env(crate::gate::ENV_SECRET_FILE, secret_file());
     cmd
 }
 

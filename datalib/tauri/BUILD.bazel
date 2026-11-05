@@ -57,6 +57,18 @@ rust_test(
     deps = ["@datalib_crates//:tempfile"],
 )
 
+# Same arrangement for `src/backend_output.rs`: how the URL and the output
+# of the shell's backend reach it, and what is left of neither on disk.
+# Nothing in it may reference `tauri`.
+rust_test(
+    name = "backend_output_test",
+    size = "small",
+    srcs = ["src/backend_output.rs"],
+    crate_root = "src/backend_output.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
 # Same arrangement for `src/protected.rs`: where the protected folder
 # is, which libraries are in it, and the latchkey store made for them.
 # Nothing in it may reference `tauri`.

@@ -17,7 +17,7 @@
 # A release builds from scratch and reads no cache: no BuildBuddy and no
 # repository cache. Bazel verifies no cache entry, so a cache that anything
 # running on `main` can write would decide what this workflow ships
-# (docs/dev/threat_models.md). `lint_repo.py` check 21 holds it to that.
+# (docs/dev/security_posture.md). `lint_repo.py` check 21 holds it to that.
 #
 # Read docs/dev/release_steps.md before changing this file: the steps
 # that assemble a release are scripts under `scripts/release/`, tested on
@@ -204,7 +204,7 @@ jobs:
       # all. A tag restores what a run on `main` saved under the same key,
       # and bazel uses the extracted trees in a repository cache without
       # checking them. Downloads come from their origin, each pinned by
-      # sha256. docs/dev/threat_models.md has the measurement.
+      # sha256. docs/dev/security_posture.md has the measurement.
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-cache: false

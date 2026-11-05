@@ -123,6 +123,7 @@ rust_test(
         "requires-network",
     ],
     deps = [
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",

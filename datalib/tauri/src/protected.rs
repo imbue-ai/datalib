@@ -29,6 +29,13 @@ pub fn libraries_dir(container: &Path) -> PathBuf {
     container.join("Libraries")
 }
 
+/// macOS keeps other apps out of a group container from version 15 on.
+/// Before that the folder is an ordinary one, open to every program running
+/// as the person, so it must not be offered as protected.
+pub fn macos_guards_the_container(major_version: isize) -> bool {
+    major_version >= 15
+}
+
 /// `root` is inside the container, judged by where both paths lead once
 /// every `..` and link is followed. A root that cannot be followed counts
 /// as inside; nothing is inside a container that is not there.
@@ -102,6 +109,18 @@ pub fn keychain_item_is_gone(exit_code: Option<i32>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 10 is what macOS reports to a program built against a very old SDK,
+    /// whatever it really is; that reads as unguarded, the safe way round.
+    #[test]
+    fn only_macos_15_and_later_guard_the_container() {
+        for unguarded in [10, 13, 14] {
+            assert!(!macos_guards_the_container(unguarded), "{unguarded}");
+        }
+        for guarded in [15, 26, 27] {
+            assert!(macos_guards_the_container(guarded), "{guarded}");
+        }
+    }
 
     #[test]
     fn the_container_is_named_for_the_team_prefixed_group() {

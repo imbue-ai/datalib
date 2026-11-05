@@ -1,4 +1,4 @@
-# Threat models
+# Security posture
 
 Who we are guarding against, what they would want, how they could get
 it, what stops them and what does not. A guard makes sense only next to
@@ -29,10 +29,10 @@ the sign-ins that fetch more of it. So there are two prizes:
 | A website | Run script in a browser that is also open on the app's local port. |
 | Whoever controls a third-party package | Publish a new version. Compromised maintainer accounts are the usual route. |
 | Someone holding a write-access account | Push branches and run workflows here, and merge a PR whose CI is green. Reviews are deliberately not required, and about 30 accounts have write access. |
+| Another program running as you | Read any file you can, see your other programs' environment and arguments, and connect to any local port. |
 
 Not written up yet, and not yet decided whether we defend against them:
-other programs on the same machine, a stolen laptop, and code a person
-chose to install as a package or applet.
+a stolen laptop, and code a person chose to install as a package or applet.
 
 ## Bad code reaches a release through the build
 
@@ -160,6 +160,94 @@ rather than on a run:
   saving the whole directory.
 - Working out the hash of a real action and planting an entry that a
   later `main` build replays.
+
+## Another program running as you
+
+An AI agent's shell, a tool that agent installed, a script you ran. It has
+your user id, so it can do whatever you can unless macOS itself says no:
+
+- **Read any file you can.** A file's mode does not separate it from you:
+  0600 means "only this user", and it is this user.
+- **See your other programs' environment and arguments** with `ps eww`.
+  Measured on macOS 26 with a program of our own, both plain and with the
+  hardened runtime under an ad-hoc signature. An Apple binary (`/bin/sleep`)
+  did not show its environment, so test with your own.
+- **Connect to any port on 127.0.0.1**, the app's and every applet's.
+
+### What we defend
+
+**An ordinary library: nothing.** It is files in your home folder, and any
+such program can read them directly. A guard on the server would not change
+that.
+
+**A library in the protected folder**, on macOS 15 or later
+([`tauri/README.md`](../../datalib/tauri/README.md) §"A protected library").
+macOS keeps other programs out of the folder until you say yes, and that is
+the only guard there is. It is meant to stop an agent running shell commands
+as you from reading the library or using its sign-ins, not a program set on
+stealing from you.
+
+### The rule for a secret
+
+**A secret that opens a library may be in a file only inside that library,
+and never in an environment variable, an argument or a log.**
+
+A file inside is acceptable because of where it is. A program that can read
+`system/api-token` or `system/applet-secret` is already in the library, and
+can read the data and the sign-ins without them, so the secret gives it
+nothing new. The same file anywhere else is a way around the folder: a program
+that macOS keeps out of the library could read it and ask the server instead.
+That is what the backend's log in `$TMPDIR` was, and what `DATALIB_APPLET_SECRET`
+was in `ps`.
+
+We looked at handing the applet secret over a pipe, so that it was in no file.
+That would add little. A copy of a running library would hold no working
+secret, but the copy already holds the data. The API token stays in a file
+either way, because scripts and Imbue Studio read it, and every published
+applet would have to read a pipe instead of a file. Studio sets `DATALIB_TOKEN`
+in the environment, where `ps` shows it; that is fine in its workspace, which
+is not what this section defends, and the desktop app does not use it.
+
+### What guards each way in
+
+| way in | what guards it | what it does not stop | how we know |
+|---|---|---|---|
+| The library's files | macOS's guard on a group container, from macOS 15. Before that the app does not offer the folder | A program you said Allow to, and one with Full Disk Access | Full Disk Access measured on macOS 26.7.2. The version comes from Apple's documentation |
+| The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
+| The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
+| An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
+
+### What is still open
+
+These all put something from a protected library outside its folder:
+
+- **Temp files.** Nothing sets `TMPDIR` for a library's server, so a step's
+  temp files go in the shared per-user temp dir. A web source's response bodies
+  are there while they download (`etl/web/src/http.rs`) and WhatsApp's decrypted
+  database is there while it is read (`whatsapp/src/ingest.rs`). Read from
+  source, not measured.
+- **The web view's disk cache.** The app sets no separate store for its
+  WKWebView, the server marks `/data` blobs cacheable for a year, and the
+  installed app had about 300 MB under `~/Library/Caches/com.imbue.datalib`.
+  Only the files were counted, so whether a protected library's content is in
+  there is not known.
+- **A credential pasted into the wizard** is on `latchkey`'s command line for
+  the second that runs. It needs a change upstream
+  ([`latchkey.md`](latchkey.md)).
+- **The fingerprint cache** is in `~/Library/Caches/datalib` on a Mac, shared by
+  every library on the machine. It says which local files a source read. Read
+  from source.
+
+### What has not been shown
+
+- All of this on a signed release. The measurements used dev builds, and the
+  `ps` one an ad-hoc signature rather than a Developer ID.
+- macOS's guard on `system/applet-secret` and `system/api-token` themselves.
+  The scratch library was not in the group container, so the measurements above
+  show where the secrets are and not that macOS keeps a program from them. The
+  checks to run are in `tauri/README.md`, and they do not name these files yet.
+- The Mac before version 15. The launcher page was drawn with stubbed state
+  and only the version comparison has a test.
 
 ## Other threats, briefly
 

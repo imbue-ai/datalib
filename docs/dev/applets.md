@@ -58,7 +58,21 @@ The child also gets four variables:
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (also the cwd) — the step protocol's spelling, reused deliberately |
 | `DATALIB_APPLET_ID` | this instance's config id |
 | `DATALIB_APPLET_BASE` | `/applet/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
-| `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
+| `DATALIB_APPLET_SECRET_FILE` | the path of an owner-only file holding a secret the gateway minted for this process (`<root>/system/applet-secret`). **Read the file when you start. Every request the gateway forwards carries the secret in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. If you cannot read the file, exit rather than answer. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, put any value in a file, name the file in the variable and send the value. |
+
+**Don't pass the secret on in an environment variable or an argument**, to a
+program your applet starts or anywhere else: `ps eww` shows both to every
+process of the same user, and the file is what keeps a protected library's
+secret behind its folder. A built-in applet reads the file through
+`datalib_applet`'s `Gate::from_env`, over `datalib_env::secret_file`. In any
+other language it is one line:
+
+```python
+secret = open(os.environ["DATALIB_APPLET_SECRET_FILE"]).read().strip()
+```
+
+An applet written against `DATALIB_APPLET_SECRET`, the variable that used to
+hold the secret itself, finds it unset and has to change to this.
 
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a namespace in card source
@@ -282,7 +296,7 @@ routes are the page's to call and never a page a link can open.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the
-gate; the `DATALIB_APPLET_SECRET` it receives is a separate, much
+gate; the secret in `DATALIB_APPLET_SECRET_FILE` is a separate, much
 weaker guard against a stray local process (see the table above).
 
 ## Two instances of one command

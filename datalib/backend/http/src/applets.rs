@@ -48,14 +48,20 @@ pub const ENV_APPLET_ID: &str = datalib_env::DATALIB_APPLET_ID;
 /// than assuming the mount layout.
 pub const ENV_APPLET_BASE: &str = datalib_env::DATALIB_APPLET_BASE;
 
-/// The secret an applet requires on every request, carried in
-/// [`APPLET_SECRET_HEADER`]. The gateway mints one per process, hands it
-/// to each applet in this variable at spawn, and sends it on everything
-/// it forwards. Without it the applet's loopback port is a second door to
-/// the data the gateway keeps behind the API token, open to any local
-/// process and to a web page that resolves its own hostname to 127.0.0.1.
-pub const ENV_APPLET_SECRET: &str = datalib_env::DATALIB_APPLET_SECRET;
+/// The file holding the secret an applet requires on every request, carried
+/// in [`APPLET_SECRET_HEADER`]. The gateway mints one per process, keeps it
+/// in [`secret_file`], names that to each applet in this variable, and sends
+/// it on everything it forwards. Without it the applet's loopback port is a
+/// second door to the data the gateway keeps behind the API token, open to
+/// any local process and to a web page that resolves its own hostname to
+/// 127.0.0.1. The secret itself stays out of the applet's environment:
+/// `datalib_env::secret_file` says why.
+pub const ENV_APPLET_SECRET_FILE: &str = datalib_env::DATALIB_APPLET_SECRET_FILE;
 pub const APPLET_SECRET_HEADER: &str = "X-Datalib-Applet-Secret";
+
+fn secret_file(data_root: &Path) -> PathBuf {
+    datalib_runtime::layout::system_dir(data_root).join("applet-secret")
+}
 
 /// The prefix of the one line an applet prints to **stdout** once it
 /// has written its components and bound its port: the readiness
@@ -85,7 +91,6 @@ fn base_command(
     entry: &AppletEntry,
     data_root: &Path,
     binary_dir: Option<&Path>,
-    secret: &str,
 ) -> anyhow::Result<Command> {
     let argv = split_command(&entry.id, &entry.command)?;
     // A relative path with a `/` in it (a package's program) is relative
@@ -112,7 +117,7 @@ fn base_command(
     cmd.env(datalib_dag::subprocess::ENV_DATA_ROOT, data_root);
     cmd.env(ENV_APPLET_ID, &entry.id);
     cmd.env(ENV_APPLET_BASE, format!("/applet/{}/", entry.id));
-    cmd.env(ENV_APPLET_SECRET, secret);
+    cmd.env(ENV_APPLET_SECRET_FILE, secret_file(data_root));
     for (k, v) in &entry.env {
         cmd.env(k, v);
     }
@@ -227,7 +232,7 @@ pub struct AppletRegistry {
     /// reconcile from the same baseline and kill what the first started.
     reload: Mutex<()>,
     supervisor: Supervisor,
-    /// See [`ENV_APPLET_SECRET`]. One per registry, so every applet this
+    /// See [`ENV_APPLET_SECRET_FILE`]. One per registry, so every applet this
     /// process starts answers to the same one.
     secret: String,
     /// Told after every write this gateway forwards: see [`crate::watch::Nudge`].
@@ -301,6 +306,11 @@ impl AppletRegistry {
     ) -> Self {
         let supervisor = Supervisor::bounded(start_timeout);
         let secret = mint_secret();
+        // Without the file each applet refuses to start, which is what a
+        // person sees; this says why.
+        if let Err(e) = datalib_env::secret_file::write(&secret_file(&data_root), &secret) {
+            tracing::error!("could not write the applets' secret: {e}");
+        }
         // Nothing is running yet, so every entry starts and every
         // applet namespace is rebuilt.
         let errors = reconcile(
@@ -309,7 +319,6 @@ impl AppletRegistry {
             &entries,
             &data_root,
             binary_dir.as_deref(),
-            &secret,
         );
         let store = crate::frontend::FrontendStore::scan(&data_root);
         let config_stamp = config_stamp_of(&data_root);
@@ -401,7 +410,6 @@ impl AppletRegistry {
             &entries,
             &self.data_root,
             binary_dir.as_deref(),
-            &self.secret,
         );
         let store = crate::frontend::FrontendStore::scan(&self.data_root);
 
@@ -545,7 +553,6 @@ fn reconcile(
     next: &[AppletEntry],
     data_root: &Path,
     binary_dir: Option<&Path>,
-    secret: &str,
 ) -> BTreeMap<String, String> {
     // `port` is also the liveness check, and it reaps: an applet that
     // died since it was started reports gone here and gets started
@@ -583,7 +590,7 @@ fn reconcile(
                 scope.spawn(move || {
                     (
                         entry.id.clone(),
-                        supervisor.start(entry, data_root, binary_dir, &dir, secret),
+                        supervisor.start(entry, data_root, binary_dir, &dir),
                     )
                 })
             })
@@ -695,9 +702,8 @@ impl Supervisor {
         data_root: &Path,
         binary_dir: Option<&Path>,
         frontend_dir: &Path,
-        secret: &str,
     ) -> Result<u16, String> {
-        let mut cmd = base_command(entry, data_root, binary_dir, secret)
+        let mut cmd = base_command(entry, data_root, binary_dir)
             .map_err(|e| format!("applet {:?}: {e:#}", entry.id))?;
         // `0` means "any port": the child asks the OS for one and
         // reports what it got.
@@ -1479,7 +1485,7 @@ mod tests {
         let _holder = KillHolder(holder_pid);
         let supervisor = Supervisor::default();
         supervisor
-            .start(&entry, root.path(), None, root.path(), "secret")
+            .start(&entry, root.path(), None, root.path())
             .expect("the applet announced its port");
 
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
