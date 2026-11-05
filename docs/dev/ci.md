@@ -149,7 +149,9 @@ so the release build hits exactly what the `main` run of that commit
 produced; the `-readonly` config is what keeps it from writing, not the
 key. Without the release secret a tag build runs cold (~20 min a leg)
 rather than falling back to the contributor cache — that is the
-intended failure mode.
+intended failure mode. The mac legs run cold with it too: `test.yml`
+has no mac leg, so nothing writes a darwin action to the release org,
+and each builds the binaries from scratch (about 25 minutes).
 
 **The two orgs are write-disjoint, so a third writer was needed.** A
 main push writes the release org and a PR run writes the contributor
