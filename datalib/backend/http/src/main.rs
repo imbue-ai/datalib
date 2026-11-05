@@ -132,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Dropped at the very end of `main`: that drop is the final flush.
     let _log = datalib_http::logging::init(&root);
+    datalib_http::boot::clear_protected_temp(&root);
 
     if args.init && datalib_dag::starter::write_starter_config(&root)? {
         tracing::info!("wrote the starter config");

@@ -62,12 +62,19 @@ pub fn resolve_name(input: &str, libraries_dir: &Path) -> Option<PathBuf> {
     plain.then(|| libraries_dir.join(name))
 }
 
+/// The folder a protected library's temp files go in. The server clears it
+/// when it starts, since macOS only clears its own temp dir.
+pub fn temp_dir(root: &Path) -> PathBuf {
+    root.join("system").join("tmp")
+}
+
 /// The variables a protected library's server starts with, which every
-/// latchkey it runs inherits. `root` is the library's real path. latchkey
+/// program it runs inherits. `root` is the library's real path. latchkey
 /// makes the store in the library and its key in the keychain the first
 /// time it needs them, so a library starts signed in to nothing and has
-/// nothing to do with `~/.latchkey`.
-pub fn latchkey_env(root: &Path) -> Vec<(&'static str, OsString)> {
+/// nothing to do with `~/.latchkey`. A temp file holds what the library
+/// holds: a web response, a decrypted database, a browser's sign-in state.
+pub fn server_env(root: &Path) -> Vec<(&'static str, OsString)> {
     vec![
         (
             "LATCHKEY_DIRECTORY",
@@ -77,6 +84,7 @@ pub fn latchkey_env(root: &Path) -> Vec<(&'static str, OsString)> {
         // `datalib_env::DATALIB_PROTECTED_LIBRARY`: this crate links nothing
         // of the backend's.
         ("DATALIB_PROTECTED_LIBRARY", "1".into()),
+        ("TMPDIR", temp_dir(root).into_os_string()),
     ]
 }
 
@@ -197,7 +205,7 @@ mod tests {
     /// or latchkey's shared `latchkey` item.
     #[test]
     fn a_protected_library_has_its_own_store_and_keychain_item() {
-        let env = latchkey_env(Path::new("/c/Libraries/Photo archive"));
+        let env = server_env(Path::new("/c/Libraries/Photo archive"));
         assert_eq!(
             env,
             [
@@ -210,9 +218,13 @@ mod tests {
                     OsString::from("Datalib Latchkey - Photo archive")
                 ),
                 ("DATALIB_PROTECTED_LIBRARY", OsString::from("1")),
+                (
+                    "TMPDIR",
+                    OsString::from("/c/Libraries/Photo archive/system/tmp")
+                ),
             ]
         );
-        assert_ne!(env, latchkey_env(Path::new("/c/Libraries/Mail")));
+        assert_ne!(env, server_env(Path::new("/c/Libraries/Mail")));
     }
 
     /// Deleting a library removes the item it was given and no other, so
@@ -220,7 +232,7 @@ mod tests {
     #[test]
     fn a_deleted_library_removes_the_item_its_server_was_given() {
         let root = Path::new("/c/Libraries/Photo archive");
-        let given = latchkey_env(root)
+        let given = server_env(root)
             .into_iter()
             .find(|(name, _)| *name == "LATCHKEY_KEYRING_SERVICE_NAME")
             .unwrap()

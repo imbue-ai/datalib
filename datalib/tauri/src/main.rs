@@ -1107,7 +1107,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     })?;
 
     backend_output::remove_left_behind(&std::env::temp_dir());
-    let latchkey_env = protected_latchkey_env(app, &root)?;
+    let protected_env = protected_server_env(app, &root)?;
 
     let mut child = Command::new(&http_bin)
         .arg(&root)
@@ -1120,7 +1120,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
         .env("DATALIB_PARENT_PIPE", "0")
-        .envs(latchkey_env)
+        .envs(protected_env)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1135,9 +1135,9 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     Ok(url)
 }
 
-/// What points a protected library's latchkey at its own store and key;
-/// nothing for any other library, which uses latchkey's own default.
-fn protected_latchkey_env(
+/// What keeps a protected library's sign-ins and temp files in its folder;
+/// nothing for any other library, which uses latchkey's and the OS's defaults.
+fn protected_server_env(
     app: &AppHandle,
     root: &Path,
 ) -> anyhow::Result<Vec<(&'static str, std::ffi::OsString)>> {
@@ -1150,7 +1150,10 @@ fn protected_latchkey_env(
     let real_root = root
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("follow {}: {e}", root.display()))?;
-    Ok(protected::latchkey_env(&real_root))
+    let temp_dir = protected::temp_dir(&real_root);
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| anyhow::anyhow!("create {}: {e}", temp_dir.display()))?;
+    Ok(protected::server_env(&real_root))
 }
 
 fn fatal(app: &AppHandle, msg: String) {

@@ -68,6 +68,8 @@
                                                   (the server holds both while it is up)
 <data_root>/system/applet-secret                  what the server's applets require of a
                                                   request (`applets.md`)
+<data_root>/system/tmp/                           a protected library's temp files; the
+                                                  server empties it at start
 <data_root>/system/server-output.log               what the desktop app's server wrote to stdout
                                                   and stderr; .previous.log is the run before.
                                                   Only the desktop shell writes these

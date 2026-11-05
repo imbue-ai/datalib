@@ -3,13 +3,39 @@
 //! disk usage sampler — in one place, so every packaging boots
 //! identically.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
 
 use crate::{auth::ApiToken, embed::FrameAncestors, supervisor, usage, AppState};
+
+/// Empties `system/tmp`, where the desktop app points a protected library's
+/// `TMPDIR` (`datalib/tauri/src/protected.rs`). Call it holding the root's
+/// lock, so no other server is using the folder. Nothing else would clear
+/// it: macOS only clears its own temp dir. In any other library a
+/// `system/tmp` is not ours.
+pub fn clear_protected_temp(root: &Path) {
+    if std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_none() {
+        return;
+    }
+    let temp = datalib_core::layout::system_dir(root).join("tmp");
+    let Ok(entries) = std::fs::read_dir(&temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let removed = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(e) = removed {
+            tracing::warn!("could not clear {}: {e}", path.display());
+        }
+    }
+}
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the stores it owns, `<root>/config.toml`, and the

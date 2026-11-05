@@ -311,6 +311,25 @@ rust_test(
     ],
 )
 
+# Where a protected library's temp files go, and what clears them.
+rust_test(
+    name = "protected_temp_test",
+    size = "small",
+    srcs = [
+        "tests/protected_temp.rs",
+        "tests/server/mod.rs",
+    ],
+    crate_root = "tests/protected_temp.rs",
+    data = [":datalib_http_bin"],
+    edition = "2021",
+    env = {
+        "DATALIB_HTTP_BIN": "$(rootpath :datalib_http_bin)",
+    },
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
 # Where the launch URL goes, which is where the token goes.
 rust_test(
     name = "launch_url_test",
