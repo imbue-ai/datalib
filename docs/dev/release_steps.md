@@ -141,10 +141,10 @@ triggered by a push to a branch, with no write grants. **Run it with no
 cache key.** A darwin action's cache key does not cover the image, so
 the contributor cache replays another image's compiles and test results:
 `stage_runtime_test` reported `(cached) PASSED` on the first image with
-openrsync, in the same job whose runtime step had just failed, and a binary whose
-link is replayed would carry the other image's SDK. A tag's mac legs find
-nothing in the release cache anyway (`ci.md` §"Two caches"), so a cold
-run is the one that matches.
+openrsync, in the same job whose runtime step had just failed, and a
+binary whose link is replayed would carry the other image's SDK. A tag's
+mac legs find nothing in the release cache anyway (`ci.md` §"Two
+caches"), so a cold run is the one that matches.
 
 ## What stays release-only
 
