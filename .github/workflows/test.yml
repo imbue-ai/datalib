@@ -71,8 +71,8 @@ permissions:
 # while the previous merge's run was still going cancelled the run in
 # between, before it started a single job. 25 of the 98 completed main
 # runs between 2026-09-18 and 2026-09-22 went that way, each one a
-# commit whose actions never reached the release cache a tag build
-# replays — and `warm-contributor-cache` (#672) would have inherited
+# commit whose actions never reached the cache `main`'s next run
+# reads — and `warm-contributor-cache` (#672) would have inherited
 # the same hole. `github.run_id` is unique per run, so a main push and
 # a dispatch are now each alone in their group and simply queue for a
 # runner.
@@ -159,6 +159,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install cargo-deny (pinned)
         env:
@@ -193,6 +195,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -251,6 +255,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           # `tools/workspace_status.sh` runs `git describe --tags`; the
           # default shallow clone has no tag history, so describe would
           # always fall back to a bare sha. We pass `--nostamp` now (see
@@ -260,10 +265,10 @@ jobs:
           fetch-depth: 0
 
       # A push here is a commit on `main` (see `on:`), i.e. PR-gated
-      # code: it writes the release group's cache, which is what the
-      # tag build replays. Everything else — PRs, dispatches — uses the
-      # contributor group, which laptops write too and releases never
-      # read. `.bazelrc`'s BuildBuddy block has the reasoning.
+      # code: it uses the group only those runs write. Everything else —
+      # PRs, dispatches — uses the contributor group, which laptops write
+      # too. No release reads either. `.bazelrc`'s BuildBuddy block has
+      # the reasoning.
       - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
@@ -444,6 +449,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       - uses: ./.github/actions/prepare-bazel
@@ -648,6 +654,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # The contributor key unconditionally — that is the whole point of
@@ -682,9 +689,8 @@ jobs:
   # tags (see the incident notes in release.yml). Building `:dist` under
   # `--config=musl-x86_64` here catches musl-only breakage — a new crate
   # that links a system library, a native build script that mishandles
-  # the musl toolchain — on every PR instead of at the next release. It
-  # also warms BuildBuddy with the exact opt-mode musl actions the
-  # tag-time release build will replay. The static-ness assertion mirrors
+  # the musl toolchain — on every PR instead of at the next release. The
+  # static-ness assertion mirrors
   # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the x86_64
   # runner only; the aarch64-musl leg differs by arch, not by build
   # logic, and stays tag-time-only.)
@@ -714,13 +720,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # A push here is a commit on `main` (see `on:`), i.e. PR-gated
-      # code: it writes the release group's cache, which is what the
-      # tag build replays. Everything else — PRs, dispatches — uses the
-      # contributor group, which laptops write too and releases never
-      # read. `.bazelrc`'s BuildBuddy block has the reasoning.
+      # code: it uses the group only those runs write. Everything else —
+      # PRs, dispatches — uses the contributor group, which laptops write
+      # too. No release reads either. `.bazelrc`'s BuildBuddy block has
+      # the reasoning.
       - uses: ./.github/actions/prepare-bazel
         with:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}

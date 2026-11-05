@@ -76,7 +76,7 @@ with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
 a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
 dispatch on `main` with `publish_latest` set — a dispatch on any other
 branch that sets it fails at once, because every `main` run of
-`test.yml` runs in `latest` holding the release cache's write key — and
+`test.yml` runs in `latest` holding the release org's write key — and
 only after
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
@@ -92,7 +92,8 @@ Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
 the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 #469). It does not build the CI image. The steps that
 assemble the assets are scripts under `scripts/release/`, run by
-`bazel test //...` before any tag runs them — `release_steps.md`.
+`bazel test //...` before any tag runs them, and no job that builds
+holds a write token or the signing key: `release_steps.md`.
 
 **`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
@@ -112,7 +113,8 @@ pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
 with other people's jobs, so the quota can be spent before a run starts
 (v0.42.0's `docker-publish` failed on `toomanyrequests`). Both
 workflows take Docker Hub images through Google's pull-through mirror,
-`mirror.gcr.io`: the QEMU and BuildKit images by name, and the
+`mirror.gcr.io`: the BuildKit image by name and digest (`lint_repo.py`
+check 21 refuses a tag alone), and the
 Dockerfiles' `FROM` lines through a registry mirror in
 `setup-buildx-action`'s `buildkitd-config-inline`, so the Dockerfiles
 themselves still name Docker Hub and build the same way on a laptop. A
@@ -132,26 +134,55 @@ the image bakes is public archives verified by sha256.
 ## Two caches: contributor and release
 
 Bazel does not verify an action-cache hit, so whoever can write a
-cache decides what a build reading it ships. Two BuildBuddy *groups*
-(a group is BuildBuddy's isolation unit: its own cache, its own keys)
-keep a release from replaying anything a laptop or a PR run wrote:
+cache decides what a build reading it ships. So **a release reads no
+cache** (`lint_repo.py` check 21), and two BuildBuddy *groups* (a group
+is BuildBuddy's isolation unit: its own cache, its own keys) keep
+`main`'s CI from replaying anything a laptop or a PR run wrote:
 
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
+| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | the same |
 
 Two BuildBuddy *organizations*, each on its own subdomain
 (`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
 works against its own org's host, so `prepare-bazel` takes the key and
-the config together. A tag builds a commit that is already on `main`,
-so the release build hits exactly what the `main` run of that commit
-produced; the `-readonly` config is what keeps it from writing, not the
-key. Without the release secret a tag build runs cold (~20 min a leg)
-rather than falling back to the contributor cache — that is the
-intended failure mode. The mac legs run cold with it too: `test.yml`
-has no mac leg, so nothing writes a darwin action to the release org,
-and each builds the binaries from scratch (about 25 minutes).
+the config together. "Release" is only the org's name; nothing in
+`release.yml` reaches it.
+
+**A tag runs cold, and it costs little.** While a release read this
+cache, `main`'s builds gave it little to hit: `main` builds only on
+x86_64 Linux, so the aarch64 and mac legs got no hits at all. The two
+x86_64 legs hit about 600 of their 2,100-odd actions (v0.46.0 to v0.49.0;
+a leg's `INFO: N processes` line has the count) and took no less time
+than the aarch64 Linux legs, 20 to 25 minutes, though those run on
+different machines. A mac leg takes 25 to 30 minutes.
+
+**A tag restores no repository cache either.** v0.49.0's mac legs
+restored `setup-bazel`'s repository cache from an entry saved on `main`
+by `latchkey-auth.yml`'s daily run, whose job compiles crates, and
+bazel uses the extracted trees under that cache's `contents/` without
+checking them ([`threat_models.md`](threat_models.md)). A release's
+downloads come from their origins, each pinned by sha256, so a download
+an origin refuses fails the leg rather than being served from a copy.
+
+**`docker-image` keeps no layer cache.** Its two builds share only what
+the job's own builder holds. `setup-buildx-action`, which would cache by
+default, is told not to.
+
+**What holds the write key.** `test.yml`'s three jobs that run on a push
+to `main` compile with it in `.bazelrc.user`. Their actions run under
+bazel's `processwrapper-sandbox`, which hides no file and blocks no
+network, so a build script in a crate that reached `main` can read the
+key or write any entry. That reaches `main`'s CI and nothing that ships:
+an entry can make a failing test look green on `main`, or run code in
+those jobs by replacing a tool the build runs. The jobs hold that key
+and a read-only token, and no workflow takes their artifacts, though one
+of them is a built tarball a person could download by hand. The gate on
+a PR uses the contributor org, so the key cannot fake a required check.
+The key is a repository secret, so only `test.yml`'s own
+`github.event_name == 'push'` holds it to `main`: a workflow edited on
+any branch of this repository can name it too.
 
 **The two orgs are write-disjoint, so a third writer was needed.** A
 main push writes the release org and a PR run writes the contributor
@@ -270,7 +301,8 @@ evicts the one already waiting — `cancel-in-progress: false` protects
 only the run that is executing. So only PR runs share a group (one per
 ref) and supersede one another; a push and a dispatch each get a group
 of their own (`github.run_id`), because a `main` run evicted before it
-starts is a commit whose actions never reach the release cache (#674).
+starts is a commit whose actions never reach the cache `main`'s next run
+reads (#674).
 
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions

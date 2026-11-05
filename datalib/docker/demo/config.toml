@@ -13,10 +13,8 @@
 # image — see the BUILD-TIME CUT marker at the bottom. Everything after
 # that line is dropped for the build-time run and present in the shipped
 # file, so the first `Sync all` (or `datalib-dag` run) in a container
-# builds them. The reason is the release pipeline: the arm64 image is
-# built under QEMU, and embedding under emulation would add tens of
-# minutes to every release for an index that takes a minute to build
-# natively. The keyword (BM25) part is cheap and is built with the image.
+# builds them. The reason is the slim build, which has no models to embed
+# with. The keyword (BM25) part is cheap and is built with the image.
 
 [[groups]]
 id = "claude-export"
