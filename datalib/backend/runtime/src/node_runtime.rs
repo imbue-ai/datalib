@@ -50,6 +50,10 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// shape.
 pub const LATCHKEY_VERSION: &str = "3.21.0";
 
+/// Left unset, latchkey pings its own usage counter once a day from any run.
+/// `scripts/latchkey-wrapper.sh` sets it too, for a `latchkey` run by hand.
+pub const LATCHKEY_DISABLE_COUNTING: &str = "LATCHKEY_DISABLE_COUNTING";
+
 /// The latchkey invocation to show in user-facing instructions and
 /// error messages: the app-bundled launcher when present (the
 /// `latchkey` wrapper staged next to our binaries — see
@@ -67,7 +71,7 @@ pub fn latchkey_cli_hint() -> String {
             }
         }
     }
-    format!("npx -y latchkey@{LATCHKEY_VERSION}")
+    format!("{LATCHKEY_DISABLE_COUNTING}=1 npx -y latchkey@{LATCHKEY_VERSION}")
 }
 
 /// Single-quote `s` for POSIX shells unless it's plainly safe. Good
@@ -375,14 +379,17 @@ fn warn_npx_once(pkg_spec: &str) {
     );
 }
 
-/// `latchkey` at the ONE pin, through [`tool_command`].
+/// `latchkey` at the ONE pin, through [`tool_command`], with its usage
+/// count off.
 pub fn latchkey_command() -> Result<Command, MissingRuntime> {
-    tool_command(
+    let mut cmd = tool_command(
         "latchkey",
         LATCHKEY_VERSION,
         LATCHKEY_ENTRY_REL,
         &format!("latchkey@{LATCHKEY_VERSION}"),
-    )
+    )?;
+    cmd.env(LATCHKEY_DISABLE_COUNTING, "1");
+    Ok(cmd)
 }
 
 /// `Command` running `entry_rel` (a path under the staged tree, e.g.

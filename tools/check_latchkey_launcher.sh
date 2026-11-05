@@ -2,7 +2,8 @@
 # Runs scripts/latchkey-wrapper.sh beside made-up runtime trees, whose
 # `node` only says which tree it is. Guards which tree the launcher
 # picks: after an upgrade the cache still holds the previous release's
-# runtime, which the launcher once ran without a word.
+# runtime, which the launcher once ran without a word. And that a latchkey
+# run by hand has its usage count off, as one datalib starts does.
 
 # --- begin runfiles.bash initialization v3 ---
 # Copy-pasted from the Bazel Bash runfiles library v3.
@@ -124,5 +125,11 @@ expect_runs "the override" "DATALIB_RUNTIME_DIR wins" "DATALIB_RUNTIME_DIR=$work
 fresh no_manifest
 make_runtime "$cache/datalib/runtime/$this_dir" "someone else's tree"
 expect_refuses "stage_runtime.sh" "with no manifest nothing names a tree in the cache" "XDG_CACHE_HOME=$cache"
+
+fresh counting
+make_runtime "$release/runtime" "unused"
+printf '#!/bin/sh\necho "counting off: ${LATCHKEY_DISABLE_COUNTING:-unset}"\n' > "$release/runtime/node/bin/node"
+expect_runs "counting off: 1" "the launcher turns latchkey's usage count off"
+expect_runs "counting off: 1" "whatever the environment said" "LATCHKEY_DISABLE_COUNTING=0"
 
 exit "$failed"
