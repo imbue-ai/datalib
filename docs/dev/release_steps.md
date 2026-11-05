@@ -126,9 +126,11 @@ key is still held where crates compile, by `test.yml` on a push to
   the behaviour a wrong working directory breaks.
 - **`…_bash32_test`** — on a mac, both again under `/bin/bash`, the
   3.2 the macOS runner has, where an empty array is "unbound
-  variable" under `-u`. Bazel skips them on Linux
-  (`target_compatible_with`); `scripts/lint_repo.py` check 10 refuses
-  an empty bash array in any workflow step, since CI has no mac leg.
+  variable" under `-u`. The runtime's also runs under `/usr/bin/rsync`,
+  which a laptop's Homebrew rsync would otherwise stand in for. Bazel
+  skips them on Linux (`target_compatible_with`);
+  `scripts/lint_repo.py` check 10 refuses an empty bash array in any
+  workflow step, since CI has no mac leg.
 
 The workflow's other checks are assertions over a built artifact, made
 on its own runner before anything is published:
@@ -175,6 +177,36 @@ CI runs in).
 
 The release procedure (`.claude/skills/release/SKILL.md`) runs this
 before the version bump.
+
+## The mac legs' runner image
+
+The mac legs name one GitHub-hosted image, `macos-15` (Xcode 16.4), and
+GitHub retires an image about once a year. A tag runs its own tree, so
+a retired label costs that release its mac assets and a re-run cannot
+fix it. What the image decides:
+
+- **The SDK our own binaries link against**, which sets what AppKit and
+  WebKit do for the app: 15.5 on this image. `xcrun vtool -show-build
+  <binary>` prints it. The minimum macOS (11.0) is not the image's: it
+  comes from `.bazelrc`, and rustc's floor for Apple Silicon for the
+  Tauri shell. The two curl shims and Node arrive prebuilt, so their
+  SDK is whatever built them.
+- **The system tools the scripts call**: `/usr/bin/rsync`, which since
+  macOS 15 is openrsync and accepts `--chmod` but ignores it on a tree;
+  `/bin/bash` 3.2; `hdiutil`, `codesign` and `notarytool`.
+- **The Chrome `datalib/tauri/check-app.sh` needs.**
+
+Rust and Bazel are pinned by the repo, whatever the image carries.
+
+To move to another image, try these steps first in a throwaway workflow
+triggered by a push to a branch, with no write grants. **Run it with no
+cache key.** A darwin action's cache key does not cover the image, so
+the contributor cache replays another image's compiles and test results:
+`stage_runtime_test` reported `(cached) PASSED` on `macos-15` in the same
+job whose runtime step had just failed on openrsync, and a binary whose
+link is replayed would carry the other image's SDK. A tag's mac legs find
+nothing in the release cache anyway (`ci.md` §"Two caches"), so a cold
+run is the one that matches.
 
 ## What stays release-only
 

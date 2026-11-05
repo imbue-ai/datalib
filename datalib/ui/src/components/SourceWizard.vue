@@ -74,7 +74,7 @@ import {
   type ServiceRegistration,
   type StoredAccount,
 } from "@/api";
-import { type SignInWhere } from "@/config/issues";
+import { CANNOT_SIGN_IN_HERE, type SignInWhere } from "@/config/issues";
 import { countOf, loadingText } from "@/config/probeProgress";
 import { useApi } from "@/cards/cardApi";
 import AccountCombo, { type AccountOption } from "@/components/AccountCombo.vue";
@@ -107,6 +107,8 @@ import { refreshPackages } from "@/config/packages";
 import type { PackageLookup } from "@/api";
 
 const {
+  fetchHealth,
+  healthSnapshot,
   latchkeyService,
   runProbe,
   setLatchkeyCredential,
@@ -747,6 +749,12 @@ const serviceRegistered = ref(true);
 /// until the server says otherwise, so a command is never shown naming
 /// a binary that isn't there.
 const latchkeyCli = ref("latchkey");
+/// A latchkey run from a terminal signs in to `~/.latchkey`, not to a
+/// protected library, so this dialog offers no command to run.
+const protectedLibrary = ref(healthSnapshot()?.protected_library ?? false);
+void fetchHealth()
+  .then((health) => (protectedLibrary.value = health.protected_library))
+  .catch(() => {});
 /// The latchkey gateway the backend talks through, when there is one.
 /// Under a gateway the credentials and the browser that signs in to
 /// them are on the gateway's side, and latchkey refuses every command
@@ -1366,9 +1374,11 @@ function toFailure(e: unknown): Failure {
 
 /// Where this dialog can get a credential into latchkey from, which is
 /// what a failure's advice points at.
-const signInWhere = computed<SignInWhere>(() =>
-  gateway.value ? "gateway" : canConnect.value || canPaste.value ? "here" : "terminal",
-);
+const signInWhere = computed<SignInWhere>(() => {
+  if (gateway.value) return "gateway";
+  if (canConnect.value || canPaste.value) return "here";
+  return protectedLibrary.value ? "nowhere" : "terminal";
+});
 
 /// Which of a report's item kinds each `probe:` noun takes. A render
 /// filter matches only what emails are filed in, never a Gmail flag,
@@ -1596,8 +1606,11 @@ function submit() {
         <p v-if="chosen.intro" class="wiz-intro">{{ chosen.intro }}</p>
         <div v-if="chosen.before && !isEdit" class="wiz-before">
           <b>Before you start</b>
-          <p>{{ chosen.before.text }}</p>
-          <ol>
+          <p v-if="chosen.before.terminalSignIn && protectedLibrary">
+            {{ CANNOT_SIGN_IN_HERE }}
+          </p>
+          <p v-else>{{ chosen.before.text }}</p>
+          <ol v-if="!chosen.before.terminalSignIn || !protectedLibrary">
             <li v-for="need in chosen.before.needs" :key="need">
               <template v-for="(part, i) in codeParts(need)" :key="i"
                 ><code v-if="part.code">{{ part.text }}</code
@@ -1876,7 +1889,14 @@ function submit() {
                        login. Shown rather than done: latchkey refuses to
                        re-register a name it holds, so the only way to add one
                        destroys the credentials already stored under it. -->
-                  <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+                  <p
+                    v-if="showConversion && protectedLibrary"
+                    class="wiz-help wiz-conn-note wiz-convert"
+                  >
+                    latchkey holds <code>{{ service }}</code> without a browser login, and won’t add
+                    one to a name it already has. Use the <b>Paste a key</b> tab instead.
+                  </p>
+                  <div v-else-if="showConversion" class="wiz-conn-note wiz-convert">
                     <p class="wiz-help wiz-convert-head">
                       latchkey holds <code>{{ service }}</code> without a browser login, and won’t
                       add one to a name it already has. Adding one means taking the service apart
@@ -1999,7 +2019,11 @@ function submit() {
                 :where="signInWhere"
               />
               <p class="wiz-help wiz-conn-intro">
-                Your sign-in is kept outside this library’s folder; datalib never stores it itself.
+                {{
+                  protectedLibrary
+                    ? "Your sign-in is kept by latchkey, in this library’s protected folder."
+                    : "Your sign-in is kept outside this library’s folder; datalib never stores it itself."
+                }}
               </p>
               <details class="wiz-help wiz-conn-how">
                 <summary>How sign-ins are stored</summary>
@@ -2007,7 +2031,7 @@ function submit() {
                   latchkey keeps them, under its
                   <code>{{ signInServices.map((s) => s.service).join(", ") }}</code>
                   service{{ signsInToSeveral ? "s" : "" }}.
-                  <template v-if="signInWays.includes('paste')">
+                  <template v-if="signInWays.includes('paste') && !protectedLibrary">
                     To store one from a terminal instead: <code>{{ setCommand }}</code>
                   </template>
                 </p>

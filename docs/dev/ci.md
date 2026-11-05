@@ -150,8 +150,10 @@ the config together. Without the read-only secret a tag build runs cold
 is the intended failure mode.
 
 **A release gets little from this cache.** `main` builds only on x86_64
-Linux, so the aarch64 and mac legs get no hits at all. The two x86_64
-legs hit about 600 of their 2,100-odd actions (v0.46.0 to v0.49.0; a
+Linux, so nothing writes an aarch64 or darwin action to the release org:
+those legs get no hits at all, and each mac leg builds the binaries from
+scratch (about 25 minutes). The two x86_64 legs hit about 600 of their
+2,100-odd actions (v0.46.0 to v0.49.0; a
 leg's `INFO: N processes` line has the count) and took no less time
 than the aarch64 Linux legs, though those run on different machines. The
 release org mostly pays off for `main` itself: the same commit's musl

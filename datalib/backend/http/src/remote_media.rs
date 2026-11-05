@@ -15,8 +15,11 @@
 //! of a document's references are covered by asking
 //! (`POST /api/remote_media/check`) rather than by reading the rows
 //! itself. What a `document` or `source` row covers is what the caller
-//! says it is loading for; the rows name the person's decisions, and
-//! the token names the person.
+//! says it is loading for. The server cannot work that out for itself: it
+//! does not read render stores, and a document's references exist only
+//! once the page has parsed its markdown. So the claim is believed from
+//! the page's own loads, whose URLs the sanitizer alone writes, and never
+//! from a link, whose URL the sender wrote ([`believed_context`]).
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
@@ -27,7 +30,7 @@ use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::AllowScope;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderValue, Response, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Response, StatusCode};
 use axum::response::{IntoResponse, Json};
 use datalib_columns::{ColumnSpec, ColumnType};
 use serde::{Deserialize, Serialize};
@@ -327,6 +330,18 @@ pub struct Context {
     pub source: Option<String>,
 }
 
+/// What a request gets to say it is loading for. A link in an email, opened
+/// by the app, is a same-origin navigation whose query string is the
+/// sender's, and it could name a source the person allowed to fetch a URL of
+/// the sender's choosing.
+pub fn believed_context(context: Context, headers: &HeaderMap) -> Context {
+    if crate::auth::link_a_page_wrote(headers) {
+        Context::default()
+    } else {
+        context
+    }
+}
+
 /// The host as a `host` row names it — the same spelling the page's
 /// `URL.host` gives: the port only when it is written and not the
 /// scheme's own.
@@ -483,7 +498,15 @@ pub fn response(content_type: &str, body: Vec<u8>) -> Response<Body> {
     resp
 }
 
-pub async fn get_media(State(s): State<AppState>, Query(q): Query<MediaQuery>) -> Response<Body> {
+pub async fn get_media(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<MediaQuery>,
+) -> Response<Body> {
+    let q = MediaQuery {
+        context: believed_context(q.context, &headers),
+        ..q
+    };
     match bytes_for(&s, &q).await {
         Ok((content_type, body)) => response(&content_type, body),
         Err(refusal) => {
