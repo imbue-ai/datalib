@@ -25,7 +25,7 @@ use datalib_photo_schema::{NormalizedPhoto, Pictures};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use pictures::{Level, Size};
@@ -302,8 +302,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
     if !db.exists() {
         return Ok(None);
     }
-    let opts = SqliteConnectOptions::new()
-        .filename(&db)
+    let opts = datalib_sqlite_open::file(&db)
         .read_only(true)
         .create_if_missing(false)
         .busy_timeout(std::time::Duration::from_secs(2));
@@ -595,9 +594,7 @@ mod tests {
     async fn index_photo(root: &Path, uuid: &str, photo_json: &str, touched: &str) {
         let db = datalib_runtime::layout::grid_index_db(root);
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let opts = SqliteConnectOptions::new()
-            .filename(&db)
-            .create_if_missing(true);
+        let opts = datalib_sqlite_open::file(&db).create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .idle_timeout(None)

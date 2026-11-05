@@ -588,8 +588,7 @@ async fn connect_pool(db_path: &Path, access: Access, on_branch: bool) -> Result
     }
     // No `journal_mode` pragma: doltlite has no journal and ignores it
     // (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .with_context(|| format!("sqlite uri for {}", db_path.display()))?
+    let opts = datalib_sqlite_open::file(db_path)
         // A reader never conjures a store: an absent file is a real error for
         // it, where for the owner it is the first run.
         .create_if_missing(writable)
@@ -2057,12 +2056,11 @@ async fn read_at_path(
     if !db_path.exists() {
         return Ok(None);
     }
-    let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .connect(&url)
+        .connect_with(datalib_sqlite_open::file(db_path).read_only(true))
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
     let read = read(&pool).await;
@@ -2079,12 +2077,11 @@ pub async fn problem_counts_at_path(
     if !db_path.exists() {
         return Ok(HashMap::new());
     }
-    let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .connect(&url)
+        .connect_with(datalib_sqlite_open::file(db_path).read_only(true))
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
     let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
@@ -3148,6 +3145,46 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    async fn write_then_read_back(db: &Path) -> Result<()> {
+        let writer = open(db, &["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"]).await?;
+        sqlx::query("INSERT INTO t VALUES (1, 'row')")
+            .execute(&writer)
+            .await?;
+        commit_run(&writer, "one row").await?;
+        writer.close().await;
+        let reader = open_reader(db, None).await?.context("a committed store")?;
+        let v: String = sqlx::query_scalar("SELECT v FROM t")
+            .fetch_one(reader.pool())
+            .await?;
+        reader.close().await;
+        anyhow::ensure!(v == "row", "read back {v:?}");
+        Ok(())
+    }
+
+    /// A path is a path, not a URL: sqlx's `sqlite://` parser decoded `%41`
+    /// and so wrote the store in a sibling directory, and took everything
+    /// after a `?` for parameters, so that no open worked at all.
+    #[tokio::test]
+    async fn a_store_opens_at_its_literal_path() {
+        for name in ["x%41y", "a?b", "c#d", "@e", "x%41y?z#w@v"] {
+            let root = tempdir().unwrap();
+            let db = root.path().join(name).join("store.doltlite_db");
+            let decoded = root.path().join("xAy");
+            std::fs::create_dir(&decoded).unwrap();
+
+            write_then_read_back(&db)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+
+            assert!(db.is_file(), "{name}: nothing at {}", db.display());
+            assert_eq!(
+                std::fs::read_dir(&decoded).unwrap().count(),
+                0,
+                "{name}: the store went to the decoded path instead"
+            );
+        }
+    }
+
     /// A row the loaders cannot read back fails the load rather than
     /// vanishing from it: a render built on the rest would lose that
     /// row's document with nothing saying why.
@@ -3223,11 +3260,7 @@ mod tests {
             .max_connections(1)
             .idle_timeout(None)
             .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))
-                    .unwrap()
-                    .create_if_missing(true),
-            )
+            .connect_with(datalib_sqlite_open::file(p).create_if_missing(true))
             .await
             .unwrap()
     }
@@ -5072,9 +5105,7 @@ mod tests {
             // then re-open with a tunable pool size.
             let _ = open_test(&db_path).await;
 
-            let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-                .unwrap()
-                .create_if_missing(true);
+            let opts = datalib_sqlite_open::file(&db_path).create_if_missing(true);
             let pool = SqlitePoolOptions::new()
                 .max_connections(max_conns)
                 .idle_timeout(None)

@@ -1,10 +1,10 @@
-"""lint_repo.py's check 11, on the spellings a person could paste."""
+"""lint_repo.py's checks on what can be misspelled: checks 11 and 20."""
 
 from __future__ import annotations
 
 import unittest
 
-from lint_repo import floating_npx
+from lint_repo import floating_npx, unliteral_opens
 
 
 class FloatingNpxTest(unittest.TestCase):
@@ -50,6 +50,32 @@ class FloatingNpxTest(unittest.TestCase):
             floating_npx("Docs said to run bare `npx -y latchkey` (no version).")
         )
         self.assertTrue(floating_npx("Run `npx -y latchkey auth list` to see them."))
+
+
+class LiteralOpenTest(unittest.TestCase):
+    def test_a_url_or_a_bare_filename_is_refused(self) -> None:
+        for source in [
+            'SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))',
+            'pool.connect(&format!("sqlite://{}?mode=ro", p.display()))',
+            'from_str(&format!(\n    "sqlite://{}",\n    p.display()))',
+            'pool.connect(&format!("sqlite:{}", p.display()))',
+            "SqliteConnectOptions::new().filename(path)",
+            "SqliteConnectOptions::new()\n    .filename(&db)",
+        ]:
+            with self.subTest(source=source):
+                self.assertTrue(unliteral_opens(source))
+
+    def test_the_helper_the_plain_uri_and_memory_pass(self) -> None:
+        for source in [
+            "datalib_sqlite_open::file(path).read_only(true)",
+            'datalib_sqlite_open::revision(path, "main")',
+            'SqliteConnectOptions::from_str("sqlite::memory:")',
+            ".filename(plain_sqlite::uri(path))",
+            ".filename(datalib_runtime::plain_sqlite::uri(path))",
+            ".filename(\n    crate::plain_sqlite::uri(path))",
+        ]:
+            with self.subTest(source=source):
+                self.assertEqual(unliteral_opens(source), [])
 
 
 if __name__ == "__main__":

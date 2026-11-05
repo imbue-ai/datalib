@@ -148,6 +148,18 @@ signal, sort it instead.
 `sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and worth
 being greppable.
 
+## Naming the file to open
+
+**A store opens by its literal path: `datalib_sqlite_open::file(path)`, or
+`::revision(path, rev)` for `<file>@<rev>`.** sqlx's URL form,
+`SqliteConnectOptions::from_str("sqlite://…")`, percent-decodes the path and
+cuts it at the first `?`. So a data root under `x%41y` wrote its stores under a
+sibling `xAy` if one existed, and failed to open them if not, and a root with a
+`?` in its path failed every open. `//:lint_repo` refuses a URL or a bare
+`.filename(…)` outside a test. The one URI is
+`datalib_runtime::plain_sqlite::uri`, which makes a new plain SQLite file and
+escapes its path.
+
 ## Connection pools: one writer per file, readers pinned
 
 Doltlite gives each *connection* its own active branch and HEAD, and

@@ -31,6 +31,7 @@ rust_library(
     deps = [
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

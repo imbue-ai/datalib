@@ -12,6 +12,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
     ],
