@@ -1,6 +1,6 @@
 # Every PDF under a folder on this machine, with every option set, and
 # searchable. No account and no credentials. A scanned, image-only PDF is
-# recorded but gives no text: there is no OCR yet.
+# recorded but gives no text, as there is no OCR yet; one warning counts them.
 [[groups]]
 id = "pdf"
 name = "PDFs"
@@ -14,7 +14,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
                                         # .gitignore in the tree; default none
-max_bytes = "512 MiB"  # skip a file larger than this; the default
+max_bytes = "512 MiB"  # skip a larger file, with a warning naming it; the default
 ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.

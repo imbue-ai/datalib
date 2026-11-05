@@ -193,6 +193,12 @@ FACEBOOK_GROUP_LEFT_SINCE = (
     "|0b754b28-2000-83b2-9916-69a95bb3c612"
     "|title|noted|a group post whose group the membership file does not name"
 )
+PDFS_WITH_NO_TEXT = (
+    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
+    "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
+    "2 PDFs are not searchable, with no text we can read (no OCR yet, or fonts "
+    "that do not decode). One is holodeck/scanned_blueprint.pdf"
+)
 PDF_THAT_WILL_NOT_IDENTIFY = (
     "7b765789-41e7-536c-9392-2facf510901a"
     "|error|fetch|entity"
@@ -316,7 +322,7 @@ EXPECTED_PROBLEMS = {
             FACEBOOK_GROUP_LEFT_SINCE,
         ]
     ),
-    "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
+    "tng_pdfs": [PDFS_WITH_NO_TEXT, PDF_THAT_WILL_NOT_IDENTIFY],
     "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
     "google-takeout": sorted(
         [
