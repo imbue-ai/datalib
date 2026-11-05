@@ -345,6 +345,7 @@ def main() -> int:
     rc |= _check_try_get_ok_is_flattened(root)
     rc |= _check_no_playback_set_var(root)
     rc |= _check_no_ui_code_sinks(root)
+    rc |= _check_card_children_carry_styles(root)
     rc |= _check_stores_open_by_literal_path(root)
     return rc
 
@@ -1595,6 +1596,39 @@ def _check_stores_open_by_literal_path(root: Path) -> int:
         "  A `sqlite://` URL is percent-decoded and cut at the first `?`.\n"
         "  See lint_repo.py check 20.",
         file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 22: a card's child component brings its styles into the card --
+#
+# A card is drawn in its own shadow root, which document-head styles do
+# not reach. A plain `.vue` file's `<style>` block goes to the document
+# head, so under `cards/` it styles nothing: the time-window box shipped
+# as a bare list that way. A child with styles is `.ce.vue` and listed
+# in its card's `styleSources`, or keeps them in a `.css` file the card
+# includes (docs/dev/cards.md § "CardRender: the rendering contract").
+def _check_card_children_carry_styles(root: Path) -> int:
+    hits = [
+        f"  {rel}"
+        for rel in _git_ls_files(root, "datalib/ui/src/cards")
+        if rel.endswith(".vue")
+        and not rel.endswith(".ce.vue")
+        and (root / rel).is_file()
+        and re.search(
+            r"^<style\b", (root / rel).read_text(encoding="utf-8"), re.MULTILINE
+        )
+    ]
+    if not hits:
+        print("OK: no plain .vue file under datalib/ui/src/cards has a <style> block.")
+        return 0
+    print(
+        "ERROR: a plain .vue file under datalib/ui/src/cards has a <style> block:\n\n"
+        + "\n".join(hits)
+        + "\n\n  A card is drawn in a shadow root, and a plain .vue file's styles go to\n"
+        "  the document head, which does not reach it. Rename the file to .ce.vue\n"
+        "  and add it to its card's `styleSources`, or move the styles to a .css\n"
+        "  file the card includes (docs/dev/cards.md)."
     )
     return 1
 

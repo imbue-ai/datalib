@@ -48,7 +48,12 @@ export const PRESETS: string[] = [
   "all",
 ];
 
-export const DEFAULT_WINDOW = "90d";
+/// What a new card shows.
+export const DEFAULT_WINDOW = "all";
+
+/// What a saved card with no window in its state shows: the default when
+/// the state left the window out whenever it was the default.
+export const UNSAID_WINDOW = "90d";
 
 const DURATION = /^(?:last\s+)?(\d+(?:\.\d+)?)\s*([a-z]+)$/;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
