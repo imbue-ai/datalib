@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Refuse to ship backend binaries that are not the release build: run by
-# the `build` job on the tarball's binaries and by the `macos-app` job on
+# the `build` job on the tarball's binaries and by the `macos-app-verify` job on
 # the ones bundled in Datalib.app, before either publishes anything.
 #
 #   scripts/release/check_binaries.sh <ref-name> <dir>

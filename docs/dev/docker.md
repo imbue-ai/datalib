@@ -40,9 +40,11 @@ runs in is a separate image (`.devcontainer/Dockerfile`, published by
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
-`docker-publish` job in
+`docker-image` and `docker-publish` jobs in
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
-on every `v*` tag. The image is not built from source: it consumes the
+on every `v*` tag: each architecture builds on a runner of its own, with
+nothing emulated, and pushes by digest, then one job gives the two a tag.
+The image is not built from source: it consumes the
 Linux gnu tarballs the same release just produced, so what a user pulls
 is byte-for-byte what `curl | sh` installs on a glibc host.
 
@@ -64,9 +66,7 @@ demo) runs at image time, so a free-text search answers the moment the
 container starts. Its `embed` steps and `qmd_aggregator` sit below a
 `BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
 in the shipped file, so the first sync in a container adds the
-embeddings. Embedding under the arm64 leg's QEMU emulation would add
-tens of minutes to every release for an index that takes about a minute
-natively.
+embeddings. The slim build has no models to embed with.
 
 ## Checking the walkthrough against an image
 

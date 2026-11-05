@@ -154,7 +154,7 @@ What is established by reading the tree:
 
 - **The app is not sandboxed.** No `.entitlements` file exists for it;
   `build-signed-app.sh` has Tauri sign with the Developer ID identity,
-  `tauri.conf.json`'s `beforeBuildCommand` signs the bundled binaries
+  `sign-staged.sh` signs the bundled binaries
   with `--options runtime` (hardened runtime), and neither sets macOS
   entitlements. So the mechanism usually meant by this question —
   Powerbox handing a *sandboxed* app a grant for the user-selected

@@ -129,6 +129,24 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
+sh_test(
+    name = "build_signed_app_test",
+    size = "small",
+    srcs = ["build_signed_app_test.sh"],
+    data = ["//datalib/tauri:build-signed-app.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "build_signed_app_bash32_test",
+    size = "small",
+    srcs = ["build_signed_app_test.sh"],
+    data = ["//datalib/tauri:build-signed-app.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # The tests above, run on Linux from a mac: in the devcontainer, built
 # from .devcontainer/Dockerfile for this host's arch, over the working
 # tree, with the devcontainer's own cache volumes. A `run` target, not

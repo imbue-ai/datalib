@@ -49,12 +49,12 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
-# resolves from the live registry — the signing job runs this with the
-# Developer ID certificate in its environment).
+# resolves from the live registry — the signing job runs this CLI with
+# the Developer ID certificate in its environment).
 pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
-# release workflow's macos-app job runs in CI. It also stamps the
+# release workflow's macos-app-* jobs run in CI, a phase each. It also stamps the
 # binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-dag
 # --version` names the tag rather than `dev`) and refuses a bundle whose
 # binaries are not optimized and stamped
@@ -62,6 +62,9 @@ pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 # Vault (restricted/datalib-release/*); they're under restricted/, so log
 # in with the all-secrets role first:
 #   vault login -method oidc role=employee_all_secrets
+# It runs compile, sign and verify in turn; the release runs each on its
+# own machine, so no build has the key in reach
+# (docs/dev/release_steps.md §"Who holds what").
 ./build-signed-app.sh
 
 # Compile-only inner loop (no bundling), for a fast type/borrow check —

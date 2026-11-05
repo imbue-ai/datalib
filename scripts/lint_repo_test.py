@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from lint_repo import floating_npx, unliteral_opens
+from lint_repo import (
+    checkout_token_settings,
+    floating_images,
+    floating_npx,
+    release_grant_problems,
+    unliteral_opens,
+)
 
 
 class FloatingNpxTest(unittest.TestCase):
@@ -50,6 +56,182 @@ class FloatingNpxTest(unittest.TestCase):
             floating_npx("Docs said to run bare `npx -y latchkey` (no version).")
         )
         self.assertTrue(floating_npx("Run `npx -y latchkey auth list` to see them."))
+
+
+class WorkflowTokenTest(unittest.TestCase):
+    def test_a_checkout_says_what_it_does_with_the_token(self) -> None:
+        text = """
+steps:
+  - uses: actions/checkout@abc # bare
+  - run: echo persist-credentials: false
+  - uses: actions/checkout@abc
+    with:
+      fetch-depth: 0
+      persist-credentials: false
+  - uses: actions/checkout@abc
+    with:
+      persist-credentials: true
+"""
+        self.assertEqual(
+            [setting for _, setting in checkout_token_settings(text)],
+            [None, "false", "true"],
+        )
+
+    GOOD = """
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: x
+    steps:
+      - run: bazel build //...
+  publish-runtime:
+    permissions:
+      contents: write  # upload
+  publish-tarballs:
+    permissions:
+      contents: write
+  publish-macos-app:
+    permissions:
+      contents: write
+  macos-app-sign:
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # no bazel here
+      - run: ./datalib/tauri/build-signed-app.sh sign
+  docker-image:
+    permissions:
+      contents: read
+      packages: write
+  docker-publish:
+    permissions:
+      contents: read
+      packages: write
+"""
+
+    def test_the_table_passes(self) -> None:
+        self.assertEqual(release_grant_problems(self.GOOD), [])
+
+    def test_a_write_default_is_refused(self) -> None:
+        """The shape #1602 and earlier shipped: every build job inherited it."""
+        text = self.GOOD.replace("contents: read\n\njobs", "contents: write\n\njobs")
+        self.assertEqual(
+            release_grant_problems(text),
+            ["the workflow's default grants contents: write"],
+        )
+
+    def test_write_on_a_build_job_is_refused(self) -> None:
+        text = self.GOOD.replace(
+            "    runs-on: x\n",
+            "    permissions:\n      contents: write\n    runs-on: x\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text), ["job runtime grants contents: write"]
+        )
+
+    def test_the_signing_grant_on_the_compile_job_is_refused(self) -> None:
+        """id-token reaches every step's environment, so a build script could mint the Vault token."""
+        text = self.GOOD.replace(
+            "  runtime:\n",
+            "  macos-app-compile:\n    permissions:\n      id-token: write\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            ["job macos-app-compile grants id-token: write"],
+        )
+
+    def test_a_build_in_a_job_holding_a_grant_is_refused(self) -> None:
+        for command in [
+            "bazel build //x",
+            "cargo build --release",
+            "pnpm exec tauri build",
+            "./b/build-signed-app.sh compile",
+        ]:
+            with self.subTest(command=command):
+                text = self.GOOD.replace("build-signed-app.sh sign", command)
+                self.assertEqual(len(release_grant_problems(text)), 1)
+                self.assertIn("runs a build", release_grant_problems(text)[0])
+
+    def test_a_publish_job_that_lost_its_grant_is_refused(self) -> None:
+        """A tag is the first thing that would run it, and it would cost the release."""
+        text = self.GOOD.replace(
+            "  publish-tarballs:\n    permissions:\n      contents: write\n",
+            "  publish-tarballs:\n    runs-on: x\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            ["job publish-tarballs needs contents: write to do its work"],
+        )
+
+    def test_a_release_names_no_remote_cache(self) -> None:
+        """Bazel verifies no hit, so a cache `main` can write would decide what a release ships."""
+        for line in [
+            "      - run: bazel build --config=buildbuddy-release //x",
+            "      - run: bazel build --remote_cache=grpcs://x //x",
+            "      - run: cat > .bazelrc.user",
+            "      - uses: actions/cache@abc",
+            "      - run: docker buildx build --cache-from type=gha,scope=x ctx",
+            "        env:\n          K: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}",
+        ]:
+            with self.subTest(line=line):
+                text = self.GOOD.replace("      - run: bazel build //...", line)
+                problems = release_grant_problems(text)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("a release reads no cache", problems[0])
+
+    def test_a_third_party_image_is_pinned_by_digest(self) -> None:
+        """Whoever controls a moved tag runs code in a job that can push the image."""
+        text = """
+# image=mirror.gcr.io/moby/buildkit:latest in a comment is fine
+driver-opts: image=mirror.gcr.io/moby/buildkit:v1@sha256:abc
+image: mirror.gcr.io/tonistiigi/binfmt:latest
+driver-opts: image=mirror.gcr.io/moby/buildkit:v1
+image: ghcr.io/imbue-ai/datalib_devcontainer:latest
+"""
+        self.assertEqual(
+            floating_images(text),
+            [
+                "mirror.gcr.io/tonistiigi/binfmt:latest",
+                "mirror.gcr.io/moby/buildkit:v1",
+            ],
+        )
+
+    def test_a_comment_may_say_why_there_is_no_cache(self) -> None:
+        text = self.GOOD.replace("# no bazel here", "# no BuildBuddy, no .bazelrc.user")
+        self.assertEqual(release_grant_problems(text), [])
+
+    def test_an_action_that_caches_says_it_does_not(self) -> None:
+        """A tag's mac legs restored what `main`'s daily latchkey-auth saved; bazel checks no tree in it."""
+        clean = self.GOOD.replace(
+            "      - run: bazel build //...",
+            "      - uses: bazel-contrib/setup-bazel@abc\n"
+            "        with:\n"
+            "          bazelisk-cache: false\n"
+            "          disk-cache: false\n"
+            "          repository-cache: false\n"
+            "          external-cache: false\n"
+            "      - uses: docker/setup-qemu-action@abc\n"
+            "        with:\n"
+            "          cache-image: false\n"
+            "      - uses: docker/setup-buildx-action@abc\n"
+            "        with:\n"
+            "          cache-binary: false",
+        )
+        self.assertEqual(release_grant_problems(clean), [])
+        for setting, action in [
+            ("repository-cache", "setup-bazel"),
+            ("cache-image", "setup-qemu-action"),
+            ("cache-binary", "setup-buildx-action"),
+        ]:
+            expected = [f"a release reads no cache: {action} needs {setting}: false"]
+            with self.subTest(setting=setting):
+                turned_on = clean.replace(f"{setting}: false", f"{setting}: true")
+                self.assertEqual(release_grant_problems(turned_on), expected)
+                left_out = clean.replace(f"          {setting}: false\n", "")
+                self.assertEqual(release_grant_problems(left_out), expected)
 
 
 class LiteralOpenTest(unittest.TestCase):

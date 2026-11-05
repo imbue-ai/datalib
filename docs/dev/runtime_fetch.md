@@ -4,7 +4,8 @@ The code is
 `datalib/backend/runtime/src/node_runtime.rs` (where a runtime is looked
 for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
 (the fetch), `scripts/stage_runtime.sh` (what a runtime holds) and the
-`runtime` job in `.github/workflows/release.yml` (how it is published).
+`runtime` and `publish-runtime` jobs in `.github/workflows/release.yml`
+(how it is published).
 
 `qmd` (semantic search) and `latchkey` (credentials) are Node programs.
 datalib runs them from a **runtime**: a pinned Node plus the two
@@ -43,7 +44,7 @@ way (`datalib_qmd_models`).
 
 The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` (through
 `scripts/release/stage_runtime_asset.sh`, the step as a script) on
-each host platform and publishes what it stages:
+each host platform, and `publish-runtime` publishes what it stages:
 
 ```
 runtime-aarch64-apple-darwin.tar.gz        node/ + qmd/<v>/ + latchkey/<v>/
@@ -75,7 +76,7 @@ it is the commit they came from, for the log view's source links —
 [`logging.md`](logging.md) § "Every line has an author".)
 
 The `build` job writes `runtime.manifest` beside the binaries, reading
-each asset's sha256 back from the sidecar the `runtime` job published
+each asset's sha256 back from the sidecar `publish-runtime` published
 and its size from the release. One asset per line:
 
 ```
