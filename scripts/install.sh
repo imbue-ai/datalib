@@ -110,26 +110,27 @@ if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
     err "download failed (${url})"
 fi
 
-# --- optional checksum verification ---
-if curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
-        -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}" 2>/dev/null; then
-    # The .sha256 file lists the bare filename, so cd into tmpdir for
-    # the `-c` check. Linux ships `sha256sum`; macOS ships `shasum`.
-    # Both consume the same "HASH  filename" format the release writes.
-    if command -v sha256sum >/dev/null 2>&1; then
-        say "verifying checksum"
-        (cd "${tmpdir}" && sha256sum -c "${TARBALL}.sha256") \
-            || err "checksum verification failed"
-    elif command -v shasum >/dev/null 2>&1; then
-        say "verifying checksum"
-        (cd "${tmpdir}" && shasum -a 256 -c "${TARBALL}.sha256") \
-            || err "checksum verification failed"
-    else
-        say "no sha256 tool found; skipping checksum verification"
-    fi
-else
-    say "checksum file not published; skipping verification"
+# --- checksum verification ---
+# A tarball that cannot be checked is not installed. The sidecar comes from
+# the same release, so this catches a damaged or swapped download rather than
+# a release someone rewrote; docs/dev/security_posture.md has what stops that.
+if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
+        -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}"; then
+    err "could not fetch the checksum (${sha_url}); not installing"
 fi
+# Linux ships `sha256sum`; macOS ships `shasum`.
+if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmpdir}/${TARBALL}")"
+elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmpdir}/${TARBALL}")"
+else
+    err "need sha256sum or shasum to check the download; not installing"
+fi
+say "verifying checksum"
+actual="${actual%% *}"
+read -r expected _ < "${tmpdir}/${TARBALL}.sha256" || true
+[ -n "${expected:-}" ] && [ "${expected}" = "${actual}" ] \
+    || err "checksum mismatch for ${TARBALL}: expected '${expected:-}', got '${actual}'; not installing"
 
 # --- extract ---
 say "extracting"

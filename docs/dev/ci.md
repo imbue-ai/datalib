@@ -142,7 +142,7 @@ is BuildBuddy's isolation unit: its own cache, its own keys) keep
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | the same |
+| release | `BUILD_BUDDY_RELEASE_API_KEY`, in the `main-ci` environment | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | the same |
 
 Two BuildBuddy *organizations*, each on its own subdomain
 (`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
@@ -180,9 +180,14 @@ those jobs by replacing a tool the build runs. The jobs hold that key
 and a read-only token, and no workflow takes their artifacts, though one
 of them is a built tarball a person could download by hand. The gate on
 a PR uses the contributor org, so the key cannot fake a required check.
-The key is a repository secret, so only `test.yml`'s own
-`github.event_name == 'push'` holds it to `main`: a workflow edited on
-any branch of this repository can name it too.
+
+**Only `main` can name the key.** It is a secret of the `main-ci`
+environment, whose deployment branch policy allows `main` and nothing else,
+so a workflow edited on a branch gets no such secret. `test.yml`'s three jobs
+ask for the environment on a push and for none otherwise, and `lint_repo.py`
+check 21 refuses a job that names the key without it. The environment itself
+is a repository setting: [`security_posture.md`](security_posture.md)
+§"The settings this rests on".
 
 **The two orgs are write-disjoint, so a third writer was needed.** A
 main push writes the release org and a PR run writes the contributor
@@ -197,10 +202,10 @@ only product is cache entries. It does not help a PR that edits a
 widely-linked crate — that one rebuilds its own `rdeps` either way —
 it removes the runs that were cold for no reason.
 
-The release org exists and its read-write key is the repository
+The release org exists and its read-write key is the environment's
 secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
-BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib`.
+BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
 
 ## The caches, and what each is for
 

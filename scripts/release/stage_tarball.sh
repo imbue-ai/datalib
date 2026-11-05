@@ -7,7 +7,11 @@
 # then tar it. Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar
 # into the current directory and prints the tarball's name.
 #
-#   scripts/release/stage_tarball.sh <ref-name> <triple>
+#   RELEASE_ASSETS_DIR=<dir> scripts/release/stage_tarball.sh <ref-name> <triple>
+#
+# RELEASE_ASSETS_DIR holds the runtime assets the manifest names, with their
+# .sha256 sidecars: the `runtime` job's artifact in release.yml, since the
+# release is still a draft a read-only token cannot see.
 #
 # The binaries are read from `bazel-bin` as `//datalib/backend:bin` laid
 # them out — one list of shipped names, kept there — so the caller has
@@ -20,9 +24,6 @@
 # through these variables:
 #
 #   RELEASE_BAZEL_BIN    a tree laid out like bazel-bin (the test's runfiles)
-#   RELEASE_ASSETS_DIR   the runtime assets and their .sha256 sidecars as
-#                        local files, in place of `gh release` on the
-#                        published release
 #   GITHUB_SHA           the commit, in place of `git rev-parse HEAD`
 #   GITHUB_REPOSITORY    where the manifest's URLs point (default
 #                        imbue-ai/datalib)
@@ -35,6 +36,7 @@ fi
 ref_name="$1"
 triple="$2"
 version="${ref_name#v}"
+: "${RELEASE_ASSETS_DIR:?names the directory holding the runtime assets}"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
@@ -118,7 +120,7 @@ rm -f "$stage/.docs"
 
 # `runtime.manifest`: which runtime asset of THIS release the binaries
 # fetch on first use, with its sha256 and size read back from what the
-# `publish-runtime` job published. The musl legs name their gnu sibling's
+# `runtime` job staged. The musl legs name their gnu sibling's
 # asset: the Node in it is a glibc build (nodejs.org ships no musl
 # one), and a musl datalib on a glibc host — the common case — runs it
 # fine; a musl host is refused by the resolver with the reason named.
@@ -127,17 +129,10 @@ runtime_triple="${triple/-musl/-gnu}"
 base_url="https://github.com/${repository}/releases/download/${ref_name}"
 asset_sha_and_bytes() { # asset name -> "<sha> <bytes>"
     local name="$1" sha bytes
-    if [[ -n "${RELEASE_ASSETS_DIR:-}" ]]; then
-        sha="$(cut -d' ' -f1 "$RELEASE_ASSETS_DIR/$name.sha256")"
-        bytes="$(wc -c < "$RELEASE_ASSETS_DIR/$name" | tr -d ' ')"
-    else
-        gh release download "$ref_name" --pattern "$name.sha256" --clobber --dir manifest-src
-        sha="$(cut -d' ' -f1 "manifest-src/$name.sha256")"
-        bytes="$(gh release view "$ref_name" --json assets \
-            --jq ".assets[] | select(.name == \"$name\") | .size")"
-    fi
+    sha="$(cut -d' ' -f1 "$RELEASE_ASSETS_DIR/$name.sha256")"
+    bytes="$(wc -c < "$RELEASE_ASSETS_DIR/$name" | tr -d ' ')"
     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 for $name: '$sha'"
-    [[ "$bytes" =~ ^[0-9]+$ ]] || fail "no size for $name on the release"
+    [[ "$bytes" =~ ^[0-9]+$ ]] || fail "no size for $name in $RELEASE_ASSETS_DIR"
     echo "$sha $bytes"
 }
 manifest_line() { # kind, asset name

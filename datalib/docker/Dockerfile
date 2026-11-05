@@ -23,7 +23,7 @@
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
 # docker-image job in `release.yml` stages its architecture's assets from
-# the just-created GitHub Release and the demo from the checkout.
+# that run's artifacts and the demo from the checkout.
 #
 # Bind mounts at runtime (see docs/user/docker.md):
 #   /root/.latchkey                latchkey credentials store

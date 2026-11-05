@@ -1,12 +1,11 @@
-# Attaches the artifacts a release.yml build job left to the tag's GitHub
-# Release. The job that calls this holds `contents: write` and runs no
+# Attaches the artifacts a release.yml build job left to the tag's draft
+# GitHub Release, which `create-release` made and `publish-release` will
+# publish. The job that calls this holds `contents: write` and runs no
 # build: docs/dev/release_steps.md §"Who holds what". Callers run
 # `actions/checkout` first, as for any local composite action.
 #
 # Plain `gh`, not softprops/action-gh-release (an individually-owned
-# action). The publish jobs race to create the tag's release;
-# create-if-missing with `|| true` lets the losers fall through to the
-# upload, which targets the same release either way.
+# action).
 name: Publish release assets
 description: Download the matching artifacts and upload them to the tag's release.
 inputs:
@@ -31,9 +30,6 @@ runs:
       run: |
         set -euo pipefail
         ls -la "$ASSETS"
-        if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-            gh release create "$REF_NAME" --verify-tag --notes "" || true
-        fi
         # Once more on failure. The dmg is 175 MB, and a slow upload that
         # succeeded server-side can still come back as a client error; the
         # retry's `--clobber` replaces what landed (v0.34.0: HTTP 422

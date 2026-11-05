@@ -3,7 +3,9 @@
 # `curl` and `uname`. Guards what it puts on a user's PATH: every
 # executable at the top of the tarball and nothing else, since the
 # tarball's `git-hash` and `runtime.manifest` are data files that the
-# installer once linked and marked executable like the rest.
+# installer once linked and marked executable like the rest. Guards too
+# that a tarball it cannot check is not installed: it once carried on when
+# the checksum file was missing or no tool could read it.
 
 # --- begin runfiles.bash initialization v3 ---
 # Copy-pasted from the Bazel Bash runfiles library v3.
@@ -35,7 +37,7 @@ esac
 STUB
 cat > "$stubs/curl" <<'STUB'
 #!/bin/sh
-# Serves the made-up tarball, and has no checksum file to offer.
+# Serves the made-up tarball and whichever checksum file the case names.
 while [ "$#" -gt 1 ]; do
     if [ "$1" = "-o" ]; then
         dest="$2"
@@ -43,9 +45,12 @@ while [ "$#" -gt 1 ]; do
     shift
 done
 case "$1" in
-    *.sha256) exit 22 ;;
+    *.sha256)
+        [ -f "$FAKE_SIDECAR" ] || exit 22
+        cp "$FAKE_SIDECAR" "$dest"
+        ;;
+    *) cp "$FAKE_TARBALL" "$dest" ;;
 esac
-cp "$FAKE_TARBALL" "$dest"
 STUB
 chmod +x "$stubs/uname" "$stubs/curl"
 
@@ -57,14 +62,56 @@ chmod +x "$stage/datalib-dag" "$stage/latchkey"
 tarball="$work/datalib.tar.gz"
 tar -czf "$tarball" -C "$work" "$(basename "$stage")"
 
+sidecar="$work/sidecar"
+good_sum() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$tarball"
+    else
+        shasum -a 256 "$tarball"
+    fi
+}
+# The line the release writes: "<hash>  <bare filename>".
+echo "$(good_sum | cut -d' ' -f1)  datalib-x86_64-unknown-linux-gnu.tar.gz" > "$sidecar"
+
+run_installer() { # PATH to run under, then the directories to install into
+    env PATH="$1" HOME="$work/home" FAKE_TARBALL="$tarball" FAKE_SIDECAR="$sidecar" DATALIB_LIBC=gnu \
+        DATALIB_LIB_DIR="$2" DATALIB_INSTALL_DIR="$3" /bin/sh "$installer" > "$work/install.log" 2>&1
+}
+
 install() {
-    env PATH="$stubs:$PATH" HOME="$work/home" FAKE_TARBALL="$tarball" DATALIB_LIBC=gnu \
-        DATALIB_LIB_DIR="$lib" DATALIB_INSTALL_DIR="$bin" sh "$installer" > "$work/install.log" 2>&1 \
+    run_installer "$stubs:$PATH" "$lib" "$bin" \
         || { echo "FAIL: install.sh failed:" >&2; cat "$work/install.log" >&2; exit 1; }
 }
 
 failed=0
 complain() { echo "FAIL: $1" >&2; failed=1; }
+
+expect_refused() { # what its message should say, the case, then optionally a PATH
+    local want="$1" what="$2" path="${3:-$stubs:$PATH}" here="$work/refused"
+    rm -rf "$here"
+    if run_installer "$path" "$here/lib" "$here/bin"; then
+        complain "$what: installed anyway"
+    elif ! grep -q "$want" "$work/install.log"; then
+        complain "$what: refused without saying '$want': $(cat "$work/install.log")"
+    fi
+    [[ ! -e "$here/lib" && ! -e "$here/bin" ]] || complain "$what: left an install behind"
+}
+
+good_sidecar="$(cat "$sidecar")"
+rm "$sidecar"
+expect_refused "could not fetch the checksum" "no checksum file on the release"
+echo "$(printf '0%.0s' {1..64})  datalib-x86_64-unknown-linux-gnu.tar.gz" > "$sidecar"
+expect_refused "checksum mismatch" "a checksum that does not match"
+: > "$sidecar"
+expect_refused "checksum mismatch" "an empty checksum file"
+echo "$good_sidecar" > "$sidecar"
+# Only the tools the installer needs before it checks, and no sha256 tool.
+tools="$work/no_sha_tools"
+mkdir -p "$tools"
+for tool in cat cp mkdir mktemp mv rm tar gzip dirname basename; do
+    ln -s "$(command -v "$tool")" "$tools/$tool"
+done
+expect_refused "need sha256sum or shasum" "no tool to check with" "$stubs:$tools"
 
 install
 for name in datalib-dag latchkey; do

@@ -390,6 +390,8 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 # so a cache would decide what ships (docs/dev/security_posture.md).
 _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
+    "create-release": {"contents"},
+    "publish-release": {"contents"},
     "publish-runtime": {"contents"},
     "publish-tarballs": {"contents"},
     "publish-macos-app": {"contents"},
@@ -515,6 +517,22 @@ def release_grant_problems(text: str) -> list[str]:
     return problems
 
 
+_RELEASE_KEY_ENVIRONMENT = (
+    "environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}"
+)
+
+
+def release_key_problems(text: str) -> list[str]:
+    """Jobs naming the release org's key outside the environment only `main` may use."""
+    _, bodies = workflow_write_grants(text)
+    return [
+        f"job {job} names BUILD_BUDDY_RELEASE_API_KEY outside the main-ci environment"
+        for job, lines in bodies.items()
+        if any("BUILD_BUDDY_RELEASE_API_KEY" in line for line in lines)
+        and not any(line.strip() == _RELEASE_KEY_ENVIRONMENT for line in lines)
+    ]
+
+
 def floating_images(text: str) -> list[str]:
     """Third-party images a workflow names by a tag someone else can move."""
     return [
@@ -542,6 +560,9 @@ def _check_workflow_tokens(root: Path) -> int:
                 problems.append(
                     f"{rel}:{lineno}: `persist-credentials: true` in a workflow that does not push"
                 )
+        problems += [
+            f"{rel}: {p}" for p in release_key_problems((root / rel).read_text())
+        ]
     release = ".github/workflows/release.yml"
     problems += [
         f"{release}: {p}" for p in release_grant_problems((root / release).read_text())

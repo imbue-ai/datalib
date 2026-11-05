@@ -14,6 +14,14 @@
 # un-versioned filename so the install script's
 # `releases/latest/download/<name>` URL stays valid.
 #
+# The release stays a draft until every job has succeeded, and only then
+# does `publish-release` publish it, all at once. The repository's
+# immutable-releases setting locks its assets and tag from that moment, so
+# nothing can be added afterwards: a failed job holds the release back
+# until a re-run finishes it (docs/dev/release_steps.md §"Draft, then publish").
+# A build job reads what an earlier job made from that run's artifacts: a
+# read-only token cannot see a draft.
+#
 # A release builds from scratch and reads no cache: no BuildBuddy and no
 # repository cache. Bazel verifies no cache entry, so a cache that anything
 # running on `main` can write would decide what this workflow ships
@@ -48,14 +56,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One job, so that one draft exists: GitHub lets any number of drafts share
+  # a tag, and publish jobs racing to create it would each make their own.
+  create-release:
+    name: create the draft release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create the draft
+    steps:
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
+              gh release create "$REF_NAME" --draft --verify-tag --notes ""
+          fi
+
   # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
   # and `latchkey` trees, only this platform's CPU binding of
   # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
   # platform. Its own job rather than a step of `build` so that the
   # musl legs (whose glibc host runs the same runtime as their gnu
   # sibling) can name an asset that already exists, with its sha256:
-  # the `build` legs read the `.sha256` sidecars published here when
-  # they write `runtime.manifest`. The tarball no longer carries the
+  # the `build` legs read this job's artifact when they write
+  # `runtime.manifest`. The tarball no longer carries the
   # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
   #
   # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
@@ -123,15 +151,15 @@ jobs:
           retention-days: 7
 
   # `!cancelled()`, as on the `build` job below: the legs that succeeded
-  # still publish when another failed.
+  # still reach the draft when another failed.
   publish-runtime:
     name: publish runtime assets
-    needs: runtime
+    needs: [create-release, runtime]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # create the release and attach the assets
+      contents: write  # attach the assets to the draft
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -143,18 +171,19 @@ jobs:
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    # After the runtime assets are on the release, whose sha256s the
-    # manifest below carries. `!cancelled()` rather than the default
-    # `success()`: a runtime leg that failed costs the tarballs that name
-    # it (their manifest step fails), not every tarball.
-    needs: publish-runtime
+    # After the runtime artifacts exist, whose sha256s the manifest below
+    # carries. `!cancelled()` rather than the default `success()`: a runtime
+    # leg that failed costs the tarballs that name it (their manifest step
+    # fails), not every tarball.
+    needs: runtime
     if: ${{ !cancelled() }}
     strategy:
-      # One platform failing shouldn't cancel the others: a successful
-      # build's tarball can still be published to the release while we
-      # investigate the broken one.
+      # One platform failing shouldn't cancel the others: a re-run of the
+      # broken one then finishes the draft without rebuilding them.
       fail-fast: false
       matrix:
+        # `runtime-triple`: the runtime asset this leg's manifest names. A
+        # musl leg names its gnu sibling's (stage_tarball.sh says why).
         # `bazel-config`: extra config appended to the dist build only.
         # The musl legs run on the same gnu runners as their gnu
         # siblings (same arch, cross-libc): `--config=musl-*` selects
@@ -177,18 +206,23 @@ jobs:
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-26  # Apple Silicon
+            runtime-triple: aarch64-apple-darwin
             bazel-config: ""
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
+            runtime-triple: x86_64-unknown-linux-gnu
             bazel-config: ""
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm  # GitHub-hosted native ARM Linux
+            runtime-triple: aarch64-unknown-linux-gnu
             bazel-config: ""
           - triple: x86_64-unknown-linux-musl
             runs-on: ubuntu-latest
+            runtime-triple: x86_64-unknown-linux-gnu
             bazel-config: "--config=musl-x86_64"
           - triple: aarch64-unknown-linux-musl
             runs-on: ubuntu-24.04-arm
+            runtime-triple: aarch64-unknown-linux-gnu
             bazel-config: "--config=musl-aarch64"
 
     steps:
@@ -304,13 +338,18 @@ jobs:
       # The step is a script so //tools:stage_tarball_test runs the same
       # lines before a tag does (docs/dev/release_steps.md): the binaries
       # `:bin` laid out above, the `latchkey` launcher, the commit, the
-      # manifest of the runtime asset `publish-runtime` published (read
-      # back through `gh`, with its sha256 and size), and the third-party
-      # notices — then the tarball and its sha256.
+      # manifest of the runtime asset the `runtime` job staged (with its
+      # sha256 and size), and the third-party notices — then the tarball
+      # and its sha256.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-${{ matrix.runtime-triple }}
+          path: ${{ runner.temp }}/runtime-assets
+
       - name: Stage tarball
         id: stage
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/runtime-assets
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
         run: |
@@ -329,16 +368,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # One platform failing still publishes the others: the matrix comment
-  # above, and `!cancelled()` for the same reason as `publish-runtime`.
+  # One platform failing still attaches the others to the draft: the matrix
+  # comment above, and `!cancelled()` for the same reason as `publish-runtime`.
   publish-tarballs:
     name: publish tarballs
-    needs: build
+    needs: [create-release, build]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # create the release and attach the assets
+      contents: write  # attach the assets to the draft
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -577,11 +616,11 @@ jobs:
 
   publish-macos-app:
     name: publish macos-app
-    needs: macos-app-verify
+    needs: [create-release, macos-app-verify]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # create the release and attach the dmg
+      contents: write  # attach the dmg to the draft
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -591,9 +630,8 @@ jobs:
           pattern: macos-app-dmg
 
   # Build the runtime image for one architecture and push it to ghcr.io by
-  # digest, with no tag yet; `docker-publish` joins the two. Runs after
-  # `publish-tarballs` has uploaded the Linux tarballs to the GitHub Release,
-  # which the docker build context is staged from.
+  # digest, with no tag yet; `docker-publish` joins the two. The docker build
+  # context is staged from the artifacts of the jobs it needs.
   #
   # Each leg builds on a runner of its own architecture, so nothing is
   # emulated and the job runs no emulator image.
@@ -605,7 +643,7 @@ jobs:
   # shouldn't block publishing the Linux image.
   docker-image:
     name: docker-image (${{ matrix.arch }})
-    needs: [runtime, publish-runtime, build, publish-tarballs]
+    needs: [runtime, build]
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
@@ -626,19 +664,25 @@ jobs:
 
       - uses: ./.github/actions/free-runner-disk
 
-      # Pull the just-published tarballs from the GitHub Release into
-      # the build context at the layout datalib/docker/Dockerfile
-      # expects (`dist/<arch>/<tarball>`), via `gh release download`
-      # with the workflow's GITHUB_TOKEN: the binaries, and the CPU
-      # runtime asset with its `.sha256` sidecar, which the Dockerfile
-      # checks before unpacking it beside the binaries — an image is a
-      # bundle, so it does not fetch at run time. The demo library's
-      # inputs come from the checkout (datalib/docker/stage_demo.sh).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-${{ matrix.triple }}
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-${{ matrix.triple }}
+          path: ${{ runner.temp }}/image-assets
+
+      # Lay this run's tarball out in the build context as
+      # datalib/docker/Dockerfile expects (`dist/<arch>/<tarball>`): the
+      # binaries, and the CPU runtime asset with its `.sha256` sidecar,
+      # which the Dockerfile checks before unpacking it beside the binaries
+      # — an image is a bundle, so it does not fetch at run time. The demo
+      # library's inputs come from the checkout (datalib/docker/stage_demo.sh).
       - name: Stage tarballs and the demo into docker build context
         env:
           ARCH: ${{ matrix.arch }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
+          ASSETS: ${{ runner.temp }}/image-assets
           TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
@@ -646,13 +690,10 @@ jobs:
           cp datalib/docker/Dockerfile ctx/Dockerfile
           cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
           datalib/docker/stage_demo.sh ctx
-          for pattern in "datalib-${TRIPLE}.tar.gz" \
-                         "runtime-${TRIPLE}.tar.gz*"; do
-              gh release download "${REF_NAME}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --pattern "${pattern}" \
-                  --clobber --dir "ctx/dist/${ARCH}"
-          done
+          cp "${ASSETS}/datalib-${TRIPLE}.tar.gz" \
+             "${ASSETS}/runtime-${TRIPLE}.tar.gz" \
+             "${ASSETS}/runtime-${TRIPLE}.tar.gz.sha256" \
+             "ctx/dist/${ARCH}/"
           ls -la "ctx/dist/${ARCH}"
 
       # Every Docker Hub image this job needs — BuildKit and the
@@ -821,3 +862,33 @@ jobs:
           version="${REF_NAME#v}"
           DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${version}" \
               datalib/docker/doc_test.sh
+
+  # Everything every job made is on the draft, so publish it. Immutable from
+  # here: it becomes `releases/latest`, and its assets and tag are locked.
+  # Any job that failed leaves this skipped and the release a draft; re-running
+  # the failed jobs finishes it. Names every job that makes an asset, not only
+  # the last in each chain, because `publish-runtime` and `publish-tarballs`
+  # run on after a failed leg.
+  publish-release:
+    name: publish the release
+    needs:
+      - runtime
+      - publish-runtime
+      - build
+      - publish-tarballs
+      - macos-app-verify
+      - publish-macos-app
+      - docker-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # publish the draft
+    steps:
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release edit "$REF_NAME" --draft=false

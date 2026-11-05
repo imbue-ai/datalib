@@ -80,9 +80,6 @@ The second way in skips the first two boxes. Someone holding a
 write-access account needs no crate: a test in their own PR runs with the
 write key once it reaches `main`.
 
-The third way in skips the rest. The write key is a repository secret, so
-a workflow edited on any branch can name it, with no PR and no merge.
-
 ### What a build script can do with that position
 
 From smallest reach to largest:
@@ -125,7 +122,7 @@ That does nothing about the build scripts that run once one starts.
 | 7-day burn-in in `cargo-update.yml` | A bad backend crate noticed within the week | One nobody notices. Dependabot's PRs have no `cooldown`, so the desktop app's crates and the npm trees do not wait |
 | A release reads no cache: no BuildBuddy key, no restored repository cache, no Docker layer cache (check 21) | An entry written on `main`, or with a stolen key, reaching what a release ships. On the mac legs this was the repository cache: v0.49.0's restored an entry saved on `main` by `latchkey-auth.yml`'s daily run, while BuildBuddy gave them no hits | Bad code a release compiles itself (item 1) |
 | Two BuildBuddy orgs | A laptop or a PR run writing what `main`'s CI replays | Anything that runs on `main` |
-| The write key only on a push to `main` | A PR's code getting the key before it merges | A workflow edited on a branch: only `test.yml`'s own expression holds the key to `main` |
+| The write key is a secret of the `main-ci` environment, which only `main` may use (check 21, and a setting below) | A PR's code, or a workflow edited on a branch, getting the key before it merges | Anything that runs on `main` |
 | BuildKit pinned by digest, and each image built on its own architecture, so no emulator image runs (check 21) | Whoever controls a tag on Docker Hub running code in a job that can push the image, or changing what assembles it | A bad version someone pins deliberately, and the runner image itself |
 | Publish and sign jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, or rewriting a published release | Bad code in what it builds |
 | The `v*` tag ruleset | Anyone outside the team starting or moving a release | What a release does once started |
@@ -137,9 +134,6 @@ That does nothing about the build scripts that run once one starts.
 - **The write key sits where crates compile.** `test.yml`'s three jobs
   that run on a push to `main` hold it, and it cannot be hidden from
   build scripts on those runners. Its reach is `main`'s CI.
-- **Any write-access account can reach the write key** through a branch
-  workflow. A GitHub environment limited to `main` would close this one
-  route without a review gate.
 - **Nothing can tell a bad entry from a good one.** If a compromise is
   found, mint a new write key; that leaves any planted entries in place
   for `main`'s CI, and no release reads them.
@@ -160,6 +154,47 @@ rather than on a run:
   saving the whole directory.
 - Working out the hash of a real action and planting an entry that a
   later `main` build replays.
+
+## A release is swapped after it is built
+
+Someone holding a write-access account could replace a published tarball and
+the `.sha256` beside it, and everyone who then ran `install.sh` would install
+what they chose. The `v*` tag ruleset says nothing about this: no tag moves.
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| Immutable releases (a setting below), and a release is a draft until it is whole ([`release_steps.md`](release_steps.md) §"Draft, then publish") | Replacing or removing an asset of a published release, or moving its tag | A release published before the setting went on. Replacing an asset of a draft, in the minutes before it publishes |
+| The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing a new release under a new tag name and marking it latest, which is what `releases/latest/download/…` follows | Marking an older release as latest, which GitHub still allows on an immutable one |
+| `install.sh` refuses a tarball with a missing or wrong checksum | A damaged or partly swapped download | A rewritten release: the checksum comes from the same place. It is the immutable release that makes the pair worth checking |
+
+### What is still open
+
+- **Releases older than the setting stay replaceable.** GitHub's docs say the
+  setting applies only to future releases, so a writer could replace an old
+  release's assets and mark it latest. It goes away as they are removed or if
+  republishing them turns out to lock them, which nobody has tried here.
+- **`install.sh` itself is read from `main`,** so it is as trusted as a merge,
+  and merging takes a green CI and no review.
+- **Nothing outside GitHub vouches for a tarball.** The Mac app is signed, and
+  the tarballs are not; a person trusts GitHub's account of what the tag built.
+
+### What has not been shown
+
+A release's `gh` calls can run only on a real tag (`release_steps.md`), so no
+test covers the draft-then-publish path, and whether the settings below hold
+is something only those commands can say.
+
+## The settings this rests on
+
+Each of these lives in GitHub, not in the tree, so no test or lint can see it.
+Each line is a command that shows it.
+
+| setting | check |
+|---|---|
+| Immutable releases on | `gh api repos/imbue-ai/datalib/immutable-releases` says `"enabled":true` |
+| Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
+| `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
+| The release org's key is only in `main-ci` | `gh secret list --repo imbue-ai/datalib` does not name `BUILD_BUDDY_RELEASE_API_KEY`; `gh secret list --env main-ci --repo imbue-ai/datalib` does |
 
 ## Another program running as you
 
@@ -269,5 +304,7 @@ code before repeating it as current.
 | A message's remote image tells its sender you read it | a stranger | Remote media is fetched only for an allowed sender or document, through the server | `http/src/remote_media.rs` |
 | A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs `AssertSqlSafe` and a reason", `etl/src/run_problems.rs` |
 | A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
+| A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
+| datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
 | A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime fetch and the qmd models are pinned by sha256 | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |
