@@ -77,8 +77,8 @@ unpacks it into `~/.local/lib/datalib` and links the tools into
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
-- `datalib-applet` — serves the search grid inside the app, and
-  searches from the terminal with no app running:
+- `datalib-applet` — serves the search grid and your contacts inside
+  the app, and searches from the terminal with no app running:
   `datalib-applet search ~/datalib 'from:picard warp core'` prints what
   the search box would find, as JSON. [Searching your
   mirror](searching.md) is the query language both take.
@@ -369,7 +369,8 @@ you write after a `[…]` header belongs to that header's table until the
 next one.
 
 You normally don't write this by hand. The app's first-run screen
-writes the index steps and the applet for an empty folder, and the
+writes the index steps and the applets (search, and your contacts)
+for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
 step). From a terminal, two commands do the same:
 

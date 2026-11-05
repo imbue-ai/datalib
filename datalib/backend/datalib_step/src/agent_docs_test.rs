@@ -107,6 +107,29 @@ fn every_datalib_step_and_datalib_dag_command_in_the_docs_parses() {
     }
 }
 
+/// An agent reading only the overview learns the contacts app exists and
+/// what it is for, and each way it might ask for it lands on the same page.
+#[test]
+fn the_overview_names_every_applet_and_the_contacts_app_can_be_asked_for() {
+    let overview = crate::help::page(&[], &[], "abc123").unwrap();
+    for a in datalib_agent_docs::APPLETS {
+        assert!(overview.contains(a.name), "{} is missing", a.name);
+    }
+    assert!(overview.contains("link handles to contacts"), "{overview}");
+    assert!(
+        overview.contains("datalib-step help contacts-app"),
+        "{overview}"
+    );
+
+    let page = |word: &str| crate::help::page(&[word.to_string()], &[], "abc123").unwrap();
+    assert_eq!(page("datalib_contacts"), page("contacts-app"));
+    assert_eq!(page("photos"), page("applets"));
+    assert!(
+        page("contacts").contains("datalib-step help contacts-app"),
+        "the address-book source's page says where the contacts app is"
+    );
+}
+
 /// A doc that names `datalib-step help <topic>`, in a shell block or in
 /// its text, names a page that exists.
 #[test]

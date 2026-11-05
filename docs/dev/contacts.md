@@ -429,10 +429,19 @@ The routes, each behind the gateway's secret
 ([`applets.md`](applets.md)). A refusal the store explains (a handle
 someone else holds, a contact with no name, a bad date, not a photo)
 is a 409 with the store's words; a handle that does not parse is a
-400, and a contact or photo that is not there a 404:
+400, and a contact or photo that is not there a 404. `GET /` answers the
+list below as JSON, each with its `kind`, and `datalib-applet
+datalib_contacts --help` prints it: `read` changes nothing, `propose` is
+an agent's way to write, and `person` is the rest, recorded as the
+person's own decision whoever called it, since the store cannot tell who
+is on the other end of the token. A test holds this table to the
+router. [`contacts_app.md`](../user/contacts_app.md) is the same ground
+for an agent, as steps:
 
 | route | does |
 |---|---|
+| `GET /` | every route below, with its method, `kind` and what it does, and how a handle is spelled |
+| `GET /health` | `{ok: true}` |
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
 | `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
@@ -440,7 +449,7 @@ is a 409 with the store's words; a handle that does not parse is a
 | `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
 | `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
 | `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
-| `POST /link`, `POST /unlink` | one handle to or from a contact |
+| `POST /link`, `POST /unlink` | `{handle, contact_id}` / `{handle}`: one handle to or from a contact, as the person's own act; an agent proposes instead |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | `{contact_id, name}`, at once, without a draft |
 | `POST /me` | `{contact_id, me}`: say the contact is you, or stop; answers `{changed}`. A merged-away id marks its survivor, and a group is refused |
@@ -451,7 +460,7 @@ is a 409 with the store's words; a handle that does not parse is a
 | `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
 | `POST /proposals` | an agent's batch, one commit: `{agent, run?, contacts: [{contact_id?, name?, handles, reason?, confidence?, labels}], handles: [{handle, labels}]}`, each label `{label, applies?, reason?, confidence?}`, a confidence 0 to 1. Answers `{contacts_created, linked, labelled, skipped: [{what, why}]}` |
 | `GET /review?label=` | the review as a typed table, one row per contact or handle with anything an agent proposed or a label, with a `membership` column for `real` and for `label` if given; `GET /review/items` the same as plain records, for an agent |
-| `POST /review/confirm`, `POST /review/reject` | `{subjects}`: agree with, or turn down, everything an agent proposed for each |
+| `POST /review/confirm`, `POST /review/reject` | `{subjects}`, each a handle or `contact:<id>`: agree with, or turn down, everything an agent proposed for each |
 | `POST /label` | `{subjects, label, applies}`: a person's in (`true`), out (`false`) or unknown (`null`) |
 | `GET /not_linked` | every link a person turned down, newest first |
 
@@ -817,7 +826,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-Editing a contact on its card, merging or deleting from the person card, groups and members, undo, the triage grid of
+Merging or deleting from the person card, groups and members, undo, the triage grid of
 unresolved handles, labels in search (`label:` and its negation) and on a chip, a
 handle for a number without its country code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,

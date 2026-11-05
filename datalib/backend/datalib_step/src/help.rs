@@ -96,6 +96,13 @@ const SETUP: &[SetupStep] = &[
               search's query language, and `datalib-step help agent` the rest.",
         commands: &[],
     },
+    SetupStep {
+        say: "Say who is who. Sources know a person only by handles: an address here, a \
+              number there. The contacts app links them into one contact, which every chip \
+              and `with:contact:<id>` search then follows; you propose the links, and the \
+              person confirms them. `datalib-step help contacts-app` says how.",
+        commands: &[],
+    },
 ];
 
 pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<String, String> {
@@ -114,17 +121,29 @@ pub fn page(topic: &[String], commands: &[String], git_ref: &str) -> Result<Stri
         ([_, method], Some(t)) => Ok(method_page(t, known_method(t, method)?)),
         ([word], None) => match Function::parse(word) {
             Some(f) => Ok(function_page(f)),
-            None => Err(format!(
-                "no help on {word:?}. Try `datalib-step help` for the topics: `agent`, \
-                 `docs` for every guide and reference, a source type, a function or a \
-                 command."
-            )),
+            None => match applet_doc(word) {
+                Some(doc) => Ok(datalib_agent_docs::page(doc, git_ref)),
+                None => Err(format!(
+                    "no help on {word:?}. Try `datalib-step help` for the topics: `agent`, \
+                     `applets`, `docs` for every guide and reference, a source type, a \
+                     function or a command."
+                )),
+            },
         },
         _ => Err(format!(
             "no help on `{}`: a topic is one word, or a source type and one of its methods",
             topic.join(" ")
         )),
     }
+}
+
+/// The doc on an applet, by the applet's name. A source type of the same
+/// name (`slack`) is its own page, and the applet is on `help applets`.
+fn applet_doc(name: &str) -> Option<&'static Doc> {
+    let applet = datalib_agent_docs::APPLETS
+        .iter()
+        .find(|a| a.name == name)?;
+    datalib_agent_docs::doc(applet.topic)
 }
 
 // One line per doc, `<topic> <path>`, which `scripts/release/stage_tarball.sh`
@@ -307,6 +326,14 @@ fn overview(commands: &[String]) -> String {
              troubleshooting",
         ),
         (
+            "datalib-step help contacts-app",
+            "who a handle is: linking handles to contacts, labelling people and senders",
+        ),
+        (
+            "datalib-step help applets",
+            "the servers the app runs, listed below: what each serves, how to call them",
+        ),
+        (
             "datalib-step help docs",
             "every doc compiled in: raw stores, apps, search, a step of your own, …",
         ),
@@ -341,6 +368,10 @@ fn overview(commands: &[String]) -> String {
             f.as_str(),
             first_sentence(f.describe())
         ));
+    }
+    out.push_str("\nApplets (reached at /applet/<id>/ on datalib-http once the app runs):\n");
+    for a in datalib_agent_docs::APPLETS {
+        out.push_str(&format!("  {:<26} {}\n", a.name, a.does));
     }
     out.push_str("\nCommands:\n");
     out.push_str(&wrap(&commands.join(", "), 2, 2));

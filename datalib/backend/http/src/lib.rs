@@ -304,6 +304,7 @@ pub fn router(state: AppState) -> Router {
         // which the applet sees verbatim.
         .route("/applet/{id}/{*rest}", any(proxy_applet))
         .route("/applet/{id}/", any(proxy_applet_root))
+        .route("/applet/{id}", any(proxy_applet_root))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
         // into `index.html`.
