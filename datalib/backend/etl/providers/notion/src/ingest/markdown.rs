@@ -14,8 +14,18 @@
 //!   markdown cannot express. Fetching it returns a stub carrying the
 //!   same id — an infinite regress. Never follow one.
 //!
-//! Measured against a real workspace: `button`, `alias` and `drive` all
-//! appear as the permanent kind.
+//! Measured against a real workspace, asking for such a block by id tells
+//! the rest. A `bookmark`, a `tweet`, a `miro` and an
+//! `external_object_instance` answer with their URL. An `alias`, a `drive`
+//! and an `ai_block` answer `unsupported`, which is real content lost. A
+//! `button` and a `breadcrumb` hold nothing a reader would miss.
+
+use std::collections::BTreeMap;
+
+/// The kinds of block a page is no worse without, so neither a request
+/// nor a row. Any kind not named here is asked for, and reported if the
+/// answer is no use, so a kind Notion adds later is not lost quietly.
+const LOSES_NOTHING: &[&str] = &["button", "breadcrumb"];
 
 /// A hole in a page's markdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +42,12 @@ impl Unresolved {
     /// content. False for block types markdown cannot express.
     pub fn is_fetchable(&self) -> bool {
         self.alt.is_none()
+    }
+
+    pub fn loses_nothing(&self) -> bool {
+        self.alt
+            .as_deref()
+            .is_some_and(|alt| LOSES_NOTHING.contains(&alt))
     }
 }
 
@@ -51,9 +67,7 @@ impl PageBody {
         self.unresolved.iter().filter(|u| u.is_fetchable())
     }
 
-    /// Holes that will never resolve, as `(block_id, block_type)`. These
-    /// belong in the rendered document's problem list: the page is
-    /// genuinely incomplete and saying so is the point.
+    /// Holes markdown cannot express, as `(block_id, block_type)`.
     pub fn permanent_holes(&self) -> Vec<(String, String)> {
         self.unresolved
             .iter()
@@ -65,17 +79,80 @@ impl PageBody {
     /// link an untruncated body carries, and it is no longer a hole.
     pub fn link_database(&mut self, id: &str, title: &str) {
         self.unresolved.retain(|u| u.block_id != id);
-        let marker = tags_at(&self.markdown, "<unknown")
-            .into_iter()
-            .find(|(_, tag)| attr(tag, "url").and_then(id_in_url).as_deref() == Some(id))
-            .map(|(at, tag)| (at, tag.len()));
-        if let Some((at, len)) = marker {
+        if let Some((at, len)) = self.marker_of(id) {
             let link = format!(
                 "<database url=\"https://app.notion.com/p/{}\">{title}</database>",
                 id.replace('-', "")
             );
             self.markdown.replace_range(at..at + len, &link);
         }
+    }
+
+    /// The hole `id` came back as `part`: its text goes where the marker
+    /// is, and any hole of its own is now one of this body's.
+    pub fn fill(&mut self, id: &str, part: PageBody) {
+        self.put(id, part.markdown.trim_end_matches('\n'));
+        for hole in part.unresolved {
+            if !self.unresolved.iter().any(|u| u.block_id == hole.block_id) {
+                self.unresolved.push(hole);
+            }
+        }
+    }
+
+    /// The block `id` is a link, which goes where the marker is.
+    pub fn link_block(&mut self, id: &str, link: &str) {
+        self.put(id, link);
+    }
+
+    fn put(&mut self, id: &str, text: &str) {
+        self.unresolved.retain(|u| u.block_id != id);
+        match self.marker_of(id) {
+            Some((at, len)) => self.markdown.replace_range(at..at + len, text),
+            None if text.is_empty() => {}
+            None => {
+                self.markdown.push('\n');
+                self.markdown.push_str(text);
+                self.markdown.push('\n');
+            }
+        }
+    }
+
+    fn marker_of(&self, id: &str) -> Option<(usize, usize)> {
+        tags_at(&self.markdown, "<unknown")
+            .into_iter()
+            .find(|(_, tag)| attr(tag, "url").and_then(id_in_url).as_deref() == Some(id))
+            .map(|(at, tag)| (at, tag.len()))
+    }
+
+    /// Whether any hole could hold something a reader would miss, and so
+    /// whether the body is worth following further or reporting on.
+    pub fn has_holes_that_matter(&self) -> bool {
+        self.unresolved.iter().any(|u| !u.loses_nothing())
+    }
+
+    /// Whether a fetchable hole is still open, so text may be missing,
+    /// and links with it.
+    pub fn is_missing_text(&self) -> bool {
+        self.fetchable_holes().next().is_some()
+    }
+
+    /// What is still missing from this body once everything that can be
+    /// asked for has been, as a sentence for its `problems` row.
+    pub fn what_is_lost(&self) -> Option<String> {
+        let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+        for hole in self.unresolved.iter().filter(|u| !u.loses_nothing()) {
+            *kinds
+                .entry(hole.alt.as_deref().unwrap_or("subtree"))
+                .or_default() += 1;
+        }
+        if kinds.is_empty() {
+            return None;
+        }
+        let listed: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
+        Some(format!(
+            "missing from this page because Notion will not give it: {}",
+            listed.join(", ")
+        ))
     }
 }
 
@@ -146,6 +223,33 @@ fn tags_at<'a>(md: &'a str, open: &str) -> Vec<(usize, &'a str)> {
         }
     }
     out
+}
+
+/// A block's URL as the link to put where its marker is, or `None` for a
+/// block with no URL, or one that is not http or https: the URL came from
+/// upstream, and what is written here gets drawn as a link.
+pub fn link_of_block(block: &serde_json::Value) -> Option<String> {
+    let content = block.get(block.get("type")?.as_str()?)?;
+    let url = content.get("url")?.as_str()?;
+    let scheme_is_web = url.starts_with("https://") || url.starts_with("http://");
+    let would_end_the_link = url.contains(|c: char| c == '<' || c == '>' || c.is_whitespace());
+    if !scheme_is_web || would_end_the_link {
+        return None;
+    }
+    let caption: String = content
+        .get("caption")
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("plain_text")?.as_str())
+        .collect();
+    let text = if caption.trim().is_empty() {
+        url
+    } else {
+        caption.trim()
+    };
+    let text = text.replace('[', "\\[").replace(']', "\\]");
+    Some(format!("[{text}](<{url}>)"))
 }
 
 /// Read a `page_markdown` response body.

@@ -3,7 +3,7 @@
 //! under this build holding everything it held, owing exactly what it
 //! had not fetched, and with the mark gone: rung 1 of
 //! `schema_raw::LADDER`. Rung 2 then gives each page it held its row in
-//! `tree`.
+//! `tree`. Rung 3 is in `holes.rs`.
 
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr};
@@ -261,7 +261,7 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
             "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
         )
         .await,
-        ["2"]
+        ["3"]
     );
     assert_eq!(
         strings(

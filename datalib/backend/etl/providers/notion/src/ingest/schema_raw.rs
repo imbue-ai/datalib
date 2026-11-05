@@ -304,7 +304,41 @@ pub const LADDER: &[Migration] = &[
         name: "every page held has its row in tree",
         apply: |conn| Box::pin(pages_into_the_tree(conn)),
     },
+    Migration {
+        version: 3,
+        name: "a body whose holes this build can do better with is owed",
+        apply: |conn| Box::pin(bodies_with_holes_are_owed(conn)),
+    },
 ];
+
+/// Rung 3. A held body is not asked for again until its page is edited,
+/// so one stored before holes were filled in place, and links kept, would
+/// stay as it is and report nothing. Those bodies are read again once.
+async fn bodies_with_holes_are_owed(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, markdown, unresolved_block_ids FROM page_markdown \
+         WHERE markdown LIKE '%<unknown%' \
+            OR (unresolved_block_ids IS NOT NULL AND unresolved_block_ids NOT IN ('', '[]'))",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    for (id, markdown, unresolved) in rows {
+        let unresolved: serde_json::Value = unresolved
+            .and_then(|u| serde_json::from_str(&u).ok())
+            .unwrap_or_default();
+        let body = super::markdown::parse(&serde_json::json!({
+            "markdown": markdown,
+            "unresolved_block_ids": unresolved,
+        }));
+        if body.has_holes_that_matter() {
+            sqlx::query("UPDATE page_markdown_bookkeeping SET held_version = NULL WHERE id = ?")
+                .bind(&id)
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
+    Ok(())
+}
 
 /// Rung 2. A store from before `tree` holds pages whose rows it lacks,
 /// and a search walk past them never lists them again; each gets its
