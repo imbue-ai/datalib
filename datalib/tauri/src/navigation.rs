@@ -47,7 +47,7 @@ pub fn new_window(next: &Url, app: Option<&Url>, launcher: &Url) -> Destination 
 }
 
 /// The schemes the OS is asked to open: the same set the page's own
-/// opener may hand out (`capabilities/open-external-urls.json`).
+/// opener may hand out (`library-capabilities/open-external-urls.json`).
 fn opens_outside(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https" | "mailto" | "tel")
 }

@@ -51,7 +51,7 @@ function internals(): TauriInternals | null {
  * Note this is stricter than "is the desktop app": the app loads the UI
  * from localhost as an external URL, and Tauri withholds IPC from a
  * remote origin unless a capability lists it (see
- * `datalib/tauri/capabilities/reveal-local-files.json`). If that
+ * `datalib/tauri/library-capabilities/reveal-local-files.json`). If that
  * capability is missing or its URL patterns stop matching, this returns
  * false and the UI falls back to browser behavior — which is the
  * failure mode we want: a missing menu item, not a broken one.
@@ -94,7 +94,7 @@ export interface LibraryMenu {
 /**
  * What the library menu lists (`library_menu` in
  * `datalib/tauri/src/main.rs`). Null outside the app, or when the
- * capability (`capabilities/switch-libraries.json`) does not reach this
+ * capability (`library-capabilities/switch-libraries.json`) does not reach this
  * page.
  */
 export async function libraryMenu(): Promise<LibraryMenu | null> {
@@ -142,7 +142,7 @@ export async function showLibraries(): Promise<void> {
  * (`open_raw_store` in `datalib/tauri/src/main.rs`).
  *
  * An app command rather than a plugin one, so there is no package to
- * own the command name; `capabilities/open-raw-stores.json` grants it.
+ * own the command name; `library-capabilities/open-raw-stores.json` grants it.
  */
 export async function openRawStore(
   path: string,
@@ -204,7 +204,7 @@ export function filePathFromUrl(url: string): string | null {
  * register, and the Promise it returns is truthy — `if
  * (!window.confirm(…)) return` never returns. The plugin's own
  * `confirm` goes through `plugin:dialog|message`, granted by
- * `capabilities/confirm-actions.json`. A refused call rejects, and the
+ * `library-capabilities/confirm-actions.json`. A refused call rejects, and the
  * action does not happen.
  */
 export async function confirmAction(message: string): Promise<boolean> {
@@ -220,7 +220,7 @@ export async function confirmAction(message: string): Promise<boolean> {
  *
  * Denial is a real failure mode here rather than a theoretical one.
  * The webview reaches this command only through
- * `capabilities/pick-local-paths.json`, and an unlisted or
+ * `library-capabilities/pick-local-paths.json`, and an unlisted or
  * no-longer-matching remote URL pattern makes Tauri refuse the call —
  * with no user-visible signal of its own.
  */
