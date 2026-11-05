@@ -54,7 +54,7 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
-# release workflow's macos-app job runs in CI. It also stamps the
+# release workflow's macos-app-* jobs run in CI, a phase each. It also stamps the
 # binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-dag
 # --version` names the tag rather than `dev`) and refuses a bundle whose
 # binaries are not optimized and stamped
