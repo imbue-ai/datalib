@@ -38,12 +38,30 @@ fn body(id: &str, md: &str) -> PageMarkdownUpsert {
     }
 }
 
+async fn store_pages(db: &RawDb, rows: &[PageUpsert]) {
+    let mut tx = db.pool().begin().await.unwrap();
+    db.store_pages(&mut tx, rows).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn store_bodies(db: &RawDb, rows: &[PageMarkdownUpsert]) {
+    let mut tx = db.pool().begin().await.unwrap();
+    for row in rows {
+        db.store_body(&mut tx, row, &[], true).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+}
+
+async fn store_comments(db: &RawDb, page_id: &str, rows: &[CommentUpsert]) {
+    let mut tx = db.pool().begin().await.unwrap();
+    db.store_comments(&mut tx, page_id, rows).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
 async fn seed(path: &std::path::Path) -> String {
     let db = RawDb::open(path).await.unwrap();
-    db.upsert_pages(&[page(A), page(B)]).await.unwrap();
-    db.upsert_page_markdown(&[body(A, "# A\n"), body(B, "# B\n")])
-        .await
-        .unwrap();
+    store_pages(&db, &[page(A), page(B)]).await;
+    store_bodies(&db, &[body(A, "# A\n"), body(B, "# B\n")]).await;
     let head = commit(&db, "seed").await;
     db.close().await;
     head
@@ -99,9 +117,7 @@ async fn only_the_changed_page_is_handed_to_render() {
     let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_page_markdown(&[body(B, "# B\n\nnew paragraph\n")])
-        .await
-        .unwrap();
+    store_bodies(&db, &[body(B, "# B\n\nnew paragraph\n")]).await;
     commit(&db, "edit B").await;
     db.close().await;
 
@@ -122,15 +138,18 @@ async fn a_new_comment_names_its_thread() {
     let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_comments(&[CommentUpsert {
-        id: "c1".into(),
-        discussion_id: Some("d1".into()),
-        page_id: Some(A.into()),
-        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
-        ..Default::default()
-    }])
-    .await
-    .unwrap();
+    store_comments(
+        &db,
+        A,
+        &[CommentUpsert {
+            id: "c1".into(),
+            discussion_id: Some("d1".into()),
+            page_id: Some(A.into()),
+            payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
+            ..Default::default()
+        }],
+    )
+    .await;
     commit(&db, "comment on A").await;
     db.close().await;
 
@@ -153,24 +172,29 @@ async fn a_changed_page_names_its_threads() {
     let f = d.path().join("notion.doltlite_db");
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_pages(&[page(A)]).await.unwrap();
-    db.upsert_comments(&[CommentUpsert {
-        id: "c1".into(),
-        discussion_id: Some("d1".into()),
-        page_id: Some(A.into()),
-        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
-        ..Default::default()
-    }])
-    .await
-    .unwrap();
+    store_pages(&db, &[page(A)]).await;
+    store_comments(
+        &db,
+        A,
+        &[CommentUpsert {
+            id: "c1".into(),
+            discussion_id: Some("d1".into()),
+            page_id: Some(A.into()),
+            payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
+            ..Default::default()
+        }],
+    )
+    .await;
     let head = commit(&db, "seed with a thread").await;
     let none: HashSet<String> = HashSet::new();
-    db.upsert_pages(&[PageUpsert {
-        last_edited_time: Some("2026-09-09T00:00:00.000Z".into()),
-        ..page(A)
-    }])
-    .await
-    .unwrap();
+    store_pages(
+        &db,
+        &[PageUpsert {
+            last_edited_time: Some("2026-09-09T00:00:00.000Z".into()),
+            ..page(A)
+        }],
+    )
+    .await;
     commit(&db, "A edited").await;
     db.close().await;
 
@@ -214,17 +238,20 @@ async fn a_thread_whose_last_comment_went_is_the_drivers_to_name() {
     let f = d.path().join("notion.doltlite_db");
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_pages(&[page(A)]).await.unwrap();
-    db.upsert_page_markdown(&[body(A, "# A\n")]).await.unwrap();
-    db.upsert_comments(&[CommentUpsert {
-        id: "c1".into(),
-        discussion_id: Some("d1".into()),
-        page_id: Some(A.into()),
-        payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
-        ..Default::default()
-    }])
-    .await
-    .unwrap();
+    store_pages(&db, &[page(A)]).await;
+    store_bodies(&db, &[body(A, "# A\n")]).await;
+    store_comments(
+        &db,
+        A,
+        &[CommentUpsert {
+            id: "c1".into(),
+            discussion_id: Some("d1".into()),
+            page_id: Some(A.into()),
+            payload: serde_json::to_string(&json!({"id": "c1", "discussion_id": "d1"})).unwrap(),
+            ..Default::default()
+        }],
+    )
+    .await;
     let head = commit(&db, "seed with a thread").await;
     let none: HashSet<String> = HashSet::new();
     db.close().await;
@@ -285,20 +312,26 @@ async fn a_parent_moves_its_tree_row_only_when_renamed() {
     let under_a = json!({"type": "page_id", "page_id": A});
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_pages(&[
-        titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone()),
-        titled(B, "Ready room", "2026-09-07T00:00:00.000Z", under_a),
-    ])
-    .await
-    .unwrap();
+    store_pages(
+        &db,
+        &[
+            titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone()),
+            titled(B, "Ready room", "2026-09-07T00:00:00.000Z", under_a),
+        ],
+    )
+    .await;
     let seeded = commit(&db, "seed").await;
-    db.upsert_pages(&[titled(A, "Bridge", "2026-09-08T00:00:00.000Z", top.clone())])
-        .await
-        .unwrap();
+    store_pages(
+        &db,
+        &[titled(A, "Bridge", "2026-09-08T00:00:00.000Z", top.clone())],
+    )
+    .await;
     let edited = commit(&db, "A edited").await;
-    db.upsert_pages(&[titled(A, "Main bridge", "2026-09-09T00:00:00.000Z", top)])
-        .await
-        .unwrap();
+    store_pages(
+        &db,
+        &[titled(A, "Main bridge", "2026-09-09T00:00:00.000Z", top)],
+    )
+    .await;
     let renamed = commit(&db, "A renamed").await;
 
     assert!(tree_changed(&db, &seeded, &edited).await.is_empty());
@@ -317,13 +350,13 @@ async fn a_tree_change_names_the_table_of_contents_and_an_edit_does_not() {
     let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_pages(&[titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone())])
-        .await
-        .unwrap();
+    store_pages(
+        &db,
+        &[titled(A, "Bridge", "2026-09-07T00:00:00.000Z", top.clone())],
+    )
+    .await;
     let seeded = commit(&db, "seed").await;
-    db.upsert_page_markdown(&[body(A, "# Bridge\n")])
-        .await
-        .unwrap();
+    store_bodies(&db, &[body(A, "# Bridge\n")]).await;
     let edited = commit(&db, "A edited").await;
     db.close().await;
 
@@ -332,9 +365,11 @@ async fn a_tree_change_names_the_table_of_contents_and_an_edit_does_not() {
     assert_eq!(just_the_edit.render, Some(set(&[A])));
 
     let db = RawDb::open(&f).await.unwrap();
-    db.upsert_pages(&[titled(B, "Ready room", "2026-09-08T00:00:00.000Z", top)])
-        .await
-        .unwrap();
+    store_pages(
+        &db,
+        &[titled(B, "Ready room", "2026-09-08T00:00:00.000Z", top)],
+    )
+    .await;
     commit(&db, "B arrived").await;
     db.close().await;
 
