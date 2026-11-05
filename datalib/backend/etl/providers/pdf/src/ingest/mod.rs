@@ -282,7 +282,7 @@ fn identify_within(
     let (ident, content_blake3) = identity::extract_with_content_hash(bytes);
     // A hash over part of a document could agree with a different one. Say
     // nothing rather than something false, as for an encrypted one.
-    let content_blake3 = content_blake3.filter(|_| !checked.left_out_object_streams);
+    let content_blake3 = content_blake3.filter(|_| checked.object_streams_left_out == 0);
 
     let kind = match det.pdf_type {
         pdf_inspector::PdfType::TextBased => PdfKind::TextBased,

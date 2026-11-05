@@ -4,6 +4,7 @@
 //! bytes and no limit, so no setting reaches the streams it inflates itself.
 //! `INGEST.md` § "A PDF can be made by anyone" has the rules.
 
+use std::collections::HashSet;
 use std::io::Read;
 
 use anyhow::{bail, Result};
@@ -41,9 +42,20 @@ pub const EXPANDED_OBJECT_STREAM_BYTES: usize = 8 << 20;
 /// What the measuring found out about a document it let through.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Checked {
-    /// A loader will leave out at least one object stream, so what is
-    /// reachable in the document is not everything it holds.
-    pub left_out_object_streams: bool,
+    /// Object streams a loader leaves out, with everything they hold.
+    pub object_streams_left_out: u64,
+    /// Objects no loader can parse, and `pdf-inspector` does not repair.
+    pub objects_unparsed: u64,
+}
+
+impl Checked {
+    /// What a person is told when the document is missing part of itself.
+    pub fn absent(&self) -> Option<String> {
+        let parts = self.object_streams_left_out + self.objects_unparsed;
+        (parts > 0).then(|| {
+            format!("{parts} part(s) of this PDF could not be read, so what they hold is missing")
+        })
+    }
 }
 
 /// The document, with the limit [`check`] assumes.
@@ -62,6 +74,10 @@ pub fn check(bytes: &[u8]) -> Result<Checked> {
 }
 
 pub fn check_within(bytes: &[u8], limits: &Limits) -> Result<Checked> {
+    // The bytes `pdf-inspector` goes on to load, so an object this repair
+    // brings back is not counted as gone.
+    let repaired = pdf_inspector::structure_tree::fix_bare_struct_names(bytes);
+    let bytes = repaired.as_ref();
     // A file that does not open has no stream to measure, and the parser
     // that refuses it next says what is wrong with it.
     let Ok(doc) = Document::load_mem_with_options(
@@ -82,9 +98,14 @@ pub fn check_within(bytes: &[u8], limits: &Limits) -> Result<Checked> {
             measure_stream(*id, stream, &mut budget, &mut checked)?;
         }
     }
+    let mut written = None;
     for (id, span) in spans_of_unparsed_objects(bytes, &doc) {
         if let Some(stream) = stream_written_in(span) {
             measure_stream(id, &stream, &mut budget, &mut checked)?;
+        }
+        let written = written.get_or_insert_with(|| objects_written_in(bytes));
+        if written.contains(&id) && !has_numeral_no_parser_holds(span) {
+            checked.objects_unparsed += 1;
         }
     }
     Ok(checked)
@@ -117,9 +138,9 @@ fn measure_stream(
         return Ok(());
     }
     if decoded > EXPANDED_OBJECT_STREAM_BYTES {
-        checked.left_out_object_streams = true;
+        checked.object_streams_left_out += 1;
     } else if let Ok(content) = stream.get_plain_content_with_limit(limit) {
-        measure_object_stream(id, &stream.dict, &content, budget)?;
+        checked.objects_unparsed += measure_object_stream(id, &stream.dict, &content, budget)?;
     }
     Ok(())
 }
@@ -158,6 +179,40 @@ fn spans_of_unparsed_objects<'a>(
         .zip(ends)
         .filter(|((_, id), _)| !doc.objects.contains_key(id))
         .filter_map(|((start, id), end)| Some((id, body.get(start..end)?)))
+}
+
+/// Every `<number> <generation> obj` in the file. A cross-reference table can
+/// list an object that was never written, as Quartz does at offset 0, and
+/// nothing is lost when no parser finds that one.
+fn objects_written_in(bytes: &[u8]) -> HashSet<ObjectId> {
+    fn numeral_before(bytes: &[u8]) -> Option<(&str, &[u8])> {
+        let digits = bytes
+            .iter()
+            .rev()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        let (rest, numeral) = bytes.split_at(bytes.len() - digits);
+        Some((std::str::from_utf8(numeral).ok()?, rest))
+    }
+    let object_at = |keyword: usize| -> Option<ObjectId> {
+        let (generation, rest) = numeral_before(bytes[..keyword].trim_ascii_end())?;
+        let (number, _) = numeral_before(rest.trim_ascii_end())?;
+        Some((number.parse().ok()?, generation.parse().ok()?))
+    };
+    bytes
+        .windows(b"obj".len())
+        .enumerate()
+        .filter(|(_, window)| *window == b"obj")
+        .filter_map(|(keyword, _)| object_at(keyword))
+        .collect()
+}
+
+/// `pdf-inspector` saturates such a numeral in a form's `/BBox` and loads again,
+/// so the object is read after all. Twenty digits is past any `i64`.
+fn has_numeral_no_parser_holds(span: &[u8]) -> bool {
+    let dict = find(span, b"stream").map_or(span, |keyword| &span[..keyword]);
+    dict.split(|b| !b.is_ascii_digit())
+        .any(|digits| digits.len() >= 20)
 }
 
 /// The stream in one object's bytes, with the filters its dictionary names, for
@@ -241,13 +296,15 @@ fn flate_decoded_len(input: &[u8], limit: usize) -> Option<usize> {
 /// Reads each object in the span its index gives it, one at a time, so what
 /// a loader would hold all at once is counted without being held. An object
 /// that only parses past the end of its span overlaps the next, and a loader
-/// would read what they share again for each of them.
+/// would read what they share again for each of them. Returns how many no
+/// parser can read.
 fn measure_object_stream(
     id: ObjectId,
     dict: &Dictionary,
     content: &[u8],
     budget: &mut Budget,
-) -> Result<()> {
+) -> Result<u64> {
+    let mut unparsed = 0;
     let starts = object_starts(dict, content);
     let ends = starts.iter().skip(1).copied().chain([content.len()]);
     for (&start, end) in starts.iter().zip(ends) {
@@ -266,8 +323,9 @@ fn measure_object_stream(
             );
         }
         // Malformed however far it is read: the loaders skip it too.
+        unparsed += 1;
     }
-    Ok(())
+    Ok(unparsed)
 }
 
 /// What is left of what one document may cost.
@@ -560,7 +618,86 @@ pub(crate) mod tests {
     fn a_malformed_object_is_not_taken_for_an_overlap() {
         let index = "100 0 101 15 ";
         let body = b"<< /S Code >>  (Ten Forward)";
-        assert!(check_within(&pdf(&[object_stream(index, body)]), &LIMITS).is_ok());
+        let checked = check_within(&pdf(&[object_stream(index, body)]), &LIMITS).unwrap();
+        assert_eq!(checked.objects_unparsed, 1);
+    }
+
+    /// Neither loader gets an object like this one back, so the document
+    /// says it is missing something.
+    #[test]
+    fn an_object_no_parser_reads_is_counted_as_absent() {
+        let whole = check_within(&pdf(&[]), &LIMITS).unwrap();
+        assert_eq!(whole.absent(), None);
+
+        let part = pdf(&[b"<< /Commander Riker >>".to_vec()]);
+        assert!(
+            !Document::load_mem(&part)
+                .unwrap()
+                .objects
+                .contains_key(&(6, 0)),
+            "the premise: a parser drops this object"
+        );
+        let checked = check_within(&part, &LIMITS).unwrap();
+        assert_eq!(checked.objects_unparsed, 1);
+        let said = checked.absent().unwrap();
+        assert!(said.starts_with("1 part(s) of this PDF"), "{said}");
+    }
+
+    /// Quartz lists objects it never wrote, at offset 0, so most of what it
+    /// makes would read as damaged if that were taken for a loss. The same
+    /// entry over an object that is in the file is one.
+    #[test]
+    fn only_an_object_in_the_file_can_be_missing_from_it() {
+        let whole = pdf(&[b"(Ten Forward)".to_vec()]);
+        let at = find(&whole, b"6 0 obj").unwrap();
+        let replace = |bytes: &[u8], old: &[u8], new: &[u8]| {
+            let start = find(bytes, old).unwrap();
+            [&bytes[..start], new, &bytes[start + old.len()..]].concat()
+        };
+        let listed_at_zero = replace(
+            &whole,
+            format!("{at:010} 00000 n").as_bytes(),
+            b"0000000000 00000 n",
+        );
+        let written = b"6 0 obj\n(Ten Forward)\nendobj\n";
+        let never_written = replace(&listed_at_zero, written, &vec![b'\n'; written.len()]);
+
+        for lost in [&listed_at_zero, &never_written] {
+            assert!(
+                !Document::load_mem(lost)
+                    .unwrap()
+                    .objects
+                    .contains_key(&(6, 0)),
+                "the premise: a parser does not find this object"
+            );
+        }
+        assert_eq!(check(&listed_at_zero).unwrap().objects_unparsed, 1);
+        assert_eq!(check(&never_written).unwrap(), Checked::default());
+    }
+
+    /// A bare structure name is a real writer's bug that `pdf-inspector`
+    /// repairs, so what it brings back is not reported missing.
+    #[test]
+    fn an_object_pdf_inspector_repairs_is_not_counted_as_absent() {
+        let mut objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 4 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_vec(),
+            b"<< /Type /StructTreeRoot /K 5 0 R >>".to_vec(),
+            b"<< /Type /StructElem /S P /P 4 0 R >>".to_vec(),
+        ];
+        let repairable = build(&objects, "");
+        assert!(
+            !Document::load_mem(&repairable)
+                .unwrap()
+                .objects
+                .contains_key(&(5, 0)),
+            "the premise: a parser drops this object until it is repaired"
+        );
+        assert_eq!(check(&repairable).unwrap(), Checked::default());
+
+        objects[4] = b"<< /Type /StructElem /S /P /P Riker >>".to_vec();
+        assert_eq!(check(&build(&objects, "")).unwrap().objects_unparsed, 1);
     }
 
     /// The specification wants offsets in increasing order; a file that has
@@ -695,7 +832,7 @@ pub(crate) mod tests {
         assert_eq!(classify(&at).unwrap().page_count, 1);
 
         let past = holding_the_page_tree(EXPANDED_OBJECT_STREAM_BYTES + 1);
-        assert!(check(&past).unwrap().left_out_object_streams);
+        assert_eq!(check(&past).unwrap().object_streams_left_out, 1);
         assert!(classify(&past).is_err(), "it lost the page tree");
     }
 }

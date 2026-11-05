@@ -119,6 +119,13 @@ An object the cross-reference table lists and the loader cannot parse is measure
 from its raw bytes, because `pdf-inspector` may repair it and read it after all
 (`an_object_the_loader_drops_is_measured_from_its_bytes`).
 
+**A document missing part of itself says so.** An object stream left out, or an
+object no parser can read and `pdf-inspector` does not repair, is one warning on
+the document: a render `problems` row saying how many parts could not be read, so
+a person knows the document is short of what the file holds, though not exactly
+what is gone (`a_document_missing_part_of_itself_says_so`). A document that does
+not render, such as a fully scanned one, has no page for this row to sit on.
+
 ### What this does not stop
 
 The check has to load the file, so what `lopdf` does while loading is out of its
@@ -134,6 +141,8 @@ reach, and `lopdf` has no setting for these:
 
 Stopping the first two takes a cap in `lopdf`, or reading each new PDF in a child
 process that can be killed, which would also catch whatever nobody has thought of.
+Until then, a step the system kills for memory writes no `problems` row: the step
+shows as failed, the row does not say which file, and the next sync meets it again.
 
 ## Why no OCR yet
 

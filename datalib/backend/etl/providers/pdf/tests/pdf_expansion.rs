@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
-use datalib_etl_pdf_render::render::convert;
+use datalib_etl_pdf_render::render::{self, convert};
 use flate2::{Compress, Compression, FlushCompress};
 
 struct CountingAllocator;
@@ -244,6 +244,9 @@ async fn scan(root: &Path, raw: &Path) -> Vec<(String, String)> {
         .fetch_all(db.pool())
         .await
         .unwrap();
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "test: pdf scan")
+        .await
+        .unwrap();
     cache.pool().close().await;
     db.close().await;
     problems
@@ -263,11 +266,11 @@ async fn a_crafted_pdf_is_refused_before_it_costs_what_it_asks_for() {
     let ordinary = pdf("", &[]);
     std::fs::write(root.join("bridge.pdf"), &ordinary).unwrap();
     assert!(scan(&root, &raw).await.is_empty(), "nothing to refuse yet");
-    let pages = convert::convert(&ordinary, Path::new("bridge.pdf")).unwrap();
+    let converted = convert::convert(&ordinary, Path::new("bridge.pdf")).unwrap();
     assert!(
-        pages[0].text.contains("Warp core nominal"),
+        converted.pages[0].text.contains("Warp core nominal"),
         "{}",
-        pages[0].text
+        converted.pages[0].text
     );
 
     for (name, bytes, most) in crafted() {
@@ -310,4 +313,58 @@ async fn a_crafted_pdf_is_refused_before_it_costs_what_it_asks_for() {
 
         std::fs::remove_file(root.join(name)).unwrap();
     }
+}
+
+/// A document that read but lost part of itself looked whole: a person had no
+/// way to know its search results were short of what the file holds.
+#[tokio::test]
+async fn a_document_missing_part_of_itself_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, raw) = (dir.path().join("logs"), dir.path().join("raw"));
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let past_the_bound = stream(
+        "/Type /ObjStm /N 1 /First 6 /Filter /FlateDecode",
+        &inflates_to_spaces(9),
+    );
+    for (name, bytes) in [
+        ("bridge.pdf", pdf("", &[])),
+        ("left_out.pdf", pdf("", &[past_the_bound])),
+        (
+            "unparsed.pdf",
+            pdf("", &[b"<< /Commander Riker >>".to_vec()]),
+        ),
+    ] {
+        std::fs::write(root.join(name), bytes).unwrap();
+    }
+
+    assert!(scan(&root, &raw).await.is_empty(), "nothing was refused");
+
+    let mut emitted = Vec::new();
+    let summary = render::render(
+        &raw,
+        dir.path(),
+        "tng_pdf",
+        &datalib_etl::progress::Progress::noop(),
+        &mut |doc| {
+            emitted.push(doc);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!((summary.converted, summary.failed), (3, 0));
+    let mut problems: Vec<String> = emitted
+        .iter()
+        .flat_map(|doc| doc.problems.iter().map(|p| p.sample.clone()))
+        .collect();
+    problems.sort();
+    let said = "1 part(s) of this PDF could not be read, so what they hold is missing";
+    assert_eq!(
+        problems,
+        [
+            format!("left_out.pdf: {said}"),
+            format!("unparsed.pdf: {said}")
+        ]
+    );
 }
