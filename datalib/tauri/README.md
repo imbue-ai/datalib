@@ -221,7 +221,12 @@ What the first release with it should be checked for, on a Mac
 syncs and sign-ins work in it; from Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
-everything that Terminal runs until it quits.
+everything that Terminal runs until it quits. Run those checks from a
+Terminal without Full Disk Access: whether that permission opens the
+folder too has not been checked, so a Terminal that holds it may get in
+without a prompt and prove nothing. A person can list what they have
+granted with the query in `docs/user/first_time_user.md`, "Which apps
+have you let in?".
 
 ## Behaviour worth knowing
 

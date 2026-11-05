@@ -211,6 +211,57 @@ What that means for datalib today:
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
 
+#### Which apps have you let in? (macOS)
+
+A protected folder is only as closed as the permissions you've handed
+out. macOS makes it easy to leave a door unlocked and hard to remember
+that you did: most file permissions never expire, nothing shows when
+an app last used one, and the list is spread across several panes of
+System Settings → Privacy & Security (**Full Disk Access**, **Files &
+Folders**, **App Management**, **Automation**).
+
+To see them all in one place, run this in a terminal that has Full
+Disk Access, because the lists it reads are themselves protected. It
+prints the file permissions from both of the lists macOS keeps, one for
+your account and one for the whole computer, and changes nothing:
+
+```sh
+for db in "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "/Library/Application Support/com.apple.TCC/TCC.db"; do
+  echo "== $db"
+  sqlite3 -readonly -header -column "$db" "
+    SELECT replace(service,'kTCCService','') AS service, client,
+           CASE auth_value WHEN 0 THEN 'denied' WHEN 2 THEN 'allowed' WHEN 3 THEN 'limited' ELSE auth_value END AS auth,
+           datetime(last_modified,'unixepoch','localtime') AS changed
+    FROM access
+    WHERE service LIKE 'kTCCServiceSystemPolicy%' OR service LIKE 'kTCCServiceFileProvider%'
+    ORDER BY service, client;"
+done
+```
+
+Reading the result:
+
+- **`SystemPolicyAllFiles` with `allowed` is the row to check first.**
+  That app has Full Disk Access. We have not checked whether that also
+  opens a protected folder without asking, so assume it does.
+- **A terminal on that list passes its access on.** Everything you run
+  from that terminal gets it too, including an AI agent and any script
+  a build happens to run. Once you've read the list, consider switching
+  the terminal off again.
+- **`SystemPolicyAppData` is the permission that guards a protected
+  folder.** A row there records how macOS last answered that app. The
+  `auth` column can show a plain number here: Apple doesn't document
+  these values, and we haven't confirmed what `5` means.
+- **`denied` is a door that is shut.** The app asked and was refused,
+  or you switched it off.
+- **A `client` that is a path rather than an app id** is a program with
+  no app id of its own: a command-line tool, or a build of your own.
+  Its permission stays on the list after the program is gone.
+
+The list doesn't show everything an app can read. macOS guards only
+some places, and an app that isn't sandboxed can read the rest of your
+home folder, such as `~/.ssh`, without ever asking, so it has no row
+for them. A short list doesn't mean your files are locked down.
+
 ### Option 1: A Google Takeout export (no credentials needed)
 
 Google Takeout (<https://takeout.google.com>) lets you export your own
