@@ -25,9 +25,16 @@ fn fixture_root() -> PathBuf {
 
 /// A temp cache per run: tests must never touch this host's real one.
 async fn opts(work: &Path, db: &RawDb, sync: SyncFlags) -> FetchOptions {
+    // The fixture as a person would have it, unpacked: the tree bazel stages
+    // is links, and an export's reader does not follow one.
+    let unpacked = work.join("unpacked");
+    if !unpacked.exists() {
+        std::fs::create_dir_all(&unpacked).unwrap();
+        copy_tree(&fixture_root(), &unpacked);
+    }
     FetchOptions {
         db: db.clone(),
-        input_path: fixture_root(),
+        input_path: unpacked,
         cache: FingerprintCache::open(&work.join("fingerprints.sqlite"))
             .await
             .unwrap(),
@@ -335,6 +342,33 @@ async fn sync_flags_default_disables_everything() {
 async fn google_voice_lands_the_bills() {
     let (_work, summary, _db_path) = run_all().await;
     assert!(summary.voice_bills > 0, "{summary:?}");
+}
+
+/// A feed reads every file the walk lists, so a link in an unpacked export
+/// could store any file on the machine. It is not read, and the run says
+/// so rather than reading as though what it hid had gone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_in_an_unpacked_export_is_not_read() {
+    const VOICE_LINK: &str = "Voice/Calls/Worf - Text - leaked.html";
+    let e = Export::new();
+    let outside = e.work.path().join("outside.html");
+    std::fs::write(&outside, "<html>not from the export</html>").unwrap();
+    std::os::unix::fs::symlink(&outside, e.root.join(VOICE_LINK)).unwrap();
+
+    e.sync().await;
+
+    let db = RawDb::open(&e.db_path).await.unwrap();
+    let samples: Vec<String> =
+        sqlx::query_scalar("SELECT sample FROM problems WHERE scope_key = 'listing:files'")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert!(
+        samples.iter().any(|s| s.contains("symbolic link")),
+        "{samples:?}"
+    );
 }
 
 // ── #898: a file that is gone takes its records with it ─────────────

@@ -16,6 +16,26 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude_export")
 }
 
+/// The fixture as a person would have it, unpacked: the tree bazel stages
+/// is links, and an export's reader does not follow one.
+pub(crate) fn unpacked_fixture() -> tempfile::TempDir {
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let dest = to.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy(&entry.path(), &dest);
+            } else {
+                std::fs::copy(entry.path(), &dest).unwrap();
+            }
+        }
+    }
+    let unpacked = tempfile::tempdir().expect("a directory for the fixture");
+    copy(&fixture_dir(), unpacked.path());
+    unpacked
+}
+
 fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     fn walk(
@@ -45,9 +65,10 @@ async fn ingest_fixture(raw: &Path) {
         datalib_etl_claude::ingest::RawDb::open(&datalib_etl_claude::ingest::db::db_path_for(raw))
             .await
             .expect("open raw store");
+    let export = unpacked_fixture();
     ingest(IngestOptions {
         db: db.clone(),
-        input_path: fixture_dir(),
+        input_path: export.path().to_path_buf(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
         progress: Default::default(),
         control: Default::default(),

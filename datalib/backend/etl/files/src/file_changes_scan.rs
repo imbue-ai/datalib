@@ -128,6 +128,8 @@ pub struct ScanOptions {
     /// How deep to walk. `Some(1)` is the root's own files, and no
     /// folder beneath it is opened.
     pub max_depth: Option<usize>,
+    /// What to do with a symlink: [`fswalk::Links::Refused`] for an export.
+    pub links: fswalk::Links,
     /// Where to say what the walk and the hashing are on and how much is left.
     /// Only ever a message, never a bar: a step has one bar, and the
     /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
@@ -565,17 +567,18 @@ where
     };
 
     let listing_progress = ListProgress::new(&opts.progress, &root);
-    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
-        let accepted = only
-            .as_ref()
-            .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
-            && accept(p);
-        if accepted {
-            listing_progress.found_one();
-        }
-        accepted
-    })
-    .with_context(|| format!("walk {}", root.display()))?;
+    let (walked, errors) =
+        fswalk::walk_files_with(&root, &opts.ignore, max_depth, opts.links, |p| {
+            let accepted = only
+                .as_ref()
+                .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
+                && accept(p);
+            if accepted {
+                listing_progress.found_one();
+            }
+            accepted
+        })
+        .with_context(|| format!("walk {}", root.display()))?;
 
     let mut files = Vec::with_capacity(walked.len());
     let mut present_unread = Vec::new();

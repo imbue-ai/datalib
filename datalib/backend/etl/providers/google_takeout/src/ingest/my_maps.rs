@@ -6,10 +6,9 @@
 //! not read. Styles (icons, colours, line widths) are how the map looks,
 //! and are left out.
 
-use std::io::Read as _;
-
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_etl::expansion::Allowance;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_files::file_changes_scan;
@@ -32,6 +31,10 @@ impl FromFile for MyMapsPlacemarkRow {
         &self.file
     }
 }
+
+/// Far more than the 10 layers of 2,000 placemarks My Maps lets a map hold,
+/// and all of it goes on to be parsed in memory.
+const LARGEST_KML: u64 = 256 << 20;
 
 /// How a map looks rather than what it says.
 const STYLE_TAGS: &[&str] = &["Style", "StyleMap"];
@@ -57,11 +60,7 @@ pub fn parse(rel: &str, kmz: &[u8]) -> Result<Vec<MyMapsPlacemarkRow>> {
         })
         .find(|n| n.to_ascii_lowercase().ends_with(".kml"))
         .ok_or_else(|| super::unknown_layout(&super::shape::shape_rel(rel), "holds no .kml"))?;
-    let mut kml = String::new();
-    zip.by_name(&kml_name)
-        .context("read the map's .kml")?
-        .read_to_string(&mut kml)
-        .context("read the map's .kml as text")?;
+    let kml = read_kml(&mut zip, &kml_name, rel, kmz.len() as u64, LARGEST_KML)?;
     let root = xml_to_json(&kml).context("parse the map's KML")?;
     let document = root
         .get("kml")
@@ -81,6 +80,22 @@ pub fn parse(rel: &str, kmz: &[u8]) -> Result<Vec<MyMapsPlacemarkRow>> {
         &mut rows,
     );
     Ok(rows)
+}
+
+fn read_kml(
+    zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>,
+    name: &str,
+    rel: &str,
+    kmz_len: u64,
+    largest: u64,
+) -> Result<String> {
+    let allowance = Allowance::for_archive(kmz_len, super::shape::shape_rel(rel));
+    allowance.spend_entries(zip.len() as u64)?;
+    let entry = zip.by_name(name).context("read the map's .kml")?;
+    let kml = allowance
+        .read_all(entry, largest)
+        .context("read the map's .kml")?;
+    String::from_utf8(kml).context("read the map's .kml as text")
 }
 
 /// The placemarks of `node` and of the folders under it, each with the
@@ -280,6 +295,17 @@ pub fn xml_to_json(xml: &str) -> Result<Value> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn a_kml_past_the_limit_is_refused() {
+        let bytes = kmz("<kml>a map</kml>");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        let len = bytes.len() as u64;
+        let read = read_kml(&mut zip, "doc.kml", "My Maps/x.kmz", len, 16).unwrap();
+        assert_eq!(read, "<kml>a map</kml>");
+        let e = read_kml(&mut zip, "doc.kml", "My Maps/x.kmz", len, 15).unwrap_err();
+        assert!(format!("{e:#}").contains("larger than 15 bytes"), "{e:#}");
+    }
 
     pub fn kmz(kml: &str) -> Vec<u8> {
         let mut out = std::io::Cursor::new(Vec::new());

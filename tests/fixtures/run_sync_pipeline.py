@@ -338,6 +338,15 @@ def prepare(argv: list[str]) -> Prepared:
             ]
         )
 
+    # An export's reader follows no link, and the sandbox's inputs are all
+    # links: a person's export is real files, so these are too. A second run
+    # over this workspace finds them as the first left them, as a re-sync would.
+    def unpacked(name: str, fixture: Path) -> Path:
+        dest = workspace / "exports" / name / fixture.name
+        if not dest.exists():
+            shutil.copytree(fixture, dest)
+        return dest
+
     # Every source: name → (source type, synth input fixture dir, the
     # file-backed method's `path`). The synth input is the checked-in
     # fixture tree the synthesizer reads; the path is what a file-backed
@@ -356,8 +365,12 @@ def prepare(argv: list[str]) -> Prepared:
         "signal": ("signal", signal_snapshot_root, raw_root / "signal"),
         "whatsapp": ("whatsapp", whatsapp_dir, raw_root / "whatsapp"),
         "tng_email": ("email", email_mbox, email_mbox),
-        "google-takeout": ("google_takeout", gtk_fx, gtk_fx),
-        "linkedin": ("linkedin", linkedin_fx, linkedin_fx),
+        "google-takeout": (
+            "google_takeout",
+            gtk_fx,
+            unpacked("google-takeout", gtk_fx),
+        ),
+        "linkedin": ("linkedin", linkedin_fx, unpacked("linkedin", linkedin_fx)),
         "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
         # Render-only; its raw store was seeded above. The path is
         # unused by yolink, but every entry in this table declares one,
@@ -374,7 +387,7 @@ def prepare(argv: list[str]) -> Prepared:
         "ship-air": ("airvisual", airvisual_fx, airvisual_fx),
         # File-backed and rendering: the export's posts, album, comments,
         # reactions and friends become markdown + grid_rows.
-        "facebook": ("facebook", facebook_fx, facebook_fx),
+        "facebook": ("facebook", facebook_fx, unpacked("facebook", facebook_fx)),
         # The transcripts root, as Claude Code lays it out.
         "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
         # The Codex home, as Codex lays it out.

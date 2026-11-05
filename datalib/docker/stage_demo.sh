@@ -24,7 +24,7 @@ mkdir -p "${dest}"
 while read -r name src; do
     [[ -e "${providers}/${src}" ]] || { echo "stage_demo: missing fixture ${providers}/${src}" >&2; exit 1; }
     mkdir -p "${dest}/${name}"
-    cp -R "${providers}/${src}" "${dest}/${name}/"
+    cp -RL "${providers}/${src}" "${dest}/${name}/"
 done <<'TABLE'
 claude-export       claude/tests/fixtures/claude_export/.
 gmail-takeout       email/tests/fixtures/mbox/star_trek.mbox
