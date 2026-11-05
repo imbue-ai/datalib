@@ -129,11 +129,29 @@ window.addEventListener("message", (e) => {
     waiting.reject(new Error(String(msg.message || "search failed")));
 });
 
-// Ask the host for the card's arguments. Resolves with `{load, dq}` once
-// the host answers the `ready` announcement; never resolves unhosted.
+// A canned query the host offers: `{group, label, load, dq, limit}`,
+// written by `datalib/ui/src/cards/dactalPresets.ts`. Anything else is
+// dropped.
+function isPreset(p) {
+  return (
+    p &&
+    typeof p === "object" &&
+    ["group", "label", "load", "dq"].every((k) => typeof p[k] === "string") &&
+    typeof p.limit === "number"
+  );
+}
+
+// Ask the host for the card's arguments. Resolves with `{load, dq,
+// presets}` once the host answers the `ready` announcement; never
+// resolves unhosted.
 export function awaitInit() {
   return new Promise((resolve) => {
-    onInit = (msg) => resolve({ load: msg.load || "", dq: msg.dq || "" });
+    onInit = (msg) =>
+      resolve({
+        load: msg.load || "",
+        dq: msg.dq || "",
+        presets: Array.isArray(msg.presets) ? msg.presets.filter(isPreset) : [],
+      });
     post({ type: "dactal:ready" });
   });
 }

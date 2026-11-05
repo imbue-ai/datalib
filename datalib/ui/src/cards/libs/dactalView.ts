@@ -9,7 +9,9 @@
 // `postMessage`, and this card does the fetching with the session it
 // holds. The frame side is `public/dactal/bridge.js`; the message shapes
 // are shared between the two files and nowhere else.
-import { fetchSearch } from "../../api";
+import { fetchConfig, fetchSearch } from "../../api";
+import { listGroups } from "../../config/sourceSteps";
+import { PRESET_LIMIT, presetsFor, type DactalPreset } from "../dactalPresets";
 import type { CardCtx, CardRender } from "../types";
 
 // Served verbatim from ui/public/dactal/ in dev (vite) and prod (vite
@@ -24,7 +26,17 @@ const DACTAL_PAGE = "/dactal/index.html";
 
 // The most rows a frame may ask for in one search. The frame is data,
 // not the app: it gets what a person could load through the grid.
-const MAX_LIMIT = 2000;
+const MAX_LIMIT = PRESET_LIMIT;
+
+// The canned queries for this config's sources. A config the card cannot
+// read costs the presets and nothing else: the explorer works without them.
+async function configuredPresets(): Promise<DactalPreset[]> {
+  try {
+    return presetsFor(listGroups((await fetchConfig()).text));
+  } catch {
+    return [];
+  }
+}
 
 type FrameMessage =
   { type: "dactal:ready" } | { type: "dactal:search"; id: number; q: string; limit?: number };
@@ -60,7 +72,9 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
       if (!isFrameMessage(e.data)) return;
       const msg = e.data;
       if (msg.type === "dactal:ready") {
-        reply({ type: "dactal:init", load: opts?.load ?? "", dq: opts?.q ?? "" });
+        void configuredPresets().then((presets) =>
+          reply({ type: "dactal:init", load: opts?.load ?? "", dq: opts?.q ?? "", presets }),
+        );
         return;
       }
       const limit = Math.min(Math.max(1, Math.floor(msg.limit ?? 500)), MAX_LIMIT);

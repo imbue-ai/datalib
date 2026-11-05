@@ -99,16 +99,52 @@ for (const ex of EXAMPLES) {
   chips.appendChild(c);
 }
 
-async function load(datalibQuery, initialDq) {
+// The canned queries the host sent, one row of chips per source. A chip
+// loads its source's rows unless they are what is loaded already, then
+// runs its query.
+function renderPresets(presets) {
+  const box = document.getElementById("presets");
+  const byGroup = new Map();
+  for (const p of presets) byGroup.set(p.group, [...(byGroup.get(p.group) ?? []), p]);
+  for (const [group, list] of byGroup) {
+    const row = document.createElement("div");
+    row.className = "preset-row";
+    const name = document.createElement("span");
+    name.className = "preset-group";
+    name.textContent = group;
+    row.appendChild(name);
+    for (const p of list) {
+      const c = document.createElement("button");
+      c.type = "button";
+      c.className = "chip preset";
+      c.textContent = p.label;
+      c.title = `${p.load}  →  ${p.dq}`;
+      c.onclick = () => {
+        if (loaded && loaded.q === p.load && loaded.limit >= p.limit) runQuery(p.dq);
+        else load(p.load, p.dq, p.limit);
+      };
+      row.appendChild(c);
+    }
+    box.appendChild(row);
+  }
+}
+
+// The search and size of the working set that is loaded, or null.
+let loaded = null;
+
+async function load(datalibQuery, initialDq, limit = 500) {
   setStatus("loading working set…");
+  loaded = null;
+  datalibInput.value = datalibQuery;
   history = [];
   // Reset datasets so re-loading doesn't append duplicates.
   for (const k of Object.keys(dactal.data)) {
     if (!dactal.internal_datasets.includes(k)) delete dactal.data[k];
   }
   try {
-    const resp = await fetchSearch(datalibQuery, 500);
+    const resp = await fetchSearch(datalibQuery, limit);
     const summary = loadSearchIntoDactal(dactal, resp);
+    loaded = { q: datalibQuery, limit };
     const ents = Object.entries(summary.entities)
       .filter(([, n]) => n)
       .map(([k, n]) => `${k}:${n}`)
@@ -135,8 +171,8 @@ datalibInput.addEventListener("keydown", (e) => { if (e.key === "Enter") load(e.
 // that ran whatever `?dq=` it was opened with would evaluate a query
 // for anyone who could make the user follow a link.
 if (hosted) {
-  awaitInit().then(({ load: initialLoad, dq }) => {
-    datalibInput.value = initialLoad;
+  awaitInit().then(({ load: initialLoad, dq, presets }) => {
+    renderPresets(presets);
     load(initialLoad, dq || DEFAULT_DQ);
   });
 } else {

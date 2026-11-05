@@ -8,12 +8,35 @@ in any card, e.g. in an empty card's header type:
 
 ```
 dactalView()                                      # explore recent rows
-dactalView({ load: "provider:slack", q: "rows/channel" })
+dactalView({ load: "source:slack", q: "rows/conversation_name" })
 ```
 
 `opts.load` is a Datalib search that seeds the working set; `opts.q` is the
 initial DACTAL query. Both reach the page in the host's `dactal:init`
 message, never in its URL.
+
+## Canned queries
+
+When the config has a source with `type = "slack"`, the page shows a row
+of chips under the query bar, each a Datalib search and a DACTAL query
+over its result:
+
+| Chip | Loads | DACTAL query |
+|---|---|---|
+| Messages per channel | `source:<id>` | `rows:kind=[Slack Message]/conversation_name#-count` |
+| Who posts most | `source:<id>` | `rows:kind=[Slack Message]/author#-count` |
+| Threads, newest first | `source:<id>` | `rows:kind=[Slack Thread]#-touched_at` |
+| Reactions by emoji | `source:<id>` | `rows:kind=[Slack Reaction]/name#-count` |
+| Who reacts most | `source:<id>` | `rows:kind=[Slack Reaction]/author#-count` |
+
+A chip loads the source's newest 2000 rows, unless those are already
+loaded, then runs its query; on a large workspace the counts are over
+those rows, not the whole history. Each Slack source gets its own row of
+chips. The card reads the config (`GET /api/config`), builds the list in
+`datalib/ui/src/cards/dactalPresets.ts` and sends it in `dactal:init`;
+`tests/e2e/dactal-presets.spec.ts` runs every chip on the fixture's
+Slack source. A Slack row names its channel in `conversation_name`
+(`#bridge`, or `@Name` for a direct message).
 
 It is **data-agnostic**: there is no per-provider code. The page takes
 whatever `/applet/unified_document_index/search` returns — fetched by the host card,
@@ -91,8 +114,8 @@ dactalView() card ──► <iframe sandbox="allow-scripts"> ──► /dactal/i
     over it. Reuses DACTAL's engine + renderer but not its host page (no
     saved-query store / AI assist / adapters). Also carries the CSP — see
     caveat 5.
-  - `main.js` — that page's own logic (query bar, render loop, the globals
-    the vendored renderer expects). Split out of `index.html` so the CSP
+  - `main.js` — that page's own logic (query bar, canned-query chips,
+    render loop, the globals the vendored renderer expects). Split out of `index.html` so the CSP
     can forbid inline script.
   - `calc.js` — the query language's inline math (`rows.[=score/total]`):
     a small parser for arithmetic, in place of the `eval` the engine shipped

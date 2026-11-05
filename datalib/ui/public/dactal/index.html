@@ -84,6 +84,10 @@
   .chip { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 7px; background: #eef;
           border: 1px solid #ccd; border-radius: 10px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; }
   .chip:hover { background: #dde; }
+  .preset-row { margin: 2px 0 2px 98px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+  .preset-group { color: #666; font-size: 12px; margin-right: 4px; }
+  .chip.preset { font: inherit; font-size: 12px; background: #eef7ee; border-color: #c4dcc4; }
+  .chip.preset:hover { background: #dcecdc; }
   #status { color: #777; font-size: 12px; margin: 4px 0 0 98px; min-height: 16px; }
   #crumbs { margin: 8px 14px 0; font-family: ui-monospace, monospace; font-size: 12px; color: #888; }
   #crumbs a { color: #36c; cursor: pointer; text-decoration: none; }
@@ -96,7 +100,7 @@
   <h1>DACTAL × Datalib — query your <code>grid_rows</code> with DACTAL</h1>
   <div class="bar">
     <label for="datalib">Load (Datalib)</label>
-    <input id="datalib" placeholder="Datalib search, e.g. provider:slack after:2025-01 — pulls a working set into the browser" />
+    <input id="datalib" placeholder="Datalib search, e.g. source:slack after:2025-01 — pulls a working set into the browser" />
     <button id="datalibgo">Load</button>
   </div>
   <div class="bar">
@@ -105,6 +109,7 @@
     <button id="dqgo">Run</button>
   </div>
   <div class="chips" id="chips"></div>
+  <div id="presets"></div>
   <div id="status">loading…</div>
 </header>
 <div id="crumbs"></div>
