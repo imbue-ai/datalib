@@ -21,7 +21,7 @@ import {
 import { fetchAlignedPoints, fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import { seriesColor } from "./plot/plot";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
-import TimeWindowPicker from "./TimeWindowPicker.vue";
+import TimeWindowPicker from "./TimeWindowPicker.ce.vue";
 import {
   DEFAULT_WINDOW,
   alignedWindowSpan,

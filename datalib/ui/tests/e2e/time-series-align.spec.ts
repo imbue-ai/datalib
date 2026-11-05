@@ -120,6 +120,11 @@ test("the window box takes a preset, a typed duration and two dates", async ({ p
   // Focus offers the presets; a click on one applies it.
   await box.focus();
   await expect(card.getByRole("option", { name: /Last 1 hour/ })).toBeVisible();
+  // The list floats over the chart rather than pushing it down, and is
+  // not a bulleted list: the box once shipped without its styles.
+  const list = card.getByRole("listbox", { name: "Time windows" });
+  await expect(list).toHaveCSS("position", "absolute");
+  await expect(list).toHaveCSS("list-style-type", "none");
   await card.getByRole("option", { name: /Last 15 minutes/ }).click();
   await expect(box).toHaveValue("15m");
   await askedFor(newest - 15 * MIN, newest);
