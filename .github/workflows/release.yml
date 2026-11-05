@@ -614,9 +614,9 @@ jobs:
           persist-credentials: false
 
       # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
-      # fit a buildx run of our ~2.7 GB image × two architectures plus
-      # the `type=gha,mode=max` cache export. v0.5.0 / v0.5.1 both
-      # filled the runner's disk before docker-publish could finish.
+      # fit a buildx run of our ~2.7 GB image × two architectures. v0.5.0
+      # / v0.5.1 both filled the runner's disk before docker-publish could
+      # finish.
       # Deleting the preinstalled Android SDK, .NET runtimes, Haskell
       # GHC, large apt packages we don't use, and swap reclaims ~30 GB —
       # from ~14 GB to ~44 GB free, comfortable headroom for the build.
@@ -691,21 +691,13 @@ jobs:
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           image: mirror.gcr.io/tonistiigi/binfmt:latest
+          cache-image: false
 
-      # Pin a recent BuildKit explicitly. The `buildx-stable-1` tag that
-      # `setup-buildx-action` defaults to was on a BuildKit old enough to
-      # still use the deprecated GHA Cache Service v1 API — which GitHub
-      # turned off on 2025-06-30 — so `--cache-to type=gha` silently
-      # no-op'd: tag pushes never imported a manifest and never exported
-      # one (see runs 27184867988 / 27254340228 — no "importing cache
-      # manifest" or "exporting cache layers" lines, and every layer
-      # including the 2.25 GB `qmd pull` rebuilt from scratch). BuildKit
-      # ≥ 0.18 speaks the v2 API; `moby/buildkit:latest` keeps us on
-      # whatever's current.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
           driver-opts: image=mirror.gcr.io/moby/buildkit:latest
+          cache-binary: false
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
@@ -720,10 +712,9 @@ jobs:
       # Build and push the multi-arch image in one go. We previously had
       # a separate `--load` amd64 build that ran a latchkey
       # services-register / auth-set / auth-list roundtrip against the
-      # loaded image before this step pushed; that doubled cold-cache
-      # wall time (the amd64 build was effectively done twice — once
-      # for smoke, once for publish, with the latter cache-hitting via
-      # GHA but still re-exporting layers) and the only thing it
+      # loaded image before this step pushed; that doubled wall time
+      # (the amd64 build was effectively done twice — once for smoke,
+      # once for publish) and the only thing it
       # uniquely caught was a regression in the entrypoint's
       # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
       # (`datalib-dag --version`, `datalib-http --help`)
@@ -733,17 +724,12 @@ jobs:
       # someone notices — acceptable while the user base is small;
       # revisit if we ever get pulls from real users.
       #
-      # `type=gha` cache means consecutive tag pushes within ~7 days
-      # cache-hit both arches (the eviction window) — only the first
-      # tag in a long while pays a full cold build. `mode=max` writes
-      # ALL intermediate layers (not just the final image) so the
-      # 2.25 GB qmd model layer is the dominant cache hit.
+      # No layer cache, as in the build job: each tag builds these layers
+      # itself, so nothing another run wrote ships in the image.
       - name: Build and push multi-arch image
         env:
           REF_NAME: ${{ github.ref_name }}
-          # Plain-text progress so cache-import/export lines are
-          # actually readable in the log — the TTY-style default hid
-          # whether `type=gha` was working at all in earlier runs.
+          # Plain-text progress, so each step is readable in the log.
           BUILDKIT_PROGRESS: plain
         run: |
           set -euo pipefail
@@ -751,24 +737,11 @@ jobs:
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          # `scope=docker-publish` makes the cache persist across
-          # tag pushes. Without an explicit scope, type=gha defaults
-          # to the workflow ref, so a tag push (refs/tags/v0.6.x)
-          # gets a per-tag scope — i.e. every release starts cold and
-          # re-runs the 2.25 GB `qmd pull` plus all the apt / node /
-          # latchkey / doltlite-CLI layers from scratch. Mirrors the
-          # devcontainer block below (which already does this right).
-          #
-          # `version=2` pins the GHA Cache Service v2 API. v1 was
-          # turned off on 2025-06-30; without this, older BuildKit
-          # builds silently no-op the cache (no import, no export).
           docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --cache-from type=gha,scope=docker-publish,version=2 \
-              --cache-to type=gha,mode=max,scope=docker-publish,version=2 \
               --push \
               ctx
 
@@ -784,24 +757,13 @@ jobs:
           # only: this is a build input for the devcontainer, not a
           # product image, and the only thing that consumes it runs on
           # x86_64 runners. Every layer up to the qmd step is identical
-          # to the build above and comes from the same `type=gha` cache,
+          # to the build above, and this job's builder still holds them,
           # so this costs one extra qmd/npm layer, not a second image.
-          #
-          # Reads the full build's cache (every layer up to the qmd step
-          # is identical) but writes to its OWN scope. BuildKit keeps one
-          # mutable index per scope, so exporting both builds to
-          # `docker-publish` would leave the amd64-only slim index as the
-          # survivor and cost the multi-arch build its cache on the next
-          # tag — the exact cold-start this job's cache config exists to
-          # avoid.
           docker buildx build \
               --platform linux/amd64 \
               --build-arg QMD_PREFETCH_MODELS=false \
               --tag "${image}:${version}-slim" \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --cache-from type=gha,scope=docker-publish,version=2 \
-              --cache-from type=gha,scope=docker-publish-slim,version=2 \
-              --cache-to type=gha,mode=max,scope=docker-publish-slim,version=2 \
               --push \
               ctx
 

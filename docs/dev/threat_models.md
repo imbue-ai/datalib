@@ -123,7 +123,7 @@ That does nothing about the build scripts that run once one starts.
 |---|---|---|
 | Lockfiles; `cargo deny` allows only the crates.io registry and fails on a known advisory; required to merge | An unpinned version, an unknown source, a bad version once it has an advisory | A bad version nobody has reported yet |
 | 7-day burn-in in `cargo-update.yml` | A bad backend crate noticed within the week | One nobody notices. Dependabot's PRs have no `cooldown`, so the desktop app's crates and the npm trees do not wait |
-| A release reads no cache: no BuildBuddy key, no restored repository cache (check 21) | An entry written on `main`, or with a stolen key, reaching what a release ships. On the mac legs this was the repository cache: v0.49.0's restored an entry saved on `main` by `latchkey-auth.yml`'s daily run, while BuildBuddy gave them no hits | Bad code a release compiles itself (item 1). It also does not cover `docker-publish`'s layer cache, below |
+| A release reads no cache: no BuildBuddy key, no restored repository cache, no Docker layer cache (check 21) | An entry written on `main`, or with a stolen key, reaching what a release ships. On the mac legs this was the repository cache: v0.49.0's restored an entry saved on `main` by `latchkey-auth.yml`'s daily run, while BuildBuddy gave them no hits | Bad code a release compiles itself (item 1) |
 | Two BuildBuddy orgs | A laptop or a PR run writing what `main`'s CI replays | Anything that runs on `main` |
 | The write key only on a push to `main` | A PR's code getting the key before it merges | A workflow edited on a branch: only `test.yml`'s own expression holds the key to `main` |
 | Publish and sign jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, or rewriting a published release | Bad code in what it builds |
@@ -131,12 +131,10 @@ That does nothing about the build scripts that run once one starts.
 
 ### What is still open
 
-- **`docker-publish` still uses a shared layer cache.** Its `docker
-  buildx` builds read and write `type=gha` entries, and a planted layer
-  would ship in the image. `main` runs nothing that writes that scope, so
-  this needs something on `main` to get GitHub's cache token out of a
-  job, which `run:` steps are not handed (reasoned; not tried, and not
-  measured how often a tag's build hits).
+- **`docker-publish` builds with two floating images.** It takes
+  `moby/buildkit:latest` and `tonistiigi/binfmt:latest` through a mirror,
+  and the job holds `packages: write`. Whoever controls either tag runs
+  code there, and BuildKit is what assembles the image.
 - **Bad code a release compiles itself** (item 1 above). The burn-in and
   `cargo deny` are all that stand in front of it.
 - **The write key sits where crates compile.** `test.yml`'s three jobs

@@ -165,6 +165,11 @@ checking them ([`threat_models.md`](threat_models.md)). A release's
 downloads come from their origins, each pinned by sha256, so a download
 an origin refuses fails the leg rather than being served from a copy.
 
+**`docker-publish` keeps no layer cache.** Its two builds share only what
+the job's own builder holds, and the job takes about ten minutes. A
+release's other actions that would cache by default, `setup-qemu-action`
+and `setup-buildx-action`, are told not to.
+
 **What holds the write key.** `test.yml`'s three jobs that run on a push
 to `main` compile with it in `.bazelrc.user`. Their actions run under
 bazel's `processwrapper-sandbox`, which hides no file and blocks no

@@ -404,11 +404,21 @@ _WRITE_GRANT = re.compile(r"^\s*([a-z-]+):\s*write\b")
 _BUILD_COMMAND = re.compile(
     r"\bbazel\b|setup-bazel|cargo build|tauri build|build-signed-app\.sh compile"
 )
-_CACHE_KEY = re.compile(
-    r"build.?buddy|bazelrc\.user|remote_cache|remote_header|actions/cache",
+_CACHE_USE = re.compile(
+    r"build.?buddy|bazelrc\.user|remote_cache|remote_header|actions/cache"
+    r"|--cache-from|--cache-to|type=gha",
     re.IGNORECASE,
 )
-_SETUP_BAZEL_CACHE = re.compile(r"^\s*([a-z]+-cache):\s*(\S+)")
+_ACTION_CACHE_INPUTS = {
+    "setup-bazel": [
+        "bazelisk-cache",
+        "disk-cache",
+        "repository-cache",
+        "external-cache",
+    ],
+    "setup-qemu-action": ["cache-image"],
+    "setup-buildx-action": ["cache-binary"],
+}
 
 
 def checkout_token_settings(text: str) -> list[tuple[int, str | None]]:
@@ -488,14 +498,18 @@ def release_grant_problems(text: str) -> list[str]:
                 problems.append(
                     f"job {job} holds a write grant and runs a build: {line.strip()}"
                 )
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        if _CACHE_KEY.search(line):
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    for line in code:
+        if _CACHE_USE.search(line):
             problems.append(f"a release reads no cache, but: {line.strip()}")
-        setup_cache = _SETUP_BAZEL_CACHE.match(line)
-        if setup_cache and setup_cache.group(2) != "false":
-            problems.append(f"a release restores no cache, but: {line.strip()}")
+    for action, inputs in _ACTION_CACHE_INPUTS.items():
+        uses = sum(f"/{action}@" in line for line in code)
+        for name in inputs:
+            turned_off = sum(line.strip() == f"{name}: false" for line in code)
+            if turned_off < uses:
+                problems.append(
+                    f"a release reads no cache: {action} needs {name}: false"
+                )
     return problems
 
 

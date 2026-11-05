@@ -100,11 +100,10 @@ A compromised build can still put bad code in what it builds, and
 `macos-app-sign` would sign it; that is true of any signed build. What
 the jobs prevent is the build taking the key, or rewriting a release.
 
-No job that compiles holds a cache key or restores a cache (`ci.md`
-§"Two caches"), so nothing `main`'s CI saved reaches what it compiles,
-and a build script in one has no cache to leave anything in.
-`docker-publish`'s layer cache is the one shared cache left, and
-[`threat_models.md`](threat_models.md) says what that leaves open.
+No job holds a cache key or restores a cache (`ci.md` §"Two caches",
+[`threat_models.md`](threat_models.md)), so nothing `main`'s CI saved
+reaches what a release builds, and a build script in a release has no
+cache to leave anything in.
 
 ## What runs on every `bazel test //...`
 

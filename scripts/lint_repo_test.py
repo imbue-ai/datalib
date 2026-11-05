@@ -168,6 +168,7 @@ jobs:
             "      - run: bazel build --remote_cache=grpcs://x //x",
             "      - run: cat > .bazelrc.user",
             "      - uses: actions/cache@abc",
+            "      - run: docker buildx build --cache-from type=gha,scope=x ctx",
             "        env:\n          K: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}",
         ]:
             with self.subTest(line=line):
@@ -180,22 +181,35 @@ jobs:
         text = self.GOOD.replace("# no bazel here", "# no BuildBuddy, no .bazelrc.user")
         self.assertEqual(release_grant_problems(text), [])
 
-    def test_setup_bazel_restores_nothing(self) -> None:
-        """A tag's mac legs restored what `main`'s daily latchkey-auth saved; a repo contents cache entry is not verified either."""
+    def test_an_action_that_caches_says_it_does_not(self) -> None:
+        """A tag's mac legs restored what `main`'s daily latchkey-auth saved; bazel checks no tree in it."""
         clean = self.GOOD.replace(
             "      - run: bazel build //...",
             "      - uses: bazel-contrib/setup-bazel@abc\n"
             "        with:\n"
+            "          bazelisk-cache: false\n"
+            "          disk-cache: false\n"
             "          repository-cache: false\n"
-            "          disk-cache: false",
+            "          external-cache: false\n"
+            "      - uses: docker/setup-qemu-action@abc\n"
+            "        with:\n"
+            "          cache-image: false\n"
+            "      - uses: docker/setup-buildx-action@abc\n"
+            "        with:\n"
+            "          cache-binary: false",
         )
         self.assertEqual(release_grant_problems(clean), [])
-        self.assertEqual(
-            release_grant_problems(
-                clean.replace("repository-cache: false", "repository-cache: true")
-            ),
-            ["a release restores no cache, but: repository-cache: true"],
-        )
+        for setting, action in [
+            ("repository-cache", "setup-bazel"),
+            ("cache-image", "setup-qemu-action"),
+            ("cache-binary", "setup-buildx-action"),
+        ]:
+            expected = [f"a release reads no cache: {action} needs {setting}: false"]
+            with self.subTest(setting=setting):
+                turned_on = clean.replace(f"{setting}: false", f"{setting}: true")
+                self.assertEqual(release_grant_problems(turned_on), expected)
+                left_out = clean.replace(f"          {setting}: false\n", "")
+                self.assertEqual(release_grant_problems(left_out), expected)
 
 
 class LiteralOpenTest(unittest.TestCase):
