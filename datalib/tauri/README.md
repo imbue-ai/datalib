@@ -223,6 +223,12 @@ on stealing from you.
   since a log line can quote what a library holds. The URL with the token
   stays out of it. The server prints that URL to stderr only at a terminal,
   and hands it to the shell over a pipe.
+- **What opens the library's servers stays in the folder too.** The API
+  token and the applets' secret are each in a file in `system/`, and in
+  no process's environment or arguments, where `ps eww` would show them
+  to any program running as you. A credential pasted into the wizard is
+  the one exception: it is on `latchkey`'s command line for the second
+  that runs (`docs/dev/latchkey.md`).
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
   programs an app starts as that app, so `datalib-http` and everything

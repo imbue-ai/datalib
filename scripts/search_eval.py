@@ -39,6 +39,7 @@ import secrets
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -59,11 +60,14 @@ class Applet:
 
     def __init__(self, binary: str, root: Path, tz: str | None = None):
         self.secret = secrets.token_hex(16)
+        fd, self.secret_file = tempfile.mkstemp(prefix="applet-secret-")
+        with os.fdopen(fd, "w") as f:
+            f.write(self.secret)
         env = dict(os.environ)
         if tz:
             env["TZ"] = tz
         env["DATALIB_DAG_DATA_ROOT"] = str(root)
-        env["DATALIB_APPLET_SECRET"] = self.secret
+        env["DATALIB_APPLET_SECRET_FILE"] = self.secret_file
         env.setdefault("RUST_LOG", "warn")
         self.proc = subprocess.Popen(
             [binary, "unified_document_index", "-p", "0"],
@@ -90,6 +94,7 @@ class Applet:
     def close(self) -> None:
         self.proc.terminate()
         self.proc.wait(timeout=30)
+        os.unlink(self.secret_file)
 
 
 class Gateway:

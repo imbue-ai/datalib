@@ -66,6 +66,8 @@
                                                   (`dag/README.md` § What wakes the loop)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
+<data_root>/system/applet-secret                  what the server's applets require of a
+                                                  request (`applets.md`)
 <data_root>/system/server-output.log               what the desktop app's server wrote to stdout
                                                   and stderr; .previous.log is the run before.
                                                   Only the desktop shell writes these

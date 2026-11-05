@@ -833,3 +833,52 @@ async fn the_old_index_prefix_reaches_the_document_index_applet() {
     assert_eq!(status, StatusCode::OK, "{old}");
     assert_eq!(old, new);
 }
+
+/// `ps eww` shows a process's environment to any other process of the same
+/// user, and an applet's secret is what guards its port. In the environment
+/// it would let any such process past the protected folder, by asking the
+/// applet instead of opening the folder.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_applets_secret_is_in_a_private_file_and_not_its_environment() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    let dumped = root.join("applet-environment");
+    let script = write_script(
+        root,
+        "dump_env.sh",
+        "#!/bin/sh\nenv > \"$DATALIB_DAG_DATA_ROOT/applet-environment.tmp\"\n\
+         mv \"$DATALIB_DAG_DATA_ROOT/applet-environment.tmp\" \"$DATALIB_DAG_DATA_ROOT/applet-environment\"\n\
+         echo DATALIB_APPLET_PORT=1\nexec cat\n",
+    );
+    let config = format!(
+        "[[applets]]\nid = \"dump\"\ncommand = \"{}\"\n",
+        script.display()
+    );
+    let _state = state_with(root, &config).await;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !dumped.exists() {
+        assert!(std::time::Instant::now() < deadline, "the applet never ran");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let environment = std::fs::read_to_string(&dumped).unwrap();
+
+    assert!(
+        !environment.contains("DATALIB_APPLET_SECRET="),
+        "the secret's variable is still set"
+    );
+    let file = root.join("system/applet-secret");
+    assert!(
+        environment.contains(&format!("DATALIB_APPLET_SECRET_FILE={}", file.display())),
+        "{environment}"
+    );
+    let secret = std::fs::read_to_string(&file).unwrap();
+    assert!(secret.len() >= 32, "not a secret: {} bytes", secret.len());
+    assert!(!environment.contains(&secret), "the secret's value is set");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+}
