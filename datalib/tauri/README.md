@@ -208,6 +208,9 @@ on stealing from you.
   copy of `~/.latchkey` (`protected::seed_latchkey`), so the library's
   sources keep their sign-ins; the originals stay until the person
   signs out of them. Every protected library shares that one store.
+  The key that encrypts it does not move: it stays in the login
+  keychain, shared with `~/.latchkey`, so the first latchkey run from
+  the app's Node can put up macOS's password prompt.
 - **Nothing hands it to another app.** The folder button is disabled on
   a protected row, and Browse refuses a protected library's raw stores
   (`refuse_if_protected`): Finder or Terminal would have to be let in,
