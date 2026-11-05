@@ -81,8 +81,9 @@ fn main() {
     // backend's localhost URL): Tauri refuses a remote page any app
     // command no capability names. Once declared, every app command is
     // checked, so each one here must be granted somewhere
-    // (`capabilities/default.json`, `capabilities/open-raw-stores.json`,
-    // `capabilities/switch-libraries.json`, `capabilities/pick-local-paths.json`).
+    // (`capabilities/default.json`, `library-capabilities/open-raw-stores.json`,
+    // `library-capabilities/switch-libraries.json`,
+    // `library-capabilities/pick-local-paths.json`).
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "version",
