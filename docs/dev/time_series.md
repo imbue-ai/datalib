@@ -219,7 +219,10 @@ chart's width in pixels, and asks again at the plot's width for the
 range a zoom picks, so the applet's buckets are never wider than a
 pixel. It converts every value to SI units with
 `unit_factor` and `unit_offset`, gives each quantity its own axis (two
-at most), and prints each axis in a unit that suits it.
+at most), and prints each axis in a unit that suits it. With starts
+aligned it moves each time series back by its own `first_t`, so lines
+recorded on different days start together at 0 (`alignedAnswer` in
+`datalib/ui/src/cards/timeSeries.ts`).
 
 ## Charts in documents
 

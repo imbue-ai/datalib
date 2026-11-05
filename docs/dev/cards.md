@@ -710,7 +710,11 @@ besides components:
   factors the applet reads from their UCUM codes: a duration in hours or
   minutes and a distance in km as suits its size, anything else in the
   unit of the first time series on the axis. A time series of text is
-  listed but not drawn. The range buttons end at the newest point picked, and the
+  listed but not drawn. The time window is a text box
+  (`TimeWindowPicker.vue`, rules in `cards/timeWindow.ts`): focusing it
+  lists presets from `5m` to `1y` and `all`, and a person can type a
+  duration (`45m`, `2w`), `all`, or two dates joined by `to`, read in
+  the clock's zone. A duration ends at the newest point picked. The
   points are asked for at about one per pixel: past that the applet
   answers buckets, drawn as each bucket's mean with a band from its
   minimum to its maximum. Hovering reads every line at that time. The
@@ -720,8 +724,15 @@ besides components:
   Dragging across the chart zooms in and asks the applet for that
   stretch again at one point per pixel of the plot, so a zoom shows
   finer data rather than stretched buckets; a double-click goes back to
-  the range. The picks and the range are the card's state, the zoom
-  and the lines turned off are not; it reads again on the root's
+  the window. **Align starts** draws each line against the time since
+  its own first point, so two runs on different days start together at
+  0 and the axis reads `+10m` rather than a date; each time series is
+  then asked for its own stretch (`fetchAlignedPoints`). A duration
+  then means the first that much of each line; two dates do not apply,
+  and each line is drawn whole. The picks, the window (two dates kept
+  in UTC, so another zone on the clock reads the same instants) and
+  whether starts are aligned are the card's state, the zoom and the lines
+  turned off are not; it reads again on the root's
   `time_series_index_changed` frame. The time-series applet's row on the
   Manage screen opens it with Browse, and the card gallery lists it. Its
   chart (`TimeSeriesChart.vue`) also draws the charts inside documents
