@@ -202,9 +202,9 @@ on stealing from you.
 > program and the sign-ins is macOS keeping it out of
 > `<library>/system/latchkey`. So anything that lets a program reach
 > those files gives it the sign-ins too: saying **Allow** for that
-> program, a deleted library in the Trash (its keychain item stays), or
-> any other copy of the files outside the folder. Check any change to
-> where this store lives, or who may read it, against this.
+> program, Full Disk Access, or any copy of the files outside the folder.
+> That is why deleting a protected library skips the Trash. Check any
+> change to where this store lives, or who may read it, against this.
 
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
@@ -226,9 +226,21 @@ on stealing from you.
   were; a person signs in through the wizard. latchkey makes the item
   the first time it needs a key, and the program that makes an item is
   on its list, so macOS has no reason to ask.
+- **The wizard offers no terminal command in one.** A latchkey run from
+  a terminal has neither variable, so it signs in to `~/.latchkey`. The
+  server tells the wizard through `protected_library` in `/api/health`,
+  set by `DATALIB_PROTECTED_LIBRARY`. A source whose only sign-in is
+  those commands (CalDAV and CardDAV on a server of your own) says it
+  cannot sign in here yet.
+- **Deleting one is permanent.** After a confirmation that says so, the
+  app removes the folder, then the keychain item with
+  `/usr/bin/security`, and nothing goes to the Trash, because there the
+  sign-ins would sit outside the folder with the key still available
+  (`launcher_delete`). If only the item is left, the app says so and
+  names it.
 - **The item goes by the folder's name.** A folder given a new name
   looks for a new item, and latchkey refuses its store until the old
-  name is back. Deleting a library leaves its keychain item behind.
+  name is back.
 - **An earlier build copied `~/.latchkey` to `<container>/latchkey`.**
   Nothing reads that copy now, so a library that used it signs in again;
   its raw stores are untouched. The copy stays where it is until someone

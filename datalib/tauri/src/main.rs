@@ -338,16 +338,29 @@ async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     if let Some(refusal) = in_use() {
         return Err(refusal);
     }
-    let confirmed = app
-        .dialog()
-        .message(
+    let is_protected =
+        protected_container(&app).is_some_and(|c| protected::is_protected(&root, &c));
+    let (message, button) = if is_protected {
+        (
+            "The library's folder, with everything it has downloaded and its sign-ins, is \
+             deleted permanently. It does not go to the Trash and this cannot be undone. Data \
+             that a service has since deleted cannot be downloaded again.",
+            "Delete Permanently",
+        )
+    } else {
+        (
             "The library's folder, with everything it has downloaded, moves to the Trash. \
              Data that a service has since deleted cannot be downloaded again.",
+            "Move to Trash",
         )
+    };
+    let confirmed = app
+        .dialog()
+        .message(message)
         .title(format!("Delete the library “{name}”?"))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Move to Trash".into(),
+            button.into(),
             "Cancel".into(),
         ))
         .blocking_show();
@@ -358,10 +371,39 @@ async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     if let Some(refusal) = in_use() {
         return Err(refusal);
     }
-    move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
     let home = home_dir(&app).ok_or("No home directory.")?;
-    launcher::forget_recent(&launcher::recents_file(&home), &root).map_err(|e| e.to_string())?;
+    let recents = launcher::recents_file(&home);
+    if is_protected {
+        let real_root = root
+            .canonicalize()
+            .map_err(|e| format!("Could not find {name}: {e}"))?;
+        std::fs::remove_dir_all(&real_root).map_err(|e| format!("Could not delete {name}: {e}"))?;
+        launcher::forget_recent(&recents, &root).map_err(|e| e.to_string())?;
+        delete_keychain_item(&real_root).map_err(|item_error| {
+            format!(
+                "{name} is deleted, but its keychain item could not be removed ({item_error}). \
+                 Remove “Datalib Latchkey - {name}” in Keychain Access."
+            )
+        })?;
+    } else {
+        move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
+        launcher::forget_recent(&recents, &root).map_err(|e| e.to_string())?;
+    }
     Ok(true)
+}
+
+fn delete_keychain_item(root: &Path) -> Result<(), String> {
+    let output = Command::new(protected::SECURITY_TOOL)
+        .args(protected::delete_keychain_item_args(root))
+        .env_clear()
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if protected::keychain_item_is_gone(output.status.code()) {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 // The `trash` crate's macOS default scripts Finder, which makes macOS ask

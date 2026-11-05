@@ -157,6 +157,9 @@ pub struct Health {
     /// can tell a coding agent where to read it (see `handoff.ts`);
     /// reaching this response already required holding the token.
     pub token_file: String,
+    /// A latchkey run from a person's terminal signs in to `~/.latchkey`,
+    /// not this library, so the wizard offers no command to run.
+    pub protected_library: bool,
 }
 
 /// Client-supplied portion of a feedback submission. The server stamps the
@@ -343,6 +346,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
         token_file: s.api_token.token_file().display().to_string(),
+        protected_library: std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some(),
     })
 }
 

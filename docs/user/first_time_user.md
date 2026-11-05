@@ -209,9 +209,12 @@ What that means for datalib today:
   you can get the key, by running the Node inside the Datalib app. So
   anything that lets a program reach the library's files gives it the
   sign-ins too. Saying **Allow** lets that app in for as long as it
-  keeps running, so say no unless you mean it. Deleting the library
-  moves its sign-ins to the Trash, outside the folder, so empty the
-  Trash afterwards. What
+  keeps running, so say no unless you mean it. Deleting the library is
+  permanent, after a confirmation: it skips the Trash, where its
+  sign-ins would sit outside the folder, and removes its keychain item.
+  CalDAV and CardDAV on a server of your own cannot sign in in a
+  protected library yet, because that sign-in is made in a terminal.
+  What
   is still unknown: whether an agent could get in by running one of
   Datalib's own programs directly, and whether the Datalib app gets in
   without asking at all; the first release with this option is what

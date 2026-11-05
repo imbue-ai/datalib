@@ -61,15 +61,42 @@ pub fn resolve_name(input: &str, libraries_dir: &Path) -> Option<PathBuf> {
 /// time it needs them, so a library starts signed in to nothing and has
 /// nothing to do with `~/.latchkey`.
 pub fn latchkey_env(root: &Path) -> Vec<(&'static str, OsString)> {
-    let mut key_name = OsString::from("Datalib Latchkey - ");
-    key_name.push(root.file_name().unwrap_or_default());
     vec![
         (
             "LATCHKEY_DIRECTORY",
             root.join("system").join("latchkey").into_os_string(),
         ),
-        ("LATCHKEY_KEYRING_SERVICE_NAME", key_name),
+        ("LATCHKEY_KEYRING_SERVICE_NAME", keychain_item(root)),
+        // `datalib_env::DATALIB_PROTECTED_LIBRARY`: this crate links nothing
+        // of the backend's.
+        ("DATALIB_PROTECTED_LIBRARY", "1".into()),
     ]
+}
+
+fn keychain_item(root: &Path) -> OsString {
+    let mut name = OsString::from("Datalib Latchkey - ");
+    name.push(root.file_name().unwrap_or_default());
+    name
+}
+
+pub const SECURITY_TOOL: &str = "/usr/bin/security";
+
+/// What `SECURITY_TOOL` is run with to remove a deleted library's item.
+/// `encryption-key` is the account latchkey files every item under.
+pub fn delete_keychain_item_args(root: &Path) -> Vec<OsString> {
+    vec![
+        "delete-generic-password".into(),
+        "-s".into(),
+        keychain_item(root),
+        "-a".into(),
+        "encryption-key".into(),
+    ]
+}
+
+/// `SECURITY_TOOL` exits 44 when there is no such item: a library that
+/// never signed in to anything has none.
+pub fn keychain_item_is_gone(exit_code: Option<i32>) -> bool {
+    matches!(exit_code, Some(0 | 44))
 }
 
 #[cfg(test)]
@@ -163,8 +190,37 @@ mod tests {
                     "LATCHKEY_KEYRING_SERVICE_NAME",
                     OsString::from("Datalib Latchkey - Photo archive")
                 ),
+                ("DATALIB_PROTECTED_LIBRARY", OsString::from("1")),
             ]
         );
         assert_ne!(env, latchkey_env(Path::new("/c/Libraries/Mail")));
+    }
+
+    /// Deleting a library removes the item it was given and no other, so
+    /// its sign-ins cannot be opened from any copy of its files.
+    #[test]
+    fn a_deleted_library_removes_the_item_its_server_was_given() {
+        let root = Path::new("/c/Libraries/Photo archive");
+        let given = latchkey_env(root)
+            .into_iter()
+            .find(|(name, _)| *name == "LATCHKEY_KEYRING_SERVICE_NAME")
+            .unwrap()
+            .1;
+        let args = delete_keychain_item_args(root);
+        assert_eq!(
+            args[..3],
+            ["delete-generic-password".into(), "-s".into(), given]
+        );
+        assert_eq!(args[3..], ["-a".into(), OsString::from("encryption-key")]);
+    }
+
+    /// A library that never signed in has no item to remove, which is not
+    /// a failure; anything else leaves the key behind, which is.
+    #[test]
+    fn only_a_removed_or_absent_item_counts_as_gone() {
+        assert!(keychain_item_is_gone(Some(0)));
+        assert!(keychain_item_is_gone(Some(44)));
+        assert!(!keychain_item_is_gone(Some(1)));
+        assert!(!keychain_item_is_gone(None));
     }
 }
