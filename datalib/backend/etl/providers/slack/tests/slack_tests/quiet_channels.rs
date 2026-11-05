@@ -15,7 +15,7 @@ use datalib_etl_slack::recorded::{
 };
 use serde_json::{json, Value};
 
-use crate::support::{fetch_into, msg, serve, stored_ts};
+use crate::support::{checked_at, fetch_into, msg, serve, stored_ts};
 
 /// 2025-01-01: newer than the default `since`.
 const T1: &str = "1735689600.000100";
@@ -101,7 +101,8 @@ async fn a_channel_with_nothing_new_costs_no_history_call() {
 /// A sync with nothing new must leave the store's content as it was:
 /// render reads a content change as work, and everything downstream of
 /// it (the keyword and grid indexes) runs again for it. The second sync
-/// here adds a `sync_runs` row and nothing else.
+/// here adds a `sync_runs` row and moves when the channels were last
+/// checked, and nothing else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sync_with_nothing_new_changes_no_content() {
     let dir = tempfile::tempdir().unwrap();
@@ -121,11 +122,19 @@ async fn a_sync_with_nothing_new_changes_no_content() {
             .expect("a head")
     };
 
-    sync(&api, &out, |o| o).await;
+    let at = |s: &str| s.parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+    let (then, later) = (at("2026-10-27T12:00:00Z"), at("2026-10-27T12:05:00Z"));
+    sync(&api, &out, |o| FetchOptions { now: then, ..o }).await;
     let first = head().await;
-    sync(&api, &out, |o| o).await;
+    assert_eq!(checked_at(&out).await["C1"], then);
+    sync(&api, &out, |o| FetchOptions { now: later, ..o }).await;
     let second = head().await;
     assert_ne!(first, second, "the second sync committed its run");
+    assert_eq!(
+        checked_at(&out).await["C1"],
+        later,
+        "client.counts said nothing is newer, so no walk was needed to know"
+    );
 
     let reader = datalib_pin::open_reader(&store).await.unwrap();
     let changed = datalib_etl::doltlite_raw::content_tables_changed(&reader, &first, &second)

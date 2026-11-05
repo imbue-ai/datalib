@@ -19198,14 +19198,14 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:2c47280267a5d315084fdec87ec6e9b29438c50d7e6c808f42fa8c90d0315631",
-      "rows": 196,
+      "members_sha": "sha256:f7b4f94682b5a9c4b2eb8ec014341d585e23850e319370b8429497155d67e5fd",
+      "rows": 197,
       "source": ""
     }
   ],
   "summary": {
     "documents_count": 178,
     "grid_rows_count": 568,
-    "storage_rows_count": 257
+    "storage_rows_count": 258
   }
 }

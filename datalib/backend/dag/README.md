@@ -425,7 +425,8 @@ own record and stamps, so the head moves even when nothing upstream
 changed. It reports the last commit at which a table its readers read
 moved, rows or shape (`doltlite_raw::moves_version`: every content table,
 `problems`, `ingested_files`; never a `*_bookkeeping` sidecar,
-`sync_runs`, the cursors or `coverage`). The writer keeps that commit on
+`sync_runs`, the cursors, `coverage` or `coverage_checked`). The writer
+keeps that commit on
 a branch, `datalib_content`, moved at each seal
 (`doltlite_raw::CONTENT_BRANCH`). Each spells its version the same
 way on a seal and in the outcome, so finishing on the commit last

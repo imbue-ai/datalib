@@ -195,7 +195,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     summary.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
     summary.skipped_blobs = ctx.counts.skipped_blobs.load(Ordering::Relaxed);
     summary.blobs_from_export = ctx.counts.blobs_from_export.load(Ordering::Relaxed);
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result?;
     Ok(summary)
 }

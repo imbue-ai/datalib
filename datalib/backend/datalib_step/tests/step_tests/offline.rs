@@ -123,6 +123,14 @@ fn a_network_that_goes_away_ends_the_ingest_incomplete_with_what_it_got() {
         stderr.contains("gave up on slack") && stderr.contains("Could not resolve host"),
         "the step says why it stopped:\n{stderr}"
     );
+    assert_eq!(
+        crate::interrupt::doltlite(
+            &root.join("work-slack/ingest/entities.doltlite_db"),
+            "SELECT status FROM sync_runs ORDER BY run_id DESC LIMIT 1",
+        ),
+        vec!["partial"],
+        "a run that gave up did not read everything, so its row must not say `ok`"
+    );
 
     // What it fetched before the network went is committed; the rest is
     // owed to the next run, not walked through one failure at a time.

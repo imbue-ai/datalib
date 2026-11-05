@@ -1,7 +1,7 @@
 //! What the playback tests share: a scratch tree, serving it, one download
 //! into a store, and reading the store back.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use datalib_etl::stop::StopFlag;
@@ -94,6 +94,23 @@ pub fn record_general(api: &Path) {
     )
     .unwrap();
     record_users(api, json!([{"id": "U1", "name": "alice"}])).unwrap();
+}
+
+/// `coverage_checked`, by conversation.
+pub async fn checked_at(out: &Path) -> BTreeMap<String, chrono::DateTime<chrono::Utc>> {
+    let reader = datalib_pin::open_reader(&db_path_for(out)).await.unwrap();
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT scope, checked_at_utc FROM coverage_checked")
+            .fetch_all(&reader)
+            .await
+            .unwrap();
+    reader.close().await;
+    rows.into_iter()
+        .map(|(scope, at)| {
+            let channel = scope.strip_prefix("history:").expect("a history scope");
+            (channel.to_string(), at.parse().unwrap())
+        })
+        .collect()
 }
 
 pub fn msg(ts: &str, text: &str) -> Value {

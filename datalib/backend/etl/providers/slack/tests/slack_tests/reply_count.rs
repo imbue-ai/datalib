@@ -14,7 +14,7 @@ use datalib_etl_slack::recorded::{
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
-use crate::support::{fetch_into, msg, serve};
+use crate::support::{checked_at, fetch_into, msg, serve, stored_ts};
 
 const A: &str = "1735689600.000100";
 const REPLY_1: &str = "1735689600.000150";
@@ -167,4 +167,73 @@ async fn a_root_says_its_replies_are_not_mirrored_until_they_are() {
         Some("<span class=\"msg-replies\">2 replies</span>"),
         "{incremental}"
     );
+}
+
+/// The rule in `docs/user/raw_stores.md` for whether a `ts` is mirrored,
+/// its `:channel` and `:ts` written `?1` and `?2`.
+const IS_MIRRORED: &str = "\
+    WITH q(scope, ts, key) AS (
+      SELECT 'history:' || ?1, ?2, substr('0000000000000000000' || ?2, -19))
+    SELECT EXISTS (SELECT 1 FROM coverage c, q
+                    WHERE c.scope = q.scope AND c.lo <= q.key AND q.key <= c.hi)
+        OR EXISTS (SELECT 1 FROM coverage_checked k, q
+                    WHERE k.scope = q.scope
+                      AND CAST(q.ts AS REAL) <= unixepoch(k.checked_at_utc)
+                      AND q.key > COALESCE(
+                            (SELECT max(hi) FROM coverage WHERE scope = q.scope), ''))";
+
+/// #1606: a reply newer than a channel's last top-level message lies past
+/// `hi`, which is the newest top-level message the walk saw. Before, the
+/// guide sent an app to Slack for it, since nothing said when the walk
+/// was. Now the store says the walk reached the present, and only what is
+/// newer than that walk is not mirrored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_past_the_newest_top_level_message_counts_as_mirrored() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out_raw");
+    let api = d.path().join("api");
+    record_run(
+        &api,
+        History::cold("C1"),
+        json!([root()]),
+        json!({"ok": true, "has_more": false,
+               "messages": [root(), msg(REPLY_1, "aye"), msg(REPLY_2, "make it so")]}),
+    );
+    let walked_at = chrono::DateTime::from_timestamp(1735693200, 0).unwrap();
+    serve(&api, &d.path().join("playback"));
+    fetch_into(&d.path().join("playback"), &out, |o| {
+        datalib_etl_slack::ingest::FetchOptions {
+            now: walked_at,
+            ..o
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(stored_ts(&out), [A, REPLY_1, REPLY_2]);
+    assert_eq!(checked_at(&out).await["C1"], walked_at);
+
+    let reader = datalib_pin::open_reader(&db_path_for(&out)).await.unwrap();
+    let hi: String = sqlx::query_scalar("SELECT hi FROM coverage WHERE scope = 'history:C1'")
+        .fetch_one(&reader)
+        .await
+        .unwrap();
+    assert!(
+        hi.as_str() < format!("00{REPLY_2}").as_str(),
+        "the reply lies past the span: {hi}"
+    );
+    let mirrored = |ts: &'static str| {
+        let reader = reader.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(IS_MIRRORED)
+                .bind("C1")
+                .bind(ts)
+                .fetch_one(&reader)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(mirrored(A).await, "inside the span");
+    assert!(mirrored(REPLY_2).await, "past the span, before the walk");
+    assert!(!mirrored("1735693201.000000").await, "after the walk");
+    reader.close().await;
 }
