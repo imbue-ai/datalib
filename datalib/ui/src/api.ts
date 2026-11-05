@@ -494,6 +494,9 @@ export type Health = {
   // to. Used to tell a coding agent where to read it (see handoff.ts) —
   // the token itself never enters the UI.
   token_file: string;
+  // A person's terminal cannot reach this library's sign-ins, so the
+  // wizard offers no command to run.
+  protected_library: boolean;
 };
 
 // Last successful /api/health payload. `fetchHealth` fills it; consumers

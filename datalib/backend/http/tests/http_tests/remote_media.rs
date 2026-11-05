@@ -262,6 +262,107 @@ async fn a_document_row_covers_requests_made_for_that_document() {
     assert_eq!(answer["allowed"].as_array().unwrap().len(), 0);
 }
 
+/// A link in an email is a same-origin navigation once the app opens it,
+/// and its query string is the sender's. Naming a source or document with a
+/// row in it fetched the sender's URL, whichever source the email was in. An
+/// image the app itself put in a document's frame is believed, and so is a
+/// URL the person opened themselves; a `url` or `host` row needs no context,
+/// so a link still gets those.
+#[tokio::test]
+async fn a_link_cannot_name_the_document_it_is_loading_for() {
+    let (base, hits) = stand_in_remote().await;
+    let (_root, app) = app().await;
+    let url = format!("{base}/pic.png");
+    for row in [
+        r#"{"scope":"source","key":"mail"}"#,
+        r#"{"scope":"document","key":"doc-1"}"#,
+    ] {
+        let (status, _, _) = call(&app, post_json("/api/remote_media/allow", row)).await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let load = |context: &str, site: &'static str, mode: &'static str| {
+        Request::get(format!("/api/remote_media?url={url}&{context}"))
+            .header("sec-fetch-site", site)
+            .header("sec-fetch-mode", mode)
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    for context in ["source=mail", "document=doc-1"] {
+        let (status, _, body) = call(&app, load(context, "same-origin", "navigate")).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{context}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "refused before any fetch");
+
+    let (status, _, body) = call(&app, load("source=mail", "same-origin", "no-cors")).await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(body, PNG);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    // The person's own "Open Image in New Tab" comes from no page.
+    let (status, _, _) = call(&app, load("document=doc-1", "none", "navigate")).await;
+    assert_eq!(status, StatusCode::OK);
+    // Neither does a client with no fetch metadata at all.
+    let (status, _, _) = call(
+        &app,
+        get_req(&format!("/api/remote_media?url={url}&source=mail")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, _) = call(
+        &app,
+        post_json(
+            "/api/remote_media/allow",
+            &format!(r#"{{"scope":"url","key":"{url}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(&app, load("source=elsewhere", "same-origin", "navigate")).await;
+    assert_eq!(status, StatusCode::OK, "a `url` row is no one's context");
+}
+
+/// With an allow row in place, a link on another site still reaches neither
+/// the sender's host nor the store.
+#[tokio::test]
+async fn a_link_from_another_site_fetches_nothing() {
+    let (base, hits) = stand_in_remote().await;
+    let (_root, app) = app().await;
+    let url = format!("{base}/pic.png");
+    let (status, _, _) = call(
+        &app,
+        post_json(
+            "/api/remote_media/allow",
+            &format!(r#"{{"scope":"url","key":"{url}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    for site in ["cross-site", "same-site"] {
+        let (status, _, _) = call(
+            &app,
+            Request::get(format!("/api/remote_media?url={url}"))
+                .header("sec-fetch-site", site)
+                .header("sec-fetch-mode", "navigate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "from {site}");
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    let (_, _, body) = call(&app, get_req("/api/remote_media/fetched")).await;
+    let table: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(table["rows"].as_array().unwrap().len(), 0);
+}
+
 /// A refusal comes back with its status and reason, and nothing is
 /// recorded for it.
 #[tokio::test]

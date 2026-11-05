@@ -5,13 +5,16 @@
 import type { Failure, IssueKind } from "@/api";
 
 /// Where a person can get a credential into latchkey from this dialog.
-export type SignInWhere = "here" | "gateway" | "terminal";
+export type SignInWhere = "here" | "gateway" | "terminal" | "nowhere";
 
 export type IssueText = { headline: string; advice: string | null };
 
 /// Longest headline kept whole; an unclassified failure is its first
 /// line, cut here.
 const HEADLINE_MAX = 140;
+
+export const CANNOT_SIGN_IN_HERE =
+  "A protected library can only sign in from this dialog, and this service has no way to do that yet.";
 
 function signInAgain(where: SignInWhere): string {
   switch (where) {
@@ -21,6 +24,8 @@ function signInAgain(where: SignInWhere): string {
       return "Sign in where the latchkey gateway is managed, then check again.";
     case "terminal":
       return "Store a new one with latchkey in a terminal, then check again.";
+    case "nowhere":
+      return CANNOT_SIGN_IN_HERE;
   }
 }
 
@@ -50,7 +55,9 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
             ? "Give it one below."
             : where === "gateway"
               ? "Set one up where the latchkey gateway is managed, then check again."
-              : "Create one with latchkey auth browser-prepare in a terminal, then check again.",
+              : where === "nowhere"
+                ? CANNOT_SIGN_IN_HERE
+                : "Create one with latchkey auth browser-prepare in a terminal, then check again.",
       };
     case "expired":
       return { headline: `The stored ${service} sign-in has expired.`, advice: signInAgain(where) };
