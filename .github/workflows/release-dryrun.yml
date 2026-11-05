@@ -1,0 +1,520 @@
+# Builds the `//datalib/backend:dist` bins on every supported
+# host platform — plus fully-static `*-unknown-linux-musl` variants
+# cross-libc-compiled on the same gnu runners — and attaches a
+# per-triple tarball to a GitHub Release.
+# The `runtime` job stages the Node runtime the binaries run `qmd` and
+# `latchkey` from as its own asset per platform
+# (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
+# from the `runtime.manifest` the `build` job writes beside them — see
+# docs/dev/runtime_fetch.md.
+# The `macos-app-*` jobs additionally build, sign, and notarize the
+# Datalib desktop app and attach its dmg to the same release.
+# Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
+# origin v0.1.0`). Each tarball is published with a stable,
+# un-versioned filename so the install script's
+# `releases/latest/download/<name>` URL stays valid.
+#
+# A release builds from scratch and reads no cache: no BuildBuddy and no
+# repository cache. Bazel verifies no cache entry, so a cache that anything
+# running on `main` can write would decide what this workflow ships
+# (docs/dev/threat_models.md). `lint_repo.py` check 21 holds it to that.
+#
+# Read docs/dev/release_steps.md before changing this file: the steps
+# that assemble a release are scripts under `scripts/release/`, tested on
+# every `bazel test //...`, and a new one goes there rather than inline.
+#
+# A job that builds holds nothing worth stealing. GitHub grants a token's
+# permissions per job, never per step, and a hosted runner's passwordless
+# sudo lets any process read the runner's memory, so only a separate job
+# on its own machine keeps a write token or the signing key from a crate's
+# build script. Every build job here is read-only and hands what it made
+# to a publish job through an artifact; §"Who holds what" in that doc is
+# the table, and `scripts/lint_repo.py` holds each grant to its job.
+name: release-dryrun
+
+on:
+  push:
+    branches:
+      - "claude/release-dryrun-macos26-f0f8f4d"
+
+permissions:
+  contents: read
+
+# Don't cancel in progress — tag runs publish a release and must
+# complete. (No main-branch races to serialize anymore now that the
+# warmup runs are gone.)
+concurrency:
+  group: release-dryrun-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
+  # and `latchkey` trees, only this platform's CPU binding of
+  # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
+  # platform. Its own job rather than a step of `build` so that the
+  # musl legs (whose glibc host runs the same runtime as their gnu
+  # sibling) can name an asset that already exists, with its sha256:
+  # the `build` legs read the `.sha256` sidecars published here when
+  # they write `runtime.manifest`. The tarball no longer carries the
+  # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
+  #
+  # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
+  # targets and an rsync: a few minutes, most of it runner setup.
+  runtime:
+    name: runtime (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `cuda`: also publish `runtime-<triple>-cuda.tar.gz`, the two
+        # CUDA packages the resolver overlays where an NVIDIA driver is
+        # present. Only Linux x86_64 has prebuilt CUDA bindings.
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-26  # Apple Silicon; docs/dev/release_steps.md §"The mac legs' runner image"
+            cuda: false
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            cuda: true
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
+            cuda: false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No cache, as in the build job below; see its comment.
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      # The step is a script so //tools:stage_runtime_test runs the same
+      # lines before a tag does (docs/dev/release_steps.md). The trees
+      # come out of Bazel; the script prunes the bindings this platform
+      # cannot use, proves the one it keeps loads, and tars the tree
+      # with its contents at the top (`node/`, `qmd/`, `latchkey/`),
+      # which is how the resolver unpacks it into
+      # `~/.cache/datalib/runtime/<sha12>/`.
+      - name: Stage the runtime
+        id: stage
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          CUDA: ${{ matrix.cuda }}
+        run: |
+          set -euo pipefail
+          {
+              echo "files<<FILES"
+              scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}"
+              echo "FILES"
+          } >> "$GITHUB_OUTPUT"
+
+      # compression-level 0: every file is a gzip or a checksum already.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-${{ matrix.triple }}
+          path: ${{ steps.stage.outputs.files }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # `!cancelled()`, as on the `build` job below: the legs that succeeded
+  # still publish when another failed.
+  publish-runtime:
+    name: publish runtime assets
+    needs: runtime
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stub gh (dry run)
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          cat > "$RUNNER_TEMP/stub/gh" <<'STUB'
+          #!/bin/sh
+          echo "STUB gh $*"
+          case "$1 $2" in
+              "release view") exit 1 ;;
+          esac
+          if [ "$1 $2" = "release upload" ]; then
+              shift 4
+              for f in "$@"; do ls -la "$f" || exit 1; done
+          fi
+          exit 0
+          STUB
+          sed -i 's/^          //' "$RUNNER_TEMP/stub/gh"
+          chmod +x "$RUNNER_TEMP/stub/gh"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/publish-release-assets
+        with:
+          pattern: runtime-*
+
+  build:
+    name: build (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    # After the runtime assets are on the release, whose sha256s the
+    # manifest below carries. `!cancelled()` rather than the default
+    # `success()`: a runtime leg that failed costs the tarballs that name
+    # it (their manifest step fails), not every tarball.
+    needs: publish-runtime
+    if: ${{ !cancelled() }}
+    strategy:
+      # One platform failing shouldn't cancel the others: a successful
+      # build's tarball can still be published to the release while we
+      # investigate the broken one.
+      fail-fast: false
+      matrix:
+        # `bazel-config`: extra config appended to the dist build only.
+        # The musl legs run on the same gnu runners as their gnu
+        # siblings (same arch, cross-libc): `--config=musl-*` selects
+        # the `//platforms:linux_*_musl` target platform, under which
+        # the hermetic musl toolchains (see MODULE.bazel) produce
+        # fully-static binaries that run on any Linux regardless of
+        # libc. Build scripts and proc macros still run under the
+        # host gnu toolchain, so the apt setup below is identical for
+        # gnu and musl legs. The
+        # version-consistency bazel test keeps running in the host
+        # config on every leg (it's a shell test; no point
+        # cross-compiling it) — on musl legs that costs one extra
+        # ~30s analysis pass versus the gnu legs' shared-config
+        # optimization described above the build steps.
+        #
+        # No x86_64-apple-darwin leg: nothing installs the full toolchain
+        # there (scripts/install.sh only maps Darwin/arm64), and the
+        # curl shims an Intel mac needs ship from
+        # github.com/imbue-ai/latchkey-curl-shims.
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-26  # Apple Silicon
+            bazel-config: ""
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            bazel-config: ""
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm  # GitHub-hosted native ARM Linux
+            bazel-config: ""
+          - triple: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+            bazel-config: "--config=musl-x86_64"
+          - triple: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+            bazel-config: "--config=musl-aarch64"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `tools/workspace_status.sh` runs `git describe --tags`; the
+          # default shallow clone has no tag history, so describe would
+          # always fall back to a bare sha.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Every cache this action offers stays off, `repository-cache` above
+      # all. A tag restores what a run on `main` saved under the same key,
+      # and bazel uses the extracted trees in a repository cache without
+      # checking them. Downloads come from their origin, each pinned by
+      # sha256. docs/dev/threat_models.md has the measurement.
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      - name: Show toolchain versions
+        run: |
+          bazel version
+          rustc --version || true
+
+      # Both bazel invocations pass `-c opt` so they share the same
+      # analysis cache. Mixing fastbuild + opt across consecutive
+      # invocations would discard the analysis cache between them
+      # ("WARNING: Build option --compilation_mode has changed,
+      # discarding analysis cache"), costing ~30s of re-analysis on
+      # the second invocation despite the action cache being warm.
+      - name: Run version-consistency test
+        run: bazel test //datalib/backend:version_consistency_test -c opt --build_metadata=ROLE=CI
+
+      # `--config=release` turns on `--stamp` so the binary's
+      # `--version` reports the real `git describe` output (e.g.
+      # `v0.8.0`) instead of falling back to the literal `"dev"` that
+      # an unstamped build produces. The post-build version assertion
+      # below catches any future regression where stamping gets
+      # silently disabled.
+      # `:bin` is `:dist` under the public names, the one list of what
+      # ships; the stage step below copies it whole.
+      - name: Build dist bins
+        run: bazel build //datalib/backend:bin -c opt --config=release --build_metadata=ROLE=CI ${{ matrix.bazel-config }}
+
+
+
+  # Build, sign, and notarize the Datalib desktop app (Tauri) and attach
+  # the dmg to the GitHub Release: four jobs, four machines, so that the
+  # job holding the signing key runs no build and the jobs running a build
+  # cannot ask for the key. Deliberately NOT gated on the `build` matrix
+  # job: the tauri crate is a standalone cargo workspace (not owned by
+  # bazel — see datalib/tauri/README.md), so a dist failure shouldn't block
+  # shipping the app, and vice versa.
+  #
+  # All the mechanics are the phases of datalib/tauri/build-signed-app.sh,
+  # which is what you run locally too — CI differs in where the secrets
+  # come from and in running each phase on its own machine.
+  #
+  # macos-app-compile runs every crate's build script and proc macro, the
+  # beforeBuildCommand's bazel build and cargo-about. No `id-token` here:
+  # that permission puts the means to mint the Vault token in every step's
+  # environment, so a build script could read the certs without waiting
+  # for them to be exported.
+  macos-app-compile:
+    name: macos-app (compile)
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The tauri beforeBuildCommand bazel-builds the bundled
+      # datalib-http / datalib-dag / datalib-step binaries; no cache, as in
+      # the build job above.
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      # The tauri crate is built by cargo (not bazel's hermetic rust
+      # toolchain), so make sure a current stable toolchain is default
+      # instead of trusting whatever the runner image ships (Cargo.toml
+      # says rust-version = "1.83"). Plain rustup, no third-party action.
+      # GitHub's macOS images carry rustup; if a future one drops it this
+      # fails here, and the fix is a change of image, not an installer
+      # piped into a shell.
+      - name: Install Rust (1.99.1, the version Bazel builds with)
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc --version
+
+      # scripts/ensure_pnpm.sh bootstraps pnpm via corepack, but corepack
+      # is being removed from newer Node distributions — install the
+      # pinned pnpm (packageManager in datalib/ui/package.json)
+      # directly so the runner image's Node choices can't break us.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: datalib/ui/package.json
+
+      # DATALIB_APP_VERSION stamps the tag's version into the shell, as
+      # the sign and verify jobs do into the bundle (tauri.conf.json's
+      # checked-in version is not kept in sync with the backend Cargo.toml
+      # version the tag asserts on). The tag goes through env, never
+      # ${{ }}-interpolated into run: (see verify-version in sculptor's
+      # build-desktop.yml for why).
+      - name: Compile the app and stage what it bundles
+        env:
+          REF_NAME: v0.49.1
+        run: |
+          set -euo pipefail
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          ./datalib/tauri/build-signed-app.sh compile
+
+      # A tar, since an artifact keeps no file modes and these are programs.
+      - name: Pack what the sign job needs
+        run: |
+          tar -C datalib/tauri -czf macos-app-compiled.tar.gz \
+              binaries runtime licenses target/release/datalib-tauri
+          ls -la macos-app-compiled.tar.gz
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-compiled
+          path: macos-app-compiled.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Holds the org's Developer ID signing key. The certs + notarization key
+  # live under restricted/datalib-release/* in Vault, read via the
+  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
+  # The role binds on this repository plus a glob on the OIDC ref claim
+  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
+  # PR workflows are denied, and no GitHub Environment setup is needed.
+  # The gate is therefore "who can push a v* tag"; see the vault repo's
+  # module comment for the residual exposure and how to tighten further.
+  #
+  # SUPPLY CHAIN: `tauri bundle` cannot compile, and nothing else here
+  # builds: no bazel, no cargo beyond `cargo metadata`, no cache restored.
+  # use-vault-secrets exports through $GITHUB_ENV, so
+  # every later step can read the certs. So the job uses no
+  # individually-owned third-party actions (only GitHub/pnpm org actions +
+  # our own), everything is fetched BEFORE the export, which is the last
+  # setup step on purpose, and each step until the certs are blanked is
+  # plain `run:` shell. Third-party code that still runs with the certs in
+  # reach: the Tauri CLI at the version pnpm-lock.yaml names.
+  macos-app-sign:
+    name: macos-app (sign + notarize)
+    needs: macos-app-compile
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      VAULT_AUTH_ROLE: datalib_release_gh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `tauri bundle` asks `cargo metadata` where the target directory is,
+      # and rust-toolchain.toml would have rustup fetch this toolchain then.
+      - name: Install Rust (1.99.1, the version Bazel builds with)
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc --version
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: datalib/ui/package.json
+
+      # The Tauri CLI at the version pnpm-lock.yaml names, from the
+      # tarballs it names, install scripts off.
+      - name: Install the pinned Tauri CLI
+        run: |
+          set -euo pipefail
+          cd datalib/tauri
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm exec tauri --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-compiled
+
+      - name: Unpack what the compile job made
+        run: |
+          tar -C datalib/tauri -xzf macos-app-compiled.tar.gz
+          rm macos-app-compiled.tar.gz
+
+      - name: Sign, bundle, notarize
+        env:
+          REF_NAME: v0.49.1
+        run: |
+          set -euo pipefail
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          export APPLE_SIGNING_IDENTITY=-
+          ./datalib/tauri/sign-staged.sh
+          : > "$RUNNER_TEMP/cargo.log"
+          mkdir -p "$RUNNER_TEMP/shim"
+          real_cargo="$(command -v cargo)"
+          printf '#!/bin/sh\necho "cargo $*" >> "%s/cargo.log"\nexec "%s" "$@"\n' "$RUNNER_TEMP" "$real_cargo" > "$RUNNER_TEMP/shim/cargo"
+          chmod +x "$RUNNER_TEMP/shim/cargo"
+          cd datalib/tauri
+          PATH="$RUNNER_TEMP/shim:$PATH" ./node_modules/.bin/tauri bundle --bundles app,dmg --config "{\"version\":\"$DATALIB_APP_VERSION\"}" 2>&1 | tee "$RUNNER_TEMP/bundle.log"
+          echo "--- every cargo call the bundle made:"
+          cat "$RUNNER_TEMP/cargo.log"
+          echo "--- Compiling lines in the bundle's log: $(grep -c ' Compiling ' "$RUNNER_TEMP/bundle.log" || true)"
+          if grep -E '^cargo (build|rustc|check|run)' "$RUNNER_TEMP/cargo.log"; then exit 1; fi
+
+      # Before the upload action and every post-step, on failure too.
+      - name: Blank the signing credentials
+        if: always()
+        run: |
+          for name in CERTS_TAR_GZ APPLE_API_KEY_ID APPLE_API_ISSUER; do
+              echo "${name}=" >> "$GITHUB_ENV"
+          done
+
+      - name: Stage dmg
+        env:
+          REF_NAME: v0.49.1
+        # Same stable, un-versioned filename convention as the tarballs
+        # so `releases/latest/download/<name>` URLs stay valid.
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          dmg="datalib/tauri/target/release/bundle/dmg/Datalib_${version}_aarch64.dmg"
+          out="Datalib-aarch64-apple-darwin.dmg"
+          cp "$dmg" "$out"
+          shasum -a 256 "$out" > "$out.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-dmg
+          path: |
+            Datalib-aarch64-apple-darwin.dmg
+            Datalib-aarch64-apple-darwin.dmg.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Runs the signed app, and with it the node and JS trees it bundles, on a
+  # machine that never held the key. Checks the dmg a person downloads.
+  macos-app-verify:
+    name: macos-app (verify)
+    needs: macos-app-sign
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+
+      - name: Check the dmg
+        env:
+          REF_NAME: v0.49.1
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/stub"
+          printf '#!/bin/sh\necho "STUB spctl $*"\n' > "$RUNNER_TEMP/stub/spctl"
+          printf '#!/bin/sh\necho "STUB xcrun $*"\n' > "$RUNNER_TEMP/stub/xcrun"
+          chmod +x "$RUNNER_TEMP/stub/spctl" "$RUNNER_TEMP/stub/xcrun"
+          PATH="$RUNNER_TEMP/stub:$PATH" ./datalib/tauri/build-signed-app.sh verify Datalib-aarch64-apple-darwin.dmg
+
+  publish-macos-app:
+    name: publish macos-app
+    needs: macos-app-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Stub gh (dry run)
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub"
+          cat > "$RUNNER_TEMP/stub/gh" <<'STUB'
+          #!/bin/sh
+          echo "STUB gh $*"
+          case "$1 $2" in
+              "release view") exit 1 ;;
+          esac
+          if [ "$1 $2" = "release upload" ]; then
+              shift 4
+              for f in "$@"; do ls -la "$f" || exit 1; done
+          fi
+          exit 0
+          STUB
+          sed -i 's/^          //' "$RUNNER_TEMP/stub/gh"
+          chmod +x "$RUNNER_TEMP/stub/gh"
+          echo "$RUNNER_TEMP/stub" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/publish-release-assets
+        with:
+          pattern: macos-app-dmg
+
