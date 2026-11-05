@@ -130,7 +130,18 @@ each one. There are two ways to keep a store open from Python:
   and it does not work under uv's Python
   ([below](#making-the-sqlite3-module-run-on-doltlite)).
 
-Both get the engine from dolthub's **`doltlite`** package on PyPI:
+### Calling the library directly
+
+The engine is also a library, `libdoltlite`, with SQLite's C API, so
+`ctypes` can call it and no module has to be replaced. **A release
+install already has it**, at `lib/libdoltlite.so` (`.dylib` on a mac)
+beside `datalib-doltlite` in the unpacked tree, and in the docker image.
+It is built from the source the binaries are built from, so it always
+matches your stores and there is nothing to install.
+
+The musl tarballs and the desktop app do not carry it, and a checkout
+has it only under `bazel-bin`. There, install dolthub's **`doltlite`**
+package from PyPI, which carries a copy:
 
 ```sh
 pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
@@ -138,33 +149,47 @@ pip install doltlite==<version>   # the DoltLite version `doltlite --version` pr
 
 Install the version your shell prints: a release that changes the
 storage format refuses our stores. Wheels exist for macOS on arm64 and
-for glibc Linux (manylinux) on x86_64 and aarch64. On anything else
-(an Intel mac, musl), or when a store is refused after an upgrade, use
-the shell: `datalib-doltlite -readonly -json`.
+for glibc Linux (manylinux) on x86_64 and aarch64. With neither the
+library nor a wheel (musl, an Intel mac), use the shell:
+`datalib-doltlite -readonly -json`.
 
-### Calling the library directly
-
-The wheel carries `libdoltlite`, and that library has SQLite's C API.
-`ctypes` can call it, so no module has to be replaced. Save this as
-`doltlite_reader.py`:
+Save this as `doltlite_reader.py`:
 
 ```python
 # doltlite_reader.py
-"""Read a doltlite store from any Python, uv's included, by calling the
-libdoltlite the `doltlite` wheel carries. It never imports the package:
-importing it is what replaces sqlite3 and, on macOS, restarts the interpreter."""
+"""Read a doltlite store from any Python, uv's included, by calling libdoltlite:
+the one a datalib release installs, or else the one in the `doltlite` wheel. It
+never imports that package: importing it is what replaces sqlite3 and, on macOS,
+restarts the interpreter."""
 
 import ctypes as c
 import importlib.util
 import os
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import quote
 
 _name = "libdoltlite.dylib" if sys.platform == "darwin" else "libdoltlite.so"
-_wheel = importlib.util.find_spec("doltlite")  # finds the package without running it
+
+
+def _find_library():
+    shell = shutil.which("datalib-doltlite")
+    if shell:
+        shipped = Path(shell).resolve().parent / "lib" / _name
+        if shipped.is_file():
+            return shipped
+    wheel = importlib.util.find_spec("doltlite")  # finds it without running it
+    if wheel:
+        return Path(wheel.origin).parent / "_lib" / _name
+    raise ImportError(
+        f"no {_name}: put a datalib release's datalib-doltlite on the PATH, "
+        "or pip install the doltlite version `datalib-doltlite --version` prints"
+    )
+
+
 _lib = c.CDLL(
-    str(Path(_wheel.origin).parent / "_lib" / _name),
+    str(_find_library()),
     mode=os.RTLD_NOW | os.RTLD_LOCAL | getattr(os, "RTLD_DEEPBIND", 0),
 )
 
@@ -304,21 +329,30 @@ What to know about it:
   was imported first. So `sqlite3` still cannot read a store, and a child
   process inherits nothing. The library opens plain SQLite files too,
   such as a source's `blobs.sqlite`.
-- **It leans on the wheel's private layout**, the `_lib/` directory. It
-  cannot ask the package for the path: importing anything under
-  `doltlite` runs the bootstrap described below.
+- **It looks for the release's library first**, through
+  `datalib-doltlite` on the `PATH`, following the link `install.sh` made.
+  A step finds it even when the `PATH` you start from does not hold it,
+  since the runner puts its own directory on a step's `PATH`.
+- **A program that stays up across an upgrade keeps the old library.**
+  If that upgrade changed the storage format, the store is refused until
+  the program restarts.
+- **The wheel route leans on a private layout**, the wheel's `_lib/`
+  directory. It cannot ask the package for the path: importing anything
+  under `doltlite` runs the bootstrap described below.
 
 `//datalib/backend/doltlite_facts:python_reader_test` runs this code as
-it is written here, under the Python build uv fetches
-(python-build-standalone, which `rules_python` brings too), on CI's
-Linux x86_64 and on a mac. `python_package_test` runs it under the host's
-`python3`, which loads SQLite as a shared library.
+it is written here, with both libraries, under the Python build uv
+fetches (python-build-standalone, which `rules_python` brings too), on
+CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
+host's `python3`, which loads SQLite as a shared library.
 
 Measured on a mac against real stores: a lookup by primary key on an open
 connection took about 0.01 ms. The same lookup cost about 15 ms when each
 one ran in a new `doltlite -readonly -json` process.
 
 ### Making the `sqlite3` module run on doltlite
+
+This route always needs the wheel, at the version your shell prints.
 
 ```python
 import doltlite  # first, before anything imports sqlite3

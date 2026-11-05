@@ -733,9 +733,9 @@ A python step using inputs + progress + outcome, which opens each
 download that moved at the commit it was started against. It works under
 any Python, uv's included. Save the reader in
 [Reading a store from Python](doltlite.md#calling-the-library-directly)
-as `doltlite_reader.py` beside it, and point `command` at a Python that
-has the `doltlite` wheel installed: `/path/to/.venv/bin/python
-/path/to/step.py`.
+as `doltlite_reader.py` beside it, and point `command` at any Python:
+`/path/to/python3 /path/to/step.py`. Under a release install there is
+nothing to install; otherwise that Python needs the `doltlite` wheel.
 
 ```python
 #!/usr/bin/env python3

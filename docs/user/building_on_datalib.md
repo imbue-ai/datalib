@@ -307,13 +307,14 @@ things, in this order:
    takes about 0.01 ms. From Python, under any interpreter, uv's
    included, use the short module in
    [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python).
-   It calls the library in dolthub's `doltlite` wheel, which has SQLite's
-   C API, so any language that can call C can do the same.
+   It calls `libdoltlite`, which a release installs beside
+   `datalib-doltlite` under `lib/`. The library has SQLite's C API, so any
+   language that can call C can do the same. It is built from the same
+   source as the binaries, so it matches your stores.
 2. **The shell, as a subprocess.** `datalib-doltlite -readonly -json`
-   costs a process start and a store open per query, about 15 ms. It
-   needs nothing installed and always matches your stores, so keep it as
-   the fallback for when an upgrade changes the storage format and the
-   wheel you have installed refuses a store.
+   costs a process start and a store open per query, about 15 ms. Use it
+   where there is no library: a musl tarball, or the desktop app with no
+   `doltlite` wheel installed.
 
 ## Your app's derived data as a step
 

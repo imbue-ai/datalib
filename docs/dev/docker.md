@@ -15,7 +15,8 @@ security model the walkthrough's bind-mount rules rest on.
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
   `doltlite` — `latchkey-curl-router`, `curl-impersonate` and the
-  `latchkey` launcher; plus the release's `runtime-<triple>.tar.gz`
+  `latchkey` launcher, with `lib/libdoltlite.so` left in that tree; plus
+  the release's `runtime-<triple>.tar.gz`
   asset unpacked beside them as `runtime/` — the Node runtime plus the
   lockfile-pinned `qmd` and `latchkey` package trees the binaries
   resolve beside themselves, checked against its published sha256 at

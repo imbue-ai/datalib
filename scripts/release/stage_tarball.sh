@@ -72,6 +72,13 @@ chmod +x "$stage"/*
 for required in datalib-dag datalib-step datalib-http datalib-doltlite latchkey-curl-router curl-impersonate; do
     [[ -x "$stage/$required" ]] || fail "$required missing from //datalib/backend:bin"
 done
+# The engine as a library, for a program of someone else's to call. Static
+# musl builds have none: //third-party/doltlite:shipped_library.
+case "$triple" in
+    *-musl) ;;
+    *) [[ -f "$stage/lib/libdoltlite.so" || -f "$stage/lib/libdoltlite.dylib" ]] \
+        || fail "lib/libdoltlite missing from //datalib/backend:bin" ;;
+esac
 
 # The `latchkey` launcher: runs the bundled latchkey with the router
 # curl beside it, from `runtime/` when one is staged beside it (the

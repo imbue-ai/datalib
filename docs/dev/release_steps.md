@@ -32,7 +32,7 @@ workflow's `run:` blocks are one line each:
 | step | script | what it makes |
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple> <cuda>` | `runtime-<triple>.tar.gz` (+ `-cuda`) and `.sha256` sidecars, from `scripts/stage_runtime.sh` |
-| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
 
 Each script writes into the current directory, prints what it wrote,
 and takes what a test cannot supply through environment variables
@@ -54,7 +54,7 @@ in the workflow. They are the part that cannot run anywhere else.
 - **`//tools:stage_tarball_test`** runs `stage_tarball.sh` for four
   triples (gnu with the CUDA overlay, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
-  and checks every binary is a regular executable, the launcher, the
+  and checks every binary is a regular executable, the library, the launcher, the
   commit, the manifest line for this triple's runtime asset, and the
   six notice files. `cargo-about` cannot run in the sandbox (it needs
   `cargo` and the crate sources), so the test hands
