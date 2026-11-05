@@ -502,6 +502,8 @@ async fn a_link_from_another_site_opens_a_page_and_reaches_no_route() {
         "/api/health",
         "/api/sync/stream",
         "/applet/unified_document_index/search?q=",
+        "/applet/datalib_contacts",
+        "/applet/datalib_contacts/",
         "/metrics",
         "/modules/abc",
     ] {
