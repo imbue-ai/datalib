@@ -95,10 +95,10 @@ jobs:
           external-cache: false
 
       # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
+      # the release group's read-only key.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_READONLY_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
@@ -108,7 +108,7 @@ jobs:
           EOF
               echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_READONLY_API_KEY not available — running without remote cache."
           fi
 
       # The step is a script so //tools:stage_runtime_test runs the same
@@ -254,16 +254,18 @@ jobs:
       # the bottom of `.bazelrc` picks it up automatically.
       #
       # SUPPLY CHAIN: a release build replays action-cache hits into
-      # what it ships, and bazel verifies none of them. So this is the
-      # RELEASE group's key — a cache only `test.yml` runs of commits on
-      # `main` write to, which is what makes a hit here "what main just
-      # built" — and `--config=buildbuddy-release-readonly`, which
-      # reads and never writes. Never the contributor key: every laptop and every
-      # PR run writes that cache. Without the secret this leg runs cold
-      # (~20 min), which is the right failure mode.
+      # what it ships, and bazel verifies none of them. So this reads the
+      # RELEASE group, a cache only `test.yml` runs of commits on `main`
+      # write to, with a key BuildBuddy accepts no write from: a crate's
+      # build script can read `.bazelrc.user`, so the key is what has to
+      # refuse, not a bazel flag. Never the contributor key (every laptop
+      # and every PR run writes that cache) or the release group's write
+      # key; `scripts/lint_repo.py` check 21 refuses both. Without the
+      # secret this leg runs cold (~20 min), which is the right failure
+      # mode. docs/dev/ci.md §"Two caches".
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_READONLY_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
@@ -273,7 +275,7 @@ jobs:
           EOF
               echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_READONLY_API_KEY not available — running without remote cache."
           fi
 
       # Defense in depth against "tagged the wrong version" or "forgot
@@ -444,10 +446,10 @@ jobs:
           external-cache: false
 
       # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
+      # the release group's read-only key.
       - name: Configure BuildBuddy remote cache
         env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_READONLY_API_KEY }}
         run: |
           set -euo pipefail
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
@@ -457,7 +459,7 @@ jobs:
           EOF
               echo "BuildBuddy release cache enabled for this job (read-only)."
           else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
+              echo "BUILD_BUDDY_RELEASE_READONLY_API_KEY not available — running without remote cache."
           fi
 
       # The tauri crate is built by cargo (not bazel's hermetic rust

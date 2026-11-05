@@ -161,6 +161,23 @@ jobs:
             ["job publish-tarballs needs contents: write to do its work"],
         )
 
+    def test_only_the_read_only_cache_key_may_appear(self) -> None:
+        """A cold release could tempt someone to paste a write key back; a build script could use it."""
+        with_key = self.GOOD.replace(
+            "      - run: bazel build //...\n",
+            "      - run: bazel build //...\n"
+            "        env:\n"
+            "          K: ${{ secrets.BUILD_BUDDY_RELEASE_READONLY_API_KEY }}\n",
+        )
+        self.assertEqual(release_grant_problems(with_key), [])
+        for name in ["BUILD_BUDDY_RELEASE_API_KEY", "BUILD_BUDDY_API_KEY"]:
+            with self.subTest(name=name):
+                text = with_key.replace("BUILD_BUDDY_RELEASE_READONLY_API_KEY", name)
+                self.assertEqual(
+                    release_grant_problems(text),
+                    [f"names {name}: a build job may hold only the read-only key"],
+                )
+
 
 class LiteralOpenTest(unittest.TestCase):
     def test_a_url_or_a_bare_filename_is_refused(self) -> None:

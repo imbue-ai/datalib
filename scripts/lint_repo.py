@@ -402,6 +402,8 @@ _WRITE_GRANT = re.compile(r"^\s*([a-z-]+):\s*write\b")
 _BUILD_COMMAND = re.compile(
     r"\bbazel\b|setup-bazel|cargo build|tauri build|build-signed-app\.sh compile"
 )
+_BUILDBUDDY_SECRET = re.compile(r"secrets\.(BUILD_BUDDY_\w+)")
+_RELEASE_BUILDBUDDY_SECRET = "BUILD_BUDDY_RELEASE_READONLY_API_KEY"
 
 
 def checkout_token_settings(text: str) -> list[tuple[int, str | None]]:
@@ -481,6 +483,9 @@ def release_grant_problems(text: str) -> list[str]:
                 problems.append(
                     f"job {job} holds a write grant and runs a build: {line.strip()}"
                 )
+    for name in sorted(set(_BUILDBUDDY_SECRET.findall(text))):
+        if name != _RELEASE_BUILDBUDDY_SECRET:
+            problems.append(f"names {name}: a build job may hold only the read-only key")
     return problems
 
 

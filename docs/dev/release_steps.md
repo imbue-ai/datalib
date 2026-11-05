@@ -63,9 +63,9 @@ to wait for.
 
 | job | runs on it | holds |
 |---|---|---|
-| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read`; the release cache's key |
+| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read`; the release cache's read-only key |
 | `publish-runtime`, `publish-tarballs`, `publish-macos-app` | `gh release`, nothing built | `contents: write` |
-| `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read`; the release cache's key |
+| `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read`; the release cache's read-only key |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
 | `docker-publish` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
@@ -100,10 +100,12 @@ A compromised build can still put bad code in what it builds, and
 `macos-app-sign` would sign it; that is true of any signed build. What
 the jobs prevent is the build taking the key, or rewriting a release.
 
-The release cache's key is the gap left in this table. These jobs read
-the cache with `--config=buildbuddy-release-readonly`, but that config
-is what stops them writing, not the key (`ci.md` §"Two caches"), and the
-key sits in `.bazelrc.user` while crates compile.
+The release cache's key cannot write either. It sits in `.bazelrc.user`
+while crates compile, so a build script can read it, and what that gets
+is the cache's contents and the ability to post build events. Check 21
+refuses any other BuildBuddy secret in `release.yml`. The cache's write
+key is still held where crates compile, by `test.yml` on a push to
+`main`: `ci.md` §"Two caches" says what that exposes and why it stays.
 
 ## What runs on every `bazel test //...`
 

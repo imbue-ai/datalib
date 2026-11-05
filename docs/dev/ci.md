@@ -140,17 +140,57 @@ keep a release from replaying anything a laptop or a PR run wrote:
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
+| release | `BUILD_BUDDY_RELEASE_API_KEY` to write, `BUILD_BUDDY_RELEASE_READONLY_API_KEY` to read | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml` (`--config=buildbuddy-release-readonly`) |
 
 Two BuildBuddy *organizations*, each on its own subdomain
 (`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
 works against its own org's host, so `prepare-bazel` takes the key and
-the config together. A tag builds a commit that is already on `main`,
-so the release build hits exactly what the `main` run of that commit
-produced; the `-readonly` config is what keeps it from writing, not the
-key. Without the release secret a tag build runs cold (~20 min a leg)
-rather than falling back to the contributor cache — that is the
-intended failure mode.
+the config together. Without the read-only secret a tag build runs cold
+(~20 min a leg) rather than falling back to the contributor cache — that
+is the intended failure mode.
+
+**A release gets little from this cache.** `main` builds only on x86_64
+Linux, so the aarch64 and mac legs get no hits at all. The two x86_64
+legs hit about 600 of their 2,100-odd actions (v0.46.0 to v0.49.0; a
+leg's `INFO: N processes` line has the count) and took no less time
+than the aarch64 Linux legs, though those run on different machines. The
+release org mostly pays off for `main` itself: the same commit's musl
+`:dist` in `test.yml` had 2,071 hits and ran 92 actions. A tag and that
+run differ in the runner image (bare `ubuntu-latest` against the
+devcontainer) and in stamping; which of them costs the hits has not been
+measured.
+
+**A read-only key is refused every write, and the refusal is silent.**
+BuildBuddy's `Read-only` key type has no write capability. An action-cache
+update answers success and stores nothing, and a blob upload answers
+`ALREADY_EXISTS`, so a build never fails on it and only the probe below
+can tell the key apart. Two things look different on a release:
+
+- The remote downloader needs write access to fetch something it does not
+  already hold. On a miss bazel prints `WARNING: Remote Cache:
+  PERMISSION_DENIED` and downloads from the origin itself (the
+  `_local_fallback` flag). That warning is expected, not a failure.
+- Files the build event stream uploads, test logs and the timing profile
+  among them, are not kept, so a release's invocation page cannot open
+  them.
+
+A `CAS-only` key would keep the downloader filling the cache and cannot
+write the action cache, but BuildBuddy lets it start remote execution,
+so it is not what a release gets.
+
+**What still holds the write key.** `test.yml`'s three jobs that run on
+a push to `main` compile with it in `.bazelrc.user`. Their actions run
+under bazel's `processwrapper-sandbox`, which hides no file and blocks
+no network, so a build script in a crate that reached `main` can read
+the key or write any entry a later release would replay. This is the
+design's accepted cost for as long as a release replays what `main`
+wrote: bazel uploads from the machine that builds, and an uploader on a
+second machine would pass on whatever the build handed it. If a
+compromised crate does reach `main`, delete the read-only secret, so
+that tags run cold and read nothing, and mint a new write key. The key
+is a repository secret, not an environment's, so only `test.yml`'s own
+`github.event_name == 'push'` holds it to `main`: a workflow edited on
+any branch of this repository can name it too.
 
 **The two orgs are write-disjoint, so a third writer was needed.** A
 main push writes the release org and a PR run writes the contributor
@@ -165,10 +205,27 @@ only product is cache entries. It does not help a PR that edits a
 widely-linked crate — that one rebuilds its own `rdeps` either way —
 it removes the runs that were cold for no reason.
 
-The release org exists and its read-write key is the repository
-secret; a second org means creating it from BuildBuddy's org switcher,
-minting a key under its Settings → API keys, and `gh secret set
-BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib`.
+The release org exists and both its keys are repository secrets. A
+second org means creating it from BuildBuddy's org switcher and, under
+its Settings → Org API keys, minting a `Read+Write` key for `gh secret
+set BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib` and a
+`Read-only` key for `gh secret set BUILD_BUDDY_RELEASE_READONLY_API_KEY
+--repo imbue-ai/datalib`.
+
+A secret cannot be read back, so check a key before setting it. This
+builds one throwaway action twice in an empty workspace, asking bazel to
+upload it. A key that can write shows `1 remote cache hit` on the second
+build. A read-only key shows the action running again both times, and a
+`--remote_upload_local_results is set, but…` warning:
+
+```bash
+cd "$(mktemp -d)" && echo 9.3.1 > .bazelversion && touch MODULE.bazel
+echo "genrule(name='probe', outs=['probe.txt'], cmd='echo $(uuidgen) > \$@')" > BUILD.bazel
+printf 'Key: '; IFS= read -rs KEY; echo
+printf 'common --remote_header=x-buildbuddy-api-key=%s\nbuild --remote_cache=grpcs://imbue-release.buildbuddy.io --remote_upload_local_results=true\n' "$KEY" > .bazelrc
+bazelisk build :probe; bazelisk clean; bazelisk build :probe
+bazelisk shutdown; rm .bazelrc; unset KEY
+```
 
 ## The caches, and what each is for
 
