@@ -4,6 +4,7 @@
 //! last seal. The flag is raised from the progress sink's per-channel
 //! tick, so the test does not depend on timing.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +15,7 @@ use datalib_etl_slack::ingest::{db_path_for, FetchOptions};
 use datalib_etl_slack::recorded::record_workspace;
 use serde_json::json;
 
-use crate::support::{channels_with_messages, fetch_into, Tree};
+use crate::support::{channels_with_messages, checked_at, fetch_into, Tree};
 
 /// Raises the stop on the download's first progress tick — what the SIGINT
 /// handler does, at a point the test controls. The first tick now lands
@@ -67,8 +68,26 @@ async fn a_stop_ends_the_walk_at_the_next_channel_boundary() {
         .fetch_all(&reader)
         .await
         .unwrap();
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+            .fetch_one(&reader)
+            .await
+            .unwrap();
     reader.close().await;
     assert_eq!(covered.len(), 1, "{covered:?}");
+    assert_eq!(
+        status, "partial",
+        "it did not read everything it set out to"
+    );
+    assert_eq!(
+        checked_at(&t.out)
+            .await
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        walked,
+        "the channel it finished is current; the ones it never started are not"
+    );
 
     fetch_into(&t.playback, &t.out, |o| o).await.unwrap();
     assert_eq!(channels_with_messages(&t.out).len(), 3);

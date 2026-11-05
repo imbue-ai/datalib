@@ -279,7 +279,8 @@ next `open` finishes it.
 `main` moves on every run; this branch moves, at the same publish, only
 when a table a reader reads changed its rows or its shape
 (`moves_version`: every content table, `problems`, `ingested_files`;
-not a `*_bookkeeping` sidecar, `sync_runs`, the cursors or `coverage`).
+not a `*_bookkeeping` sidecar, `sync_runs`, the cursors, `coverage` or
+`coverage_checked`).
 An ingest reports the commit it names, so a sync that found nothing new
 wakes no consumer. A raw store gets the branch at its first open by a
 build that knows it, at `main`, before that open's own schema commit,

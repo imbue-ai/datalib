@@ -921,6 +921,39 @@ fn stretches(wanted: &[Span], refresh_from: Option<&str>, held: &[Span]) -> Vec<
     out
 }
 
+/// How a run comes to know a conversation has nothing newer than what
+/// its history covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Present {
+    /// `client.counts`, or Slack listing it archived, already said so.
+    Known,
+    /// Its walk will say so, if it reaches its end.
+    OnceWalked,
+    /// Not this run: a closed DM not due its check, or a stretch with a
+    /// top (`context_after`), which is about that stretch alone.
+    Unknown,
+}
+
+/// Whether Slack has already answered for a conversation's newest
+/// history, so that all a run does is re-read what it holds.
+fn quiet(newest: Newest, walks: &[Stretch]) -> bool {
+    matches!(newest, Newest::At(_) | Newest::Archived { read: true })
+        && walks.iter().all(|w| w.reread)
+}
+
+fn present(wanted: &[Span], walks: &[Stretch], quiet: bool) -> Present {
+    let open_top = |top: &str| top == END_OF_TIME;
+    if !wanted.iter().any(|w| open_top(&w.hi)) {
+        Present::Unknown
+    } else if quiet {
+        Present::Known
+    } else if walks.iter().any(|w| open_top(&w.span.hi)) {
+        Present::OnceWalked
+    } else {
+        Present::Unknown
+    }
+}
+
 /// What `client.counts` says of a conversation's newest message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Newest<'a> {
@@ -1947,6 +1980,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         let mut owed_before: u64 = 0;
         let mut refreshing = vec![false; targets.len()];
         let mut quiet = vec![false; targets.len()];
+        let mut presents = vec![Present::Unknown; targets.len()];
         // Closed DMs whose check is due, and whether they were ever
         // checked before.
         let mut checking = vec![false; targets.len()];
@@ -2010,8 +2044,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 newest,
             );
             refreshing[target] = walks.iter().any(|w| w.reread);
-            quiet[target] = matches!(newest, Newest::At(_) | Newest::Archived { read: true })
-                && walks.iter().all(|w| w.reread);
+            quiet[target] = self::quiet(newest, &walks);
+            presents[target] = present(&wants, &walks, quiet[target]);
             frontier
                 .walks
                 .extend(walks.into_iter().map(|stretch| Walk::new(target, stretch)));
@@ -2067,6 +2101,14 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // Authors an earlier run named and did not look up, as a stopped
         // run does not: until they are, their messages show no one.
         mirror.look_up_authors(&mut writes).await?;
+        let checked_at = datalib_time::IsoOffsetTimestamp::from(now);
+        let known: Vec<String> = targets
+            .iter()
+            .zip(&presents)
+            .filter(|(_, present)| **present == Present::Known)
+            .map(|((cid, _), _)| db::history_scope(cid))
+            .collect();
+        coverage::checked(writes.tx().await?, &known, &checked_at).await?;
         let mut totals = Totals::default();
         let mut messages_in = vec![0usize; targets.len()];
         // Messages a walk found above everything held.
@@ -2256,6 +2298,10 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                         for (_, key) in swept.iter().filter(|(due, _)| *due && !failed[target]) {
                             db::record_sweep(&mut **writes.tx().await?, key, &now).await?;
                         }
+                        if presents[target] == Present::OnceWalked && !failed[target] {
+                            let scope = [db::history_scope(cid)];
+                            coverage::checked(writes.tx().await?, &scope, &checked_at).await?;
+                        }
                         // The daily check is the fallback behind
                         // `client.counts`; it finding news means a DM was
                         // reopened and closed between runs.
@@ -2310,7 +2356,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     // optimisation, to overflow a worker thread's stack beside the
     // futures a caller wraps it in.
     let result = Box::pin(work).await;
-    run.finish(&result, &grand).await;
+    run.finish(found.ended_early(), &result, &grand).await;
     result?;
 
     info!(
@@ -2665,6 +2711,43 @@ mod tests {
     fn walks(held: &[Span], latest: Option<&str>) -> bool {
         let newest = latest.map_or(Newest::Closed { check_due: false }, Newest::At);
         !planned_walk(None, held, newest).is_empty()
+    }
+
+    /// #1606: what a run can claim about a conversation's present. Only
+    /// a walk to the open top or a word from Slack says nothing is newer.
+    #[test]
+    fn a_conversation_is_known_current_only_when_something_said_so() {
+        let wanted = from_since(&ts_key(SINCE));
+        let held = [span(SINCE, "1735689600.000100")];
+        let of = |newest: Newest| {
+            let walks = to_walk(&wanted, None, &held, newest);
+            present(&wanted, &walks, quiet(newest, &walks))
+        };
+        assert_eq!(of(Newest::At("1735689600.000100")), Present::Known);
+        assert_eq!(of(Newest::Archived { read: true }), Present::Known);
+        assert_eq!(of(Newest::At("1735689600.000200")), Present::OnceWalked);
+        assert_eq!(of(Newest::Unknown), Present::OnceWalked);
+        assert_eq!(of(Newest::Archived { read: false }), Present::OnceWalked);
+        assert_eq!(of(Newest::Closed { check_due: true }), Present::OnceWalked);
+        assert_eq!(of(Newest::Closed { check_due: false }), Present::Unknown);
+    }
+
+    /// `context_after`: a window with a top says nothing past that top,
+    /// however it was read.
+    #[test]
+    fn a_window_with_a_top_says_nothing_of_the_present() {
+        let wanted = [span(SINCE, "1735689600.000300")];
+        let of = |held: &[Span], newest: Newest| {
+            let walks = to_walk(&wanted, None, held, newest);
+            let quiet = quiet(newest, &walks);
+            (quiet, present(&wanted, &walks, quiet))
+        };
+        assert_eq!(
+            of(&wanted, Newest::At("1735689600.000100")),
+            (true, Present::Unknown),
+            "the window is whole and `client.counts` shows nothing newer"
+        );
+        assert_eq!(of(&[], Newest::Unknown), (false, Present::Unknown));
     }
 
     /// #1374: a DM closed in the sidebar, or open with nothing since

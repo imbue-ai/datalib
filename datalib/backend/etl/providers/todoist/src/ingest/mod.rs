@@ -369,7 +369,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             Err(e)
         }
     };
-    run.finish(&result, &s).await;
+    run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
 }
 

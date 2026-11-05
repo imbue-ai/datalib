@@ -67,12 +67,12 @@ impl<'p> DownloadRun<'p> {
         self.run_id
     }
 
-    pub async fn finish<S, T>(self, result: &Result<T>, summary: &S)
+    pub async fn finish<S, T>(self, ended_early: bool, result: &Result<T>, summary: &S)
     where
         S: Serialize,
     {
         let elapsed_ms = self.started.elapsed().as_millis() as u64;
-        let status = if result.is_ok() { "ok" } else { "error" };
+        let status = final_status(result.is_ok(), ended_early);
         let deltas = compute_deltas(self.pool, self.head_at_start.as_deref()).await;
         let cursors_after = scope_state::snapshot(self.pool).await.unwrap_or_else(|e| {
             tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at finish failed");
@@ -105,6 +105,16 @@ impl<'p> DownloadRun<'p> {
                 "download_run: finish_run bookkeeping failed"
             );
         }
+    }
+}
+
+/// `ok` is a claim a reader relies on: this run read everything it set
+/// out to, so its start is how recent the mirror is.
+fn final_status(succeeded: bool, ended_early: bool) -> &'static str {
+    match (succeeded, ended_early) {
+        (false, _) => "error",
+        (true, true) => "partial",
+        (true, false) => "ok",
     }
 }
 
@@ -231,6 +241,52 @@ mod tests {
         skipped: usize,
     }
 
+    /// #1606: `ok` promises the run read everything it set out to, and a
+    /// run that ended early used to write it too, so the newest `ok` row
+    /// said nothing about how recent the mirror was.
+    #[tokio::test]
+    async fn a_run_that_ended_early_is_partial_however_it_ended() {
+        let (pool, _dir) = fresh_pool().await;
+        let status_after = |end: fn(&crate::run_problems::RunProblems, &crate::stop::StopFlag)| {
+            let pool = pool.clone();
+            async move {
+                let stop = crate::stop::StopFlag::new();
+                let (status_of, ran) = (pool.clone(), stop.clone());
+                let run_id = crate::run_problems::collecting(&pool, &stop, |found| async move {
+                    let run = DownloadRun::start(&status_of, &json!({})).await?;
+                    let run_id = run.run_id();
+                    end(&found, &ran);
+                    run.finish(
+                        found.ended_early(),
+                        &Ok::<(), anyhow::Error>(()),
+                        &DummySummary { new: 0, skipped: 0 },
+                    )
+                    .await;
+                    Ok(run_id)
+                })
+                .await
+                .unwrap();
+                sqlx::query_scalar::<_, String>("SELECT status FROM sync_runs WHERE run_id = ?")
+                    .bind(run_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(status_after(|_, _| {}).await, "ok");
+        assert_eq!(status_after(|_, stop| stop.request()).await, "partial");
+        assert_eq!(status_after(|found, _| found.cut_short()).await, "partial");
+        assert_eq!(
+            status_after(|found, _| found.gave_up("stopped answering")).await,
+            "partial"
+        );
+        assert_eq!(
+            status_after(|_, stop| stop.give_up("stopped answering")).await,
+            "partial"
+        );
+        assert_eq!(final_status(false, true), "error");
+    }
+
     #[tokio::test]
     async fn ok_path_writes_ok_status_with_elapsed_and_summary_fields() {
         let (pool, _dir) = fresh_pool().await;
@@ -238,7 +294,7 @@ mod tests {
         let run_id = run.run_id();
         let work_result: Result<()> = Ok(());
         let summary = DummySummary { new: 7, skipped: 3 };
-        run.finish(&work_result, &summary).await;
+        run.finish(false, &work_result, &summary).await;
 
         let row: (String, String) =
             sqlx::query_as("SELECT status, summary FROM sync_runs WHERE run_id = ?")
@@ -289,7 +345,7 @@ mod tests {
             .unwrap();
         let work_result: Result<()> = Ok(());
         let summary = DummySummary { new: 0, skipped: 0 };
-        run.finish(&work_result, &summary).await;
+        run.finish(false, &work_result, &summary).await;
 
         let deltas = summary_deltas(&pool, run_id).await;
         // sync_scope_state: 1 row inserted since baseline.
@@ -344,7 +400,7 @@ mod tests {
         // before the failure is preserved — that's what makes
         // post-mortem analysis possible.
         let summary = DummySummary { new: 4, skipped: 0 };
-        run.finish(&work_result, &summary).await;
+        run.finish(false, &work_result, &summary).await;
 
         let row: (String, String) =
             sqlx::query_as("SELECT status, summary FROM sync_runs WHERE run_id = ?")
@@ -435,7 +491,7 @@ mod tests {
                 .unwrap();
         }
         let work_result: Result<()> = Ok(());
-        run.finish(&work_result, &DummySummary { new: 7, skipped: 0 })
+        run.finish(false, &work_result, &DummySummary { new: 7, skipped: 0 })
             .await;
 
         let deltas = summary_deltas(&pool, run_id).await;

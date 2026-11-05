@@ -235,7 +235,11 @@ document.
 
 ### `sync_runs`
 
-One row per download run.
+One row per download run, for the sources that reach a service over the
+network (not Garmin, YoLink or contacts), and for few that read local
+files. The start of the newest `ok` row is how recent the source
+is as a whole: [building on datalib](building_on_datalib.md) § "How
+fresh is the mirror?".
 
 | column | what it holds |
 |---|---|
@@ -244,7 +248,7 @@ One row per download run.
 | `finished_at_utc` | when it ended; NULL while it runs, or if it was killed |
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
-| `status` | `running`, `ok` or `error`; `interrupted` for a run killed before it could finish, set when the next run starts |
+| `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. Rows written before `partial` existed say `ok` for a run that ended early |
 | `summary` | what it did, JSON (counts, and why it stopped early if it did) |
 
 ### `sync_scope_state`
@@ -554,19 +558,44 @@ Slack listed in it is stored.
   ends are inside the stretch.
 
 A conversation's history reaches back to the source's `since` (to its
-first message when the config sets none) and up to the newest message the
-last walk saw. With `scope = "involves_me"`, a channel's reaches back
+first message when the config sets none) and up to the newest top-level
+message the last walk saw. With `scope = "involves_me"`, a channel's reaches back
 only to `context_before` ahead of the oldest message that involves the
 account, and a channel where nothing does is not walked at all. A conversation walked and found empty has one row with
-`lo = hi`, the point the walk began. A `ts` inside a `history:` span is
-mirrored; one outside every span is not, and you should ask Slack.
+`lo = hi`, the point the walk began.
+
+**`hi` is not a time, and a stored message can lie past it.** It stays
+put through any number of walks that find nothing new, and a reply newer
+than the channel's last top-level message is stored above it. When the
+download last looked is in `coverage_checked`: at `checked_at_utc`, Slack
+had no top-level message in that conversation newer than its spans,
+because a walk reached the top or `client.counts` showed nothing newer
+(`client.counts` skips a join or leave notice, which the next walk picks
+up). The time is this machine's clock as the sync began, so it errs early. A
+conversation that fell behind keeps its older time: a DM closed in the
+sidebar between its daily checks, a walk that failed, a sync stopped
+before reaching it. With `context_after` set, a stretch has a top of its
+own and says nothing about the present, so there is usually no row.
+
+So, for what `conversations.history` would list: a `ts` inside a
+`history:` span is mirrored. One past every span and no later than
+`checked_at_utc` is mirrored too, there being no top-level message there.
+Anything else, ask Slack.
 
 ```sql
-SELECT 1 FROM coverage
- WHERE scope = 'history:' || :channel
-   AND lo <= substr('0000000000000000000' || :ts, -19)
-   AND substr('0000000000000000000' || :ts, -19) <= hi;
+WITH q(scope, ts, key) AS (
+  SELECT 'history:' || :channel, :ts, substr('0000000000000000000' || :ts, -19))
+SELECT EXISTS (SELECT 1 FROM coverage c, q
+                WHERE c.scope = q.scope AND c.lo <= q.key AND q.key <= c.hi)
+    OR EXISTS (SELECT 1 FROM coverage_checked k, q
+                WHERE k.scope = q.scope
+                  AND CAST(q.ts AS REAL) <= unixepoch(k.checked_at_utc)
+                  AND q.key > COALESCE(
+                        (SELECT max(hi) FROM coverage WHERE scope = q.scope), ''));
 ```
+
+This does not say a thread's replies are held; that is the root's
+`threads_bookkeeping.held_version` against its `latest_reply` (above).
 
 **What is not mirrored**: anything before `since`; direct messages,
 unless the source sets `dms = true`; for up to a day, the newest
@@ -738,6 +767,17 @@ The stretches of each conversation the download has walked (above).
 | `scope` | `history:<channel id>`, `replies:<channel id>` or `involving:<search>` |
 | `lo` | the oldest `ts` in the stretch, zero-padded to 19 characters |
 | `hi` | the newest `ts` in the stretch, the same way |
+
+### `coverage_checked`
+
+When each conversation's history was last known to hold everything
+Slack listed (above). No row means it never has been.
+
+| column | what it holds |
+|---|---|
+| `scope` | `history:<channel id>` |
+| `checked_at_utc` | when, in UTC |
+| `tz_offset` | the offset for that stamp |
 
 ## Calendars (`calendar`)
 

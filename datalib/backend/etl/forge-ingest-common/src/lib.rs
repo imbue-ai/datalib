@@ -227,7 +227,7 @@ async fn sync_collecting<F: Forge>(
     let result = work(forge, client, &opts, &found, &fetcher).await;
     let mut summary = fetcher.summary.into_inner();
     forge.record_requests(&mut summary, client.request_count());
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result?;
     Ok(summary)
 }

@@ -638,6 +638,19 @@ user list, claude's orgs and project docs).
 Local sources (files on disk) are read whole each run in one seal and
 need none of this.
 
+**A span's top may not be a time.** On slack, linear and notion it is the
+newest stamp the walk saw, deliberately, so that what appears late below
+"now" is still asked for; it says nothing about when the walk was. On the
+forges, todoist and yolink it is the run's own now, and on garmin the
+run's last day. What a reader wants to know, "as of when is there nothing
+newer", is the start of the newest `sync_runs` row that says `ok`. Slack's
+conversations can fall behind one another, so each also has its row in
+`coverage_checked`, written when a walk reaches the open top or
+`client.counts` shows nothing newer
+([`building_on_datalib.md`](../user/building_on_datalib.md) § "How fresh
+is the mirror?"). It is its own narrow table because it moves every run: in
+`sync_scope_state` each move would also land in the run's `summary`.
+
 ### A claim of completeness is written only by a walk that completed
 
 Two things a download writes are not data but **claims about how far
@@ -646,7 +659,9 @@ authority a prune needs ("this enumeration was complete, so absence
 means deletion"). Each is read by the *next*
 run as permission to skip work. A claim written by a walk that did
 not finish is therefore a silent data loss: the next run believes it,
-does less, and nothing anywhere reports the gap.
+does less, and nothing anywhere reports the gap. `sync_runs.status = 'ok'`
+and `coverage_checked` are claims of the same kind, made to whoever reads
+the store rather than to the next run.
 
 The trap is that a walk ends early far more often than it fails.
 Every one of these is an `Ok` return with the marker's write still
