@@ -298,6 +298,23 @@ The `_bookkeeping` and listing tables are the download's own records.
 Their shape can change with a migration, and the test that keeps
 [raw_stores.md](raw_stores.md) honest will say so when it does.
 
+## Reading from your program
+
+Stock SQLite cannot open a raw store, so your program needs one of two
+things, in this order:
+
+1. **A connection in your own process.** A query on an open connection
+   takes about 0.01 ms. From Python, under any interpreter, uv's
+   included, use the short module in
+   [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python).
+   It calls the library in dolthub's `doltlite` wheel, which has SQLite's
+   C API, so any language that can call C can do the same.
+2. **The shell, as a subprocess.** `datalib-doltlite -readonly -json`
+   costs a process start and a store open per query, about 15 ms. It
+   needs nothing installed and always matches your stores, so keep it as
+   the fallback for when an upgrade changes the storage format and the
+   wheel you have installed refuses a store.
+
 ## Your app's derived data as a step
 
 If your app computes something from the mirror (a work list, a

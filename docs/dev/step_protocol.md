@@ -729,17 +729,26 @@ id = "notes/ingest"
 command = "sh -c 'mkdir -p notes/ingest && cp -R \"$HOME/notes/.\" notes/ingest/'"
 ```
 
-A python step using inputs + progress + outcome:
+A python step using inputs + progress + outcome, which opens each
+download that moved at the commit it was started against. It works under
+any Python, uv's included. Save the reader in
+[Reading a store from Python](doltlite.md#calling-the-library-directly)
+as `doltlite_reader.py` beside it, and point `command` at a Python that
+has the `doltlite` wheel installed: `/path/to/.venv/bin/python
+/path/to/step.py`.
 
 ```python
 #!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys
+
+from doltlite_reader import Store
 
 def lines(name): return [p for p in os.environ.get(name, "").split("\n") if p]
 
 inputs = lines("DATALIB_DAG_INPUTS")
 changed = set(lines("DATALIB_DAG_CHANGED_INPUTS"))  # every input on a first run
 failed = set(lines("DATALIB_DAG_FAILED_INPUTS"))    # read, but partial
+reads = json.loads(os.environ.get("DATALIB_READS", "{}"))  # no entry: no version yet
 root = pathlib.Path(os.environ["DATALIB_DAG_DATA_ROOT"])
 out = os.environ["DATALIB_DAG_STEP"]   # the one tree this step writes
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
@@ -752,9 +761,14 @@ for src in inputs:
     if src in failed:
         emit({"event": "log", "step": "", "level": "warn",
               "msg": f"{src} did not finish its last run; reading what it committed"})
-    if src in changed:
-        # ... process only what moved ...
-        emit({"event": "log", "step": "", "level": "info", "msg": f"{src} moved"})
+    if src in changed and src in reads:
+        # A download's version is a commit of its raw store: <fingerprint>:<commit>.
+        commit = reads[src].split(":", 1)[1]
+        with Store(root / src / "entities.doltlite_db", commit) as store:
+            # ... process only what moved; dolt_diff_<table> says what that is ...
+            [(message,)] = store.query(
+                "SELECT message FROM dolt_log WHERE commit_hash = ?", commit)
+        emit({"event": "log", "step": "", "level": "info", "msg": f"{src} moved: {message}"})
     emit({"event": "progress_inc", "step": "", "delta": 1})
 
 # A content version: same output bytes → same string, every run. A

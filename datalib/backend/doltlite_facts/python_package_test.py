@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -138,6 +139,65 @@ class StartingPython(unittest.TestCase):
             text=True,
             env=fresh_env(**env),
         )
+
+    def test_a_child_process_inherits_what_the_bootstrap_leaves(self) -> None:
+        expected = ["_DOLTLITE_BOOTSTRAPPED"]
+        if sys.platform == "darwin":
+            expected.append("DYLD_INSERT_LIBRARIES")
+        self.assertEqual([k for k in BOOTSTRAP_ENV if k in os.environ], expected)
+
+    def test_a_child_python_with_only_the_marker_cannot_read_a_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "entities.doltlite_db"
+            cli(str(store), "CREATE TABLE t(id TEXT PRIMARY KEY);")
+            script = Path(tmp) / "child.py"
+            script.write_text(
+                "import doltlite\n"
+                "import sqlite3\n"
+                f"sqlite3.connect({str(store)!r}).execute('SELECT id FROM t')\n"
+            )
+            done = self.run_python(str(script), _DOLTLITE_BOOTSTRAPPED="1")
+            self.assertNotEqual(done.returncode, 0, "it read the store")
+            self.assertIn("file is not a database", done.stderr)
+
+    def test_the_direct_reader_works_beside_a_shared_library_sqlite3(self) -> None:
+        """This host Python loads SQLite as a shared library, so the two engines
+        could collide here as they cannot under python_reader_test's. The reader
+        must read and the sqlite3 module stay stock, whichever loaded first."""
+        doc = Path(os.environ["DOLTLITE_DOC"]).read_text()
+        reader = next(
+            b
+            for b in re.findall(r"```python\n(.*?)```", doc, flags=re.DOTALL)
+            if b.startswith("# doltlite_reader.py")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(Path(tmp) / "entities.doltlite_db")
+            cli(store, "CREATE TABLE t(id TEXT PRIMARY KEY);")
+            (Path(tmp) / "doltlite_reader.py").write_text(reader)
+            use_both = (
+                f"with Store({store!r}) as s:\n"
+                "    assert s.query('SELECT count(*) FROM t') == [(0,)]\n"
+                "try:\n"
+                f"    sqlite3.connect({store!r}).execute('SELECT id FROM t')\n"
+                "except sqlite3.DatabaseError as e:\n"
+                "    assert 'file is not a database' in str(e), e\n"
+                "else:\n"
+                "    raise SystemExit('the sqlite3 module read a store')\n"
+            )
+            for name, imports in (
+                (
+                    "sqlite3_first.py",
+                    "import sqlite3\nfrom doltlite_reader import Store\n",
+                ),
+                (
+                    "reader_first.py",
+                    "from doltlite_reader import Store\nimport sqlite3\n",
+                ),
+            ):
+                script = Path(tmp) / name
+                script.write_text(imports + use_both)
+                done = self.run_python(str(script))
+                self.assertEqual(done.returncode, 0, f"{name}: {done.stderr}")
 
     def test_python_c_fails_on_macos_only(self) -> None:
         done = self.run_python("-c", "import doltlite")
