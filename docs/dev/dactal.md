@@ -94,6 +94,9 @@ dactalView() card ──► <iframe sandbox="allow-scripts"> ──► /dactal/i
   - `main.js` — that page's own logic (query bar, render loop, the globals
     the vendored renderer expects). Split out of `index.html` so the CSP
     can forbid inline script.
+  - `calc.js` — the query language's inline math (`rows.[=score/total]`):
+    a small parser for arithmetic, in place of the `eval` the engine shipped
+    with. See caveat 5.
   - `vendor/` — the two pinned DACTAL scripts.
 
 `public/**` is already in `datalib/ui/BUILD.bazel`'s `vite_inputs`, so the
@@ -136,8 +139,9 @@ fallback.
 all (the frame could remove its own attribute); do not add the second.
 What the sandbox does not stop: a script that has already taken over the
 frame can still navigate the frame itself to an outside URL with whatever
-it holds in the query string — the working set, at most. That is the
-residual, down from "the whole API with the session attached".
+it holds in the query string, and it can ask the host for any search first.
+That is the residual, down from "the whole API with the session attached",
+and why no query may run as code (caveat 5).
 
 The iframe `src` is the explicit `/dactal/index.html`, not the bare
 `/dactal/` — a directory request misses the static file and hits the SPA
@@ -175,18 +179,24 @@ fallback, which serves the main app instead.
    quietly defeats the point of pinning: you would get whatever
    dactal.org serves *today*, with no SRI and no version pin.
 
-   So `public/dactal/index.html` carries a CSP — `script-src 'self'
-   'unsafe-eval'; connect-src 'none'` — which makes all three fail closed
-   permanently (`'none'` rather than `'self'` because the page makes no
-   request of its own: its rows arrive by message). It lives in
-   the host page rather than in `vendor/`, which keeps the "unmodified
-   pinned copies" property `vendor/PROVENANCE.md` depends on.
-   `'unsafe-eval'` has to stay: the query language evaluates expressions
-   through `eval` (in `dactal.js`) and `new Function`. The page's own
-   script is in `main.js`, not inline, precisely so that `script-src` need
-   not allow `'unsafe-inline'` — **do not move it inline.** With the
-   sandbox in place, `eval` over row data is what this policy guards; a
-   bypass gets the frame, not the app.
+   So `public/dactal/index.html` carries a CSP — `script-src 'self';
+   connect-src 'none'` — which makes all three fail closed permanently
+   (`'none'` rather than `'self'` because the page makes no request of its
+   own: its rows arrive by message). It lives in the host page rather than
+   in `vendor/`. The page's own script is in `main.js`, not inline,
+   precisely so that `script-src` need not allow `'unsafe-inline'` — **do
+   not move it inline.**
+
+   **No query runs as code, and there is no `'unsafe-eval'`.** Inline math
+   used to go through a regular-expression filter and then `eval`, and a
+   query could be written that passed the filter and reached `Function`.
+   A card's arguments can come from a link, and a script in the frame can
+   ask the host for search results and then navigate the frame to an
+   outside URL with them. So `calc.js` parses the arithmetic the language
+   can write (numbers, strings, arrays, the operators, `Math.*`, an index by
+   number, `.split`), the one vendored line that called `eval` calls it
+   instead (`vendor/PROVENANCE.md`), and the CSP refuses `eval` and
+   `new Function` outright, should a refresh of the snapshot bring one back.
 
 6. **Licensing.** The files carry no license header and dactal.org
    states none. DACTAL is Imbue's own work, and `vendor/PROVENANCE.md`

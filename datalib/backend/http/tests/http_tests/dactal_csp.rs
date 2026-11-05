@@ -199,12 +199,12 @@ async fn the_dactal_page_still_carries_its_csp() {
     // <script src="https://dactal.org/…"> injections in
     // dactal_utils.js:325 and :381; `connect-src 'none'` kills the
     // fetch() in :393 that feeds `new Function` — and every other
-    // request, since the page's rows arrive by message from the host.
+    // request, since the page's rows arrive by message from the host. No
+    // 'unsafe-eval': a query can come from a link, and must not run as code.
     assert_eq!(
         directive(&html, "script-src"),
-        "script-src 'self' 'unsafe-eval'",
-        "script-src must stay 'self' — plus 'unsafe-eval', which the \
-         query language genuinely needs. Full policy:\n{}",
+        "script-src 'self'",
+        "script-src must stay 'self', with no 'unsafe-eval'. Full policy:\n{}",
         csp_of(&html)
     );
     assert_eq!(
