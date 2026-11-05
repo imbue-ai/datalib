@@ -164,10 +164,6 @@ pub fn qmd_dir(data_root: &Path) -> PathBuf {
     unified_document_index_dir(data_root).join(QMD_DIR)
 }
 
-pub fn media_dir(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(MEDIA_DIR)
-}
-
 pub fn feedback_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(FEEDBACK_DB)
 }

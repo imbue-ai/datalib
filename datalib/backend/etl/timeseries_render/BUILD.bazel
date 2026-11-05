@@ -18,7 +18,6 @@ rust_library(
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "@datalib_crates//:anyhow",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:tracing",
     ],
 )

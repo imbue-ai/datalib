@@ -51,7 +51,6 @@ use schema_raw::{OrgRow, UserRow, ATTACHMENTS, CONVERSATIONS, PROJECTS, PROJECT_
 
 /// Between one org's listings and the next's.
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
-pub const DEFAULT_OVERLAP: usize = 3;
 pub(crate) const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 pub(crate) const CLAUDE_ORIGIN: &str = "https://claude.ai";
 

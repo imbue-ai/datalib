@@ -24,16 +24,6 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-// Constants so every provider agrees and a rename has one search target.
-// Only the DDL fragments below use them; provider SQL spells them inline.
-pub const COL_ID: &str = "id";
-pub const COL_PAYLOAD: &str = "payload";
-pub const COL_FETCHED_AT: &str = "fetched_at_utc";
-pub const COL_ATTEMPT_COUNT: &str = "attempt_count";
-pub const COL_LAST_ATTEMPT_AT: &str = "last_attempt_at_utc";
-pub const COL_LAST_ERROR: &str = "last_error";
-pub const COL_TZ_OFFSET: &str = "tz_offset";
-
 pub fn bookkeeping_ddl_for(table: &str) -> String {
     // No `DEFAULT` on any column here; writers bind every value
     // explicitly. The stamps are UTC; `tz_offset` is the offset the
@@ -1347,22 +1337,6 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
     let cols = table_columns(&probe, PROBE).await;
     probe.close().await;
     cols
-}
-
-/// How `table` in the file differs from `create_sql`, for a caller that
-/// rebuilds on any difference: `None` when the table is absent or has
-/// exactly the declared shape, else one line naming what moved.
-pub async fn table_drift(
-    pool: &SqlitePool,
-    create_sql: &str,
-    table: &str,
-) -> Result<Option<String>> {
-    let actual = table_columns(pool, table).await?;
-    if actual.is_empty() {
-        return Ok(None);
-    }
-    let declared = declared_columns(create_sql, table).await?;
-    Ok(shape_drift(&declared, &actual))
 }
 
 /// What differs between two column lists, or `None` when nothing does.
@@ -3097,22 +3071,6 @@ pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec
 }
 
 // ── sync_scope_state ────────────────────────────────────────────────
-
-pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT scope, last_seen_at_utc FROM sync_scope_state")
-        .fetch_all(pool)
-        .await
-        .context("select sync_scope_state")?;
-    let mut out = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let scope: String = r.try_get("scope").unwrap_or_default();
-        let ts: String = r.try_get("last_seen_at_utc").unwrap_or_default();
-        if !scope.is_empty() && !ts.is_empty() {
-            out.insert(scope, ts);
-        }
-    }
-    Ok(out)
-}
 
 /// `last_seen_at` is whatever offset-bearing stamp the provider chose;
 /// the row keeps it as UTC with the offset beside it. A value that is
