@@ -60,16 +60,14 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
 From a program, the simplest route is to run `datalib-doltlite
 -readonly -json` as a subprocess and parse its output. That costs a
 process start and a store open per query, so a Python program that runs
-many can keep the store open instead: dolthub's `doltlite` package
-(`pip install doltlite==<version>`, the DoltLite version
-`datalib-doltlite --version` prints) makes the standard `sqlite3`
-module run on doltlite. `import doltlite` before anything imports
-`sqlite3`, then open with
-`sqlite3.connect(f"file:{path}?mode=ro", uri=True)`. It needs a Python
-that loads SQLite as a shared library (Homebrew, the system Python,
-pyenv or Conda; not the builds `uv python install` fetches), and on
-macOS a script file, since it restarts the interpreter: `python -c`
-and the REPL fail.
+many can keep the store open instead, under any Python, uv's included.
+A release install comes with the library, `libdoltlite`, and the short
+module in
+[Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
+calls it. That section also says what to install where there is no such
+library, and when to `import doltlite` instead, which makes the standard
+`sqlite3` module run on doltlite: only for code that needs that module
+or SQLAlchemy, and not under the builds `uv python install` fetches.
 
 For a tool that
 speaks only SQLite, one pipe writes a plain SQLite copy with the same

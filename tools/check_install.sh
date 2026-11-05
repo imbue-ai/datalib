@@ -50,8 +50,9 @@ STUB
 chmod +x "$stubs/uname" "$stubs/curl"
 
 stage="$work/datalib-0.0.0-x86_64-unknown-linux-gnu"
-mkdir -p "$stage/docs"
-touch "$stage/datalib-dag" "$stage/latchkey" "$stage/git-hash" "$stage/runtime.manifest" "$stage/docs/agent_user.md"
+mkdir -p "$stage/docs" "$stage/lib"
+touch "$stage/datalib-dag" "$stage/latchkey" "$stage/git-hash" "$stage/runtime.manifest" "$stage/docs/agent_user.md" \
+    "$stage/lib/libdoltlite.so"
 chmod +x "$stage/datalib-dag" "$stage/latchkey"
 tarball="$work/datalib.tar.gz"
 tar -czf "$tarball" -C "$work" "$(basename "$stage")"
@@ -69,9 +70,10 @@ install
 for name in datalib-dag latchkey; do
     [[ -L "$bin/$name" && -x "$bin/$name" ]] || complain "$name is not linked as an executable"
 done
-for name in git-hash runtime.manifest docs; do
+for name in git-hash runtime.manifest docs lib libdoltlite.so; do
     [[ ! -e "$bin/$name" && ! -L "$bin/$name" ]] || complain "$name is on the PATH"
 done
+[[ -f "$lib/lib/libdoltlite.so" ]] || complain "lib/libdoltlite.so is not beside the binaries, where the reader looks"
 for name in git-hash runtime.manifest; do
     [[ -f "$lib/$name" ]] || complain "$name is not beside the binaries, where they read it"
     [[ ! -x "$lib/$name" ]] || complain "$name was marked executable"

@@ -428,8 +428,8 @@ place for what the engine does, with the recipes;
 `docs/dev/app_stores.md` maps which store lives where and who owns it.
 Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`,
 `//datalib/backend/etl:doltlite_two_process_test` or, for the PyPI
-wheel, `//datalib/backend/doltlite_facts:python_package_test`, so a
-doltlite bump that moves one fails by name.
+wheel, `//datalib/backend/doltlite_facts:python_package_test` and
+`:python_reader_test`, so a doltlite bump that moves one fails by name.
 
 The rules, none optional. How our code enforces them is in
 `datalib/backend/etl/README.md` §"Connection pools":

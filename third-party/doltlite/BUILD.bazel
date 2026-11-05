@@ -80,6 +80,36 @@ DOLTLITE_WARNING_SUPPRESSIONS = [
     "-Wno-deprecated-non-prototype",
 ]
 
+DOLTLITE_LIBRARY_COPTS = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
+    # Force `-O2` regardless of bazel's compilation_mode: doltlite's
+    # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
+    # store took ~60s to open (docs/dev/doltlite.md § Operational
+    # notes; hack/slack_open_debug). We never step-debug it.
+    "-O2",
+    # Position-independent even in the non-PIC archive. rustc bundles
+    # this archive into the libsqlite3-sys rlib (the build script's
+    # `rustc-link-lib=static=sqlite3`), and every Rust binary on Linux
+    # links as PIE, so a non-PIC `sqlite3.o` fails the x86_64 link with
+    # "relocation R_X86_64_32S ... can not be used when making a PIE
+    # object". The amalgamation the crate used to compile itself was
+    # built -fPIC by the `cc` crate; this keeps ours the same.
+    "-fPIC",
+]
+
+DOLTLITE_LINKOPTS = select({
+    # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
+    # ever calls sqlite3_load_extension at runtime (we don't, but
+    # the symbol references dlopen so the linker complains
+    # otherwise on Linux).
+    "@platforms//os:linux": [
+        "-lpthread",
+        "-ldl",
+        "-lm",
+    ],
+    "@platforms//os:macos": [],
+    "//conditions:default": [],
+})
+
 # `sqlite3` — a from-source doltlite build, compiled once by Bazel and
 # statically linked into every Rust binary that pulls in sqlx-sqlite
 # (transitively via `libsqlite3-sys`).
@@ -130,33 +160,63 @@ cc_library(
     srcs = ["sqlite3.c"],
     hdrs = ["sqlite3.h"],
     includes = ["."],
-    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
-        # Force `-O2` regardless of bazel's compilation_mode: doltlite's
-        # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
-        # store took ~60s to open (docs/dev/doltlite.md § Operational
-        # notes; hack/slack_open_debug). We never step-debug it.
-        "-O2",
-        # Position-independent even in the non-PIC archive. rustc bundles
-        # this archive into the libsqlite3-sys rlib (the build script's
-        # `rustc-link-lib=static=sqlite3`), and every Rust binary on Linux
-        # links as PIE, so a non-PIC `sqlite3.o` fails the x86_64 link with
-        # "relocation R_X86_64_32S ... can not be used when making a PIE
-        # object". The amalgamation the crate used to compile itself was
-        # built -fPIC by the `cc` crate; this keeps ours the same.
-        "-fPIC",
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    visibility = ["//visibility:public"],
+)
+
+# `libdoltlite` — the same amalgamation as a shared library, for a program
+# outside the Rust build to call: docs/dev/doltlite.md § "Reading a store
+# from Python". Compiled again rather than linked from `:sqlite3`, because
+# a shared library takes from an archive only what it references, and
+# here that is nothing.
+#
+# Not on the musl platforms. Those binaries are fully static, and a static
+# toolchain's shared library is one nothing we have tested can load.
+config_setting(
+    name = "musl",
+    constraint_values = [
+        "//platforms:musl",
+        "@platforms//os:linux",
     ],
-    linkopts = select({
-        # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
-        # ever calls sqlite3_load_extension at runtime (we don't, but
-        # the symbol references dlopen so the linker complains
-        # otherwise on Linux).
-        "@platforms//os:linux": [
-            "-lpthread",
-            "-ldl",
-            "-lm",
-        ],
-        "@platforms//os:macos": [],
-        "//conditions:default": [],
+)
+
+cc_binary(
+    name = "libdoltlite.so",
+    srcs = [
+        "sqlite3.c",
+        "sqlite3.h",
+    ],
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    linkshared = True,
+    target_compatible_with = select({
+        ":musl": ["@platforms//:incompatible"],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+cc_binary(
+    name = "libdoltlite.dylib",
+    srcs = [
+        "sqlite3.c",
+        "sqlite3.h",
+    ],
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+# What this platform ships: `//datalib/backend:dist` takes it, so the
+# tarball holds it at `lib/`.
+filegroup(
+    name = "shipped_library",
+    srcs = select({
+        ":musl": [],
+        "@platforms//os:linux": [":libdoltlite.so"],
+        "@platforms//os:macos": [":libdoltlite.dylib"],
     }),
     visibility = ["//visibility:public"],
 )
