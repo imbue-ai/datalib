@@ -358,9 +358,13 @@ jobs:
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
+      # `overwrite`: a re-run repeats this upload when a `runtime` leg failed,
+      # and without it a later download can get the earlier attempt's
+      # (release_steps.md §"What a re-run does").
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tarball-${{ matrix.triple }}
+          overwrite: true
           path: |
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha256 }}
@@ -638,12 +642,15 @@ jobs:
   #
   # This image is the user-facing way to run datalib on Linux
   # without trusting the bare binaries to your host shell — see
-  # docs/dev/docker.md for the bind-mount + security model. The build is
-  # NOT gated on the macOS matrix entry: a darwin-only build failure
-  # shouldn't block publishing the Linux image.
+  # docs/dev/docker.md for the bind-mount + security model.
+  #
+  # `!cancelled()`, so a failed mac or musl leg of `runtime` or `build` costs
+  # no image. A leg can't be named in `needs`, so a failed gnu leg shows up
+  # at this job's download of that leg's artifact, which fails.
   docker-image:
     name: docker-image (${{ matrix.arch }})
     needs: [runtime, build]
+    if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runs-on }}
     permissions:
       contents: read
@@ -791,9 +798,12 @@ jobs:
               --push \
               ctx
 
+      # `overwrite`, as on the tarball: a re-run after any failed `build` leg
+      # repeats this upload, and one tag must not join two attempts' images.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docker-digest-${{ matrix.arch }}
+          overwrite: true
           path: ${{ runner.temp }}/digests/${{ matrix.arch }}
           if-no-files-found: error
           retention-days: 7
@@ -801,9 +811,15 @@ jobs:
   # Give the two architectures' images one tag, and check the result. Builds
   # nothing. An architecture that failed leaves the version and `:latest`
   # untouched.
+  #
+  # The `if` has to be spelled out: a job with none is skipped when anything
+  # up its chain failed, not only what it names, so a failed mac `build` leg
+  # would skip this with `docker-image` green. The tag does not wait for the
+  # release (release_steps.md §"What one failed job costs").
   docker-publish:
     name: docker-publish (ghcr.io)
     needs: docker-image
+    if: ${{ !cancelled() && needs.docker-image.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -891,4 +907,4 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          gh release edit "$REF_NAME" --draft=false
+          gh release edit "$REF_NAME" --draft=false --latest

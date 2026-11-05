@@ -167,7 +167,9 @@ published from a local machine — the tag is the trigger.
 11. Confirm the artifacts landed: `gh release view vX.Y.Z` should list
     the per-triple tarballs and the macOS dmg, and not say `draft: true`.
     Tarball filenames are stable/un-versioned on purpose — the install
-    script fetches `releases/latest/download/<name>`.
+    script fetches `releases/latest/download/<name>`, so check that
+    `gh api repos/imbue-ai/datalib/releases/latest --jq .tag_name` prints
+    this tag. If it doesn't, `gh release edit vX.Y.Z --latest` moves it.
 
     Then give the release its notes. The workflow creates it with an
     empty body, and apps that read the raw stores learn of a change

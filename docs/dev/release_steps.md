@@ -59,12 +59,13 @@ makes `.sha256` beside a tarball worth checking: nobody with write access
 can replace both. It also means nothing can be added later, so:
 
 - **A failed job holds the whole release back.** `releases/latest` still
-  points at the previous release. Re-run the failed jobs (`gh run rerun
-  <id> --failed`); they attach to the same draft, replacing what they had
-  uploaded, and `publish-release` runs after them.
+  points at the previous release, so `install.sh` and the README's link get
+  that one, complete. Re-run the failed jobs (`gh run rerun <id> --failed`);
+  they attach to the same draft, replacing what they had uploaded, and
+  `publish-release` runs after them.
 - **A leg that cannot be fixed soon** leaves a choice: publish what is on
-  the draft by hand (`gh release edit vX.Y.Z --draft=false`), knowing the
-  missing asset can never join it, or cut a patch release.
+  the draft by hand (`gh release edit vX.Y.Z --draft=false --latest`),
+  knowing the missing asset can never join it, or cut a patch release.
 - **The title and notes stay editable**, as GitHub's docs say, so the notes
   can still be written after publishing.
 
@@ -74,6 +75,57 @@ and no build job should need more than that. The manifest's URLs do name
 the tag, so a runtime fetch works only once the release is published, and
 nothing in the workflow fetches one: the Docker image and the Mac app carry
 theirs.
+
+### What one failed job costs
+
+A failed mac leg holds back the Linux tarballs too. They wait on the draft,
+where nothing installs from them: a release is published complete or not at
+all, because once published the missing asset can never be added.
+
+| what failed | missing from the draft | Docker image | `releases/latest` |
+|---|---|---|---|
+| the mac leg of `runtime` | its runtime asset, the mac tarball | tagged | previous release |
+| the mac leg of `build` | the mac tarball | tagged | previous release |
+| a musl leg of `build` | that tarball | tagged | previous release |
+| a gnu leg of `build` | that tarball | not tagged | previous release |
+| a gnu leg of `runtime` | its runtime asset, its gnu and musl tarballs | not tagged | previous release |
+| a `macos-app-*` job | the dmg | tagged | previous release |
+
+The Docker image does not wait for the release. It carries its own runtime,
+so it works while the release is still a draft, and `docker-publish` checks
+the tagged image against the walkthrough. So `ghcr.io/…:latest` can be a
+version ahead of `releases/latest` until the release is published. An image
+needs both gnu legs, so losing either tags nothing.
+
+### What a re-run does
+
+`gh run rerun --failed` re-runs each failed job and every job downstream of
+it, including jobs that passed. A matrix job downstream runs all its legs;
+a matrix job that failed runs only its failed legs.
+
+| what failed | what runs again |
+|---|---|
+| a `build` leg | that leg, `publish-tarballs`, both `docker-image` legs, `docker-publish`, `publish-release` |
+| a `runtime` leg | that leg, `publish-runtime`, all five `build` legs, and the rest of the row above |
+| a `macos-app-*` job | the rest of that chain, `publish-macos-app`, `publish-release` |
+
+So re-running a failed `build` leg rebuilds both images, and the version tag
+and `:latest` move to the new ones. A job that a re-run repeats also uploads
+its artifact again, and `download-artifact` takes the same-named artifact
+with the highest id, which is not always the newest. So the two uploads a
+re-run can repeat, `tarball-*` and `docker-digest-*`, say `overwrite: true`.
+
+### Trying the job graph on a branch
+
+The tables above are what GitHub did with a copy of this job graph, and that
+copy needs no tag. Push a throwaway branch with a workflow that triggers on
+that branch, has the same `needs` and `if` lines and the same artifact
+uploads and downloads, and has steps that only echo, with no write grants.
+Make one leg `exit 1` when `github.run_attempt` is 1, then run `gh run rerun
+--failed`. Delete the branch afterwards. Try it this way before changing a
+`needs` or an `if` here: a job's `if` is not checked by anything else, and
+the rule that catches people is that a job with no `if` is skipped when
+anything up its chain failed, not only the jobs it names.
 
 ## Who holds what
 
@@ -253,6 +305,9 @@ matches.
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
+- Publishing the draft and `releases/latest` moving to it: `gh release
+  create`, `upload` and `edit` need a real release, and a tag's run is the
+  only one this workflow makes. The release procedure checks the result.
 - The Docker jobs' pushes. Their builds and the tagging can be tried on a
   branch with a release's published tarballs and `imagetools create
   --dry-run`, but only a tag pushes. Their Docker Hub images come through
