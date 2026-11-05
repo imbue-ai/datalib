@@ -1069,7 +1069,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     let log_err = log
         .try_clone()
         .map_err(|e| anyhow::anyhow!("clone backend log handle: {e}"))?;
-    let latchkey_dir = protected_latchkey_dir(app, &root)?;
+    let latchkey_env = protected_latchkey_env(app, &root)?;
 
     let mut child = Command::new(&http_bin)
         .arg(&root)
@@ -1083,7 +1083,7 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
         .env("DATALIB_PARENT_PIPE", "0")
-        .envs(latchkey_dir.map(|dir| ("LATCHKEY_DIRECTORY", dir)))
+        .envs(latchkey_env)
         .stdin(Stdio::piped())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err))
@@ -1126,21 +1126,22 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
     Ok(url)
 }
 
-/// For a protected library, latchkey's store in the protected folder,
-/// made from `~/.latchkey` the first time; `None` for any other library,
-/// which uses latchkey's own default.
-fn protected_latchkey_dir(app: &AppHandle, root: &Path) -> anyhow::Result<Option<PathBuf>> {
+/// What points a protected library's latchkey at its own store and key;
+/// nothing for any other library, which uses latchkey's own default.
+fn protected_latchkey_env(
+    app: &AppHandle,
+    root: &Path,
+) -> anyhow::Result<Vec<(&'static str, std::ffi::OsString)>> {
     let Some(container) = protected_container(app) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     if !protected::is_protected(root, &container) {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let dir = protected::latchkey_dir(&container);
-    let home = home_dir(app).ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-    protected::seed_latchkey(&home.join(".latchkey"), &dir)
-        .map_err(|e| anyhow::anyhow!("set up latchkey's store in {}: {e}", dir.display()))?;
-    Ok(Some(dir))
+    let real_root = root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("follow {}: {e}", root.display()))?;
+    Ok(protected::latchkey_env(&real_root))
 }
 
 fn log_tail(path: &std::path::Path) -> String {

@@ -187,19 +187,29 @@ switch on your everyday profile.
 
 What that means for datalib today:
 
-- **latchkey's encryption key is in your keychain**, and the Node that
-  latchkey runs on is allowed to read it without asking. So any program
-  running as you can use your sign-ins.
+- **latchkey's encryption key is in your keychain**, and a Node you
+  have allowed can read it without asking. If macOS asks whether `node`
+  may use your confidential information stored in "latchkey", that is a
+  Node not on the list yet. Once one is on it, any program running as
+  you can use your sign-ins.
 - **The desktop app can keep a library in a protected folder
   (experimental).** When you make a new library, tick **Keep it in a
   protected folder**. The library then lives in a folder macOS guards
   for the Datalib app, signed by Imbue, so that permission lasts
   through upgrades: Terminal, an AI agent's shell, Finder or any other
-  app that reaches in makes macOS ask you first. Your latchkey
-  sign-ins are copied in with it, so `latchkey curl` run anywhere else
-  no longer finds them once you sign out of the originals
-  (`latchkey auth clear <service>`). Saying **Allow** lets that app in
-  for as long as it keeps running, so say no unless you mean it. What
+  app that reaches in makes macOS ask you first. It starts with no
+  sign-ins, in a latchkey store of its own inside the library, whose key
+  is a keychain item named `Datalib Latchkey - <folder name>`. You sign
+  in to its sources in Datalib, and `latchkey curl` run anywhere else
+  cannot find those sign-ins. What you already signed in to in
+  `~/.latchkey` stays there, as reachable as it was. **Only the folder
+  protects these sign-ins, not the keychain:** any program running as
+  you can get the key, by running the Node inside the Datalib app. So
+  anything that lets a program reach the library's files gives it the
+  sign-ins too. Saying **Allow** lets that app in for as long as it
+  keeps running, so say no unless you mean it. Deleting the library
+  moves its sign-ins to the Trash, outside the folder, so empty the
+  Trash afterwards. What
   is still unknown: whether an agent could get in by running one of
   Datalib's own programs directly, and whether the Datalib app gets in
   without asking at all; the first release with this option is what

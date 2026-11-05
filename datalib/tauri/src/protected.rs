@@ -3,9 +3,14 @@
 //! Finder) can open only after the person says yes. What it is and what
 //! is still unknown about it: README.md, "A protected library".
 //!
+//! Only this folder guards a library's sign-ins. Any program can get the
+//! keychain key by running the app's Node, so a change that lets the store
+//! be read from outside gives away the sign-ins.
+//!
 //! Nothing here may reference `tauri`: `//datalib/tauri:protected_test`
 //! compiles this file on its own.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The app group `Datalib.entitlements` names. macOS lets an app into a
@@ -22,13 +27,6 @@ pub fn container(home: &Path) -> PathBuf {
 
 pub fn libraries_dir(container: &Path) -> PathBuf {
     container.join("Libraries")
-}
-
-/// latchkey's store for every protected library, in place of
-/// `~/.latchkey`: the server is started with `LATCHKEY_DIRECTORY` naming
-/// it, and every latchkey the library runs inherits that.
-pub fn latchkey_dir(container: &Path) -> PathBuf {
-    container.join("latchkey")
 }
 
 /// `root` is inside the container, judged by where both paths lead once
@@ -57,55 +55,21 @@ pub fn resolve_name(input: &str, libraries_dir: &Path) -> Option<PathBuf> {
     plain.then(|| libraries_dir.join(name))
 }
 
-/// Give the protected libraries a latchkey store the first time one
-/// opens: a copy of `from` (`~/.latchkey`), so their sources keep the
-/// sign-ins they had. The originals stay where they were; signing out of
-/// them is the person's call. Built beside `to` and renamed into place,
-/// so a copy cut short is never taken for a store. A store already at
-/// `to` is left alone. Returns whether anything was copied.
-pub fn seed_latchkey(from: &Path, to: &Path) -> std::io::Result<bool> {
-    if to.exists() {
-        return Ok(false);
-    }
-    let staging = to.with_extension("partial");
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)?;
-    }
-    create_owner_only_dir(&staging)?;
-    let copied = from.is_dir();
-    if copied {
-        copy_tree(from, &staging)?;
-    }
-    std::fs::rename(&staging, to)?;
-    Ok(copied)
-}
-
-/// Folders and regular files; a symlink is skipped rather than followed
-/// out of the store. `fs::copy` keeps each file's mode, which latchkey
-/// sets owner-only.
-fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        let dest = to.join(entry.file_name());
-        if kind.is_dir() {
-            create_owner_only_dir(&dest)?;
-            copy_tree(&entry.path(), &dest)?;
-        } else if kind.is_file() {
-            std::fs::copy(entry.path(), &dest)?;
-        }
-    }
-    Ok(())
-}
-
-fn create_owner_only_dir(dir: &Path) -> std::io::Result<()> {
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(dir)
+/// The variables a protected library's server starts with, which every
+/// latchkey it runs inherits. `root` is the library's real path. latchkey
+/// makes the store in the library and its key in the keychain the first
+/// time it needs them, so a library starts signed in to nothing and has
+/// nothing to do with `~/.latchkey`.
+pub fn latchkey_env(root: &Path) -> Vec<(&'static str, OsString)> {
+    let mut key_name = OsString::from("Datalib Latchkey - ");
+    key_name.push(root.file_name().unwrap_or_default());
+    vec![
+        (
+            "LATCHKEY_DIRECTORY",
+            root.join("system").join("latchkey").into_os_string(),
+        ),
+        ("LATCHKEY_KEYRING_SERVICE_NAME", key_name),
+    ]
 }
 
 #[cfg(test)]
@@ -182,78 +146,25 @@ mod tests {
         }
     }
 
-    /// The first protected library starts with the sign-ins latchkey
-    /// already holds, keeps their owner-only modes, and leaves the
-    /// originals in place; a symlink in the store is not followed.
-    #[cfg(unix)]
+    /// Each library gets its own store and its own keychain item, so
+    /// signing in to one reaches no other, and neither names `~/.latchkey`
+    /// or latchkey's shared `latchkey` item.
     #[test]
-    fn seeding_copies_the_store_once_and_leaves_the_original() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().unwrap();
-        let from = tmp.path().join(".latchkey");
-        std::fs::create_dir_all(from.join("plugins/garmin")).unwrap();
-        std::fs::write(from.join("credentials.json.enc"), "sealed").unwrap();
-        std::fs::set_permissions(
-            from.join("credentials.json.enc"),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .unwrap();
-        std::fs::write(from.join("plugins/garmin/package.json"), "{}").unwrap();
-        std::os::unix::fs::symlink("/etc", from.join("elsewhere")).unwrap();
-        let to = latchkey_dir(&tmp.path().join("container"));
-        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
-
-        assert!(seed_latchkey(&from, &to).unwrap());
+    fn a_protected_library_has_its_own_store_and_keychain_item() {
+        let env = latchkey_env(Path::new("/c/Libraries/Photo archive"));
         assert_eq!(
-            std::fs::read_to_string(to.join("credentials.json.enc")).unwrap(),
-            "sealed"
+            env,
+            [
+                (
+                    "LATCHKEY_DIRECTORY",
+                    OsString::from("/c/Libraries/Photo archive/system/latchkey")
+                ),
+                (
+                    "LATCHKEY_KEYRING_SERVICE_NAME",
+                    OsString::from("Datalib Latchkey - Photo archive")
+                ),
+            ]
         );
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&to.join("credentials.json.enc")), 0o600);
-        assert_eq!(mode(&to), 0o700);
-        assert!(to.join("plugins/garmin/package.json").is_file());
-        assert!(!to.join("elsewhere").exists());
-        assert!(
-            from.join("credentials.json.enc").is_file(),
-            "the original stays"
-        );
-        assert!(!to.with_extension("partial").exists());
-
-        std::fs::write(to.join("credentials.json.enc"), "signed in since").unwrap();
-        assert!(
-            !seed_latchkey(&from, &to).unwrap(),
-            "a store already there is kept"
-        );
-        assert_eq!(
-            std::fs::read_to_string(to.join("credentials.json.enc")).unwrap(),
-            "signed in since"
-        );
-    }
-
-    /// Someone who never used latchkey still gets a store, empty, so the
-    /// protected libraries never fall back to `~/.latchkey`.
-    #[test]
-    fn seeding_with_no_store_to_copy_makes_an_empty_one() {
-        let tmp = tempfile::tempdir().unwrap();
-        let to = latchkey_dir(tmp.path());
-        assert!(!seed_latchkey(&tmp.path().join("missing"), &to).unwrap());
-        assert!(to.is_dir());
-        assert_eq!(std::fs::read_dir(&to).unwrap().count(), 0);
-    }
-
-    /// A copy cut short leaves a `.partial` folder; the next try starts
-    /// it again rather than taking it for a store.
-    #[test]
-    fn a_copy_cut_short_is_started_again() {
-        let tmp = tempfile::tempdir().unwrap();
-        let from = tmp.path().join(".latchkey");
-        std::fs::create_dir_all(&from).unwrap();
-        std::fs::write(from.join("config.json"), "{}").unwrap();
-        let to = latchkey_dir(&tmp.path().join("c"));
-        std::fs::create_dir_all(to.with_extension("partial")).unwrap();
-        std::fs::write(to.with_extension("partial").join("half"), "x").unwrap();
-        assert!(seed_latchkey(&from, &to).unwrap());
-        assert!(to.join("config.json").is_file());
-        assert!(!to.join("half").exists());
+        assert_ne!(env, latchkey_env(Path::new("/c/Libraries/Mail")));
     }
 }
