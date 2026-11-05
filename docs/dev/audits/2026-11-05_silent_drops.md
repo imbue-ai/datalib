@@ -63,8 +63,8 @@ Each needs a decision or more than one site, so none was fixed here.
 | `calendar/src/ical.rs:91`, `calendar/src/ingest/caldav/mod.rs:268` | to-dos and journal entries, and to-do-only calendars | decide; arguably out of scope for a calendar |
 | `etl/sqlite_mirror/src/mirror.rs:463` | a virtual table whose module this build lacks; only a count | a row through `run_or_report`; beeper's bridges and lightroom also call `run`, so every caller needs it, and no test stages such a table yet |
 
-Left as they are, on purpose: `payload_max_bytes` (`media/src/ingest/mod.rs:230`)
-leaves a hash empty and no record goes; an HLS manifest (`:422`) is not something
+Left as they are, on purpose: `payload_max_bytes` (`media/src/ingest/mod.rs:235`)
+leaves a hash empty and no record goes; an HLS manifest (`:456`) is not something
 a person made; `dropped_columns` in `sqlite_mirror` are configured, or derived or
 instance-local columns.
 
