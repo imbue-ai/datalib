@@ -485,7 +485,9 @@ def release_grant_problems(text: str) -> list[str]:
                 )
     for name in sorted(set(_BUILDBUDDY_SECRET.findall(text))):
         if name != _RELEASE_BUILDBUDDY_SECRET:
-            problems.append(f"names {name}: a build job may hold only the read-only key")
+            problems.append(
+                f"names {name}: a build job may hold only the read-only key"
+            )
     return problems
 
 
