@@ -14,7 +14,7 @@
 # build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
 # a tag, or when a dispatch on `main` asks, and only after the image has
 # proved it can analyse the tree. Never from another branch: every run
-# on `main` runs in `:latest` holding the release cache's write key. To
+# on `main` runs in `:latest` holding the release org's write key. To
 # try a Dockerfile change before a release, dispatch this workflow on
 # the branch, then `test.yml` with the `sha-` tag it prints. Old `sha-`
 # versions are pruned after each push.

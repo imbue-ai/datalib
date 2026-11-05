@@ -63,9 +63,9 @@ to wait for.
 
 | job | runs on it | holds |
 |---|---|---|
-| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read`; the release cache's key |
+| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
 | `publish-runtime`, `publish-tarballs`, `publish-macos-app` | `gh release`, nothing built | `contents: write` |
-| `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read`; the release cache's key |
+| `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
 | `docker-publish` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
@@ -100,10 +100,11 @@ A compromised build can still put bad code in what it builds, and
 `macos-app-sign` would sign it; that is true of any signed build. What
 the jobs prevent is the build taking the key, or rewriting a release.
 
-The release cache's key is the gap left in this table. These jobs read
-the cache with `--config=buildbuddy-release-readonly`, but that config
-is what stops them writing, not the key (`ci.md` §"Two caches"), and the
-key sits in `.bazelrc.user` while crates compile.
+No job that compiles holds a cache key or restores a cache (`ci.md`
+§"Two caches"), so nothing `main`'s CI saved reaches what it compiles,
+and a build script in one has no cache to leave anything in.
+`docker-publish`'s layer cache is the one shared cache left, and
+[`threat_models.md`](threat_models.md) says what that leaves open.
 
 ## What runs on every `bazel test //...`
 
@@ -202,9 +203,8 @@ cache key.** A darwin action's cache key does not cover the image, so
 the contributor cache replays another image's compiles and test results:
 `stage_runtime_test` reported `(cached) PASSED` on `macos-15` in the same
 job whose runtime step had just failed on openrsync, and a binary whose
-link is replayed would carry the other image's SDK. A tag's mac legs find
-nothing in the release cache anyway (`ci.md` §"Two caches"), so a cold
-run is the one that matches.
+link is replayed would carry the other image's SDK. A tag reads no cache
+(`ci.md` §"Two caches"), so a cold run is the one that matches.
 
 ## What stays release-only
 

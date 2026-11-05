@@ -14,11 +14,10 @@
 # un-versioned filename so the install script's
 # `releases/latest/download/<name>` URL stays valid.
 #
-# Bazel action cache is served by BuildBuddy (see the "Configure
-# BuildBuddy remote cache" step below); there's no GHA-side bazel
-# cache and no main-branch warmup run. Tag pushes read the RELEASE
-# group's cache — populated only by `test.yml` runs of commits on
-# main, never by contributor laptops or PR runs — and write nothing.
+# A release builds from scratch and reads no cache: no BuildBuddy and no
+# repository cache. Bazel verifies no cache entry, so a cache that anything
+# running on `main` can write would decide what this workflow ships
+# (docs/dev/threat_models.md). `lint_repo.py` check 21 holds it to that.
 #
 # Read docs/dev/release_steps.md before changing this file: the steps
 # that assemble a release are scripts under `scripts/release/`, tested on
@@ -86,30 +85,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same cache layering as the build job below; see its comment.
+      # No cache, as in the build job below; see its comment.
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
-
-      # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
 
       # The step is a script so //tools:stage_runtime_test runs the same
       # lines before a tag does (docs/dev/release_steps.md). The trees
@@ -218,63 +200,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # BuildBuddy serves the remote action cache (the big win — skips
-      # the multi-minute tokio / sqlx / doltlite compiles), but
-      # BuildBuddy is action-cache-only: it doesn't cover the
-      # bazelisk binary download, the `http_archive` tarball downloads
-      # (rules_rust source, protobuf, etc.), or crate_universe's
-      # external-repo resolution. Those are local-to-runner concerns.
-      #
-      # We keep `repository-cache` on so the crate_universe + rules
-      # tarballs persist across runs (saves the ~1–3 min network-bound
-      # fetch on a cold runner). The other three layers stay off:
-      #   * disk-cache duplicates BuildBuddy's action cache and
-      #     previously caused "Lost inputs no longer available
-      #     remotely" failures against rules_rust's
-      #     ExtractCargoTomlEnvVars actions (see test.yml header).
-      #   * external-cache caches the materialized `external/`
-      #     workspaces — small win and historically the flakiest layer.
-      #   * bazelisk-cache saves a ~20s binary download, not worth
-      #     a slot in the 10 GB-per-repo actions/cache quota.
+      # Every cache this action offers stays off, `repository-cache` above
+      # all. A tag restores what a run on `main` saved under the same key,
+      # and bazel uses the extracted trees in a repository cache without
+      # checking them. Downloads come from their origin, each pinned by
+      # sha256. docs/dev/threat_models.md has the measurement.
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
 
       - name: Show toolchain versions
         run: |
           bazel version
           rustc --version || true
-
-      # Wire the BuildBuddy remote cache for this build. `.bazelrc.user`
-      # is gitignored so we can drop the API key into it from a repo
-      # secret without polluting the source tree; the `try-import` at
-      # the bottom of `.bazelrc` picks it up automatically.
-      #
-      # SUPPLY CHAIN: a release build replays action-cache hits into
-      # what it ships, and bazel verifies none of them. So this is the
-      # RELEASE group's key — a cache only `test.yml` runs of commits on
-      # `main` write to, which is what makes a hit here "what main just
-      # built" — and `--config=buildbuddy-release-readonly`, which
-      # reads and never writes. Never the contributor key: every laptop and every
-      # PR run writes that cache. Without the secret this leg runs cold
-      # (~20 min), which is the right failure mode.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
 
       # Defense in depth against "tagged the wrong version" or "forgot
       # to bump Cargo.toml before tagging". The bazel test below already
@@ -433,32 +374,14 @@ jobs:
           persist-credentials: false
 
       # The tauri beforeBuildCommand bazel-builds the bundled
-      # datalib-http / datalib-dag / datalib-step binaries; same cache layering
-      # rationale as the build job above (BuildBuddy serves actions,
-      # repository-cache keeps the crate_universe / rules tarballs).
+      # datalib-http / datalib-dag / datalib-step binaries; no cache, as in
+      # the build job above.
       - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
-
-      # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
 
       # The tauri crate is built by cargo (not bazel's hermetic rust
       # toolchain), so make sure a current stable toolchain is default
@@ -521,8 +444,8 @@ jobs:
   # module comment for the residual exposure and how to tighten further.
   #
   # SUPPLY CHAIN: `tauri bundle` cannot compile, and nothing else here
-  # builds: no bazel, no cargo beyond `cargo metadata`, no cache restored,
-  # no BuildBuddy key. use-vault-secrets exports through $GITHUB_ENV, so
+  # builds: no bazel, no cargo beyond `cargo metadata`, no cache restored.
+  # use-vault-secrets exports through $GITHUB_ENV, so
   # every later step can read the certs. So the job uses no
   # individually-owned third-party actions (only GitHub/pnpm org actions +
   # our own), everything is fetched BEFORE the export, which is the last

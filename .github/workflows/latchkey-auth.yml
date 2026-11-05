@@ -31,8 +31,8 @@ jobs:
           disk-cache: false
           repository-cache: true
           external-cache: false
-      # The contributor org, as a PR run uses: this is never what a
-      # release replays. `.bazelrc`'s BuildBuddy block has the reasoning.
+      # The contributor org, as a PR run uses. `.bazelrc`'s BuildBuddy
+      # block has the reasoning.
       - name: Configure BuildBuddy remote cache
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}

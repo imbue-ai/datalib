@@ -161,6 +161,42 @@ jobs:
             ["job publish-tarballs needs contents: write to do its work"],
         )
 
+    def test_a_release_names_no_remote_cache(self) -> None:
+        """Bazel verifies no hit, so a cache `main` can write would decide what a release ships."""
+        for line in [
+            "      - run: bazel build --config=buildbuddy-release //x",
+            "      - run: bazel build --remote_cache=grpcs://x //x",
+            "      - run: cat > .bazelrc.user",
+            "      - uses: actions/cache@abc",
+            "        env:\n          K: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}",
+        ]:
+            with self.subTest(line=line):
+                text = self.GOOD.replace("      - run: bazel build //...", line)
+                problems = release_grant_problems(text)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("a release reads no cache", problems[0])
+
+    def test_a_comment_may_say_why_there_is_no_cache(self) -> None:
+        text = self.GOOD.replace("# no bazel here", "# no BuildBuddy, no .bazelrc.user")
+        self.assertEqual(release_grant_problems(text), [])
+
+    def test_setup_bazel_restores_nothing(self) -> None:
+        """A tag's mac legs restored what `main`'s daily latchkey-auth saved; a repo contents cache entry is not verified either."""
+        clean = self.GOOD.replace(
+            "      - run: bazel build //...",
+            "      - uses: bazel-contrib/setup-bazel@abc\n"
+            "        with:\n"
+            "          repository-cache: false\n"
+            "          disk-cache: false",
+        )
+        self.assertEqual(release_grant_problems(clean), [])
+        self.assertEqual(
+            release_grant_problems(
+                clean.replace("repository-cache: false", "repository-cache: true")
+            ),
+            ["a release restores no cache, but: repository-cache: true"],
+        )
+
 
 class LiteralOpenTest(unittest.TestCase):
     def test_a_url_or_a_bare_filename_is_refused(self) -> None:

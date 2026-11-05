@@ -385,7 +385,9 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 # GitHub grants a token's permissions per job, never per step, and a hosted
 # runner's passwordless sudo lets a job's processes read the runner's
 # memory, so the only boundary is the job. docs/dev/release_steps.md
-# §"Who holds what" has the table this holds the workflow to.
+# §"Who holds what" has the table this holds the workflow to. A release
+# also reads no cache anything on `main` can write: bazel verifies no entry,
+# so a cache would decide what ships (docs/dev/threat_models.md).
 _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
     "publish-runtime": {"contents"},
@@ -402,6 +404,11 @@ _WRITE_GRANT = re.compile(r"^\s*([a-z-]+):\s*write\b")
 _BUILD_COMMAND = re.compile(
     r"\bbazel\b|setup-bazel|cargo build|tauri build|build-signed-app\.sh compile"
 )
+_CACHE_KEY = re.compile(
+    r"build.?buddy|bazelrc\.user|remote_cache|remote_header|actions/cache",
+    re.IGNORECASE,
+)
+_SETUP_BAZEL_CACHE = re.compile(r"^\s*([a-z]+-cache):\s*(\S+)")
 
 
 def checkout_token_settings(text: str) -> list[tuple[int, str | None]]:
@@ -481,6 +488,14 @@ def release_grant_problems(text: str) -> list[str]:
                 problems.append(
                     f"job {job} holds a write grant and runs a build: {line.strip()}"
                 )
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if _CACHE_KEY.search(line):
+            problems.append(f"a release reads no cache, but: {line.strip()}")
+        setup_cache = _SETUP_BAZEL_CACHE.match(line)
+        if setup_cache and setup_cache.group(2) != "false":
+            problems.append(f"a release restores no cache, but: {line.strip()}")
     return problems
 
 
@@ -501,7 +516,9 @@ def _check_workflow_tokens(root: Path) -> int:
         f"{release}: {p}" for p in release_grant_problems((root / release).read_text())
     ]
     if not problems:
-        print("OK: no build can reach a write token or the signing key.")
+        print(
+            "OK: no build can reach a write token or the signing key, and a release reads no cache."
+        )
         return 0
     print(
         "ERROR: a workflow leaves a token or a grant where a build can reach it:\n\n"
