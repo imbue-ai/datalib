@@ -249,7 +249,7 @@ async fn run_sync(db: &RawDb, opts: &FetchOptions, found: &RunProblems) -> Resul
     throttle.acquire(api::UNITS_GET_PROFILE).await;
     let profile = api::get_profile(&user_id, &client)
         .await
-        .context("users.getProfile — is `latchkey auth browser google-gmail` done?")?;
+        .context("users.getProfile — is this account signed in to latchkey?")?;
     let account_id = cfg
         .account_id
         .clone()

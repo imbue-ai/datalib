@@ -223,6 +223,15 @@ running elsewhere. It refuses every command that changes local state:
 The wizard therefore offers no sign-in of its own there and says where
 to sign in instead, and no plugin is installed.
 
+Whether a forwarded `auth browser` works is up to the gateway, so
+nothing datalib says may assume either way. What is printed at run time
+asks: a step's hint and a provider's error
+(`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`.
+What is written down once for everyone says both: a source's help page
+and `getting_your_data.md` give the local commands and what to do
+instead with that variable set, and a stanza's comment, which ends up in
+someone's config with no room for that, names no command at all.
+
 ## The browser
 
 `auth browser` needs a browser configured. The wizard first runs

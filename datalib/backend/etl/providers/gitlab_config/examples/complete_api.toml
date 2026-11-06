@@ -1,6 +1,5 @@
 # GitLab merge requests and their discussions, over GitLab's API, signed
-# in through latchkey with a personal access token you create
-# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`), with every
+# in through latchkey with a personal access token you create, with every
 # option set, and searchable.
 [[groups]]
 id = "gitlab"

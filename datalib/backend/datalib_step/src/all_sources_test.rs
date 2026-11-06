@@ -26,8 +26,9 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 #
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
-# pulled off a phone, or an export on disk. Copy the groups you want, and
-# the index groups' inputs that name them.
+# pulled off a phone, or an export on disk; `datalib-step help <type>` says
+# how to sign one in or where its data comes from. Copy the groups you want,
+# and the index groups' inputs that name them.
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps under
 # it, each declared as `group` + `function`. `ingest` brings the data into

@@ -142,16 +142,20 @@ fn body_retry_after(resp: &HttpResponse) -> Option<Duration> {
 fn transport_error(e: HttpError, url: &str) -> TodoistError {
     match e {
         HttpError::Curl { exit: 1, .. } | HttpError::Spawn { .. } => {
-            TodoistError::Unauthorized(format!("{url}: {e}{SIGN_IN}"))
+            TodoistError::Unauthorized(format!("{url}: {e}. {}", sign_in()))
         }
         HttpError::GaveUp { .. } => TodoistError::GaveUp(e.to_string(), e.upstream()),
         other => TodoistError::Transport(other),
     }
 }
 
-const SIGN_IN: &str = ". Sign in with `latchkey auth browser todoist`, or paste the API \
-    token from Todoist's Settings → Integrations → Developer with `latchkey auth set todoist \
-    -H \"Authorization: Bearer <token>\"`";
+fn sign_in() -> String {
+    datalib_etl_web::latchkey::sign_in_advice(
+        "Sign in with `latchkey auth browser todoist`, or paste the API token from Todoist's \
+         Settings → Integrations → Developer with `latchkey auth set todoist \
+         -H \"Authorization: Bearer <token>\"`",
+    )
+}
 
 /// What a non-2xx answer means. Todoist's errors are JSON with an
 /// `error` and an `error_tag`.
@@ -168,7 +172,7 @@ pub fn status_error(url: &str, resp: &HttpResponse) -> TodoistError {
         .unwrap_or_else(|| body.chars().take(300).collect());
     let said = format!("{url}: HTTP {}: {said}", resp.status);
     match resp.status {
-        401 | 403 => TodoistError::Unauthorized(format!("{said}{SIGN_IN}")),
+        401 | 403 => TodoistError::Unauthorized(format!("{said}. {}", sign_in())),
         _ => TodoistError::Permanent(said),
     }
 }
