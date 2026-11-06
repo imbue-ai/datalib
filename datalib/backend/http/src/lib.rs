@@ -188,7 +188,40 @@ pub struct FeedbackResponse {
     pub git_hash: String,
 }
 
+fn protected_library() -> bool {
+    std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some()
+}
+
+/// The web view's disk cache is outside the protected folder, and a
+/// response can hold what the folder guards: a document, a search's rows.
+/// `/assets/` is the app's own code, built into this binary, and nothing
+/// else is known to hold no library data.
+pub fn keep_off_disk(routes: Router) -> Router {
+    routes.layer(axum::middleware::from_fn(
+        |request: axum::extract::Request, next: axum::middleware::Next| async move {
+            let is_app_code = request.uri().path().starts_with("/assets/");
+            let mut response = next.run(request).await;
+            if !is_app_code {
+                response.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("no-store"),
+                );
+            }
+            response
+        },
+    ))
+}
+
 pub fn router(state: AppState) -> Router {
+    let routes = routes(state);
+    if protected_library() {
+        keep_off_disk(routes)
+    } else {
+        routes
+    }
+}
+
+fn routes(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
     let gate = state.api_token.clone();
     Router::new()
@@ -350,7 +383,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
         token_file: s.api_token.token_file().display().to_string(),
-        protected_library: std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some(),
+        protected_library: protected_library(),
     })
 }
 

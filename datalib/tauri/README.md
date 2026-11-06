@@ -231,6 +231,12 @@ on stealing from you.
   program it runs inherits that: a web response on its way in, a decrypted
   database, a browser's sign-in state. The server empties the folder when it
   starts, since macOS only clears its own temp dir.
+- **Its pages stay out of the web view's disk cache.** That cache is under
+  `~/Library/Caches`, outside the folder, where any program running as you
+  can open it, so the server of a protected library answers everything but
+  the app's own code (`/assets/`) `Cache-Control: no-store`. The shell empties
+  the cache at launch for anyone with a protected folder, for what an earlier
+  build stored; it is only a cache, so an ordinary library loses nothing.
 - **What opens the library's servers stays in the folder too.** The API
   token and the applets' secret are each in a file in `system/`, and in
   no process's environment or arguments, where `ps eww` would show them
