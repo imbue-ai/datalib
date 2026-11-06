@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  fillConfigEditor,
   savedConfig,
   nameCell,
   MENU_DISABLED,
@@ -162,7 +163,7 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.
-  await editor.fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });

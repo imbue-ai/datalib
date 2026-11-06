@@ -366,6 +366,22 @@ spec that rewrites responses adds
 as `problems-grid.spec.ts` does. A handler that only fulfills or aborts
 never waits, so it needs none.
 
+**Fill the config editor with `fillConfigEditor`.** A read of the config
+landing just as `fill` has selected the old text drops the selection, and
+the fill then goes after that text.
+
+**To find what a spec takes for granted, slow every answer down.** Repeating
+a spec on a quiet machine rarely shows a race. A temporary fixture that delays
+each backend answer by a random 0–400 ms shows many at once: export a `test`
+from a scratch file with `base.extend`, give it an `auto` fixture that does
+`context.route(/\/(api|applet|data)\//, …)` with the delay and then
+`route.fallback()`, and point the specs' imports at that file. Leave
+`qmd-warmup.setup.ts` as it is, or its timeout stops the run. A routed
+request loses its `sec-fetch-*` headers, so `links-from-elsewhere` and
+`document-sandbox` fail for that reason alone. This found a real bug as well
+as loose specs: Add source writing a config that held nothing but the new
+source.
+
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
 hunt one, repeat the spec (§"Running one spec, and running it several

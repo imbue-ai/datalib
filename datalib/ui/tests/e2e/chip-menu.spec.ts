@@ -85,6 +85,8 @@ test("a chip's mark or photo stays the size of a letter, hovered or not", async 
   request,
 }) => {
   const chip = await openADocumentWithAChip(page, request);
+  // The mark is drawn when the chip's look-up answers, after the chip itself.
+  await expect(chip.locator("img")).toBeVisible();
   const leadSize = () =>
     chip.evaluate((a) => {
       const lead = a.querySelector("img")!.getBoundingClientRect();

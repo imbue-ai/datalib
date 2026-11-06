@@ -2,7 +2,7 @@
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
-import { expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import { fillConfigEditor, expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
@@ -25,7 +25,7 @@ test.beforeEach(async ({ page, request }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });

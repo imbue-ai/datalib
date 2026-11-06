@@ -324,6 +324,17 @@ export async function savedConfig(request: APIRequestContext): Promise<string> {
   return text;
 }
 
+/// Put `text` in the config editor. A read landing just as `fill` has
+/// selected the old text drops the selection, and the fill then goes after
+/// that text. Once the editor holds an edit, reads leave it alone.
+export async function fillConfigEditor(page: Page, text: string) {
+  const editor = page.locator(".m2-editor");
+  await expect(async () => {
+    await editor.fill(text);
+    await expect(editor).toHaveValue(text, { timeout: 1_000 });
+  }).toPass();
+}
+
 /// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`
 /// through the editor asks for both cards by their stack.
