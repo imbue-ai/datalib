@@ -404,6 +404,15 @@ test("a source's values copy into the contact, and a copied address links in one
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).toHaveText(/Geordi$/, { timeout: 15_000 });
 
+  // Opening the draft takes a moment, and the next click can come first:
+  // that second copy must not start the form over and lose the first.
+  let letDraftOpen!: () => void;
+  const draftMayOpen = new Promise<void>((open) => (letDraftOpen = open));
+  await page.route("**/applet/datalib_contacts/contact/*/draft", async (r) => {
+    if (r.request().method() === "POST") await draftMayOpen;
+    await r.fallback();
+  });
+
   // The address book's record holds his second address too.
   const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
   await book.locator(".person-copy summary").click();
@@ -411,6 +420,7 @@ test("a source's values copy into the contact, and a copied address links in one
   await book
     .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
     .click();
+  letDraftOpen();
   await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
   await expect(book.locator(".person-copy-values")).toContainText(
     "Title “Chief Engineer”in your contact",
