@@ -72,7 +72,11 @@ struct Index {
     results: Arc<results::ResultCache>,
     keyed: Arc<tokio::sync::Mutex<results::KeyedCache>>,
     coverage: Arc<tokio::sync::Mutex<results::VectorCoverage>>,
+    /// The sources the grid holds, and the commit they were read at.
+    grid_sources: Arc<tokio::sync::Mutex<Option<GridSources>>>,
 }
+
+type GridSources = (Option<String>, Arc<Vec<String>>);
 
 impl Index {
     /// `deadline` is how long one search may wait on qmd's embedder.
@@ -97,6 +101,7 @@ impl Index {
             results: Arc::new(results::ResultCache::default()),
             keyed: Arc::default(),
             coverage: Arc::default(),
+            grid_sources: Arc::default(),
             repo: Arc::new(repo),
             root,
         })
@@ -678,6 +683,7 @@ async fn group_list(
         .map_err(index)
 }
 
+#[derive(Debug)]
 enum SearchFailure {
     /// No sync has built the qmd index yet, so free text has nothing to
     /// search. A state to show, not an error.
@@ -1246,6 +1252,14 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
 /// table so a source can answer with more than the 20 documents `qmd mcp`
 /// takes from each.
 async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
+    let hits = word_hits(s, parsed).await?;
+    documents_of_hits(s, parsed, hits).await
+}
+
+async fn word_hits(
+    s: &Index,
+    parsed: &ParsedQuery,
+) -> Result<Vec<datalib_unified_document_index::qmd::QmdHit>, SearchFailure> {
     let Some(query) = datalib_unified_document_index::qmd::lex::fts5_query(&parsed.free_text)
     else {
         return Ok(Vec::new());
@@ -1263,7 +1277,7 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
         return Err(SearchFailure::NoIndex);
     };
     let reader = &open.reader;
-    let scope = collection_scope(parsed);
+    let scope = search_scope(s, parsed).await?;
     // The documents holding the words as typed come first: BM25 alone
     // ranks a long thread that says the sentence below short ones that
     // merely hold each word.
@@ -1286,8 +1300,7 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
         Ok::<_, sqlx::Error>(hits)
     }
     .await;
-    let hits = hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
-    documents_of_hits(s, parsed, hits).await
+    hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))
 }
 
 /// The documents nearest the free text by cosine, scored here over qmd's
@@ -1328,7 +1341,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
     let keyed = keyed(s, parsed).await?;
     let among = keyed.as_deref().map(|k| &k.kept);
     let narrowed = started.elapsed();
-    let scope = collection_scope(parsed);
+    let scope = search_scope(s, parsed).await?;
     let hits = reader
         .nearest_documents(
             &open.vectors,
@@ -1496,7 +1509,36 @@ async fn ranked_rows(
     s.repo.rows_by_uuids(&uuids).await.map_err(index)
 }
 
-/// The qmd collections a parsed query may draw from.
+/// The sources the grid holds at its current commit.
+async fn grid_sources(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {
+    let head = s.repo.head().await.map_err(index)?;
+    let mut held = s.grid_sources.lock().await;
+    if let Some((at, sources)) = held.as_ref() {
+        if *at == head {
+            return Ok(sources.clone());
+        }
+    }
+    let sources = Arc::new(s.repo.source_ids().await.map_err(index)?);
+    *held = Some((head, sources.clone()));
+    Ok(sources)
+}
+
+/// What a ranking reads: what the query names, of the sources the grid holds.
+///
+/// The qmd index can hold a source the grid does not: one turned off keeps
+/// its collection, so its embeddings survive, while the grid leaves out a
+/// render store it can no longer read. A hit there has no row to show, yet
+/// it would take a place in the ranking's cut and its vectors would be held
+/// and scored.
+async fn search_scope(s: &Index, parsed: &ParsedQuery) -> Result<CollectionScope, SearchFailure> {
+    let held = grid_sources(s).await?;
+    Ok(CollectionScope::Only(match collection_scope(parsed) {
+        CollectionScope::All => held.to_vec(),
+        CollectionScope::Only(named) => named.into_iter().filter(|n| held.contains(n)).collect(),
+    }))
+}
+
+/// The qmd collections a parsed query asks for.
 ///
 /// There is one collection per group, named after it, and
 /// `source:` names a group — so a scoped query becomes a scoped
