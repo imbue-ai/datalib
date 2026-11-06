@@ -3,7 +3,7 @@
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
 import { reviewToml, row, wizardOf } from "./wizard-helpers";
-import { MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import { fillConfigEditor, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = wizardOf;
@@ -128,7 +128,7 @@ test.beforeEach(async ({ page, request }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });

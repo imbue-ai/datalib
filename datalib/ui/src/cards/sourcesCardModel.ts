@@ -6,7 +6,6 @@ import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import {
   UNIFIED_DOCUMENT_INDEX,
   installPackage,
-  type ConfigResponse,
   type ManageResponse,
   type ManageRow,
   type PackageLookup,
@@ -618,38 +617,33 @@ export function useSourcesCard(ctx: CardCtx) {
     }
   }
 
-  const commitConfig = freshest<ConfigResponse>((cfg) => {
-    configPath.value = cfg.path;
-    // `parsed_ok` false means the file is not a config at all — in
-    // which case `App.vue`'s gate is showing instead of this view, and
-    // this is belt and braces. Ordinary per-entry problems are not
-    // errors of the whole config and live in `configDiagnostics`.
-    configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
-    serverSourceCount.value = cfg.source_count;
-    configExists.value = cfg.exists;
-    configText.value = cfg.text;
-    loadError.value = null;
-    reparse();
-    if (sources.value.length === 0 && cfg.source_count > 0) {
-      // The inspector is the only channel when someone hits this in the
-      // desktop app and can't copy text out of a banner.
-      console.warn(
-        "sources card: parsed 0 entries from a config the server reads",
-        cfg.source_count,
-        "sources from —",
-        { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },
-      );
-    }
-  });
-
   async function loadConfig() {
     // Cleared on success, not before the fetch: a banner that goes and
     // comes back on every reload moves the table twice.
     try {
-      await commitConfig(async () => {
-        const cfg = await fetchConfig();
-        return cfg.exists ? cfg : fetchConfigScaffold();
-      });
+      let cfg = await fetchConfig();
+      if (!cfg.exists) cfg = await fetchConfigScaffold();
+      configPath.value = cfg.path;
+      // `parsed_ok` false means the file is not a config at all — in
+      // which case `App.vue`'s gate is showing instead of this view, and
+      // this is belt and braces. Ordinary per-entry problems are not
+      // errors of the whole config and live in `configDiagnostics`.
+      configError.value = cfg.parsed_ok ? null : (cfg.error ?? "The config was rejected.");
+      serverSourceCount.value = cfg.source_count;
+      configExists.value = cfg.exists;
+      configText.value = cfg.text;
+      loadError.value = null;
+      reparse();
+      if (sources.value.length === 0 && cfg.source_count > 0) {
+        // The inspector is the only channel when someone hits this in the
+        // desktop app and can't copy text out of a banner.
+        console.warn(
+          "sources card: parsed 0 entries from a config the server reads",
+          cfg.source_count,
+          "sources from —",
+          { path: cfg.path, textLength: cfg.text.length, parsedOk: cfg.parsed_ok },
+        );
+      }
     } catch (e) {
       loadError.value = (e as Error).message;
     }
@@ -658,7 +652,7 @@ export function useSourcesCard(ctx: CardCtx) {
   /// The config as the server has it now, for an edit to build on, or null
   /// (and a banner) when it cannot be read. An edit built on the text this
   /// card last read, or on none yet, would write the file without what it
-  /// did not know about: the form opens before the card's first read lands.
+  /// did not know about.
   async function configToEdit(): Promise<string | null> {
     await loadConfig();
     if (loadError.value) {
@@ -707,7 +701,6 @@ export function useSourcesCard(ctx: CardCtx) {
         banner.value = { ok: false, text: res.error ?? "The config was rejected." };
         return false;
       }
-      commitConfig.invalidate();
       configText.value = text;
       reparse();
       ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
@@ -728,7 +721,10 @@ export function useSourcesCard(ctx: CardCtx) {
     editing.value = null;
   }
 
-  function openAdd() {
+  /// The form reads the config first: what it suggests has to be free, and
+  /// it opens the moment the card does on the Dashboard's Add source.
+  async function openAdd() {
+    if ((await configToEdit()) === null) return;
     editing.value = null;
     wizardKey.value++;
     wizardOpen.value = true;
@@ -740,7 +736,7 @@ export function useSourcesCard(ctx: CardCtx) {
   /// editor reaches this card by a pushed frame, and an Edit clicked before
   /// that lands would open on the text from before it.
   async function openEdit(groupId: string) {
-    await loadConfig();
+    if ((await configToEdit()) === null) return;
     const group = configGroups.value.find((g) => g.id === groupId);
     if (!group) return;
     const steps = sourceStepsOf(group.id, sources.value);

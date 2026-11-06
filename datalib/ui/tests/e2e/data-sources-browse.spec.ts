@@ -8,6 +8,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  fillConfigEditor,
   cardOf,
   expandGroup,
   type GridApi,
@@ -58,7 +59,7 @@ async function openManage(page: Page) {
 
 async function writeConfig(page: Page, text: string): Promise<void> {
   await openManage(page);
-  await page.locator(".m2-editor").fill(text);
+  await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 }
