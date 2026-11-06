@@ -1,5 +1,5 @@
 load("@py_pip//:requirements.bzl", "requirement")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
@@ -244,6 +244,12 @@ py_test(
 )
 
 # The rule behind CI's "No crate built a second time for a tool" step.
+py_binary(
+    name = "check_tool_crates",
+    srcs = ["check_tool_crates.py"],
+    main = "check_tool_crates.py",
+)
+
 py_test(
     name = "check_tool_crates_test",
     size = "small",

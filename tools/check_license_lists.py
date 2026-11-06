@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """The license allow list exists twice; make the notices one cover the gate.
 
 `datalib/backend/deny.toml` is the gate: `cargo deny` fails a PR on a
