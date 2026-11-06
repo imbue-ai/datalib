@@ -526,7 +526,11 @@ besides components:
   typed there is a draft until Enter runs it, in that card, as an address bar
   does in its tab. With no search card on screen, Enter opens one, and ⌘Enter
   always does, so a search that should stay open beside another gets a tab of
-  its own. A source's own documents (`oneSource`) and a grid over any other
+  its own. The box shows its card's query, but never over text someone typed
+  that they are still in the box with, or that a card arriving would replace:
+  the box is up before any card has mounted (`draftAfterMove`). A click
+  elsewhere followed by another tab shows that tab's query, and Escape puts
+  back the card's. A source's own documents (`oneSource`) and a grid over any other
   table keep a box beside them, which asks as it is typed in. Either box is
   the one search field (`search/SearchField.vue`, on CodeMirror 6), which the
   run log shares: it offers keys and values from the table's `…/keys` and

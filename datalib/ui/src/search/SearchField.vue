@@ -98,7 +98,6 @@ defineExpose({
   focus: () => view?.focus(),
   selectAll: () => view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }),
   blur: () => view?.contentDOM.blur(),
-  hasFocus: () => view?.hasFocus ?? false,
   /// The caret after the text and its suggestions open: a key just added
   /// is waiting for its value.
   suggestAtEnd: () => {

@@ -9,7 +9,7 @@ import { SEARCH } from "@/api";
 import "@/cards/chip.css";
 import { withToken } from "@/grid/query";
 import SearchField from "@/search/SearchField.vue";
-import { activeSearch, draftAfter } from "@/search/searchCards";
+import { activeSearch, draftAfterMove } from "@/search/searchCards";
 import { searchFor, showCard, SEARCH_CARD } from "@/surface";
 import SearchPanel from "./SearchPanel.vue";
 
@@ -18,20 +18,40 @@ const input = useTemplateRef<InstanceType<typeof SearchField>>("input");
 const box = useTemplateRef<HTMLFormElement>("box");
 const panelOpen = ref(false);
 
+/// What the cards last gave the box, or what Enter last asked for with none on
+/// screen. A draft that differs was typed since.
+let shown = "";
+
 /// On a search card, its search changes. Anywhere else there is nothing to
 /// change, so a search opens a tab of its own, and the box with nothing in it
 /// shows the Search card.
 function run(q: string) {
   const card = activeSearch.value;
   if (card) card.run(q);
-  else if (q) searchFor(q);
-  else showCard(SEARCH_CARD);
+  else {
+    shown = draft.value;
+    if (q) searchFor(q);
+    else showCard(SEARCH_CARD);
+  }
 }
 
 watch(
   [activeSearch, () => activeSearch.value?.query.value],
-  ([card]) => {
-    draft.value = draftAfter(draft.value, input.value?.hasFocus() ?? false, card?.query.value);
+  ([card], [before]) => {
+    const query = card?.query.value ?? "";
+    const inBox = box.value?.contains(document.activeElement) ?? false;
+    const next = draftAfterMove({
+      draft: draft.value,
+      shown,
+      query,
+      hadCard: before != null,
+      inBox,
+    });
+    shown = query;
+    if (next === draft.value) return;
+    draft.value = next;
+    // Whoever is in the box and has not typed yet types over this, not after it.
+    if (inBox) void nextTick(() => input.value?.selectAll());
   },
   { immediate: true },
 );
