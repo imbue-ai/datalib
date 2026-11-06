@@ -12,6 +12,8 @@ from pin_release import (
     DOCKER_DOC,
     INSTALL,
     PINNED_IMAGE,
+    RELEASE_WORKFLOW,
+    built_by_release_workflow,
     checked_image_digest,
     pin_docker_doc,
     pin_install,
@@ -86,6 +88,35 @@ class WhichReleasesTest(unittest.TestCase):
         self.assertEqual(len(release_problems({"draft": True, "immutable": True})), 1)
         self.assertEqual(len(release_problems({"draft": False, "immutable": False})), 1)
         self.assertEqual(len(release_problems({})), 1)
+
+    def test_a_release_needs_a_successful_run_on_its_tags_commit(self) -> None:
+        """A writer can publish on a new tag while its run builds, and that run then fails."""
+        tag, commit = "v9.9.9", "a" * 40
+        good = {
+            "path": RELEASE_WORKFLOW,
+            "event": "push",
+            "head_branch": tag,
+            "head_sha": commit,
+            "conclusion": "success",
+        }
+        self.assertTrue(built_by_release_workflow([good], tag, commit))
+        self.assertFalse(built_by_release_workflow([], tag, commit))
+        for name, different in {
+            "failed, as when publish_release.py finds their release": {
+                "conclusion": "failure"
+            },
+            "still running": {"conclusion": None},
+            "a branch named like the tag, with its own workflow": {
+                "head_sha": "b" * 40
+            },
+            "another tag's run": {"head_branch": "v9.9.8"},
+            "another workflow": {"path": ".github/workflows/theirs.yml"},
+            "not a push": {"event": "workflow_dispatch"},
+        }.items():
+            with self.subTest(name):
+                run = good | different
+                self.assertFalse(built_by_release_workflow([run], tag, commit))
+                self.assertTrue(built_by_release_workflow([run, good], tag, commit))
 
     def test_a_tarball_without_a_digest_is_refused(self) -> None:
         assets = [

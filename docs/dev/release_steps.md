@@ -97,8 +97,9 @@ Docker image and the Mac app carry theirs.
 hash, not by `latest`, for the reason in
 [`security_posture.md`](security_posture.md). After a release publishes,
 `python3 scripts/release/pin_release.py vX.Y.Z` rewrites both from what GitHub
-reports, and refuses a release that is a draft or is not immutable. Until that
-PR lands, people get the previous release, which still works.
+reports. It refuses a release that is a draft, is not immutable, or has no
+successful `release.yml` run on its tag's commit. Until that PR lands, people
+get the previous release, which still works.
 
 ### What one failed job costs
 
