@@ -25,6 +25,13 @@ export function activeOf(entries: readonly CardEntry[]): SearchCard | null {
   return active?.card ?? null;
 }
 
+/// What the box should hold once the card it speaks for, or that card's query,
+/// changes: the card's query, unless the person is typing. A card comes on
+/// screen a moment after the page does, and what was typed by then is theirs.
+export function draftAfter(draft: string, typing: boolean, cardQuery: string | undefined): string {
+  return typing && draft !== "" ? draft : (cardQuery ?? "");
+}
+
 const entries = shallowRef<CardEntry[]>([]);
 let clock = 0;
 
