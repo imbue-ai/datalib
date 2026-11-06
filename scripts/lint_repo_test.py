@@ -8,10 +8,71 @@ from lint_repo import (
     checkout_token_settings,
     floating_images,
     floating_npx,
+    reader_grant_problems,
     release_grant_problems,
     release_key_problems,
     unliteral_opens,
 )
+
+
+class ReaderWheelGrantsTest(unittest.TestCase):
+    """The workflow that publishes to PyPI answers to the release's rules."""
+
+    GOOD = """\
+jobs:
+  wheels:
+    steps:
+      - uses: bazel-contrib/setup-bazel@abc # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+      - run: scripts/release/stage_reader_wheels.sh out
+  publish:
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@abc # v8
+        with:
+          path: ${{ runner.temp }}/wheels
+      - uses: pypa/gh-action-pypi-publish@abc # v1
+"""
+
+    def test_the_real_shape_passes(self) -> None:
+        self.assertEqual(reader_grant_problems(self.GOOD), [])
+
+    def test_a_build_cannot_hold_the_publish_grant(self) -> None:
+        text = self.GOOD.replace(
+            "  wheels:\n", "  wheels:\n    permissions:\n      id-token: write\n"
+        )
+        self.assertEqual(
+            reader_grant_problems(text), ["job wheels grants id-token: write"]
+        )
+
+    def test_the_publish_job_cannot_build(self) -> None:
+        text = self.GOOD.replace(
+            "      - uses: pypa/", "      - run: bazel build //x\n      - uses: pypa/"
+        )
+        problems = reader_grant_problems(text)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("runs a build", problems[0])
+
+    def test_it_reads_no_cache(self) -> None:
+        text = self.GOOD.replace("disk-cache: false", "disk-cache: true")
+        self.assertEqual(
+            reader_grant_problems(text),
+            ["a release reads no cache: setup-bazel needs disk-cache: false"],
+        )
+
+    def test_uv_keeps_no_cache_either(self) -> None:
+        """setup-uv turns its cache on for a PR by default."""
+        step = "      - uses: astral-sh/setup-uv@abc # v10\n"
+        text = self.GOOD.replace("      - run: scripts", step + "      - run: scripts")
+        self.assertEqual(
+            reader_grant_problems(text),
+            ["a release reads no cache: setup-uv needs enable-cache: false"],
+        )
 
 
 class FloatingNpxTest(unittest.TestCase):
@@ -87,27 +148,20 @@ jobs:
     runs-on: x
     steps:
       - run: bazel build //...
-  create-release:
-    permissions:
-      contents: write
   publish-release:
     permissions:
-      contents: write
-  publish-runtime:
-    permissions:
       contents: write  # upload
-  publish-tarballs:
-    permissions:
-      contents: write
-  publish-macos-app:
-    permissions:
-      contents: write
   macos-app-sign:
     permissions:
       contents: read
       id-token: write
     steps:
       # no bazel here
+      - uses: actions/download-artifact@abc # v8
+        with:
+          name: macos-app-compiled
+          path: ${{ runner.temp }}/macos-app-compiled
+      - run: python3 -I scripts/release/unpack_compiled_app.py x datalib/tauri
       - run: ./datalib/tauri/build-signed-app.sh sign
   docker-image:
     permissions:
@@ -165,12 +219,67 @@ jobs:
     def test_a_publish_job_that_lost_its_grant_is_refused(self) -> None:
         """A tag is the first thing that would run it, and it would cost the release."""
         text = self.GOOD.replace(
-            "  publish-tarballs:\n    permissions:\n      contents: write\n",
-            "  publish-tarballs:\n    runs-on: x\n",
+            "  publish-release:\n    permissions:\n      contents: write  # upload\n",
+            "  publish-release:\n    runs-on: x\n",
         )
         self.assertEqual(
             release_grant_problems(text),
-            ["job publish-tarballs needs contents: write to do its work"],
+            ["job publish-release needs contents: write to do its work"],
+        )
+
+    def test_a_job_that_used_to_publish_may_not_write_to_a_release(self) -> None:
+        """One job writes, so an upload cannot race the check before publishing."""
+        text = self.GOOD.replace(
+            "  runtime:\n",
+            "  publish-tarballs:\n    permissions:\n      contents: write\n  runtime:\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            ["job publish-tarballs grants contents: write"],
+        )
+
+    def test_an_artifact_downloaded_over_the_checkout_is_refused(self) -> None:
+        """It would replace the script a later step runs, with no tar involved."""
+        for path in [
+            "",
+            "          path: datalib/tauri\n",
+            "          path: ${{ github.workspace }}/x\n",
+        ]:
+            with self.subTest(path=path):
+                text = self.GOOD.replace(
+                    "          path: ${{ runner.temp }}/macos-app-compiled\n", path
+                )
+                problems = release_grant_problems(text)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn("not under runner.temp", problems[0])
+
+    def test_the_signing_job_never_unpacks_with_tar(self) -> None:
+        """An unfiltered tar replaced build-signed-app.sh and the Tauri CLI, measured on bsdtar."""
+        for command in [
+            "tar -C datalib/tauri -xzf x.tar.gz",
+            "tar xzf x.tar.gz",
+            "tar --extract -xf x.tar",
+        ]:
+            with self.subTest(command=command):
+                text = self.GOOD.replace(
+                    "      - run: ./datalib/tauri/build-signed-app.sh sign\n",
+                    f"      - run: {command}\n      - run: ./datalib/tauri/build-signed-app.sh sign\n",
+                )
+                problems = release_grant_problems(text)
+                self.assertTrue(
+                    any("unpacks with tar" in p for p in problems), problems
+                )
+
+    def test_the_signing_job_must_use_the_checked_unpack(self) -> None:
+        text = self.GOOD.replace(
+            "      - run: python3 -I scripts/release/unpack_compiled_app.py x datalib/tauri\n",
+            "",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            [
+                "job macos-app-sign must unpack through scripts/release/unpack_compiled_app.py"
+            ],
         )
 
     def test_a_release_names_no_remote_cache(self) -> None:

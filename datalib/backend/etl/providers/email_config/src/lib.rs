@@ -28,6 +28,11 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
         toml: include_str!("../examples/complete_gmail.toml"),
     },
     datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Sections,
+        method: "gmail",
+        toml: include_str!("../examples/sections_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
         kind: datalib_source_common::ExampleKind::Minimal,
         method: "mbox",
         toml: include_str!("../examples/minimal_mbox.toml"),
@@ -174,9 +179,58 @@ impl EmailConfig {
             _ => {}
         }
         match live {
-            Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
+            Some(EmailLiveMode::GmailApi(gmail)) => {
+                gmail.validate()?;
+                self.validate_gmail_fetch(gmail)
+            }
             _ => Ok(()),
         }
+    }
+
+    /// `gmail.fetch` says what the older keys say, so a config with both
+    /// would have to pick one without telling anyone.
+    fn validate_gmail_fetch(&self, gmail: &EmailGmailApi) -> anyhow::Result<()> {
+        let Some(sections) = &gmail.fetch else {
+            return Ok(());
+        };
+        if sections.is_empty() {
+            anyhow::bail!(
+                "email `gmail.fetch` names no sections; remove it to fetch the whole mailbox"
+            );
+        }
+        let mut superseded = Vec::new();
+        if !self.only_extract_labels.is_empty() {
+            superseded.push("only_extract_labels");
+        }
+        if self.whole_threads.is_some() {
+            superseded.push("whole_threads");
+        }
+        if gmail.since.is_some() {
+            superseded.push("gmail.since");
+        }
+        if !superseded.is_empty() {
+            anyhow::bail!(
+                "email `gmail.fetch` says what `{}` says; move it into a section and remove it \
+                 here",
+                superseded.join("`, `")
+            );
+        }
+        Ok(())
+    }
+
+    /// What a Gmail source fetches: its `fetch` sections, or the one
+    /// section the older keys describe.
+    pub fn gmail_fetch(&self) -> Vec<GmailFetch> {
+        let Some(gmail) = &self.gmail else {
+            return Vec::new();
+        };
+        gmail.fetch.clone().unwrap_or_else(|| {
+            vec![GmailFetch {
+                labels: self.only_extract_labels.clone(),
+                since: gmail.since.clone(),
+                whole_threads: self.whole_threads,
+            }]
+        })
     }
 
     pub fn whole_threads(&self) -> bool {
@@ -316,8 +370,17 @@ pub struct EmailGmailApi {
     /// start backfills on the next run. Narrowing it does not cancel what
     /// a wider listing already owes; the fetch goes newest first. Gmail
     /// has no `until`: the mailbox is followed forward from the walk.
+    /// To give each label its own, use `fetch`.
     #[serde(default)]
     pub since: Option<String>,
+    /// What to fetch, as sections that add up, each with its own window:
+    /// all of Inbox, say, and only the last 90 days of Sent. A label two
+    /// sections name is fetched as far back as either asks. Replaces
+    /// `since`, and the step's `only_extract_labels` and `whole_threads`,
+    /// which say the same of one section. Unset, those decide. The Add
+    /// source form cannot write this: edit the config.
+    #[serde(default)]
+    pub fetch: Option<Vec<GmailFetch>>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
     /// Google allows one user 6000 a minute and prices a `messages.get`
     /// that carries the message at 60 (its quota table), so the mail
@@ -337,6 +400,31 @@ pub struct EmailGmailApi {
     pub message_budget: Option<usize>,
 }
 
+/// One section of `gmail.fetch`: some of the mailbox, and how far back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GmailFetch {
+    /// The labels this section takes, named as `only_extract_labels`
+    /// names them. Unset takes the whole mailbox.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Oldest mail this section takes, in the grammar of `gmail.since`.
+    /// Unset takes it all.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// Also mirror the rest of the thread of a message this section's
+    /// labels keep, as `whole_threads` does. A thread reaches back past
+    /// `since`. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
+}
+
+impl GmailFetch {
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
+    }
+}
+
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
 /// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
@@ -354,6 +442,10 @@ impl EmailGmailApi {
     pub fn validate(&self) -> anyhow::Result<()> {
         datalib_time::TimeWindow::check("gmail", self.since.as_deref(), None)
             .map_err(anyhow::Error::msg)?;
+        for section in self.fetch.iter().flatten() {
+            datalib_time::TimeWindow::check("gmail.fetch", section.since.as_deref(), None)
+                .map_err(anyhow::Error::msg)?;
+        }
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
                 "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
@@ -383,6 +475,99 @@ impl datalib_source_common::IngestMethods for EmailConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_fetch(fetch: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "gmail": { "fetch": fetch } })
+    }
+
+    fn parsed(v: serde_json::Value) -> EmailConfig {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// The older keys describe one section, so everything downstream reads
+    /// one shape.
+    #[test]
+    fn the_older_keys_are_one_section() {
+        let c = parsed(serde_json::json!({
+            "only_extract_labels": ["Inbox"],
+            "whole_threads": false,
+            "gmail": { "since": "-30d" },
+        }));
+        c.validate().unwrap();
+        assert_eq!(
+            c.gmail_fetch(),
+            [GmailFetch {
+                labels: vec!["Inbox".into()],
+                since: Some("-30d".into()),
+                whole_threads: Some(false),
+            }]
+        );
+        let bare = parsed(serde_json::json!({ "gmail": {} }));
+        assert_eq!(bare.gmail_fetch(), [GmailFetch::default()]);
+        assert!(bare.gmail_fetch()[0].whole_threads());
+    }
+
+    #[test]
+    fn fetch_sections_are_read_as_written() {
+        let c = parsed(with_fetch(serde_json::json!([
+            { "labels": ["Inbox"] },
+            { "labels": ["Sent"], "since": "-90d", "whole_threads": false },
+        ])));
+        c.validate().unwrap();
+        let sections = c.gmail_fetch();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[1].since.as_deref(), Some("-90d"));
+        assert!(sections[0].whole_threads());
+        assert!(!sections[1].whole_threads());
+    }
+
+    /// Two places to say one thing would need a rule for which wins, and a
+    /// person would find out from what the mirror holds.
+    #[test]
+    fn fetch_beside_the_keys_it_replaces_is_refused_by_name() {
+        for (v, named) in [
+            (
+                serde_json::json!({ "only_extract_labels": ["Inbox"], "gmail": { "fetch": [{}] } }),
+                "only_extract_labels",
+            ),
+            (
+                serde_json::json!({ "whole_threads": false, "gmail": { "fetch": [{}] } }),
+                "whole_threads",
+            ),
+            (
+                serde_json::json!({ "gmail": { "since": "-1d", "fetch": [{}] } }),
+                "gmail.since",
+            ),
+        ] {
+            let err = parsed(v).validate().unwrap_err().to_string();
+            assert!(err.contains(named), "{named}: {err}");
+        }
+    }
+
+    /// Empty is not "everything": that is what leaving `fetch` out says.
+    #[test]
+    fn an_empty_fetch_is_refused() {
+        let err = parsed(with_fetch(serde_json::json!([])))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no sections"), "{err}");
+    }
+
+    #[test]
+    fn a_sections_since_takes_the_window_grammar() {
+        let err = parsed(with_fetch(serde_json::json!([{ "since": "a month ago" }])))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`gmail.fetch.since`"), "{err}");
+    }
+
+    #[test]
+    fn a_section_refuses_a_key_it_does_not_have() {
+        let v = with_fetch(serde_json::json!([{ "label": ["Inbox"] }]));
+        assert!(serde_json::from_value::<EmailConfig>(v).is_err());
+    }
 
     /// The whole reason mode selection became explicit: with more than
     /// one mode, inferring from one table alone would silently pick one.

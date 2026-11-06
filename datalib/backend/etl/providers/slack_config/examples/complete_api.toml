@@ -1,5 +1,5 @@
-# Slack over its API, signed in through latchkey (`latchkey auth browser
-# slack`), with every option set, and searchable.
+# Slack over its API, signed in through latchkey, with every option set, and
+# searchable.
 [[groups]]
 id = "slack"
 name = "Slack"

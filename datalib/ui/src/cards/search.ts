@@ -5,8 +5,7 @@
 // Also which words of a snippet to mark.
 import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/query";
 
-/// The two predicates that carry free text (`datalib_unified_document_index`'s
-/// `FreeTextMode`): words and meaning together, or meaning alone.
+/// The older spellings of free text, which saved searches may hold.
 const HYBRID = "qmd:";
 const MEANING = "qmd_vsearch:";
 /// `source:`, and `source_id:`, its older spelling a saved query may hold.
@@ -57,6 +56,45 @@ export function searchTitle(query: string, nameOf: (value: string) => string | n
 export function setSource(query: string, id: string | null): string {
   const kept = queryWords(query).filter((w) => !SOURCE.test(w));
   if (id !== null) kept.push(filterToken("source", id, false));
+  return kept.join(" ");
+}
+
+/// The similarity a search by meaning needs with no `semantic:` of its own
+/// (`Semantic::DEFAULT` in `datalib_unified_document_index`).
+export const DEFAULT_CUTOFF = 0.25;
+const SEMANTIC = /^semantic:/;
+
+/// The cutoff `query` searches by meaning at, or null with `semantic:off`.
+/// The last `semantic:` wins, as on the server.
+export function semanticOf(query: string): number | null {
+  const last = queryWords(query)
+    .filter((w) => SEMANTIC.test(w))
+    .pop();
+  if (!last) return DEFAULT_CUTOFF;
+  const value = carried(last);
+  if (value === "off") return null;
+  const cutoff = Number(value);
+  return value === "on" || !Number.isFinite(cutoff) ? DEFAULT_CUTOFF : cutoff;
+}
+
+/// `query` at this cutoff, or with meaning left out for null. The default
+/// is written as nothing, so a query is only as long as it says something.
+export function setSemantic(query: string, cutoff: number | null): string {
+  const kept = queryWords(query).filter((w) => !SEMANTIC.test(w));
+  if (cutoff === null) kept.push("semantic:off");
+  else if (cutoff !== DEFAULT_CUTOFF) kept.push(`semantic:${cutoff}`);
+  return kept.join(" ");
+}
+
+const PER_DOCUMENT = "is:document";
+
+export function isOneRowPerDocument(query: string): boolean {
+  return queryWords(query).includes(PER_DOCUMENT);
+}
+
+export function setOneRowPerDocument(query: string, on: boolean): string {
+  const kept = queryWords(query).filter((w) => w !== PER_DOCUMENT);
+  if (on) kept.push(PER_DOCUMENT);
   return kept.join(" ");
 }
 

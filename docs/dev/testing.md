@@ -305,7 +305,9 @@ Playwright's `fill` leaves it as it was and reports no error, so a
 spec that fills one waits on a search that never starts.
 `typeInto` in [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
 selects what is there and types over it, and the field's
-`data-query` attribute is what to assert on.
+`data-query` attribute is what to assert on. The toolbar's box then waits
+for Enter: `runSearch` does both, and `typeInto` alone is for a spec about
+what is offered while typing.
 
 **Take related values from one drawing.** Two separate reads can
 straddle a redraw. For example, the status from before a sync can sit
@@ -363,6 +365,22 @@ spec that rewrites responses adds
 `test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }))`,
 as `problems-grid.spec.ts` does. A handler that only fulfills or aborts
 never waits, so it needs none.
+
+**Fill the config editor with `fillConfigEditor`.** A read of the config
+landing just as `fill` has selected the old text drops the selection, and
+the fill then goes after that text.
+
+**To find what a spec takes for granted, slow every answer down.** Repeating
+a spec on a quiet machine rarely shows a race. A temporary fixture that delays
+each backend answer by a random 0–400 ms shows many at once: export a `test`
+from a scratch file with `base.extend`, give it an `auto` fixture that does
+`context.route(/\/(api|applet|data)\//, …)` with the delay and then
+`route.fallback()`, and point the specs' imports at that file. Leave
+`qmd-warmup.setup.ts` as it is, or its timeout stops the run. A routed
+request loses its `sec-fetch-*` headers, so `links-from-elsewhere` and
+`document-sandbox` fail for that reason alone. This found a real bug as well
+as loose specs: Add source writing a config that held nothing but the new
+source.
 
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
@@ -567,9 +585,9 @@ commented with why — is in the test's source.
 `scripts/search_eval.py` scores the search box against an eval set: target
 rows of a library, each with queries a person might type to find it (a
 few remembered words, search keys like `from:` and `after:`, or a
-description in other words). It asks every query once per answer (the
-Fields, Words and Meaning tabs, and the fused answer a search with no
-tab gets), records where the target ranked and how long
+description in other words). It asks every query once per setting (`on`,
+the search as it opens, `off`, with `semantic:off`, and any cutoff named in
+`--modes`, such as `0.3`), records where the target ranked and how long
 each answer took, and prints hit rates at 1, 3 and 10, the mean
 reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. For a
@@ -578,22 +596,31 @@ page lands, read from the row's `link`: on the message, how many
 messages off, and whether the snippet shown came from it.
 
 `--modes app` asks each query the way the search card does, and is the
-number to quote for how long a search takes. The card sends six requests
-at once: the rows of the list (`limit=50`), one row of each answer for its
-count, and the groups behind the source chips. `ms` is how long until the
+number to quote for how long a search takes. The card sends two requests
+at once: the rows of the list (`limit=50`) and the groups behind the source
+chips. `ms` is how long until the
 rows arrive; the report also gives each request's time and how long until
 all of them answered. Run it on its own, with `--http`: each answer leaves
 work cached for the next, so a time taken after another answer of the
-same query says little, and the fused time in a plain run is too low.
+same query says little, and the time in a plain run is too low.
 
 What these times leave out, measured against the real card in a browser:
-the card waits 600 ms after the last keystroke before it asks, unless the
-search was opened with Enter in the top box, and it then loads the first
-row's document into the preview. A run asks one query straight after
+the card then loads the first row's document into the preview. A run asks one query straight after
 another, which came out about 20% faster than the same requests three
 seconds apart, the gap a person leaves. On a server just started, the
 query `run` warms up with is the first search after a launch, and the
 report keeps its time apart.
+
+`first-pages` asks a different question: how long a person waits for the first
+page of a search that sorts many rows with no index to help, by size, author or
+title, say. It asks each of the eval set's `orderings` from a freshly started
+applet, times its first page, its next page and the first page again, checks
+the rows come in that order with blanks last and no row repeated, and exits 1
+when one is wrong or takes over a second. It uses no search by meaning, so it
+takes a minute, not half an hour, and needs no models. Build with `-c opt` first:
+a plain build's SQLite sorts far slower than a release's.
+Times on a busy machine move several times over between runs, so compare
+repeated runs, and read a wrong order as a failure and a slow page as a question.
 
 Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
@@ -613,11 +640,11 @@ sync does not move the answers between two runs:
 bazelisk build //datalib/backend:bin
 export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
 DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
-python3 scripts/search_eval.py compare before.json after.json   # what moved
-python3 scripts/search_eval.py show after.json --missed words   # what a query found
-python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
+uv run python scripts/search_eval.py compare before.json after.json   # what moved
+uv run python scripts/search_eval.py show after.json --missed words   # what a query found
+uv run python scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
 ```
 
 A run is worth keeping when it measures a change or a new baseline.
@@ -633,8 +660,8 @@ build the applet from that same checkout, or the commit says nothing.
 Thad's history is beside his eval set, in `search_eval/history/`:
 
 ```bash
-python3 scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
-python3 scripts/search_eval.py history <dir>
+uv run python scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
+uv run python scripts/search_eval.py history <dir>
 ```
 
 Without `--http` it starts its own `datalib-applet unified_document_index`

@@ -48,11 +48,11 @@ async fn a_takeout_seeds_the_mailbox_and_the_api_only_labels_it() {
     );
     assert_eq!(first.relabeled_from_walks, 2, "{first:?}");
     assert_eq!(first.relabeled_one_by_one, 0, "{first:?}");
-    // Profile and labels, the walk of the account, one walk per label,
-    // and the one message the Takeout does not have.
+    // Profile and labels, the walk of the account, one walk per label, the
+    // muted search, and the one message the Takeout does not have.
     assert_eq!(
         first.quota_units_spent,
-        1 + 1 + 3 * LIST_UNITS + u64::from(gmail_api::api::UNITS_MESSAGES_GET_RAW),
+        1 + 1 + 4 * LIST_UNITS + u64::from(gmail_api::api::UNITS_MESSAGES_GET_RAW),
         "{first:?}"
     );
 
@@ -177,8 +177,8 @@ async fn a_relabel_of_a_held_message_asks_for_its_labels_alone() {
     assert_eq!(relabel.messages_failed, 0, "{relabel:?}");
     assert_eq!(
         relabel.quota_units_spent,
-        1 + 1 + 2 + u64::from(gmail_api::api::UNITS_MESSAGES_GET_MINIMAL),
-        "profile, labels, history and one labels-only get: {relabel:?}"
+        1 + 1 + 2 + LIST_UNITS + u64::from(gmail_api::api::UNITS_MESSAGES_GET_MINIMAL),
+        "profile, labels, history, the muted search and one labels-only get: {relabel:?}"
     );
     assert_eq!(filed(&m, PICARD).await, [real("Label_7")]);
 }

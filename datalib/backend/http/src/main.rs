@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         tracing::info!("data root: {}", root.display());
     }
+    datalib_http::connect::log_latchkey_setup();
 
     // Minted before the announcement below because the announced URL
     // carries it: the browser (and the Tauri webview) authenticate by

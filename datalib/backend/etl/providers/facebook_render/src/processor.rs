@@ -23,7 +23,10 @@ use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::not_read::{self, tables_not_read, tables_not_read_row};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 use datalib_handle::Handle;
 use serde_json::Value;
 
@@ -133,6 +136,8 @@ pub struct Source<'a> {
 pub struct Outcome {
     pub buckets: Buckets,
     pub new_head: Option<String>,
+    /// Stored tables no feed reads, with their rows.
+    pub not_read: Vec<(String, i64)>,
 }
 
 /// The bundle key a chat's media is looked up under.
@@ -140,6 +145,10 @@ const MEDIA_PROJECTION: &str = "SELECT DISTINCT uri AS ref_id, blake3, \
             NULL AS content_type, uri AS upstream_name \
      FROM media_blobs \
      WHERE uri IN ({placeholders}) AND blake3 IS NOT NULL";
+
+/// What a render reads besides [`ALL_TABLES`], and what the download keeps
+/// for itself.
+const READ_ALONGSIDE: &[&str] = &["media_blobs"];
 
 const ALL_TABLES: &[&str] = &[
     POSTS_TABLE,
@@ -189,7 +198,15 @@ pub fn render_source(
         return Ok(Outcome::default());
     };
     let rendered = block_on(load(&db, source))
-        .and_then(|loaded| render_loaded(&db, loaded, source, progress, on_doc));
+        .and_then(|loaded| render_loaded(&db, loaded, source, progress, on_doc))
+        .and_then(|outcome| {
+            let read: Vec<&str> = ALL_TABLES.iter().chain(READ_ALONGSIDE).copied().collect();
+            let not_read = block_on(tables_not_read(db.pool(), &read))?;
+            Ok(Outcome {
+                not_read,
+                ..outcome
+            })
+        });
     block_on(db.close());
     rendered
 }
@@ -285,6 +302,7 @@ fn render_loaded(
     let mut outcome = Outcome {
         buckets: loaded.buckets,
         new_head: Some(loaded.head),
+        not_read: Vec::new(),
     };
     let projection = |_: &NormalizedChat| MEDIA_PROJECTION;
     let blobs = ChatBlobs::new(db.pool(), db.cas(), &projection);
@@ -418,6 +436,11 @@ impl SourceRender for FacebookRender {
         // the rendered ones, with what they read — in that order, so a
         // bucket no feed rendered ends declared with nothing and its
         // documents go.
+        let not_read: Vec<_> =
+            tables_not_read_row(ctx.name, &outcome.not_read, crate::common::RENDER_VERSION)
+                .into_iter()
+                .collect();
+        ctx.report_entity_problems(&ReadScope::Whole(vec![not_read::SCOPE]), &not_read)?;
         ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
         Ok("rendered".into())
     }

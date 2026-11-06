@@ -12,6 +12,18 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDate, TimeZone};
 
 use crate::IsoOffsetTimestamp;
 
+/// The start of two windows that add up, `None` being no start at all: a
+/// thing two config sections select is fetched as far back as either asks.
+pub fn widest_start(
+    a: Option<IsoOffsetTimestamp>,
+    b: Option<IsoOffsetTimestamp>,
+) -> Option<IsoOffsetTimestamp> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a.inner() <= b.inner() { a } else { b }),
+        _ => None,
+    }
+}
+
 /// One end of a window, as written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeBound {
@@ -192,6 +204,30 @@ fn reversed(since: Option<&str>, until: Option<&str>) -> WindowError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rule behind every source's `fetch` sections: windows add up, and
+    /// no start at all reaches furthest.
+    #[test]
+    fn the_widest_start_of_two_is_the_earlier_or_none() {
+        let t = |s: &str| Some(s.parse::<IsoOffsetTimestamp>().unwrap());
+        let (aug, sep) = (
+            t("2026-08-01T00:00:00+00:00"),
+            t("2026-09-01T00:00:00+00:00"),
+        );
+        assert_eq!(widest_start(aug.clone(), sep.clone()), aug);
+        assert_eq!(widest_start(sep.clone(), aug.clone()), aug);
+        assert_eq!(widest_start(None, sep.clone()), None);
+        assert_eq!(widest_start(sep, None), None);
+    }
+
+    /// An instant is compared as an instant, not as the text its offset gives.
+    #[test]
+    fn the_widest_start_compares_instants_across_offsets() {
+        let t = |s: &str| Some(s.parse::<IsoOffsetTimestamp>().unwrap());
+        let earlier = t("2026-09-01T02:00:00+05:00");
+        let later = t("2026-09-01T00:00:00+00:00");
+        assert_eq!(widest_start(later, earlier.clone()), earlier);
+    }
 
     fn now() -> IsoOffsetTimestamp {
         crate::parse_strict("2026-10-26T15:30:00-07:00").unwrap()

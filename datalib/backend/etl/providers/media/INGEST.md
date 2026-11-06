@@ -273,8 +273,10 @@ and an already-compressed JPEG or MP3 is the worst possible candidate
 for it — but both are real.
 
 So the failure is made loud rather than silent: every skip is counted
-into the step's `dataless_skipped=` summary and logged at `info`, so a
-corpus that comes back empty says why in the step's own output.
+into the step's `dataless_skipped=` summary and logged at `info`, and the
+tree's share one warning giving the count and a path
+(`cloud_placeholders_are_one_warning_with_a_count`), so a corpus that comes
+back empty says why on the Manage row.
 `skip_dataless = false` turns it off. The precise test would be macOS's
 `SF_DATALESS` stat flag, which `std`'s `MetadataExt` does not expose;
 reaching it means a `libc` dependency, which has not seemed worth it.
@@ -358,6 +360,10 @@ unreadable folder's files look exactly like deleted ones; the error is
 the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row`
 in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
 file (a size and no blocks).
+
+A file over `max_bytes` is a `record:files:<path>` warning until it is read,
+whether or not an earlier scan stored it. A playlist over 16 MiB is not read as one, keeps
+the row it has, and is a `record:media_playlists:<path>` warning.
 
 ## Interrupting a scan
 

@@ -7,6 +7,7 @@ import {
   stubClipboard,
   tabLabels,
   typeInto,
+  SEARCH_SETTLE,
 } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
@@ -73,7 +74,8 @@ test.describe("toolbar", () => {
       "aria-selected",
       "true",
     );
-    await expect(card.getByTestId("search-input")).toHaveAttribute(
+    // A source's documents keep a box of their own, a filter on one list.
+    await expect(card.getByTestId("grid-search-input")).toHaveAttribute(
       "data-query",
       new RegExp(`source:${group}`),
     );
@@ -155,17 +157,75 @@ test.describe("toolbar", () => {
     });
   });
 
-  test("the search box opens a search card on what was typed", async ({ page }) => {
+  test("a search opens a tab from elsewhere, and changes the one it is on", async ({ page }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(PINNED);
+
+    // Off the search cards there is nothing to change, so it opens a tab.
     await typeInto(searchBox(page), "warp");
     await searchBox(page).press("Enter");
-    const card = cardOf(page, 'searchView({"q":"warp"})');
-    await expect(card).toBeVisible();
+    const warp = cardOf(page, 'searchView({"q":"warp"})');
+    await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp", {
+      timeout: SEARCH_SETTLE,
+    });
     await expect(shownTabName(page)).toHaveText("Search: warp");
     await expect(tabLabels(page)).toHaveCount(4);
-    // The box empties, ready for the next search.
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
+
+    // On one, what is typed waits for Enter, and then changes that tab.
+    await typeInto(searchBox(page), "warp core");
+    await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp", {
+      timeout: SEARCH_SETTLE,
+    });
+    // The first closes any suggestions; the next puts back what is shown.
+    await searchBox(page).press("Escape");
+    await searchBox(page).press("Escape");
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
+
+    await typeInto(searchBox(page), "warp core");
+    await searchBox(page).press("Enter");
+    await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp core", {
+      timeout: SEARCH_SETTLE,
+    });
+    await expect(tabLabels(page), "changing a search adds no tab").toHaveCount(4);
+
+    // ⌘Enter keeps it and opens another.
+    await typeInto(searchBox(page), "tea");
+    await searchBox(page).press("ControlOrMeta+Enter");
+    const tea = cardOf(page, 'searchView({"q":"tea"})');
+    await expect(tea).toBeVisible();
+    await expect(shownTabName(page)).toHaveText("Search: tea");
+    await expect(tabLabels(page)).toHaveCount(5);
+
+    // The box is the box of the tab on screen, and empty on any other.
+    await tabLabels(page).first().click();
     await expect(searchBox(page)).toHaveAttribute("data-query", "");
+    await tabLabels(page).nth(3).click();
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp core");
+    // A search from elsewhere left the pinned Search tab as it was.
+    await tabLabels(page).nth(1).click();
+    await expect(searchBox(page)).toHaveAttribute("data-query", "is:document");
+  });
+
+  test("Enter with nothing typed, off the search cards, shows the Search card", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await searchBox(page).click();
+    await searchBox(page).press("Enter");
+    await expect(cardOf(page, "searchView()")).toBeVisible();
+    await expect(tabLabels(page)).toHaveText(PINNED);
+  });
+
+  test("the panel says what Enter does here", async ({ page }) => {
+    await page.goto("/");
+    await page.getByTestId("search-advanced").click();
+    const hint = page.getByTestId("search-new-tab-hint");
+    await expect(hint).toHaveText("Enter opens the search in a new tab.");
+    await tabLabels(page).nth(1).click();
+    await page.getByTestId("search-advanced").click();
+    await expect(hint).toContainText("Enter searches in this tab.");
+    await expect(hint).toContainText(/(⌘|Ctrl\+)Enter opens a new one/);
   });
 
   test("Ctrl+K puts the caret in the search box", async ({ page }) => {
@@ -246,9 +306,10 @@ test.describe("toolbar", () => {
       await page.setViewportSize({ width: 1280, height: 800 });
       for (let i = 0; i < larger; i++)
         await page.getByRole("button", { name: "More spacious" }).click();
-      // 700px leaves the name room whatever its random suffix measures;
-      // 600px was within a few letters of it with larger text.
-      for (const width of [700, 420]) {
+      // 800px leaves the name room whatever its random suffix measures, in
+      // any browser's fonts: at 700px on a mac the search box is already at
+      // its floor and the name a few pixels short.
+      for (const width of [800, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;
         const l = (await lib.boundingBox())!;
@@ -256,7 +317,7 @@ test.describe("toolbar", () => {
         expect(b.width).toBeGreaterThanOrEqual(180);
         expect(b.x + b.width).toBeLessThanOrEqual(width);
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
-        // At 700px the search box has room to give; at 420px it is at
+        // At 800px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
         await expect.poll(truncated).toBe(width === 420);
       }

@@ -13,8 +13,10 @@ async function searchUuids(request: APIRequestContext, params: string): Promise<
 
 /// The grid's "N rows (of M)": how many it holds, of how many there are.
 async function held(page: Page): Promise<{ loaded: number; total: number }> {
-  const status = await page.locator(".grid-column .status").first().textContent();
-  const m = status!.match(/(\d+) rows \(of (\d+)\)/)!;
+  const status = page.locator(".grid-column .status").first();
+  const counts = /(\d+) rows \(of (\d+)\)/;
+  await expect(status).toHaveText(counts);
+  const m = (await status.textContent())!.match(counts)!;
   return { loaded: Number(m[1]), total: Number(m[2]) };
 }
 
@@ -36,8 +38,8 @@ test("the grid opens on the newest page and loads older rows as it is scrolled u
   await page.goto(EVERY_ROW);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
 
+  await expect.poll(async () => (await held(page)).total).toBe(newestFirst.length);
   const opened = await held(page);
-  expect(opened.total).toBe(newestFirst.length);
   expect(opened.loaded, "the grid held every row at once").toBeLessThan(opened.total);
   expect((await api(page)).last).toBe(newestFirst[0]);
 
@@ -67,6 +69,9 @@ test("a header sort orders the whole search", async ({ page, request }) => {
   );
   expect(openedOn, "the fixture's oldest row is past the first page").not.toContain(oldest);
 
+  // A date's first click is its newest, the second its oldest.
+  await searchHeader(page, "touched_at").click();
+  await gridSettled(page);
   await searchHeader(page, "touched_at").click();
   await expect.poll(async () => (await api(page)).first).toBe(oldest);
   expect((await held(page)).loaded, "a sort loaded every row").toBeLessThan(
@@ -117,6 +122,8 @@ test("the Now button returns to now, and only a newest-first date order has one"
   await searchHeader(page, "kind").click();
   await expect(now).toBeHidden();
   await searchHeader(page, "touched_at").click();
-  await searchHeader(page, "touched_at").click();
   await expect(now, "Touched, newest first, is by a date").toBeVisible();
+  await gridSettled(page);
+  await searchHeader(page, "touched_at").click();
+  await expect(now, "Touched, oldest first, has its now at the far end").toBeHidden();
 });

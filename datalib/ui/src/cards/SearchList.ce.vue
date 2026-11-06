@@ -4,7 +4,7 @@
 // One of the Search card's two views (GridCard.ce.vue hosts it and owns
 // the query); the other is the table.
 import { onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
-import type { SearchResponse, SearchRow, SearchTab } from "@/api";
+import type { SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
 import { oneAtATime, subscribeLive } from "@/live";
@@ -16,6 +16,17 @@ import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
 import { handleFromUri } from "./chipLinks";
 import { endWait, startWait, type Wait } from "@/telemetry";
+import { formatBytes } from "@/config/bytes";
+import {
+  asking,
+  firstWindow,
+  nextFetch,
+  withoutPage,
+  withPage,
+  type Page,
+  type PagedWindow,
+} from "@/grid/pagedWindow";
+import { sortsBySize } from "@/grid/searchSort";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -24,11 +35,12 @@ const props = defineProps<{
   // Whether this view is the one shown. A hidden list asks nothing, and
   // catches up when it is shown again.
   active: boolean;
-  // The answer to free text the host shows; null for a search without
-  // free text. While `waiting`, no tab has opened yet, and the list asks
-  // nothing rather than show an answer that would then be replaced.
-  tab: SearchTab | null;
-  waiting: boolean;
+  // The order the host asks for; null for the search's own.
+  sort: string | null;
+}>();
+const emit = defineEmits<{
+  // What the answer said beyond its rows, for the host's line above them.
+  answered: [echo: SearchResponse["query_echo"]];
 }>();
 const api = useApi();
 
@@ -37,14 +49,22 @@ const PAGE = 50;
 const results = ref<SearchRow[]>([]);
 const total = ref(0);
 const nextOffset = ref<number | null>(null);
+/// The rows held, a prefix of the search's, as the table holds its own.
+let win: PagedWindow<SearchRow, number> | null = null;
 const notice = ref<string | null>(null);
 const loading = ref(false);
 const picked = ref<SearchRow | null>(null);
 // The query the results on screen answer; null before the first answer.
 const shownQuery = ref<string | null>(null);
-// That query with the tab it was answered in.
+// That query with the order it was answered in.
 let answered: string | null = null;
-const keyNow = () => `${props.tab ?? ""}\u0000${props.query}`;
+const keyNow = () => `${props.sort ?? ""}\u0000${props.query}`;
+const pageOf = (r: SearchResponse): Page<SearchRow, number> => ({
+  rows: r.rows,
+  next: r.next_offset,
+  total: r.total,
+  at: r.at ?? null,
+});
 const now = Date.now();
 
 let inflight: AbortController | null = null;
@@ -60,13 +80,16 @@ function report(q: string, outcome: "rows" | "refused" | "failed", more = {}) {
     card_type: props.ctx.cardType,
     view: "list",
     q,
-    tab: props.tab,
+    sort: props.sort,
     outcome,
     ...more,
   });
   wait = null;
 }
 
+/// Ask for the first page, or, when the index moved under the rows on
+/// screen, for as many as are held and through the picked one, so nobody
+/// loses their place.
 async function run(keepPick = false) {
   if (!keepPick) wait ??= startWait("search");
   inflight?.abort();
@@ -74,14 +97,15 @@ async function run(keepPick = false) {
   inflight = ctrl;
   const q = props.query;
   const key = keyNow();
+  const again = keepPick && answered === key;
   loading.value = true;
   try {
     const page: SearchResponse = await api.fetchSearch(
       q,
-      PAGE,
+      again ? Math.max(PAGE, results.value.length) : PAGE,
       ctrl.signal,
       { toast: false },
-      { tab: props.tab },
+      { sort: props.sort, through: again ? (picked.value?.uuid ?? null) : null },
     );
     if (ctrl.signal.aborted) return;
     const echo = page.query_echo;
@@ -92,11 +116,14 @@ async function run(keepPick = false) {
         : (echo?.qmd_error ?? null));
     // A query the search cannot read yet leaves the last results up.
     if (page.refused?.length) return report(q, "refused");
-    results.value = page.rows;
+    emit("answered", echo);
+    win = firstWindow(pageOf(page));
+    results.value = win.rows;
     total.value = page.total;
-    nextOffset.value = page.next_offset;
+    nextOffset.value = win.next;
     shownQuery.value = q;
     answered = key;
+    if (!again) rowsEl.value?.scrollTo({ top: 0 });
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
       picked.value = results.value[0] ?? null;
     }
@@ -112,26 +139,36 @@ async function run(keepPick = false) {
 }
 
 async function more() {
-  if (nextOffset.value == null) return;
+  const fetch = win && nextFetch(win, win.rows.length, PAGE);
+  if (!win || !fetch) return;
+  win = asking(win, fetch);
+  const key = keyNow();
   try {
     const page = await api.fetchSearch(
       props.query,
-      PAGE,
+      fetch.limit,
       undefined,
       {},
-      { offset: nextOffset.value, tab: props.tab },
+      { offset: fetch.from, sort: props.sort },
     );
-    results.value = [...results.value, ...page.rows];
-    nextOffset.value = page.next_offset;
+    // A page of a search since replaced lines up with nothing on screen.
+    if (key !== keyNow() || !win) return;
+    const next = withPage(win, fetch.from, pageOf(page));
+    if (next === "moved") return void run(true);
+    win = next;
+    results.value = win.rows;
+    total.value = page.total;
+    nextOffset.value = win.next;
   } catch (e) {
     notice.value = (e as Error).message;
+    if (win) win = withoutPage(win, fetch.from);
   }
 }
 
 watch(
-  () => [props.query, props.tab, props.waiting, props.active] as const,
-  ([, , waiting, active]) => {
-    if (active && !waiting && keyNow() !== answered) void run();
+  () => [props.query, props.sort, props.active] as const,
+  ([, , active]) => {
+    if (active && keyNow() !== answered) void run();
   },
 );
 
@@ -213,8 +250,9 @@ function when(iso: string | null): string {
 }
 
 const listEl = useTemplateRef<HTMLDivElement>("listEl");
+const rowsEl = useTemplateRef<HTMLUListElement>("rowsEl");
 const refresh = oneAtATime(async () => {
-  if (props.active && !props.waiting) await run(true);
+  if (props.active) await run(true);
   else {
     shownQuery.value = null;
     answered = null;
@@ -222,7 +260,7 @@ const refresh = oneAtATime(async () => {
 });
 let stop: (() => void) | null = null;
 onMounted(() => {
-  if (props.active && !props.waiting) void run();
+  if (props.active) void run();
   stop = subscribeLive(
     {
       root: (e) => {
@@ -249,7 +287,7 @@ onBeforeUnmount(() => {
     <p v-if="notice" class="sc-notice">{{ notice }}</p>
 
     <div class="sc-main" :data-shown-query="shownQuery">
-      <ul class="sc-list" aria-label="Results">
+      <ul ref="rowsEl" class="sc-list" aria-label="Results">
         <li v-for="r in results" :key="r.uuid">
           <button
             class="sc-result"
@@ -284,7 +322,10 @@ onBeforeUnmount(() => {
               >
               <span class="sc-meta">
                 {{ r.source_ref?.label ?? r.source
-                }}<template v-if="r.author"> · {{ r.author }}</template>
+                }}<template v-if="r.author"> · {{ r.author }}</template
+                ><template v-if="sortsBySize(sort) && r.byte_size != null">
+                  · {{ formatBytes(r.byte_size) }}</template
+                >
               </span>
             </span>
           </button>
@@ -293,7 +334,7 @@ onBeforeUnmount(() => {
           <button class="sc-link" @click="more">Show more</button>
         </li>
         <li v-if="!loading && results.length === 0 && !notice" class="sc-empty">
-          Nothing matches. Try fewer words, or another tab.
+          Nothing matches. Try fewer words.
         </li>
       </ul>
       <section class="sc-preview" aria-label="Preview">

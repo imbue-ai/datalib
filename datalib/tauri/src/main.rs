@@ -626,6 +626,23 @@ fn libraries_dirs(app: &AppHandle) -> Vec<PathBuf> {
     dirs
 }
 
+/// Before any web view opens, and only for someone who has protected
+/// libraries.
+fn clear_old_web_cache(app: &AppHandle) {
+    let (Some(container), Some(home)) = (protected_container(app), home_dir(app)) else {
+        return;
+    };
+    if !container.is_dir() {
+        return;
+    }
+    let cache = protected::web_cache(&home);
+    if let Err(e) = std::fs::remove_dir_all(&cache) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("could not clear the web cache {}: {e}", cache.display());
+        }
+    }
+}
+
 /// Where the protected folder is, whether or not it exists yet. `None`
 /// off macOS, which has no such folder.
 fn protected_container(app: &AppHandle) -> Option<PathBuf> {
@@ -755,6 +772,7 @@ fn main() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            clear_old_web_cache(&handle);
             if let Some(file) = zoom_file(&handle) {
                 *handle.state::<PageZoom>().0.lock().unwrap() = zoom::load(&file);
             }

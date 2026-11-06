@@ -1,5 +1,4 @@
-load("@py_pip//:requirements.bzl", "requirement")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
@@ -101,7 +100,11 @@ sh_test(
     name = "install_test",
     size = "small",
     srcs = ["check_install.sh"],
-    data = ["//:scripts/install.sh"],
+    data = [
+        "//:scripts/install.sh",
+        "//:scripts/release/pin_release.py",
+        "//:scripts/release/publish_release.py",
+    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
@@ -240,6 +243,12 @@ py_test(
 )
 
 # The rule behind CI's "No crate built a second time for a tool" step.
+py_binary(
+    name = "check_tool_crates",
+    srcs = ["check_tool_crates.py"],
+    main = "check_tool_crates.py",
+)
+
 py_test(
     name = "check_tool_crates_test",
     size = "small",
@@ -284,17 +293,16 @@ py_test(
     args = [
         "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "$(rootpath //docs/dev:step_protocol.md)",
-        "$(rootpath //docs/dev:doltlite.md)",
+        "$(rootpath //datalib/reader:host_wheel)",
         "$(rootpath //third-party/doltlite:doltlite)",
     ],
     data = [
         "//datalib/backend/dag:datalib_dag_bin",
-        "//docs/dev:doltlite.md",
+        "//datalib/reader:host_wheel",
         "//docs/dev:step_protocol.md",
         "//third-party/doltlite:doltlite",
     ],
     main = "step_protocol_example_test.py",
-    deps = [requirement("doltlite")],
 )
 
 # The qmd model pins (repo, revision, file, sha256) live in the build's

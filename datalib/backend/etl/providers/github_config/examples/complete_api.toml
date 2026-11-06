@@ -1,6 +1,5 @@
 # GitHub pull requests and their review threads, over GitHub's API, signed
-# in through latchkey (`latchkey auth browser github`), with every option
-# set, and searchable.
+# in through latchkey, with every option set, and searchable.
 [[groups]]
 id = "github"
 name = "GitHub"

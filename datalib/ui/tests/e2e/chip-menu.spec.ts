@@ -14,7 +14,7 @@ type Row = { uuid: string; kind: string; message_index: number | null; author: s
 
 // The search box of the Search card an "everything with" opens (its source
 // names a query), not that of the search the page opened on.
-const SEARCH_INPUT = '.ct-card[data-card-source*="searchView({"] [data-testid="search-input"]';
+const SEARCH_INPUT = '[data-testid="search-input"]';
 
 async function openADocumentWithAChip(
   page: import("@playwright/test").Page,
@@ -85,6 +85,8 @@ test("a chip's mark or photo stays the size of a letter, hovered or not", async 
   request,
 }) => {
   const chip = await openADocumentWithAChip(page, request);
+  // The mark is drawn when the chip's look-up answers, after the chip itself.
+  await expect(chip.locator("img")).toBeVisible();
   const leadSize = () =>
     chip.evaluate((a) => {
       const lead = a.querySelector("img")!.getBoundingClientRect();
@@ -141,7 +143,7 @@ test("compose hands an email address to the mail app", async ({ page, request })
 
 test("the menu's search opens everything with the person", async ({ page, request }) => {
   const chip = await openADocumentWithAChip(page, request);
-  await expect(page.locator(SEARCH_INPUT)).toHaveCount(0);
+  await expect(page.locator('.ct-card[data-card-source*="searchView({"]')).toHaveCount(0);
 
   await chip.click({ button: "right" });
   await page.locator(".chip-menu .chip-menu-item", { hasText: /^Everything with / }).click();

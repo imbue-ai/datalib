@@ -12,8 +12,9 @@
 #
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
-# pulled off a phone, or an export on disk. Copy the groups you want, and
-# the index groups' inputs that name them.
+# pulled off a phone, or an export on disk; `datalib-step help <type>` says
+# how to sign one in or where its data comes from. Copy the groups you want,
+# and the index groups' inputs that name them.
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps under
 # it, each declared as `group` + `function`. `ingest` brings the data into
@@ -413,9 +414,8 @@ inputs = ["beeper/keyword_index"]
 
 # --- calendar by `google` -----------------------------------------------
 
-# Google Calendar through Google's API, signed in through latchkey
-# (`latchkey auth browser google-calendar`), with every option set, and
-# searchable.
+# Google Calendar through Google's API, signed in through latchkey, with
+# every option set, and searchable.
 [[groups]]
 id = "calendar-google"
 name = "Google Calendar"
@@ -642,8 +642,7 @@ days_ahead = 400  # the default
 
 # The meetings booked with you on Calendly, through Calendly's API,
 # signed in through latchkey's `calendly` service with a personal access
-# token (`latchkey auth set calendly -H "Authorization: Bearer <token>"`),
-# with every option set, and searchable.
+# token, with every option set, and searchable.
 [[groups]]
 id = "calendar-calendly"
 name = "Calendly"
@@ -770,8 +769,7 @@ days_ahead = 400  # the default
 # --- chatgpt by `api` ---------------------------------------------------
 
 # ChatGPT conversations over chatgpt.com's web API, signed in through
-# latchkey (`latchkey auth browser chatgpt`), with every option set, and
-# searchable.
+# latchkey, with every option set, and searchable.
 [[groups]]
 id = "chatgpt-api"
 name = "ChatGPT"
@@ -1234,8 +1232,8 @@ inputs = ["contacts-vcf/keyword_index"]
 
 # --- email by `jmap` ----------------------------------------------------
 
-# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
-# browser fastmail`), with every option set, and searchable.
+# Fastmail mail over JMAP, signed in through latchkey, with every option set,
+# and searchable.
 [[groups]]
 id = "email-jmap"
 name = "Fastmail"
@@ -1300,8 +1298,8 @@ inputs = ["email-jmap/keyword_index"]
 
 # --- email by `gmail` ---------------------------------------------------
 
-# Gmail over the Gmail API, signed in through latchkey (`latchkey auth
-# browser google-gmail`), with every option set, and searchable.
+# Gmail over the Gmail API, signed in through latchkey, with every option set,
+# and searchable.
 [[groups]]
 id = "email-gmail"
 name = "Gmail"
@@ -1509,8 +1507,7 @@ inputs = ["file_inventory/ingest"]
 # --- garmin by `api` ----------------------------------------------------
 
 # Garmin Connect over the API the Connect phone app uses, signed in through
-# latchkey's Garmin plugin (`latchkey auth browser garmin`), with every
-# option set, and keyword-searchable.
+# latchkey's Garmin plugin, with every option set, and keyword-searchable.
 [[groups]]
 id = "garmin"
 name = "Garmin Connect"
@@ -1577,8 +1574,7 @@ inputs = ["garmin/render_markdown"]
 # --- github by `api` ----------------------------------------------------
 
 # GitHub pull requests and their review threads, over GitHub's API, signed
-# in through latchkey (`latchkey auth browser github`), with every option
-# set, and searchable.
+# in through latchkey, with every option set, and searchable.
 [[groups]]
 id = "github"
 name = "GitHub"
@@ -1633,8 +1629,7 @@ inputs = ["github/keyword_index"]
 # --- gitlab by `api` ----------------------------------------------------
 
 # GitLab merge requests and their discussions, over GitLab's API, signed
-# in through latchkey with a personal access token you create
-# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`), with every
+# in through latchkey with a personal access token you create, with every
 # option set, and searchable.
 [[groups]]
 id = "gitlab"
@@ -1690,9 +1685,8 @@ inputs = ["gitlab/keyword_index"]
 # --- google_drive by `api` ----------------------------------------------
 
 # A backup of a Google account's Docs, Sheets and Slides, signed in through
-# four latchkey services as the same account (`latchkey auth browser
-# google-drive`, then google-docs, google-sheets and google-slides), with
-# every option set.
+# four latchkey services as the same account (google-drive, google-docs,
+# google-sheets and google-slides), with every option set.
 [[groups]]
 id = "google_drive"
 name = "Google Drive"
@@ -1905,8 +1899,8 @@ inputs = ["lightroom-backups/ingest"]
 
 # --- linear by `api` ----------------------------------------------------
 
-# A Linear workspace over its GraphQL API, signed in through latchkey
-# (`latchkey auth browser linear`), with every option set.
+# A Linear workspace over its GraphQL API, signed in through latchkey, with
+# every option set.
 [[groups]]
 id = "linear"
 name = "Linear"
@@ -1999,7 +1993,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
                                                # scan, on top of any .gitignore; default none
-max_bytes = "64 GB"            # skip a larger file entirely (no row); unset is no limit
+max_bytes = "64 GB"            # skip a larger file, with a warning naming it; unset is no limit
 payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
                                # (`payload_blake3` stays NULL); default 8 GiB
 playlists = true               # index .m3u / .m3u8 playlists; default true
@@ -2020,9 +2014,9 @@ inputs = ["media/ingest"]
 
 # --- notion by `api` ----------------------------------------------------
 
-# Notion over its API, signed in through latchkey (`latchkey auth set notion
-# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`), with
-# every option set, and searchable.
+# Notion over its API, signed in through latchkey with one stored credential
+# carrying both the token and the version header, with every option set, and
+# searchable.
 [[groups]]
 id = "notion"
 name = "Notion"
@@ -2083,7 +2077,7 @@ inputs = ["notion/keyword_index"]
 
 # Every PDF under a folder on this machine, with every option set, and
 # searchable. No account and no credentials. A scanned, image-only PDF is
-# recorded but gives no text: there is no OCR yet.
+# recorded but gives no text, as there is no OCR yet; one warning counts them.
 [[groups]]
 id = "pdf"
 name = "PDFs"
@@ -2097,7 +2091,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
                                         # .gitignore in the tree; default none
-max_bytes = "512 MiB"  # skip a file larger than this; the default
+max_bytes = "512 MiB"  # skip a larger file, with a warning naming it; the default
 ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
@@ -2240,8 +2234,8 @@ inputs = ["signal/keyword_index"]
 
 # --- slack by `api` -----------------------------------------------------
 
-# Slack over its API, signed in through latchkey (`latchkey auth browser
-# slack`), with every option set, and searchable.
+# Slack over its API, signed in through latchkey, with every option set, and
+# searchable.
 [[groups]]
 id = "slack"
 name = "Slack"
@@ -2370,9 +2364,9 @@ inputs = ["sms_backup_restore/keyword_index"]
 
 # --- todoist by `api` ---------------------------------------------------
 
-# Your Todoist over its API, signed in through latchkey
-# (`latchkey auth browser todoist`, or paste the API token from
-# Settings → Integrations → Developer), with every option set.
+# Your Todoist over its API, signed in through latchkey (by browser, or with
+# the API token from Settings → Integrations → Developer), with every option
+# set.
 [[groups]]
 id = "todoist"
 name = "Todoist"

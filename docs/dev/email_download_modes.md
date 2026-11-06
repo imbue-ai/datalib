@@ -272,6 +272,24 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    message that will not fetch or will not store stays owed, with a
    `listed_messages:<id>` row in `problems` and its attempts counted.
 
+Before that fetch, a run asks which messages are muted (`messages.list`
+with `q=is:muted`, 5 units a page), since muting is no label: `labels.list`
+leaves it out, and `labelIds=MUTED` is refused. The answer goes on what the
+fetch writes, and at the end of the run onto every `read_marks` row that
+differs (INGEST.md §"Whether an email was read is a read mark").
+
+**`gmail.fetch` makes the walks' windows per label**
+([`config_model.md`](config_model.md) §"Time windows"). A walk was already
+one label at a time and `listed_since` already per scope, so a run reduces
+its sections to a `Plan` (`src/ingest/gmail_api/mod.rs`): each scope's
+widest window, the labels that keep a message, and the labels that bring
+their thread. The keys that say the same of one section read as one
+section, so nothing about a store changes when a source moves to `fetch`,
+and only a window that has widened is walked again. `since` still bounds
+only a walk: `history.list` names the whole account, so a message of a
+narrow section that changes later is fetched whatever its age. A message
+kept for one section keeps its thread only if a section it matches says so.
+
 Labels are reconciled every run, walk or not: `labels.list` is always
 the whole set. Ingest stamps `_source: { via }` into the envelope
 payload as provenance, and the row keeps the message's labels as Gmail
@@ -533,8 +551,8 @@ nothing about specific subjects or senders, only invariants that hold
 for any label. Two of them need more than one run to fail:
 
 - **A second run must be a no-op** spending less than one
-  `messages.get` of quota. Observed: 4 units (profile + labels +
-  history).
+  `messages.get` of quota. It spends 9 units (profile + labels +
+  history + the muted search).
 - **A budget-limited backfill must walk forward.** Observed with
   `message_budget = 2` over an 8-message label: `+2, +2, +2, +2`, then
   incremental.

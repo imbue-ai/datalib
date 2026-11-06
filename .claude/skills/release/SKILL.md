@@ -35,7 +35,7 @@ published from a local machine — the tag is the trigger.
   `imbue-ai/default-workspace-template` (DWT), the Minds workspace
   template. Its `datalib` skill installs the musl binaries from a tag on
   first use and reads that tag's `docs/agent_user.md`. It is bumped
-  *after* the release publishes (step 12), not with it.
+  *after* the release publishes (step 13), not with it.
 
 ## Procedure
 
@@ -160,16 +160,20 @@ published from a local machine — the tag is the trigger.
     `gh run list --workflow=release.yml --limit 1`, then
     `gh run watch <run-id> --exit-status`. It's slow (multi-platform
     matrix + notarization). `fail-fast` is off, so one broken leg
-    doesn't cancel the others. The release stays a draft until every job
-    has succeeded, and a re-run of just the failed jobs finishes it.
+    doesn't cancel the others. No release exists until every job has
+    succeeded, and a re-run of just the failed jobs finishes it.
     Once published it is immutable: its assets can never change
     (`docs/dev/release_steps.md` §"Draft, then publish").
+
+    The tag also starts `reader-wheels.yml`, which publishes
+    `imbue-datalib-reader` to PyPI: `gh run list --workflow=reader-wheels.yml
+    --limit 1`. It is separate, so a failure there holds nothing back; re-run
+    its failed jobs, and if it still fails, say so when you report the release.
 11. Confirm the artifacts landed: `gh release view vX.Y.Z` should list
     the per-triple tarballs and the macOS dmg, and not say `draft: true`.
-    Tarball filenames are stable/un-versioned on purpose — the install
-    script fetches `releases/latest/download/<name>`, so check that
-    `gh api repos/imbue-ai/datalib/releases/latest --jq .tag_name` prints
-    this tag. If it doesn't, `gh release edit vX.Y.Z --latest` moves it.
+    The last job has already checked that it is immutable, holds what the
+    run made, and is `releases/latest`; if that job failed after publishing,
+    its log says what is wrong, and a person should look before going on.
 
     Then give the release its notes. The workflow creates it with an
     empty body, and apps that read the raw stores learn of a change
@@ -186,7 +190,18 @@ published from a local machine — the tag is the trigger.
     paragraph at the top in plain words: which column, what it held,
     what it holds now (v0.46.0's notes are the example). Then
     `gh release edit vX.Y.Z --notes-file /tmp/notes.md`.
-12. Bump the pin in DWT, `imbue-ai/default-workspace-template`
+12. Pin the release, so that `install.sh`, the Docker page and CI's
+    devcontainer image move to it. They follow no `latest`, so until this
+    lands people keep getting the previous release. Wait for this tag's
+    `devcontainer.yml` to finish first:
+
+    ```sh
+    git fetch origin && git checkout -b pin-vX.Y.Z origin/main
+    uv run python scripts/release/pin_release.py vX.Y.Z
+    ```
+
+    Open a PR with what it changed, and land it like any other.
+13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
     tag-relative URL that has to resolve when a workspace first uses
     datalib. This step is the one that gets dropped, so start by checking

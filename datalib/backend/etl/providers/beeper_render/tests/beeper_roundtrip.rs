@@ -205,6 +205,44 @@ async fn render_shows_only_the_networks_it_names() -> Result<()> {
     Ok(())
 }
 
+/// A chat on an account no bridge here reads was left out with nothing to say
+/// so. Beeper's own `hungryserv` is on record at `info`; a bridge this render
+/// does not know is a warning. A login in the account id goes no further.
+#[tokio::test(flavor = "multi_thread")]
+async fn chats_on_an_unlisted_account_are_on_record() -> Result<()> {
+    use datalib_etl_beeper_render::render::parse::unlisted_chat_rows;
+    let fx = Fixture::new();
+    fx.ingest().await?;
+    assert!(fx.parse(None)?.unlisted_chats.is_empty());
+
+    fx.edit_index(&[
+        "UPDATE threads SET accountID = 'hungryserv' \
+         WHERE threadID = '!tng-data:ba_TNG.local-signal.localhost'",
+        "UPDATE threads SET accountID = 'matrix_ba_picard' \
+         WHERE threadID NOT LIKE '%local-signal%'",
+    ])
+    .await?;
+    fx.ingest().await?;
+    let parsed = fx.parse(None)?;
+    assert_eq!(parsed.unlisted_chats.get("hungryserv"), Some(&1));
+    assert!(parsed.unlisted_chats.get("matrix").is_some_and(|n| *n > 0));
+    assert!(!parsed.unlisted_chats.contains_key("matrix_ba_picard"));
+
+    let rows = unlisted_chat_rows(&parsed.unlisted_chats, "tng", 1);
+    let got: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| (r.scope_key.as_str(), r.severity.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("unlisted_bridges:hungryserv", "info"),
+            ("unlisted_bridges:matrix", "warning"),
+        ]
+    );
+    Ok(())
+}
+
 /// A bridge's own id for a message is what finds it again in a phone's
 /// backup of the same chat, so every bridge's `message` rows are kept.
 #[tokio::test(flavor = "multi_thread")]

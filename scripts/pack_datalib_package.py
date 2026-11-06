@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Pack a datalib package for publishing (docs/dev/packages.md).
 
     scripts/pack_datalib_package.py <package dir> <out dir>

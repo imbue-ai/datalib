@@ -520,28 +520,42 @@ besides components:
   which a Browse does because it names columns. A card whose view was
   picked keeps it in its own state. A view stays mounted once shown, so
   switching keeps each one's selection and scroll; a hidden view asks
-  nothing and catches up when shown. The search bar is the one search
-  field (`search/SearchField.vue`, on CodeMirror 6), which the toolbar
-  and the run log share: it offers keys and values from the table's
-  `…/keys` and `…/values` and draws a source, group or step value as
-  its chip ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-  § "The field"). The query string is the card's
-  only record of a search (`cards/search.ts`): the chips for the
-  sources the results come from, with their counts
-  (`/search/groups?by=source_ref`), write and read its `source:`
-  filter, so a filter that was clicked is the one that could have been
-  typed. Free text has four answers, a
-  small tab each at the start of that row (`grid/searchTabs.ts`):
-  **Best** (the other three fused, a search with no `tab=`), then
-  **Fields** (the search terms), **Words** (BM25 over qmd's keyword
-  index) and **Meaning** (qmd's vectors), the search's `tab=`. All four
-  are asked at once and Best opens as the search starts; if it fails,
-  the first tab with rows opens instead. A tab that comes back while
-  another is open shows a dot until it is looked at, and only a click
-  changes the tab shown. The list, the
-  table, its groups and the source chips all show the open tab's
-  answer. The toolbar's search box (⌘K)
-  opens one. Its table is the grid below, over the search: row click
+  nothing and catches up when shown. A search card has no box of its own:
+  the toolbar's (`components/CommandBox.vue`) is the box of the search
+  card last used among those on screen (`search/searchCards.ts`). What is
+  typed there is a draft until Enter runs it, in that card, as an address bar
+  does in its tab. With no search card on screen, Enter opens one, and ⌘Enter
+  always does, so a search that should stay open beside another gets a tab of
+  its own. The box shows its card's query, but never over text someone typed
+  that they are still in the box with, or that a card arriving would replace:
+  the box is up before any card has mounted (`draftAfterMove`). A click
+  elsewhere followed by another tab shows that tab's query, and Escape puts
+  back the card's. A source's own documents (`oneSource`) and a grid over any other
+  table keep a box beside them, which asks as it is typed in. Either box is
+  the one search field (`search/SearchField.vue`, on CodeMirror 6), which the
+  run log shares: it offers keys and values from the table's `…/keys` and
+  `…/values` and draws a source, group or step value as its chip
+  ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+  § "The field"). The arrow in the toolbar's box opens the advanced panel
+  (`components/SearchPanel.vue`): meaning on or off and its cutoff, one row
+  per document, the sources the results come from with their counts
+  (`/search/groups?by=source_ref`), which it leaves out once the search is
+  narrowed to one source, and filters to start. The query string is the
+  card's only record of a search (`cards/search.ts`): the panel reads all of
+  it from the query and writes it back, so what was clicked is what could have been
+  typed. Free text has one answer, whichever view shows it: the search
+  terms, the keyword index and the vectors merged by the server. A line
+  above the results says what the search could not reach: a part that
+  could not answer, and how many candidates have no vectors, with their
+  sources on hover (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
+  (best match, newest, oldest, largest, smallest, author, title;
+  `grid/searchSort.ts`). The card keeps one order, its `sort` state,
+  which the control and the table's headers both write and both views
+  read: the list shows before the grid exists, and Size is a hidden
+  column with no header to hold it. The list loads a page at a time with
+  **Show more**, on the table's `grid/pagedWindow.ts`; when the index
+  moves it reads again as many rows as it holds, through the picked one,
+  so a sync costs nobody their place. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does one click on a
   Document cell's link (the problems grid's); double-click on the row
   opens it as a standalone single-column page in a new tab. In an
@@ -553,7 +567,8 @@ besides components:
   button beside the row count scrolls back there. Any other order has
   no now and no button; going oldest first, now is at the far end of
   every row, which the grid would have to load to reach.
-  Persists `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
+  Persists `q`/`sel`/`cols`/`sort`/`view` state (a card saved before
+  `sort` keeps its order in `cols`, read once). A search given no `q` opens on
   `is:document`, one row per document; the empty bar suggests filters
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 

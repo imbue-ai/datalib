@@ -8,7 +8,9 @@
 // edit is whatever the server says next, and an answer to a question
 // asked before the edit is dropped when it lands. An answer that moves
 // on its own, like a step's status, is revalidated instead: asked again
-// with the old one still drawn, and a surface told only if it changed.
+// with the old one still drawn, and a surface told only if it changed. A
+// question already out may have been answered before whatever prompted
+// that, so it is asked once more when it lands.
 
 export type Listener = (keys: ReadonlySet<string>) => void;
 
@@ -16,6 +18,8 @@ export class Resolver<V> {
   private readonly known = new Map<string, V>();
   /// The batch each key's question went out in, until it lands.
   private readonly inflight = new Map<string, Promise<void>>();
+  /// Keys revalidated while their question was out: asked again when it lands.
+  private readonly owed = new Set<string>();
   /// Bumped by `forget`: an answer for an older generation is stale.
   private readonly generation = new Map<string, number>();
   private readonly listeners = new Set<Listener>();
@@ -41,13 +45,13 @@ export class Resolver<V> {
   /** Ask about every key that has no answer and no question out, then
    *  wait for all of them. A key whose question failed stays unknown. */
   async ask(keys: Iterable<string>): Promise<void> {
-    const waits: Promise<void>[] = [];
-    for (const key of keys) {
-      this.want(key);
-      const wait = this.inflight.get(key);
-      if (wait) waits.push(wait);
+    const asked = [...keys];
+    for (const key of asked) this.want(key);
+    for (;;) {
+      const waits = asked.flatMap((key) => this.inflight.get(key) ?? []);
+      if (waits.length === 0) return;
+      await Promise.all(waits);
     }
-    await Promise.all(waits);
   }
 
   /** Drop what is known about `keys` and tell every surface; the next
@@ -57,6 +61,7 @@ export class Resolver<V> {
     for (const key of keys) {
       this.known.delete(key);
       this.inflight.delete(key);
+      this.owed.delete(key);
       this.generation.set(key, (this.generation.get(key) ?? 0) + 1);
       dropped.add(key);
     }
@@ -68,15 +73,14 @@ export class Resolver<V> {
     return [...this.known].filter(([, v]) => test(v)).map(([k]) => k);
   }
 
-  /** Ask again about every key that has an answer, keeping each answer
-   *  until its new one lands; subscribers hear only of keys whose answer
-   *  changed, or vanished. */
+  /** Ask again about every key that has an answer or a question out,
+   *  keeping each answer until its new one lands; subscribers hear only of
+   *  keys whose answer changed, or vanished. */
   revalidate(): void {
-    for (const key of this.known.keys()) {
-      if (this.inflight.has(key)) continue;
-      const batch = this.batch();
-      batch.keys.push(key);
-      this.inflight.set(key, batch.done);
+    for (const key of new Set([...this.known.keys(), ...this.inflight.keys()])) {
+      const out = this.inflight.get(key);
+      if (!out) this.enqueue(key);
+      else if (out !== this.next?.done) this.owed.add(key);
     }
   }
 
@@ -87,7 +91,10 @@ export class Resolver<V> {
   }
 
   private want(key: string): void {
-    if (this.known.has(key) || this.inflight.has(key)) return;
+    if (!this.known.has(key) && !this.inflight.has(key)) this.enqueue(key);
+  }
+
+  private enqueue(key: string): void {
     const batch = this.batch();
     batch.keys.push(key);
     this.inflight.set(key, batch.done);
@@ -130,7 +137,11 @@ export class Resolver<V> {
     } catch (e) {
       this.onError(e as Error);
     } finally {
-      for (const key of keys) if (this.inflight.get(key) === done) this.inflight.delete(key);
+      for (const key of keys) {
+        if (this.inflight.get(key) !== done) continue;
+        this.inflight.delete(key);
+        if (this.owed.delete(key)) this.enqueue(key);
+      }
     }
   }
 

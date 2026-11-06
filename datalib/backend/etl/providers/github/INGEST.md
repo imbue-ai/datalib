@@ -79,13 +79,25 @@ the rest stay owed, with no row saying so. Each PR is a transaction of
 its own, sealed on the step's cadence, so a run that dies at any
 request leaves a store the next run finishes
 (`tests/github_tests/interrupt.rs` cuts a run at every request and
-checks that).
+checks that). A seal holds each PR whole or not at all, so render starts
+on the first seal and runs again on each later one, writing only the
+documents that seal changed (`tests/github_tests/streaming.rs`). Each
+pass still reads the whole store to find them, which is under two seconds
+at 1,500 PRs.
 
-GitHub's search answers at most 1000 results, newest first. A search
-cut off there covers only down to the oldest result it gave, and is a
-`listing:search <scope>` row; the next run searches the stretch below
-it (`updated:<=`) and lists the rest. A search GitHub reports as
-`incomplete_results` covers nothing, so the next run asks again.
+GitHub's search answers at most 1000 results, newest first, and a search
+is 30 requests a minute of its own limit, one per page of 100. A search
+cut off there covers down to the oldest result it gave, and carries on
+in the same run with a search below it (`updated:<=` that result's
+whole stamp, so it is asked for again in case others share its stamp),
+until the scope is covered, a search fails, or a stop is asked for. Each
+search is stored as it lands, so a run stopped between two of them
+keeps its place, and the next run searches only what is below. A search
+that carried on leaves no row. One that gets no further, because as
+many results share one `updated_at` as one search answers, ends with a
+`listing:search <scope>` warning saying what is not listed, and each run
+asks again. A search GitHub reports as `incomplete_results` covers
+nothing, so the next run asks again.
 
 `--full` searches every scope with no bound and fetches everything
 listed, whatever the store holds.
@@ -103,6 +115,10 @@ nothing to search for — a credential GitHub refuses fails here), or a
 read or write of the store. Anything else that fails is a `problems`
 row, and the sync goes on with the rest.
 
+- **A rate limit** is waited out, not read as a failure: the `403` or
+  `429` of either the primary or the secondary limit, for as long as
+  `retry-after` or `x-ratelimit-reset` says, or a minute when neither
+  does. A `403` that is no limit is a refusal.
 - **The shared retry loop giving up** (rate limits or failures past
   the source's budget) stops the requests there, rather than failing
   every PR after it; the run keeps what it fetched. A `phase:fetch`

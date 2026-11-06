@@ -219,6 +219,21 @@ impl RunProblem {
         )
     }
 
+    /// A listing the service cuts off however it is asked, so a stretch of
+    /// it is out of reach. A warning: every request was answered, and
+    /// nothing failed that a later attempt could mend, but what it would
+    /// not list is not in the mirror.
+    pub fn listing_cut_off(name: &str, detail: impl Into<String>) -> Self {
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Listing,
+            name,
+            detail,
+            Reason::FetchFailed,
+            Severity::Warning,
+        )
+    }
+
     pub fn phase(name: &str, detail: impl Into<String>) -> Self {
         use datalib_problems::{Reason, Severity};
         Self::new(
@@ -284,6 +299,8 @@ pub struct RecordProblem {
     pub id: String,
     /// What upstream said.
     pub detail: String,
+    pub reason: datalib_problems::Reason,
+    pub severity: datalib_problems::Severity,
 }
 
 /// The sweep key's prefix of a per-record row: every row
@@ -298,6 +315,18 @@ impl RecordProblem {
             table: table.to_string(),
             id: id.to_string(),
             detail: detail.into(),
+            reason: datalib_problems::Reason::FetchFailed,
+            severity: datalib_problems::Severity::Error,
+        }
+    }
+
+    /// A record a limit in the config said not to read. A warning: nothing
+    /// failed, but the record is not in the mirror.
+    pub fn over_size_limit(table: &str, id: &str, detail: impl Into<String>) -> Self {
+        Self {
+            reason: datalib_problems::Reason::OverSizeLimit,
+            severity: datalib_problems::Severity::Warning,
+            ..Self::new(table, id, detail)
         }
     }
 
@@ -372,14 +401,14 @@ pub(crate) fn run_prefixes() -> Vec<String> {
 }
 
 pub(crate) fn record_rows(problems: &[RecordProblem]) -> Vec<Row> {
-    use datalib_problems::{Outcome, Problem, Reason, Severity};
+    use datalib_problems::{Outcome, Problem};
     problems
         .iter()
         .map(|p| {
             (
                 p.key(),
                 Outcome::Dropped,
-                Problem::explained(Reason::FetchFailed, None, &p.detail).severity(Severity::Error),
+                Problem::explained(p.reason, None, &p.detail).severity(p.severity),
             )
         })
         .collect()

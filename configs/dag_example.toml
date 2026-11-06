@@ -160,12 +160,8 @@ command = "datalib-step"
 inputs = ["slack/keyword_index"]
 
 # ── claude ─────────────────────────────────────────────────────────
-# Prerequisite (one-time): register claude.ai with latchkey and
-# supply your sessionKey cookie (DevTools → Application → Cookies):
-#   latchkey services register claude-ai --base-api-url="https://claude.ai/"
-#   latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
-# (`latchkey` is the launcher the datalib installer puts on your PATH.)
-# See docs/user/getting_your_data.md for the full walkthrough.
+# Signs in through latchkey's `claude-ai` service with your browser's
+# sessionKey cookie; `datalib-step help claude` says how.
 [[groups]]
 id = "claude"
 type = "claude"

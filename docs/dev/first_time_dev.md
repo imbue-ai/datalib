@@ -11,6 +11,10 @@ just want to *run* the released tools against your own data, start with the
 # build driver (it also answers to `bazel`).
 brew install bazelisk
 
+# Only to run a script from `scripts/` or `tools/` by hand: `uv`, which runs
+# it on the Python the repo pins. The build and the tests do not use it.
+brew install uv
+
 # That is all: Node, qmd and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
 # latchkey and qmd through a staged `runtime/` tree (the dev launchers
@@ -267,8 +271,8 @@ SDK from the staged runtime tree (above) through
 at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collection
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
 alongside the per-source `<group>/render_markdown/` trees and
-`unified_document_index/grid_index/db.sqlite`. This is what the search bar's
-Words and Meaning tabs read (see `datalib/backend/unified_document_index/src/qmd/`).
+`unified_document_index/grid_index/db.sqlite`. This is what a search matches
+words and meaning against (see `datalib/backend/unified_document_index/src/qmd/`).
 
 Design notes:
 

@@ -1,17 +1,20 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Scores the search box against a set of queries whose answers are known.
 
 An eval set names target rows and, for each, queries a person might type to
-find it. `run` asks every query of the search applet once per answer (each
-tab, and the fused answer a search with no tab gets), records where the
-target ranked and how long each answer took, and prints the scores; `compare`
-says which queries moved between two runs; `show` prints what a query found,
-for judging the rest of the list by eye. `--modes app` instead sends each
-query the way the app does, every request at once, and times what a person
-waits for: run it on its own, since each answer leaves the others cached.
+find it. `run` asks every query of the search applet once per setting (`on`,
+the search as it opens; `off`, with `semantic:off`; or a cutoff such as `0.3`,
+to weigh one against another), records where the target ranked and how long
+each answer took, and prints the scores; `compare` says which queries moved
+between two runs; `show` prints what a query found, for judging the rest of
+the list by eye. `--modes app` instead sends each query the way the app does,
+every request at once, and times what a person waits for: run it on its own,
+since each answer leaves the others cached. `first-pages` times the eval set's
+`orderings`, searches that sort many rows no index helps with, and checks the
+rows really come in that order.
 
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
-"queries": [{"q", "style"}]}]}. A row counts as the target when it is the
+"queries": [{"q", "style"}]}], "orderings": [{"q", "sort"}]}. A row counts as the target when it is the
 target or another row of the same document (same `markdown_uuid`), since a
 search answers with the message it landed on. An optional "tz" (an IANA
 zone) is the zone the applet runs in, so a bare date in a query
@@ -47,8 +50,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-TABS = ["fields", "words", "meaning"]
-MODES = [*TABS, "fused"]
+MODES = ["on", "off"]
 APP = "app"
 BUDGET_MS = 1000
 DEFAULT_APPLET = "bazel-bin/datalib/backend/bin/datalib-applet"
@@ -128,9 +130,8 @@ def connect(
 
 
 def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str, Any]:
-    params = {"q": q, "limit": str(depth)}
-    if mode != "fused":
-        params["tab"] = mode
+    asked = q if mode == "on" else f"{q} semantic:{mode}"
+    params = {"q": asked, "limit": str(depth)}
     return read_answer(get, "/search?" + urllib.parse.urlencode(params))
 
 
@@ -249,42 +250,24 @@ APP_PAGE = 50
 QUERY_WORD = re.compile(r'-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+')
 FILTER_WORD = re.compile(r"^-?[A-Za-z_][\w.]*:")
 SOURCE_WORD = re.compile(r"^(source|source_id):")
-CARRIES_TEXT = ("qmd:", "qmd_vsearch:")
-
-
-def has_free_text(q: str) -> bool:
-    return any(
-        w.startswith(CARRIES_TEXT) or not FILTER_WORD.match(w)
-        for w in QUERY_WORD.findall(q)
-    )
 
 
 def app_requests(q: str) -> dict[str, str]:
     """What the search card sends for a new search, by what each is for: the
-    rows of the list it opens on (ui/src/cards/SearchList.ce.vue), one row of
-    each tab for its count (`askTabs` in GridCard.ce.vue), and the groups
-    behind the source chips, which ignore the query's own source
+    rows of the list it opens on (ui/src/cards/SearchList.ce.vue), and the
+    groups behind the source chips, which ignore the query's own source
     (`loadSources`)."""
 
-    def rows(limit: int, tab: str | None = None) -> str:
-        params = {"q": q, "limit": str(limit)}
-        if tab:
-            params["tab"] = tab
-        return "/search?" + urllib.parse.urlencode(params)
-
+    rows = urllib.parse.urlencode({"q": q, "limit": str(APP_PAGE)})
     others = [w for w in QUERY_WORD.findall(q) if not SOURCE_WORD.match(w)]
     chips = urllib.parse.urlencode({"q": " ".join(others), "by": "source_ref"})
-    asked = {"rows": rows(APP_PAGE), "chips": "/search/groups?" + chips}
-    if has_free_text(q):
-        asked["count best"] = rows(1)
-        asked |= {f"count {tab}": rows(1, tab) for tab in TABS}
-    return asked
+    return {"rows": "/search?" + rows, "chips": "/search/groups?" + chips}
 
 
 def ask_as_app(get: Callable[[str], Any], q: str) -> dict[str, Any]:
     """Every request at once, as the card sends them. `ms` is how long until
     the rows arrive, which is what a person waits for; `settled_ms` is how
-    long until the tabs and the chips have answered too."""
+    long until the chips have answered too."""
     asked = app_requests(q)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(asked)) as pool:
         running = {
@@ -299,8 +282,10 @@ def run(args: argparse.Namespace) -> None:
     evals = json.loads(Path(args.evals).read_text())
     modes = args.modes.split(",")
     for m in modes:
-        if m not in [*MODES, APP]:
-            raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}, {APP}")
+        if m not in [*MODES, APP] and not re.fullmatch(r"0?\.\d+|0|1", m):
+            raise SystemExit(
+                f"--modes: {m!r} is not one of {', '.join(MODES)}, {APP}, or a cutoff"
+            )
     if APP in modes and len(modes) > 1:
         raise SystemExit(
             f"--modes: ask {APP} on its own: an answer asked first leaves the next "
@@ -380,6 +365,148 @@ def run(args: argparse.Namespace) -> None:
     print(report(record))
 
 
+# The field of a row each sortable column shows, and how to read it.
+def as_stamp(value: Any) -> datetime.datetime:
+    stamp = datetime.datetime.fromisoformat(str(value))
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.UTC)
+
+
+SORT_FIELDS: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    "touched_at": ("touched_at", as_stamp),
+    "created_at": ("created_at", as_stamp),
+    "modified_at": ("modified_at", as_stamp),
+    "byte_size": ("byte_size", int),
+    "item_count": ("item_count", int),
+    "author_ref": ("author", lambda v: str(v).lower()),
+    "subject_ref": ("conversation_name", lambda v: str(v).lower()),
+    "kind": ("kind", lambda v: str(v).lower()),
+}
+
+
+def out_of_order(rows: list[dict[str, Any]], sort: str) -> str | None:
+    """What breaks the order `sort`'s first column promises across `rows`, or
+    None: a value on the wrong side of the one before, or a value after a blank,
+    since a row with nothing to sort by comes last whichever way it runs. A
+    column a row cannot show is not checked."""
+    column, _, direction = sort.split(",")[0].partition(":")
+    if column not in SORT_FIELDS:
+        return None
+    field, read = SORT_FIELDS[column]
+    previous: Any = None
+    blank_at: int | None = None
+    for i, row in enumerate(rows):
+        value = row.get(field)
+        if value in (None, ""):
+            blank_at = i if blank_at is None else blank_at
+            continue
+        if blank_at is not None:
+            return f"row {i} has a value after the blank at row {blank_at}"
+        shown = read(value)
+        if previous is not None and (
+            shown > previous if direction == "desc" else shown < previous
+        ):
+            return f"row {i} is on the wrong side of row {i - 1}"
+        previous = shown
+    return None
+
+
+def ordered_page(
+    get: Callable[[str], Any], q: str, sort: str, offset: int = 0
+) -> tuple[dict[str, Any], int]:
+    params = {"q": q, "sort": sort, "limit": str(APP_PAGE), "offset": str(offset)}
+    started = time.perf_counter()
+    answer = get("/search?" + urllib.parse.urlencode(params))
+    return answer, ms_since(started)
+
+
+def first_pages(args: argparse.Namespace) -> None:
+    """Each ordering's first page as a person waits for it, the search not yet
+    asked since the applet started; the next page, which should only slice what
+    that listed; and the first page again. Keeps counts and times, never rows."""
+    evals = json.loads(Path(args.evals).read_text())
+    orderings = evals.get("orderings")
+    if not orderings:
+        raise SystemExit(f"{args.evals} has no `orderings`")
+    root = Path(args.root).expanduser()
+    made = provenance(args, evals.get("tz"))
+    server = connect(args, root, evals.get("tz"))
+    results: list[dict[str, Any]] = []
+    try:
+        # Kept apart: the first request of all pays for opening the index.
+        _, opening_ms = ordered_page(server.get, "is:document", "touched_at:desc")
+        for o in orderings:
+            q, sort = o["q"], o["sort"]
+            first, first_ms = ordered_page(server.get, q, sort)
+            problems = [*first.get("refused", []), *first.get("errors", [])]
+            rows = first.get("rows", [])
+            entry: dict[str, Any] = {
+                "q": q,
+                "sort": sort,
+                "total": first.get("total", 0),
+                "first_ms": first_ms,
+            }
+            if first.get("next_offset") is not None:
+                following, entry["next_ms"] = ordered_page(
+                    server.get, q, sort, first["next_offset"]
+                )
+                more = following.get("rows", [])
+                held = {r["uuid"] for r in rows}
+                if any(r["uuid"] in held for r in more):
+                    problems.append("the next page repeats a row")
+                rows = [*rows, *more]
+            _, entry["again_ms"] = ordered_page(server.get, q, sort)
+            wrong = out_of_order(rows, sort)
+            if wrong:
+                problems.append(wrong)
+            entry["problems"] = problems
+            results.append(entry)
+            print(
+                f"{q or '(everything)'} by {sort}: {entry['total']} rows, "
+                f"first page {first_ms} ms",
+                file=sys.stderr,
+            )
+    finally:
+        server.close()
+    record = {
+        "root": str(root),
+        "evals": str(args.evals),
+        "via": args.http or "applet",
+        "budget_ms": args.budget_ms,
+        "opening_ms": opening_ms,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "provenance": {**made, "load": [*made["load"], round(os.getloadavg()[0], 1)]},
+        "first_pages": results,
+    }
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(record, indent=1, ensure_ascii=False) + "\n"
+        )
+    print(first_pages_report(record))
+    slow = [r for r in results if r["first_ms"] > args.budget_ms]
+    if slow or any(r["problems"] for r in results):
+        raise SystemExit(1)
+
+
+def first_pages_report(record: dict[str, Any]) -> str:
+    budget = record["budget_ms"]
+    lines = [
+        (
+            f"{len(record['first_pages'])} ordered searches via {record['via']}; "
+            f"the first request of all, opening the index, took {record['opening_ms']} ms"
+        ),
+        "",
+        "| search | sort | rows | first page ms | next page ms | again ms | problems |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in record["first_pages"]:
+        over = " **over**" if r["first_ms"] > budget else ""
+        lines.append(
+            f"| `{r['q']}` | `{r['sort']}` | {r['total']} | {r['first_ms']}{over} | "
+            f"{r.get('next_ms', '-')} | {r['again_ms']} | {'; '.join(r['problems'])} |"
+        )
+    return "\n".join(lines)
+
+
 def provenance(args: argparse.Namespace, tz: str | None) -> dict[str, Any]:
     """Where a run came from, so a kept run can be read beside another: the
     checkout the applet is meant to be built from, the machine and its load
@@ -454,7 +581,12 @@ def corpus_line(held: dict[str, int]) -> str:
 
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
-    modes = [m for m in [*MODES, APP, "ui"] if any(m in r["modes"] for r in results)]
+    cutoffs = sorted({m for r in results for m in r["modes"]} - {*MODES, APP, "ui"})
+    modes = [
+        m
+        for m in [*MODES, *cutoffs, APP, "ui"]
+        if any(m in r["modes"] for r in results)
+    ]
     lines = [
         (
             f"{len(results)} queries over {len({r['id'] for r in results})} targets, "
@@ -547,14 +679,14 @@ def requests_table(results: list[dict[str, Any]]) -> list[str]:
 
 
 def load(path: str) -> dict[str, Any]:
-    """A results file, its fused answer under that name: older files call it
-    `default`, and before it existed qmd's hybrid stood in its place."""
+    """A results file, its merged answer as `on`: older files call it `fused`
+    or `default`, and before it existed qmd's hybrid stood in its place."""
     record = json.loads(Path(path).read_text())
     for r in record["results"]:
         modes = r["modes"]
-        for old in ("default", "hybrid"):
-            if old in modes and "fused" not in modes:
-                modes["fused"] = modes.pop(old)
+        for old in ("fused", "default", "hybrid"):
+            if old in modes and "on" not in modes:
+                modes["on"] = modes.pop(old)
     return record
 
 
@@ -698,7 +830,7 @@ def audit_me(args: argparse.Namespace) -> None:
     server = connect(args, root)
 
     def ask(q: str, limit: int = 0) -> dict[str, Any]:
-        answer = search(server.get, q, "fields", limit)
+        answer = search(server.get, q, "off", limit)
         if answer.get("error"):
             raise SystemExit(f"{q!r}: {answer['error']}")
         return answer
@@ -752,7 +884,7 @@ def main() -> None:
     r.add_argument(
         "--modes",
         default=",".join(MODES),
-        help=f"answers to ask for, of {','.join(MODES)}; or {APP} alone",
+        help=f"settings to ask with, of {','.join(MODES)} or a cutoff; or {APP} alone",
     )
     r.add_argument(
         "--depth", type=int, default=20, help="rows to read from each answer"
@@ -770,6 +902,25 @@ def main() -> None:
         "--http", help="a running datalib-http's base URL, to ask through its gateway"
     )
     r.set_defaults(func=run)
+    f = sub.add_parser(
+        "first-pages", help="time the eval set's ordered searches and check their order"
+    )
+    f.add_argument("--root", required=True, help="the data root to search")
+    f.add_argument("--evals", required=True, help="the eval set (JSON)")
+    f.add_argument("--out", help="where to write the results (JSON)")
+    f.add_argument(
+        "--budget-ms",
+        type=int,
+        default=BUDGET_MS,
+        help="the most a first page may take; over it, the command exits 1",
+    )
+    f.add_argument(
+        "--applet", default=DEFAULT_APPLET, help="the datalib-applet binary to start"
+    )
+    f.add_argument(
+        "--http", help="a running datalib-http's base URL, to ask through its gateway"
+    )
+    f.set_defaults(func=first_pages)
     c = sub.add_parser("compare", help="what moved between two runs")
     c.add_argument("before")
     c.add_argument("after")

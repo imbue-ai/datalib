@@ -525,8 +525,10 @@ export function useSourcesCard(ctx: CardCtx) {
   /// the id again — `renameGroup` treats both as "no name".
   async function renameRow(row: Row, name: string) {
     if (row.kind !== "group") return;
-    const next = renameGroup(configText.value, row.id, name);
-    if (next === configText.value) return;
+    const text = await configToEdit();
+    if (text === null) return;
+    const next = renameGroup(text, row.id, name);
+    if (next === text) return;
     await writeConfig(
       next,
       name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
@@ -544,10 +546,11 @@ export function useSourcesCard(ctx: CardCtx) {
   /// over an editor save that has not reached this card yet.
   async function onRowMove(row: Row, before: Row | null) {
     if (row.kind !== "group") return;
-    await loadConfig();
+    const text = await configToEdit();
+    if (text === null) return;
     const name = (id: string) =>
       rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
-    const against = moveAgainstDataFlow(configText.value, row.id, before?.id ?? null);
+    const against = moveAgainstDataFlow(text, row.id, before?.id ?? null);
     if (against) {
       say(
         false,
@@ -559,12 +562,12 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     let next: string;
     try {
-      next = moveGroup(configText.value, row.id, before?.id ?? null);
+      next = moveGroup(text, row.id, before?.id ?? null);
     } catch (e) {
       say(false, (e as Error).message);
       return;
     }
-    if (next === configText.value) return;
+    if (next === text) return;
     const where = before ? `above ${before.name.label}` : "to the bottom";
     await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
@@ -646,6 +649,19 @@ export function useSourcesCard(ctx: CardCtx) {
     }
   }
 
+  /// The config as the server has it now, for an edit to build on, or null
+  /// (and a banner) when it cannot be read. An edit built on the text this
+  /// card last read, or on none yet, would write the file without what it
+  /// did not know about.
+  async function configToEdit(): Promise<string | null> {
+    await loadConfig();
+    if (loadError.value) {
+      say(false, `The config could not be read, so nothing was changed: ${loadError.value}`);
+      return null;
+    }
+    return configText.value;
+  }
+
   /// The rows the loader dropped, for the banner above the table.
   const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
@@ -705,7 +721,10 @@ export function useSourcesCard(ctx: CardCtx) {
     editing.value = null;
   }
 
-  function openAdd() {
+  /// The form reads the config first: what it suggests has to be free, and
+  /// it opens the moment the card does on the Dashboard's Add source.
+  async function openAdd() {
+    if ((await configToEdit()) === null) return;
     editing.value = null;
     wizardKey.value++;
     wizardOpen.value = true;
@@ -717,7 +736,7 @@ export function useSourcesCard(ctx: CardCtx) {
   /// editor reaches this card by a pushed frame, and an Edit clicked before
   /// that lands would open on the text from before it.
   async function openEdit(groupId: string) {
-    await loadConfig();
+    if ((await configToEdit()) === null) return;
     const group = configGroups.value.find((g) => g.id === groupId);
     if (!group) return;
     const steps = sourceStepsOf(group.id, sources.value);
@@ -740,6 +759,8 @@ export function useSourcesCard(ctx: CardCtx) {
     renderId: string | null;
     qmdIndexing: QmdIndexing;
   }) {
+    const text = await configToEdit();
+    if (text === null) return;
     const current = editing.value;
     let next: string;
     if (current) {
@@ -747,7 +768,7 @@ export function useSourcesCard(ctx: CardCtx) {
       // source's entries hold stays. The name and the description live on
       // the group, which is edited in place.
       try {
-        next = patchSource(configText.value, {
+        next = patchSource(text, {
           entry: payload.entry,
           group: current.group.id,
           values: payload.values,
@@ -768,7 +789,7 @@ export function useSourcesCard(ctx: CardCtx) {
       }
     } else {
       next = insertEntries(
-        configText.value,
+        text,
         payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
       );
     }
@@ -801,6 +822,12 @@ export function useSourcesCard(ctx: CardCtx) {
   // config names it, so the steps that run it can start at once.
   const packagesOpen = ref(false);
 
+  async function configToEditOrThrow(): Promise<string> {
+    const text = await configToEdit();
+    if (text === null) throw new Error(banner.value?.text ?? "The config could not be read.");
+    return text;
+  }
+
   async function writeOrThrow(text: string, what: string) {
     if (!(await writeConfig(text, what))) {
       throw new Error(banner.value?.text ?? "The config was rejected.");
@@ -809,10 +836,10 @@ export function useSourcesCard(ctx: CardCtx) {
 
   async function addPackageEntry(source: string, lookup: PackageLookup) {
     await installPackage(lookup.url, lookup.sha256);
-    await loadConfig();
-    const id = packageIdFor(configText.value, lookup.manifest);
+    const text = await configToEditOrThrow();
+    const id = packageIdFor(text, lookup.manifest);
     await writeOrThrow(
-      addPackage(configText.value, { id, source, lookup }),
+      addPackage(text, { id, source, lookup }),
       `Added the ${lookup.manifest.name} package.`,
     );
     await refreshPackages();
@@ -820,17 +847,16 @@ export function useSourcesCard(ctx: CardCtx) {
 
   async function updatePackageEntry(id: string, lookup: PackageLookup) {
     await installPackage(lookup.url, lookup.sha256);
-    await loadConfig();
     await writeOrThrow(
-      updatePackage(configText.value, id, lookup),
+      updatePackage(await configToEditOrThrow(), id, lookup),
       `Updated ${lookup.manifest.name} to ${lookup.manifest.version}.`,
     );
     await refreshPackages();
   }
 
   async function removePackageEntry(id: string) {
-    await loadConfig();
-    await writeOrThrow(removePackage(configText.value, id), `Removed the ${id} package.`);
+    const text = await configToEditOrThrow();
+    await writeOrThrow(removePackage(text, id), `Removed the ${id} package.`);
   }
 
   async function retryPackage(p: PackageView) {

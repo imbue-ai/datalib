@@ -9,6 +9,7 @@ import { searchSource } from "@/cards/cardSources";
 
 export const SOURCES_CARD = "sourcesView()";
 export const LOG_CARD = "logView()";
+export const SEARCH_CARD = "searchView()";
 
 export type SurfaceCommands = {
   // A new gallery card, revealed.
@@ -31,7 +32,7 @@ export function showCard(source: string) {
   else void router.push(encodeColumns([{ code: source, size: null, state: "" }]));
 }
 
-/// The toolbar's search box: a search card on `q`, beside whatever is
+/// A search card of its own on `q`, beside whatever is
 /// showing.
 export function searchFor(q: string) {
   const source = searchSource(q);

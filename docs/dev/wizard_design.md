@@ -86,3 +86,9 @@ when they are important.
   knows they are there. Saving a form with no changes leaves the file
   byte-for-byte as it was, and `tests/edit_source.test.ts` checks that
   for every wizard.
+- **A setting a form cannot ask stays out of it, and the docs say so.**
+  A repeated table such as `gmail.fetch` has no kind of field. It is written
+  in the config editor, kept through an edit like any other key the form does
+  not own, and its reader's guide says the form does not support it. Its
+  answers then read as though it were not there, which is the one exception to
+  the rule that an answer is recognizable from what it wrote.

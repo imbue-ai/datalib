@@ -55,7 +55,19 @@ latchkey keeps its encryption key in the system keychain, and every
 invocation reads it, even `--version`, unless `LATCHKEY_ENCRYPTION_KEY`
 or `LATCHKEY_GATEWAY` is set. On a Mac the first read can put up a
 password prompt. So the wizard runs latchkey only after a person picks
-a source that needs it, never on page load. Tests always set a key of
+a source that needs it, never on page load. A protected library's item
+puts up no prompt: the app's Node made it, so the Node is on its list.
+
+The log says what a prompt would otherwise leave no trace of. At launch
+the server writes one line, "where this library's latchkey keeps its
+sign-ins and finds their key", with `store`, `keychain_item`,
+`key_in_environment`, `gateway` and `protected_library`; it never holds
+the key. A wizard lookup that takes five seconds or more writes "latchkey
+was slow to answer about a service", with `service` and `ms`. Both are
+`info` lines, so the log card shows them. A log cannot record a dialog
+itself, so a slow answer may also be a service validating a credential.
+
+Tests always set a key of
 their own (below). The container has no keychain and keeps the key in
 its bind mount instead ([`docker.md`](docker.md)).
 
@@ -210,6 +222,15 @@ running elsewhere. It refuses every command that changes local state:
 `ensure-browser`, `services register`, `auth set` and `auth clear`.
 The wizard therefore offers no sign-in of its own there and says where
 to sign in instead, and no plugin is installed.
+
+Whether a forwarded `auth browser` works is up to the gateway, so
+nothing datalib says may assume either way. What is printed at run time
+asks: a step's hint and a provider's error
+(`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`.
+What is written down once for everyone says both: a source's help page
+and `getting_your_data.md` give the local commands and what to do
+instead with that variable set, and a stanza's comment, which ends up in
+someone's config with no room for that, names no command at all.
 
 ## The browser
 

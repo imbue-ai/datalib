@@ -262,9 +262,11 @@ fn expand_search(
         if let Some(key) = &s.key {
             let key = key.clone().unwrap_or_else(|| c.name.to_string());
             for word in std::iter::once(&key).chain(&s.aliases) {
-                // `before:`, `after:` and `is:` are the search's own; `qmd:`
-                // routes free text on a qmd table.
-                if ["before", "after", "is", "qmd", "qmd_vsearch"].contains(&word.as_str())
+                // `before:`, `after:` and `is:` are the search's own;
+                // `semantic:` and `qmd:` say how free text is searched on a
+                // qmd table.
+                if ["before", "after", "is", "semantic", "qmd", "qmd_vsearch"]
+                    .contains(&word.as_str())
                     || spelled.contains(word)
                 {
                     return Err(syn::Error::new(

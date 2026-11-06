@@ -9,7 +9,9 @@ use datalib_etl::processor::PlanContext;
 use datalib_etl_google_drive::ingest::{db_path_for, RawDb};
 use datalib_etl_google_drive_config::GoogleDriveRenderConfig;
 use datalib_etl_render::inputs::{Bucket, Inputs};
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 
 use crate::render::{render_doc, DocInput, RENDER_VERSION};
 use crate::{ids, store};
@@ -107,6 +109,11 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
             inputs: inputs.declared(),
         });
     }
+    let not_docs: Vec<_> = listing
+        .not_docs_row(ctx.name, RENDER_VERSION)
+        .into_iter()
+        .collect();
+    ctx.report_entity_problems(&ReadScope::Whole(vec![crate::store::NOT_DOCS]), &not_docs)?;
     // A file that is not a Doc, or a Doc with no capture, renders nothing
     // and is known to: whatever document it had goes.
     let no_capture = listing

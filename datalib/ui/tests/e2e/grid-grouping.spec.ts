@@ -42,6 +42,12 @@ test("every group is there with its true count before its rows are read", async 
   await page.route(/\/search\?.*within=/, () => {});
   await groupBy(page, ["kind"]);
 
+  // Until the server's groups land, the grid groups the rows it already
+  // holds, and on this small fixture those counts are right too.
+  const held = () =>
+    page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().length);
+  await expect.poll(held, { message: "the counts came from rows the grid had read" }).toBe(0);
+
   const count = new Map(byKind.map((g) => [g.values[0] ?? "—", g.count]));
   await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(1);
   for (const t of await titles(page)) {
@@ -49,10 +55,6 @@ test("every group is there with its true count before its rows are read", async 
     const [value, n] = t as [string, number];
     expect(n, `the group ${value}`).toBe(count.get(value));
   }
-  const held = await page.evaluate(
-    () => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().length,
-  );
-  expect(held, "the counts came from rows the grid had read").toBe(0);
 });
 
 /// Opening a group reads its rows, and only its: the rows under it all

@@ -231,6 +231,12 @@ on stealing from you.
   program it runs inherits that: a web response on its way in, a decrypted
   database, a browser's sign-in state. The server empties the folder when it
   starts, since macOS only clears its own temp dir.
+- **Its pages stay out of the web view's disk cache.** That cache is under
+  `~/Library/Caches`, outside the folder, where any program running as you
+  can open it, so the server of a protected library answers everything but
+  the app's own code (`/assets/`) `Cache-Control: no-store`. The shell empties
+  the cache at launch for anyone with a protected folder, for what an earlier
+  build stored; it is only a cache, so an ordinary library loses nothing.
 - **What opens the library's servers stays in the folder too.** The API
   token and the applets' secret are each in a file in `system/`, and in
   no process's environment or arguments, where `ps eww` would show them
@@ -286,10 +292,14 @@ on stealing from you.
   --version` in `build-signed-app.sh`): macOS kills a program whose
   signature cannot back its entitlements, before any window.
 
-What the first release with it should be checked for, on a Mac
-(#1525): the app makes and opens a protected library with no prompt;
-syncs and sign-ins work in it, with no keychain prompt, and the item
-`Datalib Latchkey - <folder name>` appears in Keychain Access; from
+Checked on a Mac with 0.51.0 (macOS 26.7.2): in a new protected library,
+signing in to GitHub and starting its sync put up no keychain prompt,
+and the login keychain then held `Datalib Latchkey - <folder name>`. To
+check another Mac, read the library's log: a line at launch names the
+store and the item, and a slow lookup says so (`docs/dev/latchkey.md`).
+
+What is still to be checked, on a Mac
+(#1525): the app makes and opens a protected library with no prompt; from
 Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in

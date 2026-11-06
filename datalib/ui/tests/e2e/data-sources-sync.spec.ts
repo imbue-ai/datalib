@@ -22,6 +22,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { rmSync, writeFileSync } from "node:fs";
 import {
+  fillConfigEditor,
   expandGroup,
   groupRow,
   LAST_UPDATE_AT,
@@ -107,7 +108,7 @@ async function openManager(page: Page) {
 
 async function writeConfig(page: Page, text: string) {
   await openManager(page);
-  await page.locator(".m2-editor").fill(text);
+  await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 

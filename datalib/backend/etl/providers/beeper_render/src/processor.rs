@@ -69,6 +69,16 @@ impl SourceRender for BeeperRender {
             ctx.page_size.bytes,
         )
         .context("beeper render_all")?;
+        ctx.report_entity_problems(
+            &datalib_etl_render::processor::ReadScope::Whole(vec![
+                crate::render::parse::UNLISTED_BRIDGES,
+            ]),
+            &crate::render::parse::unlisted_chat_rows(
+                &parsed.unlisted_chats,
+                ctx.name,
+                self.render_version(),
+            ),
+        )?;
         for u in &summary.unrendered {
             ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
         }

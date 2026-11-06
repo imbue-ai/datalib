@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """The qmd model pins exist twice; make them agree.
 
 `third-party/qmd_models/BUILD.bazel` fetches the build's copies of the

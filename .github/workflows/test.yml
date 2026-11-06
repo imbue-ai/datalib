@@ -41,9 +41,9 @@ on:
         description: >
           Tag of ghcr.io/imbue-ai/datalib_devcontainer to run in, e.g. a
           `sha-<commit>` that `devcontainer.yml` just built, to try an
-          image before it becomes `latest`.
+          image before CI is pinned to it. Empty: the pinned image.
         type: string
-        default: latest
+        default: ""
       remote_execution:
         description: >
           Run the test job on BuildBuddy remote execution instead of on the
@@ -240,12 +240,12 @@ jobs:
       run:
         shell: bash
 
-    # `:latest` is moved by `devcontainer.yml` only after the new image
-    # has analysed the tree from its baked output base without fetching
-    # anything, so a broken image cannot become the one every PR pulls.
+    # By digest, because a push to `main` runs here holding the write key and
+    # a workflow on any branch can probably move an image tag. pin_release.py
+    # moves all of these, and the PR that does it is what tries the new image.
     # A dispatch can name a `sha-<commit>` tag to try one first.
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -307,7 +307,7 @@ jobs:
           # RUNNER's git config, not the container's — so `git ls-files`
           # inside lint_repo.py exits 128. Mark it safe here too.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 scripts/lint_repo.py
+          bazel run //:lint_repo
 
       # This step is the merge gate: a non-zero `bazel test` exit must
       # fail the job. It previously carried `continue-on-error: true` to
@@ -356,7 +356,8 @@ jobs:
           set -euo pipefail
           bazel aquery -c opt --config=release --config=ci --nostamp ${PR_TESTS} \
             --output=jsonproto 'mnemonic("Rustc", deps(//...))' > aquery.json
-          python3 tools/check_tool_crates.py aquery.json
+          bazel run -c opt --config=release --config=ci --nostamp //tools:check_tool_crates -- \
+            "$PWD/aquery.json"
 
       # The fixture pipeline's full output, when the run is red. The test
       # log keeps each pipeline run's last 40 lines of stderr, to stay
@@ -443,7 +444,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -648,7 +649,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -718,7 +719,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

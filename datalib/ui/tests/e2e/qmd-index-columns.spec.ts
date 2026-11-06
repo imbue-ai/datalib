@@ -4,7 +4,7 @@ import {
   EVERY_ROW,
   SEARCH_ROWS,
   type GridApi,
-  typeInto,
+  runSearch,
 } from "./grid-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
@@ -81,7 +81,6 @@ test("the columns are off by default and render check marks once shown", async (
 
   // …but the summary line is on screen regardless, which is how a user
   // discovers the columns exist at all.
-  await expect(page.locator(".qmd-summary")).toContainText("documents searchable");
 
   // Turn them on the way the column picker does.
   await page.evaluate(() =>
@@ -154,7 +153,7 @@ test("rows scrolled to later get their check marks too", async ({ page }) => {
 // The line under the grid in each of the three states a root's qmd index
 // can be in. The fixture ships the third; the other two are its real
 // answers with the index state rewritten.
-test.describe("the search coverage line", () => {
+test.describe("a search with no index", () => {
   async function rewriteQmdState(
     page: Page,
     rewrite: (state: {
@@ -174,7 +173,7 @@ test.describe("the search coverage line", () => {
   // throws outside any test and takes the worker down with it.
   test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
-  test("with no index, says to sync, and free text says so without an error", async ({ page }) => {
+  test("with no index, free text says so without an error", async ({ page }) => {
     await rewriteQmdState(page, (state) => {
       state.index_present = false;
       state.summary = { documents: 0, embedded: 0 };
@@ -199,11 +198,7 @@ test.describe("the search coverage line", () => {
     // Every row: this test's free text is anything in the search bar.
     await page.goto(EVERY_ROW);
     await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
-    await expect(page.locator(".qmd-summary")).toHaveText(
-      "· search index not built yet — sync to build it",
-    );
-
-    await typeInto(page.getByTestId("search-input"), "enterprise");
+    await runSearch(page, "enterprise");
     // The rewritten answer goes through the browser's request
     // interception, which WebKit has taken close to five seconds to
     // deliver on a loaded runner; the rows above get ten.
@@ -213,28 +208,5 @@ test.describe("the search coverage line", () => {
     );
     await expect(page.locator(".qmd-error")).toHaveCount(0);
     await expect(page.getByText("no matches.")).toHaveCount(0);
-  });
-
-  test("with keyword search only, counts each index apart", async ({ page }) => {
-    let documents = 0;
-    await rewriteQmdState(page, (state) => {
-      documents = state.summary.documents;
-      state.summary.embedded = 0;
-    });
-    await page.goto(GRID);
-    await expect(page.locator(".qmd-summary")).toHaveText(
-      /^\s*· [\d,]+ documents searchable · 0 with semantic search$/,
-    );
-    expect(documents, "the fixture's keyword index holds documents").toBeGreaterThan(0);
-    await expect(page.locator(".qmd-summary")).toHaveText(
-      `· ${documents.toLocaleString("en-US")} documents searchable · 0 with semantic search`,
-    );
-  });
-
-  test("with both, counts every document in each", async ({ page }) => {
-    await page.goto(GRID);
-    await expect(page.locator(".qmd-summary")).toHaveText(
-      /^\s*· ([\d,]+) documents searchable · \1 with semantic search$/,
-    );
   });
 });

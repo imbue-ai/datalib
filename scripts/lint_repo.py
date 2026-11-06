@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Repo-hygiene lints that cannot run as Bazel tests.
 
 These checks need to look at the repo as a whole — every tracked file,
@@ -41,9 +41,10 @@ instead from `bazel run //:precommit` and as a plain step in
      BUILD.bazel, so the list cannot keep a crate nothing links.
 
  21. A build cannot reach a write token or the signing key: every
-     `actions/checkout` says what it does with the token, and each write
+     `actions/checkout` says what it does with the token, each write
      grant in release.yml sits on the one job allowed it, none of which
-     runs a build.
+     runs a build, and what a build made reaches those jobs only outside
+     the checkout, unpacked by the script that checks it.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -249,6 +250,7 @@ def _scan(root: Path) -> set[str]:
 # all three; this check is what makes forgetting one an error.
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
+    "datalib/reader",
     "scripts",
     "tests/fixtures",
     "tools",
@@ -320,7 +322,7 @@ def _repo_root() -> Path:
     `git ls-files` would find nothing. Bazel sets
     `BUILD_WORKSPACE_DIRECTORY` to the real workspace for exactly this
     case; prefer it, and fall back to the `__file__` walk so a direct
-    `python3 scripts/lint_repo.py` still works.
+    `uv run python scripts/lint_repo.py` still works.
     """
     if ws := os.environ.get("BUILD_WORKSPACE_DIRECTORY"):
         return Path(ws)
@@ -391,15 +393,14 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 # so a cache would decide what ships (docs/dev/security_posture.md).
 _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
-    "create-release": {"contents"},
     "publish-release": {"contents"},
-    "publish-runtime": {"contents"},
-    "publish-tarballs": {"contents"},
-    "publish-macos-app": {"contents"},
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
     "docker-publish": {"packages"},
 }
+# Publishes on a tag, so what holds for a release holds for it.
+_READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
+_READER_WRITE_GRANTS = {"publish": {"id-token"}}
 _CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
 _PERSIST = re.compile(r"^\s*persist-credentials:\s*(true|false)\b")
 _JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
@@ -413,6 +414,10 @@ _CACHE_USE = re.compile(
     r"|--cache-from|--cache-to|type=gha",
     re.IGNORECASE,
 )
+_DOWNLOAD_ARTIFACT = re.compile(r"^(\s*)- uses: actions/download-artifact@")
+_DOWNLOAD_PATH = re.compile(r"^\s*path:\s*\$\{\{\s*runner\.temp\s*\}\}/")
+_UNPACKS_WITH_TAR = re.compile(r"\btar\b.*(\s-?[a-zA-Z]*x[a-zA-Z]*\b|--extract)")
+_CHECKED_UNPACK = "scripts/release/unpack_compiled_app.py"
 _MIRRORED_IMAGE = re.compile(r"\bimage[:=]\s*[\"']?(mirror\.gcr\.io/[^\s\"']+)")
 _ACTION_CACHE_INPUTS = {
     "setup-bazel": [
@@ -423,6 +428,7 @@ _ACTION_CACHE_INPUTS = {
     ],
     "setup-qemu-action": ["cache-image"],
     "setup-buildx-action": ["cache-binary"],
+    "setup-uv": ["enable-cache"],
 }
 
 
@@ -487,15 +493,67 @@ def workflow_write_grants(
     return grants, bodies
 
 
-def release_grant_problems(text: str) -> list[str]:
-    grants, bodies = workflow_write_grants(text)
+def artifact_download_problems(text: str) -> list[str]:
+    """An artifact lands on top of the checkout unless it is sent somewhere else.
+
+    A download replaces whatever is at the same path, and a build's scripts can
+    reach the token that uploads artifacts, so one could replace the script a
+    later step runs.
+    """
+    lines = text.splitlines()
     problems: list[str] = []
+    for index, line in enumerate(lines):
+        download = _DOWNLOAD_ARTIFACT.match(line)
+        if not download:
+            continue
+        step: list[str] = []
+        for following in lines[index + 1 :]:
+            indent = len(following) - len(following.lstrip())
+            if following.strip() and indent <= len(download.group(1)):
+                break
+            step.append(following)
+        if not any(_DOWNLOAD_PATH.match(entry) for entry in step):
+            problems.append(
+                f"line {index + 1}: a download-artifact whose `path:` is not under runner.temp"
+            )
+    return problems
+
+
+def signing_unpack_problems(text: str) -> list[str]:
+    """The signing job runs scripts from its checkout, so tar never unpacks a build's archive there."""
+    _, bodies = workflow_write_grants(text)
+    body = bodies.get("macos-app-sign", [])
+    problems = [
+        f"job macos-app-sign unpacks with tar: {line.strip()}"
+        for line in body
+        if _UNPACKS_WITH_TAR.search(line)
+    ]
+    if not any(_CHECKED_UNPACK in line for line in body):
+        problems.append(f"job macos-app-sign must unpack through {_CHECKED_UNPACK}")
+    return problems
+
+
+def release_grant_problems(text: str) -> list[str]:
+    return signing_unpack_problems(text) + publishing_problems(
+        text, _RELEASE_WRITE_GRANTS
+    )
+
+
+def reader_grant_problems(text: str) -> list[str]:
+    return publishing_problems(text, _READER_WRITE_GRANTS)
+
+
+def publishing_problems(text: str, write_grants: dict[str, set[str]]) -> list[str]:
+    """A workflow that publishes: each write grant on the job meant to hold it, no
+    build in such a job, and no cache anywhere."""
+    grants, bodies = workflow_write_grants(text)
+    problems: list[str] = artifact_download_problems(text)
     for job, granted in grants.items():
-        allowed = _RELEASE_WRITE_GRANTS.get(job, set()) if job else set()
+        allowed = write_grants.get(job, set()) if job else set()
         for permission in sorted(granted - allowed):
             where = f"job {job}" if job else "the workflow's default"
             problems.append(f"{where} grants {permission}: write")
-    for job, allowed in _RELEASE_WRITE_GRANTS.items():
+    for job, allowed in write_grants.items():
         for permission in sorted(allowed - grants.get(job, set())):
             problems.append(f"job {job} needs {permission}: write to do its work")
         for line in bodies.get(job, []):
@@ -567,6 +625,10 @@ def _check_workflow_tokens(root: Path) -> int:
     release = ".github/workflows/release.yml"
     problems += [
         f"{release}: {p}" for p in release_grant_problems((root / release).read_text())
+    ]
+    problems += [
+        f"{_READER_WORKFLOW}: {p}"
+        for p in reader_grant_problems((root / _READER_WORKFLOW).read_text())
     ]
     if not problems:
         print(

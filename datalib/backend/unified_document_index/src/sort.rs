@@ -59,18 +59,25 @@ impl<C: Column> Sort<C> {
 
 /// The `ORDER BY` an order means, with the primary key breaking the last
 /// ties so the order is total, or `None` for none, or for qmd's rank,
-/// which no column holds.
+/// which no column holds. A row with no value comes last whichever way
+/// the column runs, so "oldest first" opens on the oldest and not on the
+/// undated. `NOCASE` only compares text: numbers and stamps sort as they
+/// did. It and the blanks term cost a whole library's sort about twice
+/// what an index gives, about a second at a million rows, and the list
+/// is kept per commit.
 pub fn order_by<C: Column>(order: &[Sort<C>]) -> Option<String> {
     let first = order.first()?;
     let keys: Vec<String> = order
         .iter()
         .map(|s| match s.by {
             SortBy::Rank => None,
-            SortBy::Column(c) => Some(format!(
-                "{} {}",
-                <C::Table as SearchTable>::sorts_by(c).as_str(),
-                s.direction()
-            )),
+            SortBy::Column(c) => {
+                let column = <C::Table as SearchTable>::sorts_by(c).as_str();
+                Some(format!(
+                    "NULLIF({column}, '') IS NULL, {column} COLLATE NOCASE {}",
+                    s.direction()
+                ))
+            }
         })
         .collect::<Option<_>>()?;
     Some(format!(
@@ -146,7 +153,11 @@ mod tests {
         let order = grid_order("author:desc,created_at").unwrap();
         assert_eq!(
             order_by(&order).as_deref(),
-            Some("author DESC, created_at_utc ASC, uuid DESC")
+            Some(
+                "NULLIF(author, '') IS NULL, author COLLATE NOCASE DESC, \
+                 NULLIF(created_at_utc, '') IS NULL, created_at_utc COLLATE NOCASE ASC, \
+                 uuid DESC"
+            )
         );
         assert_eq!(order_by::<GridRowColumn>(&[]), None);
         assert_eq!(order_by(&grid_order("score").unwrap()), None);

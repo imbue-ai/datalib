@@ -244,8 +244,18 @@ pub fn by_path(path: &str) -> Option<&'static Doc> {
 pub fn page(doc: &Doc, git_ref: &str) -> String {
     match doc.kind {
         Kind::Config => doc.text.to_string(),
-        Kind::Guide | Kind::Reference => print_links(doc.text, doc.path, git_ref, true),
+        Kind::Guide | Kind::Reference => print_links(doc.text, doc.path, git_ref, Reader::WholeDoc),
     }
+}
+
+/// How much of a doc the reader has, which decides how a link inside it
+/// can point: a reader never gets sent to the page already in front of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader<'a> {
+    /// All of the doc being printed.
+    WholeDoc,
+    /// One source type's sections of getting_your_data.md and no more.
+    SourcePage(&'a str),
 }
 
 /// Where a link in a doc leads, once resolved against the doc's path.
@@ -335,21 +345,21 @@ pub fn section_type(heading: &str) -> Option<&'static str> {
 
 /// Every link in `markdown` printed for a reader with no repo: one to an
 /// embedded doc as the command that prints it, one to anything else in
-/// the repo as its raw file at `git_ref`. `whole` says the reader has all
-/// of the doc at `doc_path`, so an anchor in it can name its heading alone.
-pub fn print_links(markdown: &str, doc_path: &str, git_ref: &str, whole: bool) -> String {
+/// the repo as its raw file at `git_ref`. An anchor to something `reader`
+/// already has names its heading alone.
+pub fn print_links(markdown: &str, doc_path: &str, git_ref: &str, reader: Reader) -> String {
     let mut out = String::with_capacity(markdown.len());
     let mut last = 0;
     for link in links(markdown) {
         out.push_str(&markdown[last..link.range.start]);
-        out.push_str(&print_link(&link, doc_path, git_ref, whole));
+        out.push_str(&print_link(&link, doc_path, git_ref, reader));
         last = link.range.end;
     }
     out.push_str(&markdown[last..]);
     out
 }
 
-fn print_link(link: &Link, doc_path: &str, git_ref: &str, whole: bool) -> String {
+fn print_link(link: &Link, doc_path: &str, git_ref: &str, reader: Reader) -> String {
     let text = link.text;
     let Target::Repo { path, fragment } = resolve(link.target, doc_path) else {
         return format!("[{text}]({})", link.target);
@@ -361,10 +371,13 @@ fn print_link(link: &Link, doc_path: &str, git_ref: &str, whole: bool) -> String
     if let Some(h) = heading {
         if target.path == GETTING_YOUR_DATA {
             if let Some(t) = section_type(h) {
+                if reader == Reader::SourcePage(t) {
+                    return format!("{text} (§ \"{h}\")");
+                }
                 return format!("{text} (`datalib-step help {t}`)");
             }
         }
-        if whole && target.path == doc_path {
+        if reader == Reader::WholeDoc && target.path == doc_path {
             return format!("{text} (§ \"{h}\")");
         }
         return format!("{text} (`datalib-step help {}`, § \"{h}\")", target.topic);

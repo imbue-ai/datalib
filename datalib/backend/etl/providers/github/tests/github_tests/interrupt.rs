@@ -108,12 +108,12 @@ struct Pr {
 /// The account before and after upstream moved: PR 1 was edited and
 /// gained a comment, and PR 3 appeared.
 #[derive(Clone, Copy)]
-enum Edition {
+pub(crate) enum Edition {
     Before,
     After,
 }
 
-fn tape(dir: &Path, edition: Edition) -> PathBuf {
+pub(crate) fn tape(dir: &Path, edition: Edition) -> PathBuf {
     let t = dir.join(match edition {
         Edition::Before => "before",
         Edition::After => "after",
@@ -200,8 +200,37 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
     t
 }
 
+/// The same account with a search that answers one result of two, in
+/// every scope: each scope takes two searches, so a run can be cut off
+/// between them. The second asks again for the oldest result of the first.
+fn capped_tape(dir: &Path) -> PathBuf {
+    let t = tape(dir, Edition::Before);
+    let capped =
+        |items: &[Value]| json!({"total_count": 2, "incomplete_results": false, "items": items});
+    for scope in DEFAULT_SCOPES {
+        serve(
+            &t,
+            &search_url(scope, &Bounds::default()),
+            capped(&[item(1, T2)]),
+        );
+        let below = Bounds {
+            lo: None,
+            hi: Some(T2.to_string()),
+        };
+        serve(
+            &t,
+            &search_url(scope, &below),
+            capped(&[item(1, T2), item(2, T1)]),
+        );
+    }
+    t
+}
+
 struct Github {
     playback: PathBuf,
+    /// The run's pinned clock. A run at the clock of the one before it
+    /// has nothing to search: what that one covered reaches it.
+    now: datalib_time::IsoOffsetTimestamp,
     /// A store an earlier run left, which every run of this rig starts
     /// from in place of an empty one.
     earlier: Option<PathBuf>,
@@ -242,7 +271,7 @@ impl Rig for Github {
                     stop,
                     ..Default::default()
                 },
-                ..FetchOptions::new(db.clone(), crate::tng_now())
+                ..FetchOptions::new(db.clone(), self.now.clone())
             }),
         );
         playback::scope(&self.playback, download).await.map(|_| ())
@@ -276,6 +305,27 @@ async fn a_first_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let rig = Github {
         playback: tape(d.path(), Edition::Before),
+        now: crate::tng_now(),
+        earlier: None,
+    };
+    for how in [How::Kill, How::Stop] {
+        let scratch = d.path().join(format!("cuts-{how:?}"));
+        every_cut_resumes(&rig, how, &scratch, every)
+            .await
+            .unwrap_or_else(|e| panic!("{how:?}: {e:#}"));
+    }
+}
+
+/// A capped search carries on in the run it began in, each search stored
+/// as it lands, so a stop or a kill can land between two searches of one
+/// scope. The next run asks only for what is below what was stored, and
+/// ends where an uninterrupted run does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_capped_search_cut_off_at_any_request_resumes_to_the_same_store() {
+    let d = tempfile::tempdir().unwrap();
+    let rig = Github {
+        playback: capped_tape(d.path()),
+        now: crate::tng_now(),
         earlier: None,
     };
     for how in [How::Kill, How::Stop] {
@@ -295,6 +345,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let first = Github {
         playback: tape(d.path(), Edition::Before),
+        now: crate::tng_now(),
         earlier: None,
     };
     let earlier = d.path().join("earlier");
@@ -305,6 +356,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
 
     let rig = Github {
         playback: tape(d.path(), Edition::After),
+        now: datalib_time::parse_strict("2369-04-16T00:00:00+00:00").unwrap(),
         earlier: Some(earlier),
     };
     for how in [How::Kill, How::Stop] {

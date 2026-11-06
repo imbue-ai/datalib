@@ -269,17 +269,24 @@ async fn open_async(
 /// page's address finds it inside the stored `.eml`
 /// (`datalib_blob_store::part_of` hashes them the same way).
 fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
-    use mail_parser::{MessageParser, PartKind};
-
     for em in &bucket.emails {
         let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
             continue;
         };
-        let Some(msg) =
-            MessageParser::default().parse(eml_blob.bytes.as_deref().unwrap_or_default())
-        else {
-            continue;
-        };
+        let atts = attachments_in(eml_blob.bytes.as_deref().unwrap_or_default());
+        if !atts.is_empty() {
+            bucket.joins.attachments.insert(em.id.clone(), atts);
+        }
+    }
+}
+
+fn attachments_in(eml: &[u8]) -> Vec<datalib_etl_email::ingest::db::LoadedAttachment> {
+    use mail_parser::{MessageParser, PartKind};
+
+    let Some(msg) = MessageParser::default().parse(eml) else {
+        return Vec::new();
+    };
+    {
         // A part with no name is labelled by its place among the
         // message's own parts, the root counted as 0.
         let place: HashMap<_, usize> = msg
@@ -305,13 +312,18 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
                 continue;
             }
             let bytes: Vec<u8> = match part.kind() {
-                PartKind::Binary | PartKind::InlineBinary => part.decoded().into_owned(),
+                PartKind::Binary | PartKind::InlineBinary | PartKind::Message(_) => {
+                    part.decoded().into_owned()
+                }
                 PartKind::Text | PartKind::Html => {
                     part.text().unwrap_or_default().into_owned().into_bytes()
                 }
                 _ => continue,
             };
-            let name = part.attachment_name().map(str::to_string);
+            let name = part
+                .attachment_name()
+                .map(str::to_string)
+                .or_else(|| part.is_message().then(|| "attached-email.eml".to_string()));
             let cid = part.content_id().map(str::to_string);
             let disposition = part.content_disposition().map(|cd| cd.ctype().to_string());
             let content_type = part.content_type().map(|ct| match ct.subtype() {
@@ -328,9 +340,7 @@ fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
                 cid,
             });
         }
-        if !atts.is_empty() {
-            bucket.joins.attachments.insert(em.id.clone(), atts);
-        }
+        atts
     }
 }
 
@@ -672,6 +682,26 @@ mod tests {
     /// A full render of a mailbox with more threads than SQLite binds in
     /// one statement (#1156): each thread, its email and the email's
     /// mailbox and keyword all come back.
+    /// An email attached to an email, a forward or a bounce, was skipped:
+    /// the page showed the outer one with no sign it held another.
+    #[test]
+    fn an_email_attached_to_an_email_is_an_attachment() {
+        let inner = "From: Data <data@enterprise.ufp>\r\n\
+                     Subject: Warp core report\r\n\r\nAll nominal.\r\n";
+        let eml = format!(
+            "From: Picard <picard@enterprise.ufp>\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+             --b\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n\
+             --b\r\nContent-Type: message/rfc822\r\n\r\n{inner}\r\n--b--\r\n"
+        );
+        let atts = attachments_in(eml.as_bytes());
+        assert_eq!(atts.len(), 1, "{atts:?}");
+        assert_eq!(atts[0].name.as_deref(), Some("attached-email.eml"));
+        assert_eq!(atts[0].content_type.as_deref(), Some("message/rfc822"));
+        assert!(atts[0].size.unwrap() > 0);
+    }
+
     #[tokio::test]
     async fn loads_more_threads_than_sqlite_binds_in_one_statement() {
         let pool = SqlitePoolOptions::new()

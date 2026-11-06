@@ -40,7 +40,8 @@ use super::parse::{DocBucket, ParsedBeeper};
 /// v7: an avatar is linked where the blob store holds it.
 /// v8: the account's own person is marked as the account, so search
 ///     reads their handles as `me`.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: chats on an account no bridge here reads are on record.
+pub const RENDER_VERSION: u32 = 9;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {

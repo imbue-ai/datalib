@@ -41,6 +41,9 @@ pub trait IndexRepo: Send + Sync {
     /// The commit the index is at now, or `None` when it has none yet.
     async fn head(&self) -> Result<Option<String>, RepoError>;
 
+    /// Every source holding a row.
+    async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
+
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
     /// or newest first with none. Its free text is qmd's; nothing here
@@ -193,6 +196,15 @@ pub trait IndexRepo: Send + Sync {
     ) -> Result<Vec<(String, String, bool)>, RepoError>;
 
     /// Which of `markdown_uuids` hold a row `q`'s structured terms match.
+    /// The documents holding a row `q` keeps that have a page qmd could
+    /// index, each with the source it is filed under. A row with no page,
+    /// a photo's, has nothing to embed, and a page filed for the grid alone
+    /// (`layout::UNINDEXED_DIR`) is left out on purpose.
+    async fn documents_with_pages(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<Vec<(String, String)>, RepoError>;
+
     async fn documents_kept(
         &self,
         q: &ParsedQuery,

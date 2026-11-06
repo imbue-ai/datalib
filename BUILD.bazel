@@ -3,16 +3,20 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
     ".bazelrc",  # read by //tools:qmd_model_cache_path_test
+    "LICENSE",  # in the reader wheel, read by //datalib/reader:reader_wheel_test
     ".github/workflows/release.yml",  # its rustc pin, read by //tools:version_pins_test
     "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
     # Run by //tools:install_test.
     "scripts/install.sh",
+    "scripts/release/pin_release.py",
+    "scripts/release/publish_release.py",
     # Run by //tools:stage_runtime_test, //tools:stage_tarball_test and
     # //tools:check_binaries_test: release.yml's steps, as scripts.
     "scripts/latchkey-wrapper.sh",
     "scripts/release/check_binaries.sh",
+    "scripts/release/make_reader_wheel.py",
     "scripts/release/stage_runtime_asset.sh",
     "scripts/release/stage_tarball.sh",
     "scripts/stage_runtime.sh",
@@ -41,6 +45,7 @@ filegroup(
     name = "python_sources",
     srcs = glob(["scripts/**/*.py"]) + [
         "//datalib/backend/doltlite_facts:python_sources",
+        "//datalib/reader:python_sources",
         "//tests/fixtures:python_sources",
         "//tools:python_sources",
     ],
@@ -108,6 +113,59 @@ py_test(
     ],
     imports = ["scripts"],
     main = "scripts/lint_repo_test.py",
+)
+
+# The order check `search_eval.py first-pages` trusts.
+py_test(
+    name = "search_eval_test",
+    size = "small",
+    srcs = [
+        "scripts/search_eval.py",
+        "scripts/search_eval_test.py",
+    ],
+    imports = ["scripts"],
+    main = "scripts/search_eval_test.py",
+)
+
+# release.yml's steps that are Python, and the one the release procedure runs.
+py_test(
+    name = "unpack_compiled_app_test",
+    size = "small",
+    srcs = [
+        "scripts/release/unpack_compiled_app.py",
+        "scripts/release/unpack_compiled_app_test.py",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/unpack_compiled_app_test.py",
+)
+
+py_test(
+    name = "publish_release_test",
+    size = "small",
+    srcs = [
+        "scripts/release/publish_release.py",
+        "scripts/release/publish_release_test.py",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/publish_release_test.py",
+)
+
+py_test(
+    name = "pin_release_test",
+    size = "small",
+    srcs = [
+        "scripts/release/pin_release.py",
+        "scripts/release/pin_release_test.py",
+        "scripts/release/publish_release.py",
+    ],
+    data = [
+        ".github/workflows/cargo-update.yml",
+        ".github/workflows/test.yml",
+        "scripts/install.sh",
+        "//docs/user:docker.md",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/pin_release_test.py",
 )
 
 sh_binary(

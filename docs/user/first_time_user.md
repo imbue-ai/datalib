@@ -70,8 +70,8 @@ One command installs the binaries from the GitHub Releases page — no
 curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 ```
 
-This downloads the latest release tarball, verifies its checksum,
-unpacks it into `~/.local/lib/datalib` and links the tools into
+This downloads the release the script names, verifies its hash, unpacks
+it into `~/.local/lib/datalib` and links the tools into
 `~/.local/bin`. The ones you will meet in this guide:
 
 - `datalib-http` — the app: a local web server with the UI built in.
@@ -99,8 +99,10 @@ Three optional knobs:
 - `DATALIB_INSTALL_DIR` — link the tools somewhere else, e.g.
   `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`
   (`DATALIB_LIB_DIR` moves the unpacked tarball).
-- `DATALIB_VERSION` — pin a release tag instead of `latest`, e.g.
-  `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`.
+- `DATALIB_VERSION` — install another release tag, e.g.
+  `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`. By default the
+  script installs the release it names, which moves to each new release
+  shortly after it publishes.
 - `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
   distros like Alpine get the fully-static musl build); set
   `DATALIB_LIBC=musl` to force the static build on a glibc distro —
@@ -201,7 +203,9 @@ What that means for datalib today:
   app with Full Disk Access: a Terminal holding it got in with no
   prompt. It starts with no
   sign-ins, in a latchkey store of its own inside the library, whose key
-  is a keychain item named `Datalib Latchkey - <folder name>`. You sign
+  is a keychain item named `Datalib Latchkey - <folder name>`. macOS
+  does not ask for your password to use that item, because Datalib made
+  it. You sign
   in to its sources in Datalib, and `latchkey curl` run anywhere else
   cannot find those sign-ins. What you already signed in to in
   `~/.latchkey` stays there, as reachable as it was. **Only the folder

@@ -276,22 +276,13 @@ export const SEARCH_SETTLE = 90_000;
 
 // Type a query and wait until the grid has actually painted *its*
 // results.
-/// Open the answer tab `tab` of the free-text search on screen, and wait
-/// until the grid shows its rows.
-export async function pickAnswerTab(page: Page, tab: "best" | "fields" | "words" | "meaning") {
-  await page.locator(`.answer-tabs [data-tab="${tab}"]`).click();
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", tab, {
-    timeout: SEARCH_SETTLE,
-  });
-}
-
 export async function searchAndSettle(
   page: Page,
   q: string,
   opts: { grid?: Locator; timeout?: number } = {},
 ) {
   const grid = opts.grid ?? page.locator(".grid-wrap");
-  await typeInto(page.getByTestId("search-input"), q);
+  await runSearch(page, q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
@@ -331,6 +322,17 @@ export async function savedConfig(request: APIRequestContext): Promise<string> {
   const { text } = (await (await request.get("/api/config")).json()) as { text: string };
   expect(text, "the server should hold a config to put back").toContain("[[applets]]");
   return text;
+}
+
+/// Put `text` in the config editor. A read landing just as `fill` has
+/// selected the old text drops the selection, and the fill then goes after
+/// that text. Once the editor holds an edit, reads leave it alone.
+export async function fillConfigEditor(page: Page, text: string) {
+  const editor = page.locator(".m2-editor");
+  await expect(async () => {
+    await editor.fill(text);
+    await expect(editor).toHaveValue(text, { timeout: 1_000 });
+  }).toPass();
 }
 
 /// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
@@ -748,6 +750,23 @@ export async function inDocFrame(page: Page, selector: string, timeout = 10_000)
   return hit!;
 }
 
+/// Serve the live stream as one frame per connection, reconnecting fast:
+/// heartbeats until `commit()`, an index commit after it.
+export async function stubStream(page: Page): Promise<() => void> {
+  let committed = false;
+  await page.route("**/api/sync/stream", (route) => {
+    const frame = committed ? { kind: "index_changed" } : { kind: "heartbeat" };
+    return route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+      body: `retry: 200\nevent: root\ndata: ${JSON.stringify(frame)}\n\n`,
+    });
+  });
+  return () => {
+    committed = true;
+  };
+}
+
 /// Puts `text` in a search field over what it held, as a person typing
 /// would. Playwright's `fill` leaves the field's CodeMirror editor as it
 /// was in WebKit, with no error, so a spec never fills one.
@@ -756,4 +775,18 @@ export async function typeInto(field: Locator, text: string) {
   await field.press("ControlOrMeta+a");
   if (text === "") await field.press("Backspace");
   else await field.page().keyboard.insertText(text);
+}
+
+/// Runs `text` from the toolbar's search box, which asks only on Enter.
+export async function runSearch(page: Page, text: string) {
+  const field = page.getByTestId("search-input");
+  // On a page that opens on a search card, wait until the box speaks for it:
+  // until then, Enter has no search to change and opens a new tab.
+  if (decodeURIComponent(page.url()).includes("searchView(")) {
+    await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
+      timeout: SEARCH_SETTLE,
+    });
+  }
+  await typeInto(field, text);
+  await field.press("Enter");
 }
