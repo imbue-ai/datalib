@@ -55,7 +55,19 @@ latchkey keeps its encryption key in the system keychain, and every
 invocation reads it, even `--version`, unless `LATCHKEY_ENCRYPTION_KEY`
 or `LATCHKEY_GATEWAY` is set. On a Mac the first read can put up a
 password prompt. So the wizard runs latchkey only after a person picks
-a source that needs it, never on page load. Tests always set a key of
+a source that needs it, never on page load. A protected library's item
+puts up no prompt: the app's Node made it, so the Node is on its list.
+
+The log says what a prompt would otherwise leave no trace of. At launch
+the server writes one line, "where this library's latchkey keeps its
+sign-ins and finds their key", with `store`, `keychain_item`,
+`key_in_environment`, `gateway` and `protected_library`; it never holds
+the key. A wizard lookup that takes five seconds or more writes "latchkey
+was slow to answer about a service", with `service` and `ms`. Both are
+`info` lines, so the log card shows them. A log cannot record a dialog
+itself, so a slow answer may also be a service validating a credential.
+
+Tests always set a key of
 their own (below). The container has no keychain and keeps the key in
 its bind mount instead ([`docker.md`](docker.md)).
 
