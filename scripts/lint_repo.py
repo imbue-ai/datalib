@@ -41,9 +41,10 @@ instead from `bazel run //:precommit` and as a plain step in
      BUILD.bazel, so the list cannot keep a crate nothing links.
 
  21. A build cannot reach a write token or the signing key: every
-     `actions/checkout` says what it does with the token, and each write
+     `actions/checkout` says what it does with the token, each write
      grant in release.yml sits on the one job allowed it, none of which
-     runs a build.
+     runs a build, and what a build made reaches those jobs only outside
+     the checkout, unpacked by the script that checks it.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -391,11 +392,7 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
 # so a cache would decide what ships (docs/dev/security_posture.md).
 _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
-    "create-release": {"contents"},
     "publish-release": {"contents"},
-    "publish-runtime": {"contents"},
-    "publish-tarballs": {"contents"},
-    "publish-macos-app": {"contents"},
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
     "docker-publish": {"packages"},
@@ -413,6 +410,10 @@ _CACHE_USE = re.compile(
     r"|--cache-from|--cache-to|type=gha",
     re.IGNORECASE,
 )
+_DOWNLOAD_ARTIFACT = re.compile(r"^(\s*)- uses: actions/download-artifact@")
+_DOWNLOAD_PATH = re.compile(r"^\s*path:\s*\$\{\{\s*runner\.temp\s*\}\}/")
+_UNPACKS_WITH_TAR = re.compile(r"\btar\b.*(\s-?[a-zA-Z]*x[a-zA-Z]*\b|--extract)")
+_CHECKED_UNPACK = "scripts/release/unpack_compiled_app.py"
 _MIRRORED_IMAGE = re.compile(r"\bimage[:=]\s*[\"']?(mirror\.gcr\.io/[^\s\"']+)")
 _ACTION_CACHE_INPUTS = {
     "setup-bazel": [
@@ -487,9 +488,50 @@ def workflow_write_grants(
     return grants, bodies
 
 
+def artifact_download_problems(text: str) -> list[str]:
+    """An artifact lands on top of the checkout unless it is sent somewhere else.
+
+    A download replaces whatever is at the same path, and a build's scripts can
+    reach the token that uploads artifacts, so one could replace the script a
+    later step runs.
+    """
+    lines = text.splitlines()
+    problems: list[str] = []
+    for index, line in enumerate(lines):
+        download = _DOWNLOAD_ARTIFACT.match(line)
+        if not download:
+            continue
+        step: list[str] = []
+        for following in lines[index + 1 :]:
+            indent = len(following) - len(following.lstrip())
+            if following.strip() and indent <= len(download.group(1)):
+                break
+            step.append(following)
+        if not any(_DOWNLOAD_PATH.match(entry) for entry in step):
+            problems.append(
+                f"line {index + 1}: a download-artifact whose `path:` is not under runner.temp"
+            )
+    return problems
+
+
+def signing_unpack_problems(text: str) -> list[str]:
+    """The signing job runs scripts from its checkout, so tar never unpacks a build's archive there."""
+    _, bodies = workflow_write_grants(text)
+    body = bodies.get("macos-app-sign", [])
+    problems = [
+        f"job macos-app-sign unpacks with tar: {line.strip()}"
+        for line in body
+        if _UNPACKS_WITH_TAR.search(line)
+    ]
+    if not any(_CHECKED_UNPACK in line for line in body):
+        problems.append(f"job macos-app-sign must unpack through {_CHECKED_UNPACK}")
+    return problems
+
+
 def release_grant_problems(text: str) -> list[str]:
     grants, bodies = workflow_write_grants(text)
-    problems: list[str] = []
+    problems: list[str] = artifact_download_problems(text)
+    problems += signing_unpack_problems(text)
     for job, granted in grants.items():
         allowed = _RELEASE_WRITE_GRANTS.get(job, set()) if job else set()
         for permission in sorted(granted - allowed):

@@ -101,7 +101,11 @@ sh_test(
     name = "install_test",
     size = "small",
     srcs = ["check_install.sh"],
-    data = ["//:scripts/install.sh"],
+    data = [
+        "//:scripts/install.sh",
+        "//:scripts/release/pin_release.py",
+        "//:scripts/release/publish_release.py",
+    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
