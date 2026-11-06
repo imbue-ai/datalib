@@ -37,7 +37,7 @@ every search would find every document:
 
 | you write | meaning |
 |---|---|
-| nothing | documents at a similarity of at least 0.3 count |
+| nothing | documents at a similarity of at least 0.25 count |
 | `semantic:0.4` | ask for a closer match; from 0 to 1, where 0 keeps every document |
 | `semantic:off` | leave meaning out. Faster from a shell, which then loads no model |
 

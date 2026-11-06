@@ -61,7 +61,7 @@ export function setSource(query: string, id: string | null): string {
 
 /// The similarity a search by meaning needs with no `semantic:` of its own
 /// (`Semantic::DEFAULT` in `datalib_unified_document_index`).
-export const DEFAULT_CUTOFF = 0.3;
+export const DEFAULT_CUTOFF = 0.25;
 const SEMANTIC = /^semantic:/;
 
 /// The cutoff `query` searches by meaning at, or null with `semantic:off`.
