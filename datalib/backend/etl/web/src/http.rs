@@ -609,7 +609,7 @@ pub enum Retryability {
 /// Default response classifier: HTTP 429 and 502–504 are retryable (honoring
 /// `Retry-After`); everything else is accepted. Providers whose rate-limit
 /// signal isn't visible by status code — Slack's HTTP-200
-/// `error:"ratelimited"`, GitHub's `403 + x-ratelimit-remaining:0` — wrap this
+/// `error:"ratelimited"`, GitHub's `403`s — wrap this
 /// and call [`latchkey_curl_classified`].
 pub fn default_retryability(resp: &HttpResponse) -> Retryability {
     match resp.status {

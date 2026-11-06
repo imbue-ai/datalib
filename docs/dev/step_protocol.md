@@ -176,8 +176,8 @@ What that means from your side:
   again.** A producer that declares `streams_output` (below, under
   "checkpoint") lets the steps that read it start on each of its seals
   while it carries on. The downloads datalib ships for Slack, mail,
-  Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin and
-  YoLink all declare it. You are run again after each later seal, and
+  Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
+  GitHub and GitLab all declare it. You are run again after each later seal, and
   once more when the producer ends if it moved since your last run;
   never twice at once. A step that sets `reads = "files"` is not
   started while what it reads is being written.

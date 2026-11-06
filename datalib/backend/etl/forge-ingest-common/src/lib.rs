@@ -9,7 +9,8 @@
 //! named, at the `updated_at` the search gave (`listed_change_requests`).
 //! What each search looked at is a `coverage` span of `updated_at` per
 //! scope, so a widened window or a search cut short is a gap, not a
-//! cursor. What is held is the change-request table's sidecar
+//! cursor. A search the forge cut off carries on below its oldest result
+//! in the same run. What is held is the change-request table's sidecar
 //! `held_version`, written in the one transaction that writes the
 //! record and its children. Owed is the difference, fetched through
 //! `datalib_etl_web::owed` (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
@@ -369,6 +370,13 @@ pub fn covered_hi<'a>(now: &'a str, newest_listed: Option<&'a str>) -> &'a str {
     }
 }
 
+fn stamps(listed: &[Listed]) -> impl Iterator<Item = &str> {
+    listed
+        .iter()
+        .map(|l| l.updated_at.as_str())
+        .filter(|s| !s.is_empty())
+}
+
 /// The span of `updated_at` a search of `gap` looked at whole: nothing
 /// of an incomplete answer, and of a truncated one only down to the
 /// oldest result it gave.
@@ -376,22 +384,66 @@ fn covered(gap: &Span, now: &str, search: &Search, listed: &[Listed]) -> Option<
     if search.incomplete {
         return None;
     }
-    let stamps = listed
-        .iter()
-        .map(|l| l.updated_at.as_str())
-        .filter(|s| !s.is_empty());
-    let newest = stamps.clone().max();
+    let newest = stamps(listed).max();
     let hi = if gap.hi.as_str() >= now {
         covered_hi(now, newest).to_string()
     } else {
         gap.hi.clone()
     };
     let lo = if search.truncated {
-        stamps.min()?.to_string()
+        stamps(listed).min()?.to_string()
     } else {
         gap.lo.clone()
     };
     Some(Span::new(lo, hi))
+}
+
+/// What a search of `gap` leaves to ask.
+#[derive(Debug, PartialEq, Eq)]
+enum Left {
+    /// Nothing, this run: the search answered whole, or was cut off at or
+    /// under the bottom of the gap, or answered incomplete, which the next
+    /// run asks again.
+    Nothing,
+    /// The forge cut the search off above the bottom of the gap, so this
+    /// much of it is still to search. Its top is the oldest result, which
+    /// is asked for again: others may share its stamp.
+    Below(Span),
+    /// The forge cut the search off, and a search below its results would
+    /// get no further: the oldest of them is no older than the top of what
+    /// was asked for, or none of them says when it was updated.
+    Stuck { oldest: Option<String> },
+}
+
+fn left_of(gap: &Span, search: &Search, listed: &[Listed]) -> Left {
+    if search.incomplete || !search.truncated {
+        return Left::Nothing;
+    }
+    match stamps(listed).min() {
+        None => Left::Stuck { oldest: None },
+        Some(oldest) if oldest >= gap.hi.as_str() => Left::Stuck {
+            oldest: Some(oldest.to_string()),
+        },
+        Some(oldest) if oldest <= gap.lo.as_str() => Left::Nothing,
+        Some(oldest) => Left::Below(Span::new(gap.lo.clone(), oldest)),
+    }
+}
+
+/// The row a search that got no further leaves: nothing failed, but a
+/// stretch is not in the mirror, and each run asks again.
+fn stuck_detail(count: usize, oldest: Option<&str>) -> String {
+    match oldest {
+        Some(oldest) => format!(
+            "the search says it has more than the {count} results it answered, and none of them \
+             is older than {oldest}, so searching below them gets no further; what was updated \
+             before that is not listed, and each run asks again"
+        ),
+        None => format!(
+            "the search says it has more than the {count} results it answered, and none of them \
+             says when it was updated, so there is nowhere to carry on from; the rest are not \
+             listed, and each run asks again"
+        ),
+    }
 }
 
 /// Where a gap is searched: open at the bottom when it starts at the
@@ -414,9 +466,118 @@ fn refresh_floor(now: &IsoOffsetTimestamp, days: u32) -> Option<IsoOffsetTimesta
     (at.timestamp() >= 0).then(|| IsoOffsetTimestamp::from(at))
 }
 
+/// How the searches of one gap ended.
+enum GapEnd {
+    /// As far as it can this run; any row is written. On to the next gap.
+    Done,
+    /// A search failed and said so: the scope's other gaps wait for the
+    /// next run.
+    Failed,
+    Stopped,
+    GaveUp(RunProblem),
+}
+
+/// What every search of a run shares.
+struct Searches<'a, F: Forge> {
+    forge: &'a F,
+    client: &'a ForgeClient,
+    me: &'a Value,
+    opts: &'a SyncOptions<'a>,
+    found: &'a RunProblems,
+    now: &'a str,
+}
+
+impl<F: Forge> Searches<'_, F> {
+    /// Search `gap` of `scope`, carrying on below the oldest result each
+    /// time the forge cuts a search off, until the gap is covered, a
+    /// search fails or gets no further, or a stop is requested. The top
+    /// falls with every search, so this ends. Each search's results and
+    /// its span are stored as it lands, so a run stopped here keeps its
+    /// place.
+    async fn walk_gap(&self, scope: &str, mut gap: Span) -> Result<GapEnd> {
+        let key = coverage_scope(scope);
+        let name = format!("search {scope}");
+        loop {
+            if self.opts.stop.requested() {
+                return Ok(GapEnd::Stopped);
+            }
+            let bounds = bounds_of(&gap, self.now);
+            tracing::info!(
+                scope,
+                from = bounds.lo.as_deref().unwrap_or(""),
+                to = bounds.hi.as_deref().unwrap_or(""),
+                "searching {}s",
+                F::ITEM
+            );
+            let search = match self
+                .forge
+                .search(self.client, scope, self.me, &bounds)
+                .await
+            {
+                Ok(search) => search,
+                // After a stop every request fails at once; that is not
+                // something the search did.
+                Err(_) if self.opts.stop.requested() => return Ok(GapEnd::Stopped),
+                Err(e) if is_give_up(&e) => {
+                    return Ok(GapEnd::GaveUp(RunProblem::phase(
+                        "search",
+                        format!(
+                            "the retry loop gave up searching {scope} ({e:#}); \
+                             nothing was fetched, and the next run searches again"
+                        ),
+                    )));
+                }
+                Err(e) => {
+                    let refused = e
+                        .downcast_ref::<ForgeError>()
+                        .is_some_and(ForgeError::refused);
+                    self.found.push(if refused {
+                        RunProblem::forbidden(&name, format!("{e:#}"))
+                    } else {
+                        RunProblem::listing(&name, format!("{e:#}"))
+                    });
+                    return Ok(GapEnd::Failed);
+                }
+            };
+            let listed: Vec<Listed> = search
+                .items
+                .iter()
+                .filter_map(|item| self.forge.listed(item))
+                .collect();
+            let span = covered(&gap, self.now, &search, &listed);
+            store_listing(self.forge, &key, &listed, span, self.opts.sealer).await?;
+            if search.incomplete {
+                self.found.listing(
+                    &name,
+                    format!(
+                        "the forge answered an incomplete set of results, so nothing of this \
+                         search counts as looked at; the next run asks again ({} listed)",
+                        listed.len()
+                    ),
+                );
+            }
+            tracing::info!(scope, count = listed.len(), "search stored");
+            match left_of(&gap, &search, &listed) {
+                Left::Nothing => return Ok(GapEnd::Done),
+                Left::Below(rest) => {
+                    tracing::info!(scope, below = %rest.hi, "the search was cut off; carrying on");
+                    gap = rest;
+                }
+                Left::Stuck { oldest } => {
+                    self.found.push(RunProblem::listing_cut_off(
+                        &name,
+                        stuck_detail(listed.len(), oldest.as_deref()),
+                    ));
+                    return Ok(GapEnd::Done);
+                }
+            }
+        }
+    }
+}
+
 /// Every scope's searches, each gap of what it has not looked at in
-/// turn, newest first. Each search's results and its span land in one
-/// transaction. Returns the give-up that ended the searches, if one did.
+/// turn, newest first. Returns the give-up that ended the searches, if
+/// one did.
 async fn discover<F: Forge>(
     forge: &F,
     client: &ForgeClient,
@@ -436,83 +597,27 @@ async fn discover<F: Forge>(
             .unwrap_or_default()
     };
     let wanted = Span::new(floor, now.clone());
+    let searches = Searches {
+        forge,
+        client,
+        me,
+        opts,
+        found,
+        now: &now,
+    };
     for scope in opts.scopes {
-        if opts.stop.requested() {
-            break;
-        }
-        let key = coverage_scope(scope);
         let held = if opts.full_sync {
             Vec::new()
         } else {
-            coverage::held(pool, &key).await?
+            coverage::held(pool, &coverage_scope(scope)).await?
         };
-        let name = format!("search {scope}");
         for gap in coverage::gaps(&wanted, &held).into_iter().rev() {
-            if opts.stop.requested() {
-                break;
+            match searches.walk_gap(scope, gap).await? {
+                GapEnd::Done => {}
+                GapEnd::Failed => break,
+                GapEnd::Stopped => return Ok(None),
+                GapEnd::GaveUp(problem) => return Ok(Some(problem)),
             }
-            let bounds = bounds_of(&gap, &now);
-            tracing::info!(
-                scope,
-                from = bounds.lo.as_deref().unwrap_or(""),
-                to = bounds.hi.as_deref().unwrap_or(""),
-                "searching {}s",
-                F::ITEM
-            );
-            let search = match forge.search(client, scope, me, &bounds).await {
-                Ok(search) => search,
-                // After a stop every request fails at once; that is not
-                // something the search did.
-                Err(_) if opts.stop.requested() => return Ok(None),
-                Err(e) if is_give_up(&e) => {
-                    return Ok(Some(RunProblem::phase(
-                        "search",
-                        format!(
-                            "the retry loop gave up searching {scope} ({e:#}); \
-                             nothing was fetched, and the next run searches again"
-                        ),
-                    )));
-                }
-                Err(e) => {
-                    let refused = e
-                        .downcast_ref::<ForgeError>()
-                        .is_some_and(ForgeError::refused);
-                    found.push(if refused {
-                        RunProblem::forbidden(&name, format!("{e:#}"))
-                    } else {
-                        RunProblem::listing(&name, format!("{e:#}"))
-                    });
-                    break;
-                }
-            };
-            let listed: Vec<Listed> = search
-                .items
-                .iter()
-                .filter_map(|item| forge.listed(item))
-                .collect();
-            let span = covered(&gap, &now, &search, &listed);
-            store_listing(forge, &key, &listed, span, opts.sealer).await?;
-            if search.incomplete {
-                found.listing(
-                    &name,
-                    format!(
-                        "the forge answered an incomplete set of results, so nothing of this \
-                         search counts as looked at; the next run asks again ({} listed)",
-                        listed.len()
-                    ),
-                );
-            } else if search.truncated {
-                found.listing(
-                    &name,
-                    format!(
-                        "the search has more results than it answers, so what was updated \
-                         before the oldest of the {} it gave was not listed; the next run \
-                         lists it",
-                        listed.len()
-                    ),
-                );
-            }
-            tracing::info!(scope, count = listed.len(), "scope done");
         }
     }
     Ok(None)
@@ -966,6 +1071,75 @@ mod tests {
                 &[listed(3, T3), listed(2, T2)]
             ),
             None
+        );
+    }
+
+    /// Each answer a search can give, and what it leaves of the gap.
+    #[test]
+    fn a_cut_off_search_leaves_what_is_below_its_oldest_result() {
+        let gap = Span::new(T1, NOW);
+        let two = [listed(3, T3), listed(2, T2)];
+        assert_eq!(
+            left_of(&gap, &search(2, false, false), &two),
+            Left::Nothing,
+            "answered whole"
+        );
+        assert_eq!(
+            left_of(&gap, &search(2, true, true), &two),
+            Left::Nothing,
+            "incomplete says nothing of where it stopped; the next run asks again"
+        );
+        assert_eq!(
+            left_of(&gap, &search(2, true, false), &two),
+            Left::Below(Span::new(T1, T2))
+        );
+        assert_eq!(
+            left_of(&Span::new(T2, NOW), &search(2, true, false), &two),
+            Left::Nothing,
+            "it reached the bottom of the gap"
+        );
+        assert_eq!(
+            left_of(
+                &Span::new("", T2),
+                &search(2, true, false),
+                &[listed(2, T2)]
+            ),
+            Left::Stuck {
+                oldest: Some(T2.to_string())
+            },
+            "the oldest is the stamp the search was bounded by: no further down"
+        );
+        assert_eq!(
+            left_of(
+                &Span::new(T2, T2),
+                &search(2, true, false),
+                &[listed(2, T2)]
+            ),
+            Left::Stuck {
+                oldest: Some(T2.to_string())
+            },
+            "a gap of one stamp that is still cut off did not reach its bottom"
+        );
+        assert_eq!(
+            left_of(
+                &gap,
+                &search(2, true, false),
+                &[listed(3, ""), listed(2, "")]
+            ),
+            Left::Stuck { oldest: None }
+        );
+        assert_eq!(
+            left_of(&gap, &search(0, true, false), &[]),
+            Left::Stuck { oldest: None },
+            "says it has more, and answers nothing"
+        );
+        let ahead = "2369-04-15T10:00:00Z";
+        assert_eq!(
+            left_of(&gap, &search(1, true, false), &[listed(4, ahead)]),
+            Left::Stuck {
+                oldest: Some(ahead.to_string())
+            },
+            "every result is above the top: a search below would be open at the top again"
         );
     }
 
