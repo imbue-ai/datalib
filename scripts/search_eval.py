@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Scores the search box against a set of queries whose answers are known.
 
 An eval set names target rows and, for each, queries a person might type to
@@ -367,9 +367,8 @@ def run(args: argparse.Namespace) -> None:
 
 # The field of a row each sortable column shows, and how to read it.
 def as_stamp(value: Any) -> datetime.datetime:
-    # This runs on the host's python3, which may predate `Z` and `datetime.UTC`.
-    stamp = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))  # noqa: FURB162
-    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.timezone.utc)  # noqa: UP017
+    stamp = datetime.datetime.fromisoformat(str(value))
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.UTC)
 
 
 SORT_FIELDS: dict[str, tuple[str, Callable[[Any], Any]]] = {
