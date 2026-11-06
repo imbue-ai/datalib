@@ -93,8 +93,8 @@ whole stamp, so it is asked for again in case others share its stamp),
 until the scope is covered, a search fails, or a stop is asked for. Each
 search is stored as it lands, so a run stopped between two of them
 keeps its place, and the next run searches only what is below. A search
-that carried on leaves no row. One that gets no further, because more
-results share one `updated_at` than one search answers, ends with a
+that carried on leaves no row. One that gets no further, because as
+many results share one `updated_at` as one search answers, ends with a
 `listing:search <scope>` warning saying what is not listed, and each run
 asks again. A search GitHub reports as `incomplete_results` covers
 nothing, so the next run asks again.

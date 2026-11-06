@@ -54,6 +54,11 @@ the results says how many of the documents the search could have found have no
 vectors, and hovering says which sources they are in. From a shell or the API
 it is `query_echo.without_vectors`.
 
+A search covers the sources the document index holds. A source turned off can
+leave it after an upgrade changes how documents are stored, because a turned-off
+source does not re-render, and a warning on its row says so. Turn it on and sync
+it to bring it back; what it has already embedded is kept.
+
 Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's
 own id for a record counts too, where it is a uuid, dashed or not, and so

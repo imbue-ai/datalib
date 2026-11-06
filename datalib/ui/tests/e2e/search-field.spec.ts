@@ -3,10 +3,132 @@
 // over the query it still is (docs/dev/plans/search_autocomplete.md).
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, typeInto } from "./grid-helpers";
+import { cardOf, GRID, SEARCH_SETTLE, tabLabels, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => page.locator(".cm-tooltip-autocomplete");
+const onSearchCard = (page: Page) => page.locator(".command-box");
+const shownQuery = (page: Page) => cardOf(page, "searchView()").locator(".grid-wrap");
+
+/// The toolbar's box is up before the app's first read of the config lands,
+/// and no card mounts until it does. Holding that read keeps the search card
+/// away for as long as a spec needs; the function it returns lets it through.
+async function holdTheCards(page: Page): Promise<() => void> {
+  let letThrough!: () => void;
+  const mayLand = new Promise<void>((land) => (letThrough = land));
+  await page.route("**/api/config", async (route) => {
+    await mayLand;
+    await route.continue();
+  });
+  return letThrough;
+}
+
+/// The search card arriving wrote its query over whatever was in the box, so
+/// someone quick lost what they typed, and specs that typed straight after a
+/// page load failed on a box holding `is:document`.
+test("what is typed while the app loads stays when the search card arrives", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "warp");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  // It is still a draft: the card shows its own search until Enter.
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "is:document", {
+    timeout: SEARCH_SETTLE,
+  });
+  await field(page).press("Enter");
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp", {
+    timeout: SEARCH_SETTLE,
+  });
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
+
+/// Typed text stays after the keyboard has left the box, too: someone can click
+/// away, or to another window, before the card has come.
+test("what is typed while the app loads stays after a click away", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "warp");
+  await field(page).blur();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
+
+/// Enter before there is a card opens one on the search, and the box then shows
+/// what ran; what is typed after that Enter is a new draft, and stays.
+const ownCard = (page: Page) =>
+  cardOf(page, 'searchView({"q":"source:slack"})').locator(".grid-wrap");
+
+test("Enter while the app loads opens the search, and the box shows what ran", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "source:slack ");
+  await field(page).press("Enter");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
+    timeout: SEARCH_SETTLE,
+  });
+  await expect(field(page)).toHaveAttribute("data-query", "source:slack");
+});
+
+test("what is typed after an Enter while the app loads stays too", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "source:slack");
+  await field(page).press("Enter");
+  await typeInto(field(page), "source:slack warp");
+  await field(page).blur();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
+    timeout: SEARCH_SETTLE,
+  });
+  await expect(field(page)).toHaveAttribute("data-query", "source:slack warp");
+});
+
+/// A draft typed with no search on screen goes with the person to the Search
+/// tab, where Enter would run it; Escape puts back what that tab shows.
+test("what is typed off a search tab stays when the Search tab is clicked", async ({ page }) => {
+  await page.goto("/");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+  await typeInto(field(page), "warp");
+  await tabLabels(page)
+    .filter({ hasText: /^Search$/ })
+    .click();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  // The first closes any suggestions; the next puts back what is shown.
+  await field(page).press("Escape");
+  await field(page).press("Escape");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document");
+});
+
+/// Someone who has clicked in and not typed yet gets the card's query, and
+/// typing replaces it rather than landing on the end of it.
+test("typing replaces the query a search card brought to a box already clicked in", async ({
+  page,
+}) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await field(page).click();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document");
+  await page.keyboard.type("warp");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
 
 test("a key, then a source picked from its values, is drawn as the source's chip", async ({
   page,

@@ -311,6 +311,9 @@ datalib/
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
   tauri/       the desktop shell (out of Bazel).
+  reader/      `imbue-datalib-reader` on PyPI: a module that reads a store by
+               calling libdoltlite, and its page. Its wheels are built by
+               scripts/release/ (docs/dev/release_steps.md).
 tests/fixtures/  the TNG fixture pipeline: it syncs the providers' TNG
                source data (each kept in its provider's tests/fixtures/)
                into the cached `ingested/` artifact.
@@ -431,8 +434,9 @@ place for what the engine does, with the recipes;
 `docs/dev/app_stores.md` maps which store lives where and who owns it.
 Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`,
 `//datalib/backend/etl:doltlite_two_process_test` or, for the PyPI
-wheel, `//datalib/backend/doltlite_facts:python_package_test` and
-`:python_reader_test`, so a doltlite bump that moves one fails by name.
+wheels, `//datalib/backend/doltlite_facts:python_package_test`,
+`:python_reader_test` and `//datalib/reader:reader_wheel_test`, so a doltlite
+bump that moves one fails by name.
 
 The rules, none optional. How our code enforces them is in
 `datalib/backend/etl/README.md` §"Connection pools":
@@ -559,7 +563,7 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 
 then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
 only used for fixture / test tooling and scripts; everything shipping is
-Rust.
+Rust, but for the one standard-library module in `datalib/reader/`.
 
 A version bump also changes the wheel hashes `MODULE.bazel.lock` keeps
 under `facts`, and a local build can keep the old ones: Bazel's hidden

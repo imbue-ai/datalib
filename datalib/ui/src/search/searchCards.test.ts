@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ref } from "vue";
-import { activeOf, draftAfter, type CardEntry, type SearchCard } from "./searchCards";
+import { activeOf, draftAfterMove, type CardEntry, type SearchCard } from "./searchCards";
 
 const card = (id: string): SearchCard => ({
   id,
@@ -13,23 +13,6 @@ const entry = (id: string, shown: boolean, usedAt: number): CardEntry => ({
   card: card(id),
   shown,
   usedAt,
-});
-
-describe("what the toolbar's box holds", () => {
-  it("is the query of the card it speaks for, and nothing with no card", () => {
-    expect(draftAfter("old", false, "warp")).toBe("warp");
-    expect(draftAfter("old", false, undefined)).toBe("");
-  });
-
-  /// A card comes on screen a moment after the page does, and once replaced
-  /// what had been typed by then.
-  it("keeps what is being typed when a card comes on screen", () => {
-    expect(draftAfter("source:", true, "is:document")).toBe("source:");
-  });
-
-  it("follows the card when the caret is there but nothing is typed", () => {
-    expect(draftAfter("", true, "is:document")).toBe("is:document");
-  });
 });
 
 describe("the card the toolbar's box speaks for", () => {
@@ -45,5 +28,37 @@ describe("the card the toolbar's box speaks for", () => {
       entry("newer", true, 2),
     ]);
     expect(active?.id).toBe("newer");
+  });
+});
+
+/// A search card landing after the box was up wrote its query over what had
+/// been typed, which lost a quick person's text and failed specs at random.
+describe("what the toolbar's box holds when its card moves", () => {
+  const move = { draft: "warp", shown: "", query: "is:document", hadCard: false, inBox: true };
+
+  it("keeps what was typed when a card arrives", () => {
+    expect(draftAfterMove(move)).toBe("warp");
+  });
+
+  it("keeps it when a card arrives after the keyboard has left the box", () => {
+    expect(draftAfterMove({ ...move, inBox: false })).toBe("warp");
+  });
+
+  it("keeps what is still being typed when the query or the card moves", () => {
+    expect(draftAfterMove({ ...move, shown: "warp core", hadCard: true })).toBe("warp");
+    expect(draftAfterMove({ ...move, shown: "warp core", hadCard: true, query: "" })).toBe("warp");
+  });
+
+  it("follows the card once the keyboard has left, as on a click on another tab", () => {
+    const left = { ...move, shown: "warp core", hadCard: true, inBox: false };
+    expect(draftAfterMove(left)).toBe("is:document");
+    expect(draftAfterMove({ ...left, query: "" })).toBe("");
+  });
+
+  it("follows the card when nothing was typed, keyboard in the box or not", () => {
+    const untouched = { ...move, draft: "", shown: "" };
+    expect(draftAfterMove(untouched)).toBe("is:document");
+    expect(draftAfterMove({ ...untouched, inBox: false })).toBe("is:document");
+    expect(draftAfterMove({ ...untouched, hadCard: true })).toBe("is:document");
   });
 });

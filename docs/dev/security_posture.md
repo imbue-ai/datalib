@@ -223,6 +223,24 @@ tag ruleset says nothing about this: no tag moves.
 real calls are first tried by a tag's run. Whether the settings below hold is
 something only those commands can say.
 
+## A bad wheel reaches PyPI
+
+`imbue-datalib-reader` runs inside the programs that read a person's library, and
+anyone can install it by name, so it is worth the same care as a tarball.
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| Trusted publishing: no PyPI token exists, and PyPI takes an upload only from `reader-wheels.yml` in the `pypi` environment | A leaked token, or a workflow on a branch uploading | A merge to `main` that changes the workflow, which a later tag then runs |
+| The `pypi` environment takes only `v*` tags (a setting below), and only `datalib-release` may create one | Anyone else starting an upload | What a tag's run does once started |
+| The wheels build in a workflow of their own, with no cache, and the Linux ones in images named by digest, compiling with no network | Anything `release.yml` compiles planting a wheel, and whoever controls an image's tag choosing the compiler | A bad image someone pins deliberately, and the mac leg, which compiles on GitHub's runner image |
+| PyPI never lets a file be replaced, and the upload carries attestations of the workflow that built it | Swapping a published version | A new version from a compromised run, and a person who does not check attestations |
+
+Still open: who owns the project on PyPI. An owner's account can add a publisher
+or a maintainer, and nothing in this repository can see that. A person's own
+lockfile pins a wheel's hash; a bare `pip install` follows whatever is latest.
+None of this has run yet: a PR run has built and checked the wheels, and the first
+upload will be the next tag's.
+
 ## The settings this rests on
 
 Each of these lives in GitHub, not in the tree, so no test or lint can see it.
@@ -238,6 +256,7 @@ Each line is a command that shows it.
 | Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
 | Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
 | `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
+| `pypi` may deploy only from a `v*` tag | `gh api repos/imbue-ai/datalib/environments/pypi/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `v*`, `tag`, and nothing else |
 | The release org's key is only in `main-ci` | `gh secret list --repo imbue-ai/datalib` does not name `BUILD_BUDDY_RELEASE_API_KEY`; `gh secret list --env main-ci --repo imbue-ai/datalib` does |
 
 ## Another program running as you

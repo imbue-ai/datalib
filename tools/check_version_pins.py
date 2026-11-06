@@ -132,10 +132,10 @@ FAMILIES: list[Family] = [
             "pin, `ARG DOLTLITE_CLI_VERSION`, for a `.deb` copy of the "
             "shell; it now installs the one in the release tarball, which "
             "is built from these same archives and so cannot drift. The "
-            "PyPI `doltlite` wheel is the one docs/dev/doltlite.md tells "
-            "a Python program to install, and "
-            "//datalib/backend/doltlite_facts:python_package_test and "
-            ":python_reader_test run it against stores the pinned CLI wrote."
+            "PyPI `doltlite` wheel is what docs/dev/doltlite.md gives a "
+            "program that needs the `sqlite3` module itself, and "
+            "//datalib/backend/doltlite_facts:python_package_test runs it "
+            "against stores the pinned CLI wrote."
         ),
         canonical="third-party/doltlite/BUILD.bazel",
         sites=[
