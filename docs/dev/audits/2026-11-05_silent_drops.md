@@ -24,6 +24,13 @@ Messages.
 | a device, item, activity or weigh-in listed with no id | Garmin's log, or nothing | `skipped:<listing>:` row |
 | a YouTube history entry with no link | nothing | one `skipped:youtube_watch_history:` row with a count |
 | an AirVisual column nothing stores | the log | the file's row |
+| an email attached to an email | nothing | listed and linked among the email's attachments, like any other |
+| a Slack message's cards, link previews and forwards | nothing | an `info` row on the document, on its banner |
+| what a Signal backup holds and no page shows: stickers, chat updates, reactions, quotes, previews, the rest of a long message | nothing | one `skipped:not_shown:` warning, by kind. Stored, but not shown or searchable; rendering them is still to do |
+| a chat on an account no bridge here reads | nothing | a row per kind of account; `info` for Beeper's own (`hungryserv`, `$space`), a warning for a bridge the list does not know |
+| an MMS part with no data | nothing | one warning a backup file, with the count |
+| LinkedIn and Facebook tables no feed reads | nothing | one `unrendered_tables:all` warning a source |
+| Google Drive files that are not Docs | nothing | one `unrendered_files:all` warning with a count by kind |
 
 ## Measured
 
@@ -32,6 +39,19 @@ binaries. 659 render nothing (647 `scanned`, 9 `image_based`, 3 with fonts that
 do not decode), most of them icons and glyphs. That is one warning, and the 182
 that render agree with the render store's documents. A second sync committed
 nothing. A row per document would have been 659 warnings on the Manage row.
+
+Slack, from the store of a real workspace, counts only: nearly every message's
+`blocks` are `rich_text` repeating its `text` (37,586 of them over 40,346
+messages), so those are not counted. Messages with cards, previews or forwards
+are 4,704 of those, on 4,360 of 15,300 documents; in a second workspace 20,052 of
+211,424, on 17,033 of 63,618 documents. As warnings that would be 17,000 on one
+Manage row, so the row is `info`, and shows on the document's banner.
+
+Beeper, from a real `index.db`, counts and account kinds only: `slackgo`,
+`googlechat`, `local-signal`, and `hungryserv` and `$space` whose chats hold
+messages (3 chats). `$other` holds threads and no messages, so it is not reported.
+
+Google Drive, real, counts only: 304 Docs, 44 decks, 41 Sheets.
 
 14 of a mac's system sounds with `max_bytes = "200 KB"`: 13 warnings, none after
 the limit rose, and 14 files stored.
@@ -42,19 +62,9 @@ Each needs a decision or more than one site, so none was fixed here.
 
 | where | what is dropped | what it needs |
 |---|---|---|
-| `email_render/src/render/parse.rs:312`, `render.rs:888` | an email attached to an email (`message/rfc822`: a forward as attachment, a bounce); both loops skip it | render it as an attachment. A row per message would be noise on any mailbox with bounces |
-| `slack_render/src/render/render.rs:416`, `:502` | a message's `attachments` and `blocks` (unfurls, forwards, bot cards), so one can show blank; the raw store keeps them (upstream) | render them, or a row |
-| `signal_render/src/render/normalize.rs:74`, `parse.rs:667` | every chat item that is not a standard message: sticker, shared contact, group or call update, payment | decide which a transcript shows |
-| `signal_render/src/render/normalize.rs:161`, `parse.rs:650-660` | on a message that renders: reactions, quote, link preview, edits, and the rest of a long message (upstream) | render them |
-| `signal/src/ingest/mod.rs:378`, `:407` | attachments on other items, never decrypted; sticker packs, ad hoc calls, notification profiles and chat folders ignored | a decision per kind |
 | `apple_messages_render/src/render.rs:288`, `:249`, `:447` | a message in no chat with its attachments, and a tapback whose target is not held; a `debug!` at most (upstream: Recently Deleted leaves such rows) | a report path, which this crate lacks |
 | `apple_messages_render/src/render.rs:263-273` | attachment bytes: only `chat.db` is mirrored, so each shows a name and a local path | mirror the attachments |
-| `beeper_render/src/render/parse.rs:223` | a thread whose account `BRIDGES` does not list, such as iMessage | a row per account. Check real account ids first: `hungryserv` is left out on purpose, and a warning on it would be a false alarm |
 | `chatgpt_render/src/render/parse.rs:431`, `chatgpt/src/ingest/mod.rs:727` | voice audio parts, neither fetched nor shown, though the comment at `parse.rs:427` says they are attachments (upstream) | fetch them, or a row |
-| `sms_backup_restore/src/ingest/parse.rs:210` | an MMS part with no `data`, as in a backup taken without media (upstream) | one row with a count: a row each would be every MMS of such a backup |
-| `linkedin_render/src/processor.rs:83-93`, `linkedin/src/ingest/mod.rs:155` | stored and never rendered: education, positions, skills, invitations, logins, saved jobs, any unknown CSV | decide what renders |
-| `facebook_render/src/processor.rs:144` | every table outside `ALL_TABLES` | decide what renders |
-| `google_drive_render/src/store.rs:92`, `processor.rs:116` | Sheets and Slides: captured by default, never rendered | render them, or a row |
 | `slack/src/ingest/api.rs:185-188` | a file with no URL, `hidden_by_limit` on a free plan (upstream) | a row at `render.rs:502` |
 | `claude_code/src/ingest/parse.rs:158-171` | line types other than the ones it reads; only a count | decide; a row for every known type would be noise |
 | `claude_render/src/render/render.rs:287`, `:333`; `claude_code_render/src/render.rs:502`; `codex_render/src/render.rs:464` | a content block of a type added upstream later | a row, as `Reason::UnsupportedJson` |

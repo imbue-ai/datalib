@@ -312,6 +312,7 @@ and joins the comments feed.
 
 - Photos and videos outside posts and albums
   (`your_uncategorized_photos.json`, `your_videos.json`), places, search
-  history: in the raw store, not rendered.
+  history: in the raw store, not rendered. Render counts every table no
+  feed reads in one `unrendered_tables:all` warning, naming a few.
 - A `uri` is stored when a record points at it. Media files the export
   ships but no JSON record names are not mirrored.

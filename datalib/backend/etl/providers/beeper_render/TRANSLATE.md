@@ -55,6 +55,14 @@ the kinds are `<Network> Chat`, `<Network> Message` and
 The markdown layout, `path_prefix`, orphan reactions and `LAYOUT_VERSION`
 are chat-common's ([`chat-common/README.md`](../../chat-common/README.md)).
 
+## Chats no document shows
+
+A room renders only on an account `network_for_account` knows. A chat holding
+messages on any other account is counted in a row per kind of account,
+`unlisted_bridges:<kind>`, with no login in it: `info` for Beeper's own
+(`hungryserv`, and `$space` and the like, which are not bridges), a warning for a
+bridge the list does not know. A thread with no messages is not reported.
+
 ## Documents are room × period
 
 A document is one room's events in one period: `month` by default, or
