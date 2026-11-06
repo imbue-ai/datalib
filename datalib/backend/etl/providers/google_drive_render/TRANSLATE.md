@@ -3,7 +3,7 @@
 The raw store keeps each file in Google's own JSON at every version a
 sync saw ([`../google_drive/INGEST.md`](../google_drive/INGEST.md)).
 This crate turns each **Google Doc** into one markdown document, from its
-newest capture. Sheets and Slides do not render yet; they stay in the
+newest capture. Sheets and Slides do not render yet (one warning counts them by kind); they stay in the
 raw store.
 
 ## What becomes what

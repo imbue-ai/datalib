@@ -29,7 +29,8 @@ use crate::unsupported;
 /// v2: a Doc's images link the blob store rather than a copy beside it.
 /// v3: the account's own comments mark its address as the account's, so
 ///     search reads it as `me`.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the files that are not Docs are counted on record.
+pub const RENDER_VERSION: u32 = 4;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";

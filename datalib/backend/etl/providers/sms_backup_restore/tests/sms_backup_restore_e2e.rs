@@ -507,6 +507,56 @@ fn an_mms_part_that_will_not_decode_is_a_problem_until_it_does() -> Result<()> {
     })
 }
 
+/// A backup taken without media holds MMS parts with nothing in them. They
+/// went without a word. It is one row a file, whatever the count, and it goes
+/// when the file holds them.
+#[test]
+fn mms_parts_with_no_data_are_one_row_a_file() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    let mms = |parts: &str| {
+        format!(
+            r#"<smses count="1">
+  <mms date="2369041512000" msg_box="1" address="+17015550101" m_id="NCC-1701-D">
+    <parts>{parts}<part seq="0" ct="text/plain" text="Shields up" /></parts>
+  </mms>
+</smses>"#
+        )
+    };
+    let path = input.join("sms-2369041512000.xml");
+    fs::write(
+        &path,
+        mms(
+            r#"<part seq="0" ct="image/gif" cl="a.gif" /><part seq="0" ct="video/mp4" cl="b.mp4" />"#,
+        ),
+    )?;
+    let cache = tmp.path().join("fpcache.sqlite");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        fetch_dir(&db, &input, &cache).await?;
+        let rows = problems(&db).await?;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].1, "warning");
+        let said: String = sqlx::query_scalar("SELECT sample FROM problems")
+            .fetch_one(db.pool())
+            .await?;
+        assert!(said.starts_with("2 MMS part(s) "), "{said}");
+
+        fs::write(&path, mms(""))?;
+        fetch_dir(&db, &input, &cache).await?;
+        assert!(problems(&db).await?.is_empty());
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
 /// A run that held deletions back stamped the rewritten file anyway, so
 /// the next run saw nothing rewritten, read only the new file, deleted
 /// nothing, and cleared the held-back row: what left the rewritten file

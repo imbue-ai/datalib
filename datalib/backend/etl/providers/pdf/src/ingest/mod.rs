@@ -150,7 +150,7 @@ async fn scan_tree(
         })
         .collect();
     summary.pdfs_seen = scan.files.len();
-    summary.too_large = scan.stats.too_large;
+    summary.too_large = scan.over_max_bytes.len();
     opts.progress.set_length(Some(scan.files.len() as u64));
 
     let mut doc_batch: Vec<PdfDocumentRow> = Vec::new();
@@ -242,6 +242,10 @@ async fn scan_tree(
     if scan.errors.is_empty() {
         summary.documents_removed = opts.db.prune_unnamed().await? as usize;
     }
+    found.skipped(
+        db::DOCUMENTS_WITHOUT_TEXT,
+        opts.db.documents_without_text().await?,
+    );
     // Every scan retries every document it could not identify, so a row
     // stands only on a path under an entry the walk could not read.
     found.records_tried_all_but("pdf_paths", scan.unseen());

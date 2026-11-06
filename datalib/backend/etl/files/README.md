@@ -177,6 +177,12 @@ It is listed in `present_unread`, as is a file over `max_bytes`: both are
 there, so a source keyed by path keeps their rows, and `changes_since`
 does not count them as removed.
 
+**A file over `max_bytes`** is in `over_max_bytes` too.
+`Scan::report_problems` makes it a `record:<name>:<path>` warning
+(`Reason::OverSizeLimit`), which is how a person learns of a file no scan has
+ever read, since it has no row to keep. It goes the run the file is read, or
+is gone: the file shrank, the limit rose or the file was deleted.
+
 **A file the walk found and could not open** (a mode that will not let us
 read it) is there too: it goes in `present_unread` and in `unreadable`, not
 in `errors`. A walk error says the walk may have missed paths, so it holds

@@ -16,7 +16,7 @@ use datalib_contact_schema::ContactHandle;
 use datalib_etl::doltlite_raw;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
-use datalib_schema::problems::{Problem, Reason};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -154,6 +154,9 @@ pub struct ParsedBeeper {
     /// The raw rows each loaded room reads, by room uuid.
     pub inputs: HashMap<String, Inputs>,
     pub scan: ScanResult,
+    /// Chats holding messages on an account no bridge here reads, by what
+    /// the account id says it is.
+    pub unlisted_chats: BTreeMap<String, usize>,
 }
 
 /// Open the raw store beside `input` and produce one [`DocBucket`] per
@@ -213,6 +216,22 @@ async fn load(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ParsedBeeper> {
+    let mut unlisted_chats: BTreeMap<String, usize> = BTreeMap::new();
+    for account in sqlx::query_scalar::<_, Option<String>>(
+        "SELECT accountID FROM threads t \
+         WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)",
+    )
+    .fetch_all(pool)
+    .await
+    .context("read which accounts hold messages")?
+    {
+        let account = account.unwrap_or_default();
+        if network_for_account(&account).is_none() {
+            *unlisted_chats
+                .entry(bridge_of(&account).to_string())
+                .or_default() += 1;
+        }
+    }
     let mut rooms: HashMap<String, Room> = HashMap::new();
     for r in sqlx::query("SELECT threadID, accountID, thread FROM threads")
         .fetch_all(pool)
@@ -418,6 +437,7 @@ async fn load(
     });
 
     Ok(ParsedBeeper {
+        unlisted_chats,
         docs: bucket(events.into_iter().map(|(room, _, e)| (room, e)), period),
         people,
         rooms,
@@ -683,6 +703,48 @@ fn slack_channel_url(team_channel: &str) -> Option<String> {
     (!team.is_empty() && !channel.is_empty())
         .then(|| format!("https://slack.com/app_redirect?channel={channel}&team={team}"))
 }
+
+/// The bridge an `index.db` account id names, without the login after it.
+fn bridge_of(account_id: &str) -> &str {
+    account_id.split(['.', '_']).next().unwrap_or(account_id)
+}
+
+/// A row per kind of account whose chats no document shows. On Beeper's own
+/// `hungryserv` and in its `$space`s nothing is wrong, so that is on record at
+/// `info`; a bridge this list does not know is a warning.
+pub fn unlisted_chat_rows(
+    unlisted: &BTreeMap<String, usize>,
+    source_id: &str,
+    render_version: u32,
+) -> Vec<ProblemRow> {
+    unlisted
+        .iter()
+        .map(|(bridge, chats)| {
+            let (severity, why) = if bridge == "hungryserv" || bridge.starts_with('$') {
+                (Severity::Info, "Beeper's own, not a bridge")
+            } else {
+                (Severity::Warning, "a bridge this render does not know")
+            };
+            ProblemRow::new(
+                source_id,
+                Stage::Parse,
+                Scope::Entity(&format!("{UNLISTED_BRIDGES}:{bridge}")),
+                None,
+                Outcome::Dropped,
+                Problem::explained(
+                    Reason::UncoveredType,
+                    None,
+                    &format!("{chats} chat(s) on {bridge} ({why}) not shown"),
+                )
+                .severity(severity),
+                Some(render_version),
+            )
+        })
+        .collect()
+}
+
+/// The raw "table" an unlisted bridge's row names.
+pub const UNLISTED_BRIDGES: &str = "unlisted_bridges";
 
 /// The canonical network an `index.db` account id belongs to: the id is
 /// the bridge's name, alone or followed by `.` or `_` and the login.

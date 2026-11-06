@@ -27,7 +27,7 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_etl_render::processor::Unparsed;
 use datalib_etl_slack::ingest::schema_raw::split_key;
-use datalib_schema::problems::{Problem, Reason};
+use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
@@ -66,7 +66,9 @@ use datalib_schema::providers::Provider;
 ///     same, but the first render across the rung that made the table
 ///     cannot tell which marks moved in that range (`read_marks::moved`),
 ///     so every thread renders once.
-pub const RENDER_VERSION: u32 = 17;
+/// v18: a document says when its messages hold cards, link previews or
+///     forwards that are not shown.
+pub const RENDER_VERSION: u32 = 18;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -327,7 +329,7 @@ fn build_chat(
     };
     // What the page shows under the root, a broadcast reply among them.
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
-    let items: Vec<NormalizedChatItem> = bucket
+    let mut items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
         .map(|m| {
@@ -336,6 +338,7 @@ fn build_chat(
             item
         })
         .collect();
+    note_what_is_not_shown(&bucket.messages, &mut items);
 
     // "#channel: <root snippet>" preserves the old scannable H1; the
     // bare "#channel" remains the conversation_name (via `display`).
@@ -398,6 +401,49 @@ fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
         .iter()
         .filter_map(|m| m.user_id.as_deref())
         .filter(move |u| seen.insert(*u))
+}
+
+/// Whether a message holds something its `text` and `files` do not: a card, a
+/// link preview or a forwarded message. Nearly every message's `blocks` are
+/// `rich_text` repeating its `text`, and a divider or a row of buttons says
+/// nothing, so those do not count.
+fn holds_what_is_not_shown(raw: &Value) -> bool {
+    let list = |key| raw.get(key).and_then(Value::as_array);
+    list("attachments").is_some_and(|a| !a.is_empty())
+        || list("blocks").is_some_and(|blocks| {
+            blocks.iter().any(|b| {
+                !matches!(
+                    b.get("type").and_then(Value::as_str),
+                    Some("rich_text" | "divider" | "actions")
+                )
+            })
+        })
+}
+
+/// One row a document, on the first message it is about. At `info`: it shows on
+/// the page, and a workspace with bots has it on a quarter of its documents,
+/// which as warnings would be thousands on the Manage row.
+fn note_what_is_not_shown(messages: &[Message], items: &mut [NormalizedChatItem]) {
+    let holding: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| holds_what_is_not_shown(&m.raw_json))
+        .map(|(i, _)| i)
+        .collect();
+    let (Some(first), count) = (holding.first(), holding.len()) else {
+        return;
+    };
+    let many = if count == 1 { "message" } else { "messages" };
+    items[*first].problems.push(
+        Problem::explained(
+            Reason::UncoveredType,
+            Some("attachments".to_string()),
+            &format!(
+                "{count} {many} here hold cards, link previews or forwards that are not shown"
+            ),
+        )
+        .severity(Severity::Info),
+    );
 }
 
 fn build_item(
@@ -652,6 +698,58 @@ mod reaction_tests {
                 .map(|r| r.emoji)
                 .collect();
         assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
+    }
+
+    /// A forward, a preview or a bot's card once left a message blank with
+    /// nothing to say so. Rich text repeats the message's `text`, so it is no
+    /// loss, and it is on nearly every message.
+    #[test]
+    fn a_document_says_when_a_message_holds_what_is_not_shown() {
+        let holding = |raw: Value| holds_what_is_not_shown(&raw);
+        assert!(holding(
+            json!({"attachments": [{"from_url": "https://memory-alpha.example"}]})
+        ));
+        assert!(holding(json!({"blocks": [{"type": "section"}]})));
+        assert!(!holding(json!({"attachments": []})));
+        assert!(!holding(
+            json!({"blocks": [{"type": "rich_text"}, {"type": "divider"}]})
+        ));
+        assert!(!holding(json!({"text": "Engage."})));
+
+        let with = |raw: Value| Message {
+            raw_json: raw,
+            ..reacted(json!([]))
+        };
+        let messages = [
+            with(json!({"text": "Engage."})),
+            with(json!({"attachments": [{"is_share": true}]})),
+            with(json!({"blocks": [{"type": "section"}]})),
+        ];
+        let shared = Shared::default();
+        let lookups = Lookups {
+            shared: &shared,
+            user_labels: BTreeMap::new(),
+            channel_labels: BTreeMap::new(),
+            account: None,
+            org_name: None,
+        };
+        let bucket = SlackThreadBucket {
+            thread_key: "T1#C1#12604000100.000100".to_string(),
+            messages: messages.to_vec(),
+            blobs: Default::default(),
+            inputs: Inputs::default(),
+        };
+        let chat = build_chat(&lookups, &bucket, "src");
+        let problems: Vec<_> = chat.buckets[0]
+            .items
+            .iter()
+            .map(|item| item.problems.as_slice())
+            .collect();
+        assert!(problems[0].is_empty());
+        assert_eq!(problems[1].len(), 1, "one row a document");
+        assert_eq!(problems[1][0].severity, Some(Severity::Info));
+        assert!(problems[1][0].sample.starts_with("2 messages here "));
+        assert!(problems[2].is_empty());
     }
 
     /// Only a root carries Slack's count, and one that is not a number

@@ -3,7 +3,7 @@
 //! comments, all small enough to read whole. A Doc's native JSON and its
 //! images are read one file at a time, as it renders.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
 
 use anyhow::{Context, Result};
@@ -13,11 +13,12 @@ use datalib_etl_google_drive::ingest::schema_raw::{
 };
 use datalib_etl_google_drive::ingest::RawDb;
 use datalib_etl_render::inputs::{changed_rows, RawRange};
-use datalib_schema::problems::{Problem, Reason};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use serde_json::Value;
 use sqlx::Row as _;
 
 pub const DOC_MIME: &str = "application/vnd.google-apps.document";
+const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
 
 /// Every table a file's document reads; the forward scan diffs each.
 /// Every key in them starts with the file id, then `#`.
@@ -31,6 +32,9 @@ pub struct Capture {
     pub parts: Vec<(String, String, Option<String>)>,
 }
 
+/// The raw "table" the row about files that are not Docs names.
+pub const NOT_DOCS: &str = "unrendered_files";
+
 #[derive(Debug, Default)]
 pub struct Listing {
     /// Every Doc the store holds a listing entry for, by file id.
@@ -41,6 +45,9 @@ pub struct Listing {
     /// Every other file this run looked at: a Sheet, a deck, a listing
     /// entry with no payload. None of them is a document.
     pub others: Vec<String>,
+    /// How many files of each kind the store lists that no page shows, in
+    /// scope or not, by the last word of the MIME type.
+    pub not_docs: BTreeMap<String, usize>,
     /// Every file id the store has a `files` row for, in scope or not.
     pub listed: HashSet<String>,
     /// The files to render; `None` renders every Doc.
@@ -48,6 +55,33 @@ pub struct Listing {
 }
 
 impl Listing {
+    /// The one row saying what is stored and not searchable: every Sheet and
+    /// deck of a Drive would otherwise be one row each.
+    pub fn not_docs_row(&self, source_id: &str, render_version: u32) -> Option<ProblemRow> {
+        if self.not_docs.is_empty() {
+            return None;
+        }
+        let kinds: Vec<String> = self
+            .not_docs
+            .iter()
+            .map(|(k, n)| format!("{n} {k}"))
+            .collect();
+        Some(ProblemRow::new(
+            source_id,
+            Stage::Render,
+            Scope::Entity(&format!("{NOT_DOCS}:all")),
+            None,
+            Outcome::Dropped,
+            Problem::explained(
+                Reason::DeliberateLoss,
+                None,
+                &format!("Not Google Docs, so not searchable: {}", kinds.join(", ")),
+            )
+            .severity(Severity::Warning),
+            Some(render_version),
+        ))
+    }
+
     fn renders(&self, file: &str) -> bool {
         self.render.as_ref().is_none_or(|r| r.contains(file))
     }
@@ -79,12 +113,24 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
     {
         let id: String = row.try_get("id")?;
         out.listed.insert(id.clone());
-        if !out.renders(&id) {
-            continue;
-        }
         let entry = row
             .try_get::<Option<String>, _>("payload")?
             .and_then(|p| serde_json::from_str::<Value>(&p).ok());
+        let mime = entry
+            .as_ref()
+            .and_then(|e| e.get("mimeType"))
+            .and_then(Value::as_str);
+        if mime != Some(DOC_MIME) && mime != Some(FOLDER_MIME) {
+            let kind = mime
+                .unwrap_or("unknown")
+                .rsplit('.')
+                .next()
+                .unwrap_or("unknown");
+            *out.not_docs.entry(kind.to_string()).or_default() += 1;
+        }
+        if !out.renders(&id) {
+            continue;
+        }
         match entry {
             Some(e) if e.get("mimeType").and_then(Value::as_str) == Some(DOC_MIME) => {
                 out.docs.insert(id, e);

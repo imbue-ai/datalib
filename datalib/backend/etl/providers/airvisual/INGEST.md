@@ -137,9 +137,9 @@ format between files (`2026/09/01` at the root, `9/1/2025` in a
 `corrupt_` files are ~95% blank-sensor lines carrying only the followed
 outdoor station's index — and `-1` is a sentinel; both become NULL.
 `Temperature(F)` is `Temperature(C)` converted and is not stored. A
-column the parser does not know is not stored either, and is warned
-about once per file (`airvisual_unknown_column`) so a firmware that
-adds one is noticed rather than silently dropped.
+column the parser does not know is not stored either, and is named in
+the file's `problems` row, so a firmware that adds one is noticed rather
+than silently dropped (`a_column_we_do_not_store_is_the_files_row`).
 
 **The month being written ends in a block of NULs** the device has
 reserved; the parser trims them. A line cut short by a concurrent write

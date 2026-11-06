@@ -1327,6 +1327,12 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
         before,
         "every file is over max_bytes, none is gone"
     );
+    let warned: Vec<String> = sqlx::query_scalar(
+        "SELECT scope_key FROM problems WHERE reason = 'over_size_limit' AND severity = 'warning'",
+    )
+    .fetch_all(h.db.pool())
+    .await?;
+    assert!(warned.contains(&"record:files:music/ode_to_spot.mp3".to_string()));
 
     let evicted = h.root.join("music/ode_to_spot.mp3");
     let size = std::fs::metadata(&evicted)?.len();
@@ -1346,10 +1352,79 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
     let walked = h.scan().await?;
     assert_eq!(walked.removed, 0, "{walked:?}");
     assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
-    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+    let problems: Vec<String> =
+        sqlx::query_scalar("SELECT scope_key FROM problems WHERE scope_key NOT LIKE 'skipped:%'")
+            .fetch_all(h.db.pool())
+            .await?;
+    assert_eq!(problems, vec!["listing:files".to_string()]);
+    Ok(())
+}
+
+/// A file evicted to the cloud that no scan had read left only a count in
+/// a summary string. Every one in the tree shares a warning with the count,
+/// which goes when none is left.
+#[tokio::test]
+async fn cloud_placeholders_are_one_warning_with_a_count() -> Result<()> {
+    const SAID: &str =
+        "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:cloud_placeholders:%'";
+    let h = Harness::on_a_copy().await?;
+    let mut evicted = Vec::new();
+    for rel in ["music/ode_to_spot.mp3", "music/untagged_hum.mp3"] {
+        let path = h.root.join(rel);
+        let bytes = std::fs::read(&path)?;
+        std::fs::remove_file(&path)?;
+        std::fs::File::create(&path)?.set_len(bytes.len() as u64)?;
+        evicted.push((path, bytes));
+    }
+    let s = h.scan().await?;
+    assert_eq!(s.dataless_skipped, 2, "{s:?}");
+    let said: Vec<String> = sqlx::query_scalar(SAID).fetch_all(h.db.pool()).await?;
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].starts_with("2 files "), "{}", said[0]);
+    assert!(said[0].ends_with("music/ode_to_spot.mp3"), "{}", said[0]);
+
+    for (path, bytes) in evicted {
+        std::fs::write(path, bytes)?;
+    }
+    h.scan().await?;
+    let said: Vec<String> = sqlx::query_scalar(SAID).fetch_all(h.db.pool()).await?;
+    assert_eq!(said, Vec::<String>::new());
+    Ok(())
+}
+
+/// A playlist past the size the scan will read lost its stored row, as if
+/// it were gone, and said nothing. It keeps the row and says so.
+#[tokio::test]
+async fn a_playlist_too_large_to_read_keeps_its_row_and_says_so() -> Result<()> {
+    const KEY: &str = "record:media_playlists:playlists/bridge_ambience.m3u";
+    let h = Harness::on_a_copy().await?;
+    h.scan().await?;
+    let stored = "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'";
+    let row: i64 = sqlx::query_scalar(stored).fetch_one(h.db.pool()).await?;
+    assert_eq!(row, 1);
+
+    let path = h.root.join("playlists/bridge_ambience.m3u");
+    let small = std::fs::read(&path)?;
+    std::fs::write(&path, vec![b'#'; 17 * 1024 * 1024])?;
+    h.scan().await?;
+    let row: i64 = sqlx::query_scalar(stored).fetch_one(h.db.pool()).await?;
+    assert_eq!(row, 1);
+    let said: Vec<(String, String)> =
+        sqlx::query_as("SELECT severity, reason FROM problems WHERE scope_key = ?")
+            .bind(KEY)
+            .fetch_all(h.db.pool())
+            .await?;
+    assert_eq!(
+        said,
+        [("warning".to_string(), "over_size_limit".to_string())]
+    );
+
+    std::fs::write(&path, small)?;
+    h.scan().await?;
+    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
         .fetch_all(h.db.pool())
         .await?;
-    assert_eq!(problems, vec!["listing:files".to_string()]);
+    assert!(!keys.contains(&KEY.to_string()), "{keys:?}");
     Ok(())
 }
 

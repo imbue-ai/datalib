@@ -36,7 +36,8 @@ use serde_json::Value;
 /// v11: a post's "Edited" is a `<time>` stamp.
 /// v12: the owner is marked as the account's own, by their name and the
 ///     profile's address, so search reads both as `me`.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: the tables no feed reads are counted on record.
+pub const RENDER_VERSION: u32 = 13;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

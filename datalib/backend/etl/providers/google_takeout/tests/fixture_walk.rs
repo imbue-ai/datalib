@@ -805,6 +805,45 @@ async fn a_watch_dropped_from_a_newer_export_is_gone() {
     assert_eq!(e.count("youtube_watch_history").await, 2);
 }
 
+/// A history entry with no link, as Takeout writes for a video since
+/// removed, was passed over with nothing to say so. Thousands of them are
+/// one row with a count.
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_history_entries_with_no_link_are_one_row_with_a_count() {
+    const NO_LINK: &str = "SELECT sample FROM problems WHERE rule = 'youtube_watch_no_link'";
+    let e = Export::new();
+    e.sync().await;
+    let said = |e: &Export| {
+        let db_path = e.db_path.clone();
+        async move {
+            let db = RawDb::open(&db_path).await.unwrap();
+            let rows: Vec<String> = sqlx::query_scalar(NO_LINK)
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+            db.close().await;
+            rows
+        }
+    };
+    assert_eq!(said(&e).await, Vec::<String>::new());
+
+    let removed = "<div class=\"outer-cell\"><div class=\"content-cell\">\
+                   Watched a video that has been removed<br>Apr 13, 2364</div></div>";
+    let original = std::fs::read_to_string(e.root.join(WATCH_HISTORY)).unwrap();
+    e.rewrite(WATCH_HISTORY, |html| {
+        html.replace("</body>", &format!("{removed}{removed}</body>"))
+    });
+    e.sync().await;
+    assert_eq!(e.count("youtube_watch_history").await, 3);
+    let rows = said(&e).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].starts_with("2 entries "), "{}", rows[0]);
+
+    e.rewrite(WATCH_HISTORY, |_| original);
+    e.sync().await;
+    assert_eq!(said(&e).await, Vec::<String>::new());
+}
+
 /// The dropped cell is the one with the attachment, so its CAS edge must
 /// go with it.
 #[tokio::test(flavor = "multi_thread")]
