@@ -332,12 +332,15 @@ These all put something from a protected library outside its folder:
 - **The web view's other storage.** `~/Library/WebKit/com.imbue.datalib` holds
   what the UI puts in `localStorage`: display settings and which source groups
   are expanded, so some source ids. Not read, only named from the UI's source.
-- **Spotlight's index.** It holds the path of files in the folder, source ids
-  included: 121 paths on a real container, found with `mdfind`, which no guard
-  stops. Three words searched for in the files' contents matched nothing, so
-  whether it holds any content is not known. A folder named `*.noindex` keeps
-  everything under it out, and clears what was indexed when renamed; an empty
-  `.metadata_never_index` file does nothing (both measured on macOS 26.7.2).
+- **The names of its files, perhaps, through `mdfind`.** Spotlight's index holds
+  nothing from the folder: a machine-wide `mdfind 'kMDItemFSName ==
+  "*.doltlite_db"'` listed none of a real container's stores, and all 74 in a real
+  `~/Datalib` (macOS 26.7.2). But `mdfind -onlyin <container>`, run from an agent's
+  shell, listed 1,438 file names, so a scoped query does not only read the index.
+  How it gets them is not known, nor whether it would for a program never let
+  into the folder: that shell's app may have been allowed. The same query found
+  files in a folder named `*.noindex`, so that name is not expected to stop it. To
+  learn what Spotlight holds, query machine-wide, never with `-onlyin`.
 - **A credential pasted into the wizard** is on `latchkey`'s command line for
   the second that runs. It needs a change upstream
   ([`latchkey.md`](latchkey.md)).

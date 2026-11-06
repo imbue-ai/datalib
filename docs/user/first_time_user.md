@@ -230,6 +230,11 @@ What that means for datalib today:
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
 
+Spotlight indexes an ordinary library, as it does the rest of your home
+folder, and not one in the protected folder. To keep your libraries out of
+its results, add `~/Datalib` to the Search Privacy list in Spotlight's page
+of System Settings.
+
 #### Which apps have you let in? (macOS)
 
 A protected folder is only as closed as the permissions you've handed
