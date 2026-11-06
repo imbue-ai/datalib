@@ -37,6 +37,76 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// crate links no ETL code.
 const GATEWAY_ENV_VAR: &str = datalib_env::LATCHKEY_GATEWAY;
 
+/// An answer slower than this has usually waited on something other than
+/// latchkey: a keychain prompt, or a service validating a credential.
+const SLOW_ANSWER: Duration = Duration::from_secs(5);
+/// latchkey's own name for its keychain item, when nothing renames it.
+const DEFAULT_KEYCHAIN_ITEM: &str = "latchkey";
+
+/// Which sign-ins this server's latchkey reaches, and where their key
+/// comes from. Holds whether a key was handed over, never the key.
+#[derive(Debug, PartialEq, Eq)]
+struct LatchkeySetup {
+    store: Option<String>,
+    keychain_item: Option<String>,
+    key_in_environment: bool,
+    gateway: Option<String>,
+    protected_library: bool,
+}
+
+fn latchkey_setup(
+    store: Option<std::path::PathBuf>,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> LatchkeySetup {
+    let set = |name: &str| var(name).filter(|value| !value.is_empty());
+    let gateway = gateway_from(var(GATEWAY_ENV_VAR));
+    let key_in_environment = set(datalib_env::LATCHKEY_ENCRYPTION_KEY).is_some();
+    let keychain_item = (gateway.is_none() && !key_in_environment).then(|| {
+        set(datalib_env::LATCHKEY_KEYRING_SERVICE_NAME).map_or_else(
+            || DEFAULT_KEYCHAIN_ITEM.to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    });
+    LatchkeySetup {
+        store: store.map(|dir| dir.display().to_string()),
+        keychain_item,
+        key_in_environment,
+        gateway,
+        protected_library: set(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some(),
+    }
+}
+
+fn log_setup(setup: &LatchkeySetup) {
+    tracing::info!(
+        store = setup.store.as_deref(),
+        keychain_item = setup.keychain_item.as_deref(),
+        key_in_environment = setup.key_in_environment,
+        gateway = setup.gateway.as_deref(),
+        protected_library = setup.protected_library,
+        "where this library's latchkey keeps its sign-ins and finds their key"
+    );
+}
+
+/// Says at launch what the log cannot otherwise show: `/api/latchkey` and
+/// a step's `latchkey curl` go wherever these point.
+pub fn log_latchkey_setup() {
+    log_setup(&latchkey_setup(plugins::latchkey_dir(), |name| {
+        std::env::var_os(name)
+    }));
+}
+
+/// The request's own line is `debug` and says only the time.
+fn note_slow_answer(service: &str, took: Duration) {
+    if took >= SLOW_ANSWER {
+        tracing::info!(
+            service,
+            ms = took.as_millis() as u64,
+            "latchkey was slow to answer about a service; a keychain prompt may have been \
+             waiting on a person"
+        );
+    }
+}
+
 /// The gateway's URL, when this process is pointed at one.
 pub(crate) fn latchkey_gateway() -> Option<String> {
     gateway_from(std::env::var_os(GATEWAY_ENV_VAR))
@@ -170,7 +240,10 @@ pub async fn get_service(
     let service = validated_service(&service)?;
     let gateway = latchkey_gateway();
     let command = format!("services info {service}");
-    match latchkey_json(&["services", "info", &service], SERVICES_TIMEOUT).await {
+    let asked = std::time::Instant::now();
+    let answer = latchkey_json(&["services", "info", &service], SERVICES_TIMEOUT).await;
+    note_slow_answer(&service, asked.elapsed());
+    match answer {
         Ok(v) => Ok(Json(ServiceInfo {
             gateway,
             ..parse_service_info(&service, &v)
@@ -1091,6 +1164,75 @@ mod latchkey_failed_tests {
         tracing::subscriber::with_default(subscriber, f);
         let bytes = captured.0.lock().unwrap().clone();
         String::from_utf8(bytes).unwrap()
+    }
+
+    fn environment<'a>(
+        vars: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, value)| value.into())
+        }
+    }
+
+    /// A protected library's log says which store and keychain item its
+    /// latchkey uses, which a person otherwise cannot see from outside it.
+    #[test]
+    fn the_launch_says_which_store_and_keychain_item_a_library_uses() {
+        let store = std::path::PathBuf::from("/c/Libraries/Mail/system/latchkey");
+        let setup = latchkey_setup(
+            Some(store),
+            environment(&[
+                ("LATCHKEY_KEYRING_SERVICE_NAME", "Datalib Latchkey - Mail"),
+                ("DATALIB_PROTECTED_LIBRARY", "1"),
+            ]),
+        );
+        let log = logged_while(|| log_setup(&setup));
+        assert!(log.contains("INFO"), "{log}");
+        assert!(log.contains("/c/Libraries/Mail/system/latchkey"), "{log}");
+        assert!(log.contains("Datalib Latchkey - Mail"), "{log}");
+        assert!(log.contains("protected_library=true"), "{log}");
+    }
+
+    /// An ordinary library uses latchkey's own item; one handed a key or a
+    /// gateway reads no keychain, and the line must not suggest it does.
+    #[test]
+    fn the_setup_names_a_keychain_item_only_when_one_is_read() {
+        let item = |vars: &[(&str, &str)]| latchkey_setup(None, environment(vars)).keychain_item;
+        assert_eq!(item(&[]).as_deref(), Some("latchkey"));
+        assert_eq!(item(&[("LATCHKEY_ENCRYPTION_KEY", "k")]), None);
+        assert_eq!(item(&[("LATCHKEY_GATEWAY", "http://g")]), None);
+        assert_eq!(
+            item(&[("LATCHKEY_ENCRYPTION_KEY", "")]).as_deref(),
+            Some("latchkey")
+        );
+    }
+
+    /// The line about a key handed over must never carry the key.
+    #[test]
+    fn the_launch_line_does_not_carry_a_key() {
+        let setup = latchkey_setup(
+            None,
+            environment(&[("LATCHKEY_ENCRYPTION_KEY", "tea-earl-grey-hot")]),
+        );
+        assert!(setup.key_in_environment);
+        let log = logged_while(|| log_setup(&setup));
+        assert!(log.contains("key_in_environment=true"), "{log}");
+        assert!(!log.contains("tea-earl-grey-hot"), "{log}");
+    }
+
+    /// Someone typing a keychain password used to leave only the request's
+    /// `debug` line, however long it took.
+    #[test]
+    fn a_slow_answer_is_in_the_log_and_a_quick_one_is_not() {
+        let slow = logged_while(|| note_slow_answer("github", Duration::from_secs(40)));
+        assert!(slow.contains("INFO"), "{slow}");
+        assert!(slow.contains("github"), "{slow}");
+        assert!(slow.contains("ms=40000"), "{slow}");
+        assert!(slow.contains("keychain"), "{slow}");
+        let quick = logged_while(|| note_slow_answer("github", Duration::from_millis(311)));
+        assert_eq!(quick, "");
     }
 
     /// A keychain prompt nobody answered in time used to leave only the
