@@ -205,7 +205,8 @@ LINKEDIN_TABLES_NOT_READ = (
     "01d8f641-ba65-5430-9cd4-67c6aae0387d|warning|render|entity|unrendered_tables:all|||"
     "deliberate_loss|Stored and not searchable, 3 rows in table(s): skills"
 )
-PDFS_WITH_NO_TEXT = (    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
+PDFS_WITH_NO_TEXT = (
+    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
     "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
     "2 PDFs are not searchable, with no text we can read (no OCR yet, or fonts "
     "that do not decode). One is holodeck/scanned_blueprint.pdf"
