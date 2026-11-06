@@ -167,7 +167,7 @@ tag ruleset says nothing about this: no tag moves.
 |---|---|---|
 | `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
 | `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
-| Immutable releases (a setting below) | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
+| Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
 | One job creates, uploads, reads back and publishes (`release_steps.md` §"Draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
 | The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing under a new tag name | A release on a tag that already exists, and marking an older release latest, which GitHub allows even on an immutable one |
 | The Mac app's signature and notarization | A swapped dmg passing Gatekeeper, for someone who clicks through `releases/latest` | Bad code we signed ourselves |
@@ -203,6 +203,11 @@ tag ruleset says nothing about this: no tag moves.
   release in.
 - **Nothing outside GitHub vouches for a tarball.** The Mac app is signed, and
   the tarballs are not; a person trusts GitHub's account of what the tag built.
+  GitHub attests each immutable release (`gh release verify v0.51.0` passes;
+  v0.50.0 has no attestation). As we read it, that says what a release held when
+  it locked, not who built it, so a writer's own release on an old tag would
+  likely get one too (not tried). A build attestation from `release.yml` would
+  say who built it, but `curl | sh` has no `gh` to check one with.
 
 ### What has not been shown
 

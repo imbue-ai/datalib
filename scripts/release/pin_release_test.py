@@ -104,6 +104,8 @@ class WhichReleasesTest(unittest.TestCase):
         self.assertEqual(checked_image_digest(release, contents), IMAGE)
         with self.assertRaises(ValueError):
             checked_image_digest(release, b"sha256:" + b"d" * 64 + b"\n")
+        with self.assertRaises(ValueError):
+            checked_image_digest({"assets": []}, contents)
 
 
 if __name__ == "__main__":

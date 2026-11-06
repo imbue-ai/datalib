@@ -80,7 +80,7 @@ def tarball_hashes(release: dict[str, Any]) -> dict[str, str]:
 
 def checked_image_digest(release: dict[str, Any], contents: bytes) -> str:
     """The image digest in `contents`, once it is shown to be the release's own asset."""
-    held = next(a for a in release["assets"] if a["name"] == IMAGE_DIGEST)
+    held = next((a for a in release["assets"] if a["name"] == IMAGE_DIGEST), {})
     if held.get("digest") != f"sha256:{hashlib.sha256(contents).hexdigest()}":
         raise ValueError(
             f"{IMAGE_DIGEST}: what was downloaded is not what the release holds"
