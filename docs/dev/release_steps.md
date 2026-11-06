@@ -95,11 +95,14 @@ Docker image and the Mac app carry theirs.
 
 `scripts/install.sh` and `docs/user/docker.md` name a release by version and
 hash, not by `latest`, for the reason in
-[`security_posture.md`](security_posture.md). After a release publishes,
-`python3 scripts/release/pin_release.py vX.Y.Z` rewrites both from what GitHub
-reports. It refuses a release that is a draft, is not immutable, or has no
+[`security_posture.md`](security_posture.md), and `test.yml` and
+`cargo-update.yml` name the devcontainer image by digest for the same reason.
+After a release publishes, `python3 scripts/release/pin_release.py vX.Y.Z`
+rewrites all four from what GitHub reports, which needs `gh` to hold
+`read:packages` (`gh auth refresh -s read:packages`). Wait for that tag's
+`devcontainer.yml` first, or it stops for want of the image. It refuses a release that is a draft, is not immutable, or has no
 successful `release.yml` run on its tag's commit. Until that PR lands, people
-get the previous release, which still works.
+get the previous release, which still works, and CI stays on the previous image.
 
 ### What one failed job costs
 
@@ -288,8 +291,8 @@ writes the contributor BuildBuddy cache your laptop uses; the release
 org stays CI's alone. What it shares is with other Apple-silicon runs
 of this script, not with PR runs, which build on x86_64. Set
 `DATALIB_DEVCONTAINER_IMAGE` to use an image you already have (on an
-x86_64 host, `ghcr.io/imbue-ai/datalib_devcontainer:latest`, the one
-CI runs in).
+x86_64 host, `ghcr.io/imbue-ai/datalib_devcontainer:latest`, the last
+release's).
 
 The release procedure (`.claude/skills/release/SKILL.md`) runs this
 before the version bump.

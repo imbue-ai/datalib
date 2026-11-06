@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Point scripts/install.sh and docs/user/docker.md at one published release.
+"""Point install.sh, the Docker page and CI's image at one published release.
 
-Both name a release by version and hash rather than following `latest`, which
-anyone holding write access can move (docs/dev/security_posture.md). The
-release procedure runs this once a release has published, and lands the result
-in a PR of its own.
+Each names it by version and hash rather than following `latest`, which anyone
+holding write access can move (docs/dev/security_posture.md). The release
+procedure runs this once a release has published, and lands the result in a PR
+of its own, whose CI is the first run in the new devcontainer image.
 
     python3 scripts/release/pin_release.py vX.Y.Z
 
@@ -34,6 +34,16 @@ RELEASE_WORKFLOW = ".github/workflows/release.yml"
 VERSION_SHAPE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 PINNED_IMAGE = re.compile(r"(ghcr\.io/imbue-ai/datalib@)sha256:[0-9a-f]{64}")
 IMAGE_PINS_IN_DOCKER_DOC = 2
+PINNED_DEVCONTAINER = re.compile(
+    r"(ghcr\.io/imbue-ai/datalib_devcontainer[^\n]*@)sha256:[0-9a-f]{64}"
+)
+DEVCONTAINER_PINS = {
+    ".github/workflows/cargo-update.yml": 1,
+    ".github/workflows/test.yml": 4,
+}
+DEVCONTAINER_VERSIONS = (
+    "orgs/imbue-ai/packages/container/datalib_devcontainer/versions?per_page=100"
+)
 
 
 def sub_exactly(pattern: str, new: str, text: str, wanted: int = 1) -> str:
@@ -58,6 +68,28 @@ def pin_docker_doc(text: str, image_digest: str) -> str:
     return sub_exactly(
         PINNED_IMAGE.pattern, rf"\g<1>{image_digest}", text, IMAGE_PINS_IN_DOCKER_DOC
     )
+
+
+def pin_devcontainer(text: str, image_digest: str, wanted: int) -> str:
+    return sub_exactly(
+        PINNED_DEVCONTAINER.pattern, rf"\g<1>{image_digest}", text, wanted
+    )
+
+
+def devcontainer_digest(versions: list[dict[str, Any]], version: str) -> str:
+    """The digest of the devcontainer image `devcontainer.yml` tagged for `version`."""
+    tag = version.removeprefix("v")
+    found = [
+        entry["name"]
+        for entry in versions
+        if tag in entry.get("metadata", {}).get("container", {}).get("tags", [])
+    ]
+    if len(found) != 1 or not IMAGE_DIGEST_SHAPE.fullmatch(found[0]):
+        raise ValueError(
+            f"datalib_devcontainer:{tag}: wanted one image, found {found}. "
+            "Has this tag's devcontainer.yml run finished?"
+        )
+    return found[0]
 
 
 def release_problems(release: dict[str, Any]) -> list[str]:
@@ -165,6 +197,9 @@ def main() -> int:
         "-",
     )
     image_digest = checked_image_digest(release, contents)
+    ci_image = devcontainer_digest(
+        json.loads(gh_bytes("api", DEVCONTAINER_VERSIONS)), args.version
+    )
 
     install = ROOT / INSTALL
     install.write_text(
@@ -172,7 +207,10 @@ def main() -> int:
     )
     doc = ROOT / DOCKER_DOC
     doc.write_text(pin_docker_doc(doc.read_text(), image_digest))
-    print(f"Pinned {INSTALL} and {DOCKER_DOC} to {args.version}")
+    for rel, wanted in DEVCONTAINER_PINS.items():
+        workflow = ROOT / rel
+        workflow.write_text(pin_devcontainer(workflow.read_text(), ci_image, wanted))
+    print(f"Pinned {INSTALL}, {DOCKER_DOC} and CI's image to {args.version}")
     return 0
 
 

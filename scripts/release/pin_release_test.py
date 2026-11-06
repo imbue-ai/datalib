@@ -9,12 +9,16 @@ import unittest
 from pathlib import Path
 
 from pin_release import (
+    DEVCONTAINER_PINS,
     DOCKER_DOC,
     INSTALL,
+    PINNED_DEVCONTAINER,
     PINNED_IMAGE,
     RELEASE_WORKFLOW,
     built_by_release_workflow,
     checked_image_digest,
+    devcontainer_digest,
+    pin_devcontainer,
     pin_docker_doc,
     pin_install,
     release_problems,
@@ -53,8 +57,40 @@ class TheTreeTest(unittest.TestCase):
         self.assertNotIn("ghcr.io/imbue-ai/datalib:", text)
         self.assertIsNone(re.search(r"ghcr\.io/imbue-ai/datalib\s", text))
 
+    def test_ci_names_its_image_by_digest_only(self) -> None:
+        """A push to main runs in this image holding the write key, and a tag can be moved."""
+        for rel, wanted in DEVCONTAINER_PINS.items():
+            with self.subTest(rel):
+                images = [
+                    line
+                    for line in read(rel).splitlines()
+                    if line.strip().startswith("image:")
+                    and "datalib_devcontainer" in line
+                ]
+                self.assertEqual(len(images), wanted)
+                for line in images:
+                    self.assertRegex(line, PINNED_DEVCONTAINER)
+                    self.assertNotIn("latest", line)
+
 
 class RewriteTest(unittest.TestCase):
+    def test_pinning_ci_moves_every_mention_and_nothing_else(self) -> None:
+        for rel, wanted in DEVCONTAINER_PINS.items():
+            with self.subTest(rel):
+                before = read(rel)
+                after = pin_devcontainer(before, IMAGE, wanted)
+                self.assertEqual(after.count(IMAGE), wanted)
+                self.assertEqual(
+                    PINNED_DEVCONTAINER.sub("", before),
+                    PINNED_DEVCONTAINER.sub("", after),
+                )
+
+    def test_a_workflow_with_a_pin_missing_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            pin_devcontainer(
+                "image: ghcr.io/imbue-ai/datalib_devcontainer:latest\n", IMAGE, 1
+            )
+
     def test_pinning_install_sh_changes_only_the_pins(self) -> None:
         before = read(INSTALL)
         after = pin_install(before, "v9.9.9", HASHES)
@@ -117,6 +153,23 @@ class WhichReleasesTest(unittest.TestCase):
                 run = good | different
                 self.assertFalse(built_by_release_workflow([run], tag, commit))
                 self.assertTrue(built_by_release_workflow([run, good], tag, commit))
+
+    def test_ci_moves_only_to_the_image_tagged_for_this_release(self) -> None:
+        other = "sha256:" + "d" * 64
+        versions = [
+            {"name": other, "metadata": {"container": {"tags": ["9.9.8"]}}},
+            {"name": IMAGE, "metadata": {"container": {"tags": ["9.9.9", "latest"]}}},
+            {"name": "sha256:" + "e" * 64},
+        ]
+        self.assertEqual(devcontainer_digest(versions, "v9.9.9"), IMAGE)
+        with self.assertRaises(ValueError):
+            devcontainer_digest(versions, "v9.9.7")
+        with self.assertRaises(ValueError):
+            devcontainer_digest(
+                versions
+                + [{"name": other, "metadata": {"container": {"tags": ["9.9.9"]}}}],
+                "v9.9.9",
+            )
 
     def test_a_tarball_without_a_digest_is_refused(self) -> None:
         assets = [

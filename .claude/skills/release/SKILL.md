@@ -185,9 +185,10 @@ published from a local machine — the tag is the trigger.
     paragraph at the top in plain words: which column, what it held,
     what it holds now (v0.46.0's notes are the example). Then
     `gh release edit vX.Y.Z --notes-file /tmp/notes.md`.
-12. Pin the release, so that `install.sh` and the Docker page move to it.
-    They follow no `latest`, so until this lands people keep getting the
-    previous release:
+12. Pin the release, so that `install.sh`, the Docker page and CI's
+    devcontainer image move to it. They follow no `latest`, so until this
+    lands people keep getting the previous release. Wait for this tag's
+    `devcontainer.yml` to finish first:
 
     ```sh
     git fetch origin && git checkout -b pin-vX.Y.Z origin/main

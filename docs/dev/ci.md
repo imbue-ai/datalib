@@ -14,7 +14,7 @@ reference behind them.
 
 **`test.yml`** is the merge gate. Every job runs on `ubuntu-latest`
 (4 vCPU); the bazel ones run inside
-`ghcr.io/imbue-ai/datalib_devcontainer:latest`:
+`ghcr.io/imbue-ai/datalib_devcontainer`, named by digest:
 
 - `cargo deny` — a RustSec and license scan of both Cargo lockfiles
   (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
@@ -64,7 +64,7 @@ what `main` changed, even though the PR did not. A `workflow_dispatch`
 run builds the bare branch head; compare like with like before calling
 a cache key unstable (#484's comments are the worked example).
 `test.yml` also takes two dispatch inputs: `devcontainer_tag`, to run
-against an image that is not yet `latest`, and `remote_execution`, to
+against an image CI is not pinned to yet, and `remote_execution`, to
 run the test job on BuildBuddy's executors (`--config=remote`).
 
 **`devcontainer.yml`** builds and publishes that image
@@ -73,14 +73,15 @@ and on demand — not on pushes or PRs, since a build is ~8 min and
 ~2.5 GB and a release's worth of drift costs seconds. To try a
 Dockerfile change early, dispatch it on the branch and then `test.yml`
 with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
-a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
-dispatch on `main` with `publish_latest` set — a dispatch on any other
-branch that sets it fails at once, because every `main` run of
-`test.yml` runs in `latest` holding the release org's write key — and
-only after
+a tag build also `:X.Y.Z` and `latest`, once
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
-downloads. The newest six `sha-` versions are kept and older ones
+downloads. CI follows none of these tags, because a push to `main`
+runs in this image holding the release org's write key: `test.yml` and
+`cargo-update.yml` name it by digest, and `pin_release.py` moves them
+to each release's image in the PR it prepares
+(`release_steps.md` §"Pinning what people get by default"). To move CI
+between releases, write the digest of a `sha-` tag into both. The newest six `sha-` versions are kept and older ones
 pruned. It is a workflow of its own so that nothing in a release can
 keep it from publishing (#500).
 
