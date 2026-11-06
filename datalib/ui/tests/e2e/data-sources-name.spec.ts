@@ -1,9 +1,10 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
+  GRID,
   savedConfig,
   nameCell,
   expandGroup,
@@ -73,6 +74,7 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   if (!original) return;
   await openManager(page);
   await page.locator(".m2-editor").fill(original);
@@ -439,6 +441,51 @@ test("a download-only source gets its render step, and no Rendering section", as
   expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
+});
+
+/// Add source from the Sources tab, as far as its form's own button, with
+/// whatever `answer` does to every read of the config from then on.
+async function addPhotosWhileReading(page: Page, answer: (route: Route) => Promise<void>) {
+  await page.goto(GRID);
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
+  await page.route("**/api/config", async (r) => {
+    if (r.request().method() === "GET") await answer(r);
+    else await r.fallback();
+  });
+  await page.getByRole("treeitem", { name: "Sources", exact: true }).click();
+  await page.getByRole("button", { name: "Add source" }).click();
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
+  await nameField(page).fill("Photos");
+  await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+}
+
+/// The form opens before the card has read the config. Added to the text
+/// it held then, which was none, the new source was the whole file.
+test("a source added before the card has read the config keeps the rest", async ({
+  page,
+  request,
+}) => {
+  let letReadLand!: () => void;
+  const readMayLand = new Promise<void>((land) => (letReadLand = land));
+  await addPhotosWhileReading(page, async (r) => {
+    await readMayLand;
+    await r.fallback();
+  });
+  letReadLand();
+  await expect(page.getByText("Added Photos.")).toBeVisible();
+  const saved = await savedConfig(request);
+  expect(saved).toContain('group = "photos"\nfunction = "ingest"');
+  for (const [entry] of original.matchAll(/^id = "[^"]+"$/gm)) expect(saved).toContain(entry);
+});
+
+test("a source added while the config cannot be read changes nothing", async ({
+  page,
+  request,
+}) => {
+  await addPhotosWhileReading(page, (r) => r.fulfill({ status: 500, body: "disk trouble" }));
+  await expect(page.getByText(/could not be read, so nothing was changed/)).toBeVisible();
+  expect(await savedConfig(request)).toBe(original);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {
