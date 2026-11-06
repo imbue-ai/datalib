@@ -65,6 +65,15 @@ jobs:
             ["a release reads no cache: setup-bazel needs disk-cache: false"],
         )
 
+    def test_uv_keeps_no_cache_either(self) -> None:
+        """setup-uv turns its cache on for a PR by default."""
+        step = "      - uses: astral-sh/setup-uv@abc # v10\n"
+        text = self.GOOD.replace("      - run: scripts", step + "      - run: scripts")
+        self.assertEqual(
+            reader_grant_problems(text),
+            ["a release reads no cache: setup-uv needs enable-cache: false"],
+        )
+
 
 class FloatingNpxTest(unittest.TestCase):
     def test_every_runner_and_spelling_without_an_exact_version_is_refused(

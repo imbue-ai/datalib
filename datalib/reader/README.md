@@ -32,12 +32,10 @@ with Store(path, commit) as store:  # one commit, however far the store moves on
 - **Take the version of your datalib**, which `datalib-dag --version` prints.
   Each version carries the library that release's binaries were built from.
 
-Wheels exist for Linux on x86_64 and aarch64: `manylinux_2_17` for any glibc
-distribution from the last decade, and `musllinux_1_2` for Alpine. `pip` and
-`uv` pick the right one. There is no source distribution and no wheel for macOS
-yet; a datalib release there carries the library and
-[the same module](https://github.com/imbue-ai/datalib/blob/main/docs/dev/doltlite.md#calling-the-library-directly)
-can be saved beside your program.
+Wheels exist for Apple-silicon Macs on macOS 11 or later, and for Linux on x86_64
+and aarch64: `manylinux_2_17` for any glibc distribution from the last decade, and
+`musllinux_1_2` for Alpine. `pip` and `uv` pick the right one. There is no source
+distribution, and no wheel for an Intel Mac.
 
 What each table holds:
 [Reading the raw stores](https://github.com/imbue-ai/datalib/blob/main/docs/user/raw_stores.md).

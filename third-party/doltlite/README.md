@@ -122,7 +122,7 @@ Steps:
    `//datalib/backend/doltlite_facts:python_package_test` and
    `:python_reader_test` (the PyPI wheel at the new pin, and the shipped
    library). A PR that moves the pin also runs `reader-wheels.yml`, which
-   compiles it on glibc 2.17 and musl and reads a store under each
+   compiles it on glibc 2.17, musl and a Mac and reads a store under each
    ([`release_steps.md`](../../docs/dev/release_steps.md) §"The reader wheels").
    Where a fact moved, fix
    [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) first, then the

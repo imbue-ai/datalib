@@ -156,7 +156,8 @@ anything up its chain failed, not only the jobs it names.
 ## The reader wheels
 
 `imbue-datalib-reader` puts [the reader module](doltlite.md#calling-the-library-directly)
-and `libdoltlite` on PyPI, so that `uv add imbue-datalib-reader` works on Linux.
+and `libdoltlite` on PyPI, so that `uv add imbue-datalib-reader` works on Linux and
+an Apple-silicon Mac.
 It has its own workflow,
 [`reader-wheels.yml`](../../.github/workflows/reader-wheels.yml), and a tag starts
 it beside `release.yml`, for two reasons. `pin_release.py` refuses a tag whose
@@ -165,23 +166,28 @@ a release that is fine. And a run's artifacts reach only its own jobs, so nothin
 `release.yml` compiles can plant a wheel here. A failure here costs PyPI that
 version and costs the release nothing.
 
-There are four wheels, one per architecture (x86_64, aarch64) and libc:
+There are five wheels: one per architecture (x86_64, aarch64) and libc on Linux,
+and one for an Apple-silicon Mac:
 
-| wheel | compiled in | runs on |
+| wheel | built in | runs on |
 |---|---|---|
 | `manylinux_2_17` (also tagged `manylinux2014`) | `quay.io/pypa/manylinux2014_<arch>`, glibc 2.17 | any glibc from 2.17 on |
 | `musllinux_1_2` | `quay.io/pypa/musllinux_1_2_<arch>`, musl 1.2 | Alpine and other musl from 1.2 on |
+| `macosx_11_0_arm64` | Bazel on `macos-26`, the library the mac tarball ships | macOS 11 or later on Apple silicon |
 
-The library's symbol versions come from the libc it is linked against, which is
-why each one is compiled in an old image rather than by Bazel on the runner. The
-source and flags still come from Bazel (`//third-party/doltlite:rename_amalgamation`
-and `:library_copts`), so there is no second list of them.
+On Linux, a library's symbol versions come from the libc it is linked against,
+which is why each one is compiled in an old image rather than by Bazel on the
+runner. The source and flags still come from Bazel
+(`//third-party/doltlite:rename_amalgamation` and `:library_copts`), so there is no
+second list of them. A Mac's floor is `--macos_minimum_os` in `.bazelrc`, whatever
+SDK the runner has, so the same build serves. It has no Intel wheel, as a release
+has no Intel tarball.
 
 | step | script | what it does |
 |---|---|---|
-| `wheels` job, each architecture | `scripts/release/stage_reader_wheels.sh <out-dir>` | Compiles in each image with no network, writes the wheel with `make_reader_wheel.py` (the standard library, no build backend), and fails unless that image's `auditwheel` agrees with the tag the wheel claims |
-| the same job | `scripts/release/check_reader_wheels.sh <wheel-dir>` | Installs with `pip` on glibc 2.17, Debian and Alpine, and with `uv add` under uv's own Python on Debian and Alpine, each given both libcs' wheels to choose from, and reads a store the pinned shell wrote, mounted read-only, with `sqlite3` beside it and, on Debian and Alpine, stock SQLite loaded globally |
-| `publish` job, on a tag | `pypa/gh-action-pypi-publish` | Uploads all four, with attestations. PyPI never lets a file be replaced; a re-run uploads only what is missing |
+| `wheels` job, each leg | `scripts/release/stage_reader_wheels.sh <linux\|macos> <out-dir>` | On Linux, compiles in each image with no network and fails unless that image's `auditwheel` agrees with the tag the wheel claims. On a Mac, which has no `auditwheel`, fails unless the library is arm64 alone, says macOS 11.0, is signed and links only the system's. Both write the wheel with `make_reader_wheel.py` (the standard library, no build backend) |
+| the same job | `scripts/release/check_reader_wheels.sh <linux\|macos> <wheel-dir>` | Installs with `pip` on glibc 2.17, Debian, Alpine and `/usr/bin/python3` on a Mac, and with `uv add` under uv's own Python on Debian, Alpine and a Mac. On Linux each gets both libcs' wheels to choose from. Each reads a store the pinned shell wrote, read-only, with `sqlite3` beside it and, on Debian, Alpine and `/usr/bin/python3`, stock SQLite loaded globally |
+| `publish` job, on a tag | `pypa/gh-action-pypi-publish` | Uploads all five, with attestations. PyPI never lets a file be replaced; a re-run uploads only what is missing |
 
 It runs on a PR that touches the module, these scripts, the workflow or the
 doltlite pin, and by hand with `gh workflow run reader-wheels.yml`. On a tag, the
@@ -190,18 +196,19 @@ script stops unless the tag is the version in `datalib/backend/Cargo.toml`.
 layout and `RECORD`, the same bytes from the same inputs, the module on the doc's
 page word for word, and that a wheel uses its own library whatever is on the `PATH`.
 
-To run the two scripts on a mac, where the arm64 images run natively:
+To run the two scripts on a mac, for the mac wheel, and then `linux` for the
+wheels of its own architecture, whose arm64 images run natively:
 
 ```sh
-BAZEL=bazelisk scripts/release/stage_reader_wheels.sh /tmp/wheels
+BAZEL=bazelisk scripts/release/stage_reader_wheels.sh macos /tmp/wheels
 ```
 
 ```sh
-BAZEL=bazelisk scripts/release/check_reader_wheels.sh /tmp/wheels
+BAZEL=bazelisk scripts/release/check_reader_wheels.sh macos /tmp/wheels
 ```
 
-Set `READER_ARCH=x86_64` for the other architecture, which runs under an emulator
-and takes far longer to compile.
+With `linux`, `READER_ARCH=x86_64` gives the other architecture, which runs under
+an emulator and takes far longer to compile. The mac check needs `uv`.
 
 **Setting it up on PyPI, once.** Nothing here can do this. On pypi.org, under an
 account the team shares, add a *pending publisher* for `imbue-datalib-reader`:
@@ -235,7 +242,7 @@ to wait for.
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
 | `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
 | `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
-| `reader-wheels.yml`'s `wheels` | Bazel fetching doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
+| `reader-wheels.yml`'s `wheels` | Bazel fetching and, on a Mac, compiling doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
 | `reader-wheels.yml`'s `publish` | `pypa/gh-action-pypi-publish`, no checkout | `id-token: write`, which only PyPI takes |
 
 A build job hands what it made to the next through an artifact.
@@ -359,7 +366,8 @@ before the version bump.
 
 ## The mac legs' runner image
 
-The mac legs name one GitHub-hosted image, `macos-26` (Xcode 26.6), and
+The mac legs, `reader-wheels.yml`'s among them, name one GitHub-hosted image,
+`macos-26` (Xcode 26.6), and
 GitHub retires an image about once a year. `latchkey-auth.yml` runs on
 the same one, so the sign-in suite tries it every night. A tag runs its
 own tree, so a retired label costs that release its mac assets and a

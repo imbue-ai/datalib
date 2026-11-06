@@ -428,6 +428,7 @@ _ACTION_CACHE_INPUTS = {
     ],
     "setup-qemu-action": ["cache-image"],
     "setup-buildx-action": ["cache-binary"],
+    "setup-uv": ["enable-cache"],
 }
 
 

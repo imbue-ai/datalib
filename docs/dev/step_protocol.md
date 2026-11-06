@@ -738,7 +738,7 @@ A python step using inputs + progress + outcome, which opens each
 download that moved at the commit it was started against. It works under
 any Python, uv's included. Give that Python the reader in
 [Reading a store from Python](doltlite.md#calling-the-library-directly):
-`imbue-datalib-reader` on Linux, or anywhere the module saved as
+`imbue-datalib-reader` installed in it, or the module saved as
 `datalib_reader.py` beside the step. Then point `command` at it:
 `/path/to/python3 /path/to/step.py`.
 

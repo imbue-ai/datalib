@@ -60,13 +60,12 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
 From a program, the simplest route is to run `datalib-doltlite
 -readonly -json` as a subprocess and parse its output. That costs a
 process start and a store open per query, so a Python program that runs
-many can keep the store open instead, under any Python, uv's included. On
-Linux, `uv add imbue-datalib-reader` installs the library, `libdoltlite`,
-with a short module that calls it.
+many can keep the store open instead, under any Python, uv's included.
+`uv add imbue-datalib-reader` installs the library, `libdoltlite`, with a short
+module that calls it.
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
-has how to use it, and what to do on a mac, where a release install has the
-library and you save the module yourself. It also says when to `import
-doltlite` instead, which makes the standard `sqlite3` module run on doltlite:
+has how to use it, and how to do without installing anything. It also says when
+to `import doltlite` instead, which makes the standard `sqlite3` module run on doltlite:
 only for code that needs that module or SQLAlchemy, and not under the builds
 `uv python install` fetches.
 

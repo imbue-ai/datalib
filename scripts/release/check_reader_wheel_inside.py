@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """What check_reader_wheels.sh runs inside each image, after installing the wheel
-there: the installer chose the wheel for this libc, its own library loaded, and
+there: the installer chose the wheel for this platform, its own library loaded, and
 it reads a store with `sqlite3` stock beside it. The module's behaviour in depth
 is //datalib/backend/doltlite_facts:python_reader_test's."""
 
@@ -14,9 +14,9 @@ import sys
 import threading
 from pathlib import Path
 
-STORE = "/fixture/entities.doltlite_db"
+STORE = os.environ["STORE"]
 FIRST_COMMIT = os.environ["FIRST_COMMIT"]
-WANT_LIBC = os.environ["WANT_LIBC"]
+WANT_PLATFORM = os.environ["WANT_PLATFORM"]
 STOCK_SQLITE = os.environ.get("STOCK_SQLITE")
 
 BESIDE_SQLITE3 = """
@@ -52,7 +52,7 @@ def main() -> None:
         "WHEEL"
     )
     assert wheel_tags is not None
-    assert f"-{WANT_LIBC}" in wheel_tags, f"installed the wrong wheel:\n{wheel_tags}"
+    assert f"-{WANT_PLATFORM}" in wheel_tags, f"the wrong wheel:\n{wheel_tags}"
 
     from datalib_reader import Store, _lib  # pyright: ignore[reportMissingImports]
 
@@ -101,9 +101,9 @@ def main() -> None:
         )
 
     print(
-        f"OK: Python {platform.python_version()} on "
-        f"{platform.libc_ver()[0] or 'musl'}, {library.name} from the {WANT_LIBC} "
-        f"wheel, SQLite {versions[0]}, doltlite {versions[1]}"
+        f"OK: Python {platform.python_version()} on {platform.platform()}, "
+        f"{library.name} from the {WANT_PLATFORM} wheel, "
+        f"SQLite {versions[0]}, doltlite {versions[1]}"
     )
 
 

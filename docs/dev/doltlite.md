@@ -133,19 +133,20 @@ each one. There are two ways to keep a store open from Python:
 ### Calling the library directly
 
 The engine is also a library, `libdoltlite`, with SQLite's C API, so
-`ctypes` can call it and no module has to be replaced. **On Linux, install
-the package that carries both**:
+`ctypes` can call it and no module has to be replaced. **Install the package
+that carries both**:
 
 ```sh
 uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
 ```
 
-Wheels exist for x86_64 and aarch64: `manylinux_2_17` for any glibc from
-glibc 2.17 on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right
-one. Each version carries the library that release's binaries were built
-from. There is no source distribution.
+Wheels exist for Apple-silicon Macs on macOS 11 or later (`macosx_11_0`), and
+for Linux on x86_64 and aarch64: `manylinux_2_17` for any glibc from glibc 2.17
+on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right one. Each
+version carries the library that release's binaries were built from. There is
+no source distribution.
 
-**Anywhere else, save the module below as `datalib_reader.py`**, the import
+**To install nothing, save the module below as `datalib_reader.py`**. The import
 is the same, and it finds a library in this order:
 
 1. A release install's, at `lib/libdoltlite.so` (`.dylib` on a mac) beside
@@ -367,8 +368,8 @@ CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
 host's `python3`, which loads SQLite as a shared library.
 `//datalib/reader:reader_wheel_test` holds this text to the file the wheel
 is built from, and `scripts/release/check_reader_wheels.sh` installs the
-wheels on glibc 2.17, a current Debian and Alpine, with `pip` and with `uv`
-([`release_steps.md`](release_steps.md) §"The reader wheels").
+wheels on glibc 2.17, a current Debian, Alpine and a Mac, with `pip` and with
+`uv` ([`release_steps.md`](release_steps.md) §"The reader wheels").
 
 Measured on a mac against real stores: a lookup by primary key on an open
 connection took about 0.01 ms. The same lookup cost about 15 ms when each

@@ -34,17 +34,22 @@ concurrency:
 
 jobs:
   wheels:
-    name: wheels (${{ matrix.arch }})
+    name: wheels (${{ matrix.leg }})
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - leg: linux-x86_64
+            target: linux
             runs-on: ubuntu-latest
-          - arch: aarch64
+          - leg: linux-aarch64
+            target: linux
             runs-on: ubuntu-24.04-arm
+          - leg: macos-arm64
+            target: macos
+            runs-on: macos-26  # docs/dev/release_steps.md §"The mac legs' runner image"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,16 +63,27 @@ jobs:
           repository-cache: false
           external-cache: false
 
-      - name: Build this architecture's manylinux and musllinux wheels
-        run: scripts/release/stage_reader_wheels.sh "${RUNNER_TEMP}/wheels"
+      # On Linux the check's `uv add` runs in uv's own image.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: ${{ matrix.target == 'macos' }}
+        with:
+          version: 0.13.7
+          enable-cache: false
+
+      - name: Build this leg's wheels
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/release/stage_reader_wheels.sh "${TARGET}" "${RUNNER_TEMP}/wheels"
 
       - name: Install them on each Python they are for, and read a store
-        run: scripts/release/check_reader_wheels.sh "${RUNNER_TEMP}/wheels"
+        env:
+          TARGET: ${{ matrix.target }}
+        run: scripts/release/check_reader_wheels.sh "${TARGET}" "${RUNNER_TEMP}/wheels"
 
       # compression-level 0: a wheel is a zip already.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: reader-wheels-${{ matrix.arch }}
+          name: reader-wheels-${{ matrix.leg }}
           overwrite: true
           path: ${{ runner.temp }}/wheels/*.whl
           compression-level: 0

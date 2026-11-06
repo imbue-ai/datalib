@@ -32,14 +32,14 @@ STEP_DOC = Path(sys.argv[11]).resolve()
 VERSION = "1.2.3"
 
 
-def make_wheel(out_dir: Path, libc: str = "manylinux", arch: str = "x86_64") -> Path:
+def make_wheel(out_dir: Path, target: str = "manylinux", arch: str = "x86_64") -> Path:
     done = subprocess.run(
         [
             sys.executable,
             "-I",
             str(MAKE_WHEEL),
             f"--version={VERSION}",
-            f"--libc={libc}",
+            f"--target={target}",
             f"--arch={arch}",
             f"--module={MODULE}",
             f"--library={LIBRARY}",
@@ -58,7 +58,7 @@ def make_wheel(out_dir: Path, libc: str = "manylinux", arch: str = "x86_64") -> 
 
 class TheDoc(unittest.TestCase):
     def test_carries_the_module_word_for_word(self) -> None:
-        """A mac has no wheel yet, so doltlite.md still hands out the module."""
+        """doltlite.md hands the module out too, for a program that installs nothing."""
         blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
         found = [b for b in blocks if b.startswith("# datalib_reader.py")]
         self.assertEqual(found, [MODULE.read_text()])
@@ -99,10 +99,18 @@ class TheWheel(unittest.TestCase):
         self.assertIn("Root-Is-Purelib: false\n", tags)
 
     def test_a_musl_wheel_says_musl(self) -> None:
-        wheel = make_wheel(self.dir, libc="musllinux", arch="aarch64")
+        wheel = make_wheel(self.dir, target="musllinux", arch="aarch64")
         self.assertEqual(
             wheel.name,
             f"imbue_datalib_reader-{VERSION}-py3-none-musllinux_1_2_aarch64.whl",
+        )
+
+    def test_a_mac_wheel_says_the_oldest_macos_the_build_targets(self) -> None:
+        """stage_reader_wheels.sh holds the library to the same 11.0."""
+        wheel = make_wheel(self.dir, target="macos", arch="arm64")
+        self.assertEqual(
+            wheel.name,
+            f"imbue_datalib_reader-{VERSION}-py3-none-macosx_11_0_arm64.whl",
         )
 
     def test_record_lists_every_file_with_its_hash_and_size(self) -> None:

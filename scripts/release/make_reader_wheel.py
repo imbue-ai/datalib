@@ -20,18 +20,20 @@ IMPORT_NAME = "datalib_reader"
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
 
-def platform_tags(libc: str, arch: str) -> list[str]:
-    """PEP 600's name for the glibc floor, then the older name of the same floor
-    for a pip from before PEP 600."""
-    if libc == "manylinux":
+def platform_tags(target: str, arch: str) -> list[str]:
+    """For manylinux, PEP 600's name for the glibc floor, then the older name of
+    the same floor for a pip from before PEP 600."""
+    if target == "manylinux":
         return [f"manylinux_2_17_{arch}", f"manylinux2014_{arch}"]
-    if libc == "musllinux":
+    if target == "musllinux":
         return [f"musllinux_1_2_{arch}"]
-    raise ValueError(f"unknown libc {libc!r}")
+    if target == "macos":
+        return [f"macosx_11_0_{arch}"]
+    raise ValueError(f"unknown target {target!r}")
 
 
-def wheel_name(version: str, libc: str, arch: str) -> str:
-    tags = ".".join(platform_tags(libc, arch))
+def wheel_name(version: str, target: str, arch: str) -> str:
+    tags = ".".join(platform_tags(target, arch))
     return f"{DISTRIBUTION.replace('-', '_')}-{version}-py3-none-{tags}.whl"
 
 
@@ -51,8 +53,8 @@ def metadata(version: str, readme: str, license_names: list[str]) -> str:
     return "\n".join(headers) + "\n\n" + readme
 
 
-def wheel_file(libc: str, arch: str) -> str:
-    tags = "".join(f"Tag: py3-none-{tag}\n" for tag in platform_tags(libc, arch))
+def wheel_file(target: str, arch: str) -> str:
+    tags = "".join(f"Tag: py3-none-{tag}\n" for tag in platform_tags(target, arch))
     return (
         "Wheel-Version: 1.0\n"
         "Generator: datalib make_reader_wheel.py\n"
@@ -71,7 +73,7 @@ def record(files: dict[str, bytes], record_name: str) -> bytes:
 
 def wheel_contents(
     version: str,
-    libc: str,
+    target: str,
     arch: str,
     module: bytes,
     library_name: str,
@@ -89,7 +91,7 @@ def wheel_contents(
     for name, content in licenses.items():
         files[f"{dist_info}/licenses/{name}"] = content
     files[f"{dist_info}/METADATA"] = metadata(version, readme, list(licenses)).encode()
-    files[f"{dist_info}/WHEEL"] = wheel_file(libc, arch).encode()
+    files[f"{dist_info}/WHEEL"] = wheel_file(target, arch).encode()
     record_name = f"{dist_info}/RECORD"
     files[record_name] = record(files, record_name)
     return files
@@ -108,7 +110,9 @@ def write_wheel(path: Path, files: dict[str, bytes]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--libc", required=True, choices=["manylinux", "musllinux"])
+    parser.add_argument(
+        "--target", required=True, choices=["manylinux", "musllinux", "macos"]
+    )
     parser.add_argument("--arch", required=True)
     parser.add_argument("--module", required=True, type=Path)
     parser.add_argument("--library", required=True, type=Path)
@@ -128,7 +132,7 @@ def main() -> None:
         licenses[name] = Path(path).read_bytes()
     files = wheel_contents(
         args.version,
-        args.libc,
+        args.target,
         args.arch,
         args.module.read_bytes(),
         args.library.name,
@@ -136,7 +140,7 @@ def main() -> None:
         args.readme.read_text(),
         licenses,
     )
-    path = args.out_dir / wheel_name(args.version, args.libc, args.arch)
+    path = args.out_dir / wheel_name(args.version, args.target, args.arch)
     write_wheel(path, files)
     print(path)
 

@@ -232,7 +232,7 @@ anyone can install it by name, so it is worth the same care as a tarball.
 |---|---|---|
 | Trusted publishing: no PyPI token exists, and PyPI takes an upload only from `reader-wheels.yml` in the `pypi` environment | A leaked token, or a workflow on a branch uploading | A merge to `main` that changes the workflow, which a later tag then runs |
 | The `pypi` environment takes only `v*` tags (a setting below), and only `datalib-release` may create one | Anyone else starting an upload | What a tag's run does once started |
-| The wheels build in a workflow of their own, with no cache, in images named by digest, compiling with no network | Anything `release.yml` compiles planting a wheel, and whoever controls an image's tag choosing the compiler | A bad image someone pins deliberately |
+| The wheels build in a workflow of their own, with no cache, and the Linux ones in images named by digest, compiling with no network | Anything `release.yml` compiles planting a wheel, and whoever controls an image's tag choosing the compiler | A bad image someone pins deliberately, and the mac leg, which compiles on GitHub's runner image |
 | PyPI never lets a file be replaced, and the upload carries attestations of the workflow that built it | Swapping a published version | A new version from a compromised run, and a person who does not check attestations |
 
 Still open: who owns the project on PyPI. An owner's account can add a publisher
