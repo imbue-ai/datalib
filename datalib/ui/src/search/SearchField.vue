@@ -27,6 +27,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [query: string];
   submit: [];
+  submitNew: [];
   escape: [];
 }>();
 
@@ -48,6 +49,7 @@ onMounted(() => {
           base: () => props.base,
           openCard: (source) => (props.openCard ?? surface.value?.showCard)?.(source),
           onSubmit: () => emit("submit"),
+          onSubmitNew: () => emit("submitNew"),
           onEscape: () => emit("escape"),
         }),
         hint.of(placeholderText(props.placeholder ?? "")),
@@ -96,6 +98,14 @@ defineExpose({
   focus: () => view?.focus(),
   selectAll: () => view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }),
   blur: () => view?.contentDOM.blur(),
+  /// The caret after the text and its suggestions open: a key just added
+  /// is waiting for its value.
+  suggestAtEnd: () => {
+    if (!view) return;
+    view.focus();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    startCompletion(view);
+  },
 });
 
 onBeforeUnmount(() => {

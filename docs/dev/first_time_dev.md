@@ -267,8 +267,8 @@ SDK from the staged runtime tree (above) through
 at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collection
 scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
 alongside the per-source `<group>/render_markdown/` trees and
-`unified_document_index/grid_index/db.sqlite`. This is what the search bar's
-Words and Meaning tabs read (see `datalib/backend/unified_document_index/src/qmd/`).
+`unified_document_index/grid_index/db.sqlite`. This is what a search matches
+words and meaning against (see `datalib/backend/unified_document_index/src/qmd/`).
 
 Design notes:
 

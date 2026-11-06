@@ -305,7 +305,9 @@ Playwright's `fill` leaves it as it was and reports no error, so a
 spec that fills one waits on a search that never starts.
 `typeInto` in [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
 selects what is there and types over it, and the field's
-`data-query` attribute is what to assert on.
+`data-query` attribute is what to assert on. The toolbar's box then waits
+for Enter: `runSearch` does both, and `typeInto` alone is for a spec about
+what is offered while typing.
 
 **Take related values from one drawing.** Two separate reads can
 straddle a redraw. For example, the status from before a sync can sit
@@ -603,9 +605,7 @@ work cached for the next, so a time taken after another answer of the
 same query says little, and the time in a plain run is too low.
 
 What these times leave out, measured against the real card in a browser:
-the card waits 600 ms after the last keystroke before it asks, unless the
-search was opened with Enter in the top box, and it then loads the first
-row's document into the preview. A run asks one query straight after
+the card then loads the first row's document into the preview. A run asks one query straight after
 another, which came out about 20% faster than the same requests three
 seconds apart, the gap a person leaves. On a server just started, the
 query `run` warms up with is the first search after a launch, and the

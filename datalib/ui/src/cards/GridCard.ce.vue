@@ -11,8 +11,8 @@
 // the one query: a list with a preview (SearchList.ce.vue) and this
 // table, picked by the tabs above them. A new search opens on the view
 // picked last (searchViewPref.ts). Both stay mounted once shown, so
-// switching keeps each one's selection and scroll. The source chips rewrite the query
-// (cards/search.ts) rather than keep state beside it.
+// switching keeps each one's selection and scroll. Its search box is the
+// toolbar's (search/searchCards.ts), and its query is the one thing it keeps.
 //
 // A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
 // or the row menu opens the row's document as a new card via
@@ -73,7 +73,6 @@ import {
   type AccountsMap,
   type ColumnSpec,
   type QmdDocState,
-  type RowGroup,
   type RowsResponse,
   type RowsSpec,
   type SearchRow,
@@ -106,6 +105,7 @@ import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchNotices, type SearchEcho } from "@/grid/searchCoverage";
+import { registerSearchCard } from "@/search/searchCards";
 import {
   chosenSort,
   sortChoices,
@@ -143,9 +143,8 @@ import { searchFailure, type SearchFailure } from "./searchFailure";
 import { DEFAULT_QUERY } from "./searchDefaults";
 import { endWait, startWait, type Wait } from "@/telemetry";
 import SearchList from "./SearchList.ce.vue";
-import { freeText, pickedSource, searchTitle, setSource } from "./search";
+import { freeText, searchTitle } from "./search";
 import SearchField from "@/search/SearchField.vue";
-import { iconUrl } from "@/config/icons";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
@@ -189,6 +188,9 @@ const props = defineProps<{
 const url = props.url ?? SEARCH;
 // The search itself, not another table that pages the way it does.
 const isSearch = url === SEARCH;
+// A search card's box is the toolbar's. A source's own documents are a filter
+// on one list, and keep a box beside it, as a grid over any other table does.
+const inToolbar = isSearch && !props.oneSource;
 
 // Each view's tab: its name and its glyph, a stroked path on a 24px grid.
 const VIEWS: { id: SearchViewId; label: string; icon: string }[] = [
@@ -226,9 +228,9 @@ above the results says when some documents cannot be matched by meaning yet. Fil
 search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
 <p><b>Sort</b> orders the results in either view: best match, newest or oldest, largest or
 smallest, by author or by title. A result with nothing to sort by comes last.</p>
-<p>The chips under the box say which sources the results come from, and how many each;
-pick one to see only its results. A chip and the tick box write a filter into the search
-box, the same one you could type.</p>
+<p>The arrow in the search box opens <b>Advanced search</b>: how closely a match has to be
+in meaning, the sources the results come from and how many each, and filters to start. Everything
+in it writes into the search box, the same words you could type.</p>
 <p>The two tabs above the results are two ways to see them. <b>List and preview</b> shows
 each result with your words marked, and the picked one to read beside it. <b>Table</b>
 shows the same results with every column, sorting and grouping: a click selects a row
@@ -1212,7 +1214,8 @@ watch(query, (q, before) => {
       settledQuery.value = q;
       void runSearch(q);
     },
-    searchDelay(before, q, ranked),
+    // The toolbar's box asks only when it means it, on Enter.
+    inToolbar ? 0 : searchDelay(before, q, ranked),
   );
   saveState();
 });
@@ -1229,46 +1232,6 @@ watch(view, (v) => {
 });
 
 // --- the source chips: a view of the query ----------------------------
-
-/// The sources the search hits and how many rows each, whichever source
-/// the query is narrowed to.
-const sources = ref<RowGroup<Row>[]>([]);
-const sourcesQuery = computed(() => setSource(settledQuery.value, null));
-let sourcesAsked = 0;
-/// A newer search cancels the chips' request, so the server stops
-/// ranking free text nobody is waiting for.
-let sourcesInflight: AbortController | null = null;
-async function loadSources() {
-  if (!isSearch || props.oneSource) return;
-  const asked = ++sourcesAsked;
-  sourcesInflight?.abort();
-  const ctrl = (sourcesInflight = new AbortController());
-  try {
-    const r = await fetchGroups<Row>(sourcesQuery.value, "source_ref", ctrl.signal, SEARCH);
-    if (asked === sourcesAsked) sources.value = r.groups;
-  } catch {
-    /* the chips are a convenience; the search says what went wrong */
-  }
-}
-watch(sourcesQuery, loadSources);
-onMounted(loadSources);
-
-const allCount = computed(() => sources.value.reduce((n, g) => n + g.count, 0));
-const source = computed(() => pickedSource(query.value));
-
-// The chips are one line that scrolls sideways; the picked one is kept
-// in sight, however it was picked.
-const sourceChips = ref<HTMLElement | null>(null);
-watch([source, sources], async () => {
-  await nextTick();
-  sourceChips.value
-    ?.querySelector(".source-chip.is-on")
-    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-});
-
-function pickSource(id: string | null) {
-  query.value = setSource(query.value, id);
-}
 
 // Restore the selected row from persisted state after rows load (or
 // after the grid is first created, whichever happens last — creation
@@ -1474,7 +1437,6 @@ onMounted(() => {
       root: (e) => {
         if (e.kind !== "index_changed") return;
         refreshRows();
-        void loadSources();
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -2184,6 +2146,11 @@ function createGrid() {
 /// grouping bar does, and adds a term keeping the rows with a value in
 /// it: `from:*`, which a person can then narrow to a value.
 const searchWrapEl = ref<HTMLDivElement | null>(null);
+/// Where a search card's header drag lands: its box is out of the card's
+/// reach, in the toolbar, so the row above its results takes it.
+function viewRowRef(el: unknown) {
+  if (inToolbar) searchWrapEl.value = el as HTMLDivElement | null;
+}
 type Sortable = { destroy(): void };
 type SortableClass = { create(el: HTMLElement, options: object): Sortable };
 let searchDrop: Sortable | null = null;
@@ -2320,6 +2287,31 @@ onMounted(() => {
     attributeFilter: ["data-theme"],
   });
 });
+// The toolbar's box speaks for this card while it is the one in use.
+if (inToolbar) {
+  const registered = registerSearchCard({
+    id: props.ctx.cardId,
+    query,
+    settled: settledQuery,
+    run: (q) => {
+      query.value = q;
+    },
+    openFeedback: openFeedbackForSearchBar,
+  });
+  let onScreen: IntersectionObserver | null = null;
+  onMounted(() => {
+    const el = cardEl.value;
+    if (!el) return;
+    onScreen = new IntersectionObserver(([e]) => registered.setShown(e.isIntersecting));
+    onScreen.observe(el);
+    el.addEventListener("pointerdown", registered.used);
+  });
+  onBeforeUnmount(() => {
+    onScreen?.disconnect();
+    registered.remove();
+  });
+}
+
 onBeforeUnmount(() => {
   searchDrop?.destroy();
   searchDrop = null;
@@ -2332,14 +2324,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="cardEl" class="grid-column">
-    <div class="search-bar">
+    <div v-if="!inToolbar" class="search-bar">
       <div ref="searchWrapEl" class="search-input-wrap">
         <SearchField
           v-model="query"
           :base="url"
           :placeholder="hint"
           class="search-input"
-          testid="search-input"
+          testid="grid-search-input"
           :open-card="(source: string) => props.ctx.host.openCards(source)"
           autofocus
           @contextmenu="openFeedbackForSearchBar"
@@ -2350,7 +2342,7 @@ onBeforeUnmount(() => {
           class="search-clear"
           aria-label="Clear search"
           title="Clear search"
-          data-testid="search-clear"
+          data-testid="grid-search-clear"
           @click="query = ''"
         >
           ×
@@ -2358,43 +2350,8 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- The chips change the search; the switch, at the row's end and
-         last before the results, changes only how they are shown. -->
-    <div v-if="isSearch" class="view-row">
-      <div
-        v-if="sources.length > 0"
-        ref="sourceChips"
-        class="source-chips"
-        role="group"
-        aria-label="Sources"
-      >
-        <button
-          type="button"
-          class="source-chip"
-          :class="{ 'is-on': source === null }"
-          :aria-pressed="source === null"
-          @click="pickSource(null)"
-        >
-          All {{ allCount.toLocaleString() }}
-        </button>
-        <button
-          v-for="g in sources"
-          :key="g.sample.source_id"
-          type="button"
-          class="source-chip"
-          :class="{ 'is-on': source === g.sample.source_id }"
-          :aria-pressed="source === g.sample.source_id"
-          :data-source="g.sample.source_id"
-          @click="pickSource(g.sample.source_id ?? null)"
-        >
-          <img
-            v-if="iconUrl(g.sample.source_ref?.icon)"
-            :src="iconUrl(g.sample.source_ref?.icon)!"
-            alt=""
-          />
-          {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
-        </button>
-      </div>
+    <!-- The sort and how the results are shown, last before them. -->
+    <div v-if="isSearch" :ref="viewRowRef" class="view-row">
       <label class="sort-pick">
         <span class="sort-label">Sort</span>
         <select
@@ -2545,9 +2502,6 @@ onBeforeUnmount(() => {
   min-height: calc(var(--datalib-control-h) + 6px);
   border-bottom: 1px solid var(--datalib-border);
 }
-.source-chips {
-  padding-bottom: 6px;
-}
 .search-notice {
   flex: 0 0 auto;
   margin: 6px 0 0;
@@ -2620,41 +2574,6 @@ onBeforeUnmount(() => {
 }
 /* One line that scrolls sideways: wrapped, a count that grew added a row
    and moved every result under it. */
-.source-chips {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-.source-chip {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: calc(var(--datalib-control-h) - 2px);
-  padding: 0 10px;
-  font: inherit;
-  border: 1px solid var(--datalib-border);
-  border-radius: 999px;
-  background: var(--datalib-bg);
-  color: var(--datalib-fg);
-  cursor: pointer;
-}
-.source-chip img {
-  width: var(--datalib-icon-size);
-  height: var(--datalib-icon-size);
-}
-.source-chip:hover {
-  background: var(--datalib-hover);
-}
-.source-chip.is-on {
-  border-color: var(--datalib-fg);
-  background: var(--datalib-fg);
-  color: var(--datalib-bg);
-}
 .table-view {
   flex: 1 1 auto;
   min-height: 0;
