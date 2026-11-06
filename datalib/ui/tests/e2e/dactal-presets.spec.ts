@@ -41,7 +41,10 @@ test("each canned Slack query loads the Slack source and draws a table", async (
   await page.goto(`/${encodeURIComponent("dactalView()")}?token=${TOKEN}`);
   const frame = page.frameLocator('iframe[src="/dactal/index.html"]');
   const status = frame.locator("#status");
-  await expect(status).toContainText(/results? for/, { timeout: 20_000 });
+  // The card's own first load has to finish before a chip starts
+  // another, or it lands second and replaces the chip's rows. It ends
+  // on a query's result count, or with no query on the dataset list.
+  await expect(status).toContainText(/results? for|Pick one/, { timeout: 20_000 });
 
   const row = frame.locator(".preset-row", { hasText: "Slack" });
   await expect(row.locator(".preset")).toHaveText(PRESETS.map((p) => p.label));
