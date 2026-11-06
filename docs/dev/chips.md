@@ -168,7 +168,9 @@ and grid in the page shares it:
 - **`revalidate()`** asks again about everything held, keeping each
   old answer drawn until its new one arrives, and tells subscribers
   only about answers that changed or vanished. That is how a chip
-  follows something that moves on its own without flickering.
+  follows something that moves on its own without flickering. A question
+  already out may have been answered before whatever prompted this, so
+  it is asked once more when it lands; `ask` waits for that answer too.
 
 The two instances:
 
