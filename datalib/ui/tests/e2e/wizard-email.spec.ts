@@ -4,7 +4,10 @@ import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml, row, showSignIn } from "./wizard-helpers";
 import {
   fillConfigEditor,
-  expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig
+  expandGroup,
+  pickRowMenu,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
 } from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
