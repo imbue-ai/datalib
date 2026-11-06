@@ -1,8 +1,7 @@
 //! A table's reading of the shared search-bar grammar (`datalib_query`):
 //! which keys are its columns (declared on the table's schema, see
 //! `datalib_query::table`), what `is:` and `before:`/`after:` mean, and,
-//! for a table qmd indexes, the `qmd:` / `qmd_vsearch:` predicates that
-//! route free text to it.
+//! for a table qmd indexes, `semantic:`, which says how free text is searched.
 
 use datalib_query::table::{self, Column, FreeText, SearchKey, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
@@ -70,15 +69,46 @@ pub struct FilterTerm<C: 'static> {
     pub handles: Option<Vec<String>>,
 }
 
-/// How free-text should be evaluated. Bare search-bar text defaults to
-/// `Hybrid`; the explicit `qmd:"..."` predicate forces `Hybrid` and
-/// `qmd_vsearch:"..."` forces `Vsearch`.
+/// Whether free text is searched by meaning too, and how near a document
+/// has to be to count. Without a cutoff every document is some distance
+/// away, so every search would find them all. A word or a field that
+/// matches counts however far off its meaning is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FreeTextMode {
-    /// Every way free text is ranked, fused.
-    Hybrid,
-    /// By meaning alone.
-    Vsearch,
+pub enum Semantic {
+    /// `semantic:off`.
+    Off,
+    /// `semantic:0.3`: at least this cosine similarity, in thousandths so
+    /// a query stays comparable.
+    AtLeast(u16),
+}
+
+impl Semantic {
+    pub const DEFAULT: Self = Semantic::AtLeast(250);
+
+    /// The similarity a document needs, or `None` when meaning is not asked.
+    pub fn cutoff(self) -> Option<f64> {
+        match self {
+            Semantic::Off => None,
+            Semantic::AtLeast(thousandths) => Some(f64::from(thousandths) / 1000.0),
+        }
+    }
+
+    fn parse(value: &str, negate: bool) -> Result<Self, String> {
+        let unread = || "`semantic:` takes `on`, `off` or a similarity from 0 to 1".to_string();
+        if negate {
+            return Err(unread());
+        }
+        match value {
+            "on" => Ok(Self::DEFAULT),
+            "off" => Ok(Semantic::Off),
+            number => match number.parse::<f64>() {
+                Ok(x) if (0.0..=1.0).contains(&x) => {
+                    Ok(Semantic::AtLeast((x * 1000.0).round() as u16))
+                }
+                _ => Err(unread()),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,12 +116,11 @@ pub struct ParsedQuery<C: 'static = GridRowColumn> {
     /// Each occurrence preserved in order. Same-field repetitions are
     /// AND-ed downstream (tree-zoom).
     pub terms: Vec<FilterTerm<C>>,
-    /// Free-text portion of the query (after structured filters and the
-    /// optional `qmd:` / `qmd_vsearch:` predicate are peeled off). Empty
-    /// when the user typed only structured filters.
+    /// Free-text portion of the query (after structured filters are peeled
+    /// off, `qmd:` and `qmd_vsearch:` being other spellings of free text).
+    /// Empty when the user typed only structured filters.
     pub free_text: String,
-    /// How `free_text` should be evaluated against the qmd index.
-    pub free_text_mode: FreeTextMode,
+    pub semantic: Semantic,
     refusal: Option<String>,
 }
 
@@ -107,22 +136,24 @@ impl<C: Column> ParsedQuery<C> {
         let mut terms: Vec<FilterTerm<C>> = Vec::new();
         let mut free_terms: Vec<String> = Vec::new();
         let mut refusal: Option<String> = None;
-        // `qmd:"..."` / `qmd_vsearch:"..."` set the mode for the free-text
-        // portion. Multiple occurrences: last one wins.
-        let mut free_text_mode: FreeTextMode = FreeTextMode::Hybrid;
+        // Multiple occurrences: the last one wins.
+        let mut semantic = Semantic::DEFAULT;
         for tok in datalib_query::parse(s) {
             match tok {
-                // `qmd:` and `qmd_vsearch:` are not column filters — they
-                // route the embedded free text through qmd. Treat the value
-                // as free text and switch modes.
+                datalib_query::Token::Term(t) if qmd && t.key == "semantic" => {
+                    match Semantic::parse(&t.value, t.negate) {
+                        Ok(asked) => semantic = asked,
+                        Err(why) => {
+                            refusal.get_or_insert(why);
+                        }
+                    }
+                }
+                // `qmd:` and `qmd_vsearch:` are what free text once had to
+                // be spelled as, kept for the saved searches that do. A
+                // search now has one answer, so both are plain free text.
                 datalib_query::Token::Term(t)
                     if qmd && !t.negate && (t.key == "qmd" || t.key == "qmd_vsearch") =>
                 {
-                    free_text_mode = if t.key == "qmd_vsearch" {
-                        FreeTextMode::Vsearch
-                    } else {
-                        FreeTextMode::Hybrid
-                    };
                     // Re-quote multi-word values so the daemon can route
                     // them as a single lex phrase. `qmd:"earl grey"` and
                     // `qmd:earl` both work; quotes survive into free_text
@@ -157,7 +188,7 @@ impl<C: Column> ParsedQuery<C> {
         ParsedQuery {
             terms,
             free_text: free_terms.join(" "),
-            free_text_mode,
+            semantic,
             refusal,
         }
     }
@@ -547,7 +578,6 @@ mod tests {
     fn bare_text_defaults_to_hybrid_mode() {
         let q = parse_query("earl grey");
         assert_eq!(q.free_text, "earl grey");
-        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
     }
 
     #[test]
@@ -556,16 +586,14 @@ mod tests {
         // Multi-word qmd: value is re-quoted so the daemon can route
         // it as a single lex phrase.
         assert_eq!(q.free_text, "\"earl grey\"");
-        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
         // qmd: is NOT a Field — it doesn't show up as a structured filter.
         assert!(q.terms.is_empty());
     }
 
     #[test]
-    fn qmd_vsearch_predicate_switches_mode() {
+    fn qmd_vsearch_predicate_is_plain_free_text() {
         let q = parse_query("qmd_vsearch:\"hello world\"");
         assert_eq!(q.free_text, "\"hello world\"");
-        assert_eq!(q.free_text_mode, FreeTextMode::Vsearch);
     }
 
     #[test]
@@ -573,7 +601,6 @@ mod tests {
         // Single-word qmd: value doesn't need re-quoting.
         let q = parse_query("qmd:\"foo\" source:slack");
         assert_eq!(q.free_text, "foo");
-        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
         assert_eq!(kept(&q, col("source_id")), ["slack"]);
     }
 
@@ -585,5 +612,43 @@ mod tests {
         let q = parse_query("-foo bar");
         assert_eq!(q.free_text, "-foo bar");
         assert!(q.terms.is_empty());
+    }
+
+    /// The search bar's one say over meaning: on by default at a cutoff, off,
+    /// or at a cutoff of the person's. Anything else is refused, so a typo
+    /// cannot quietly turn it on.
+    #[test]
+    fn semantic_is_on_by_default_and_refuses_what_it_cannot_read() {
+        let semantic = |q: &str| parse_query(q).semantic;
+        assert_eq!(semantic("warp core"), Semantic::DEFAULT);
+        assert_eq!(semantic("warp core semantic:on"), Semantic::DEFAULT);
+        assert_eq!(semantic("warp core semantic:off"), Semantic::Off);
+        assert_eq!(semantic("semantic:0.4 warp"), Semantic::AtLeast(400));
+        assert_eq!(semantic("semantic:0"), Semantic::AtLeast(0));
+        assert_eq!(semantic("semantic:1"), Semantic::AtLeast(1000));
+        assert_eq!(
+            semantic("semantic:off semantic:0.3"),
+            Semantic::AtLeast(300)
+        );
+        assert_eq!(Semantic::AtLeast(300).cutoff(), Some(0.3));
+        assert_eq!(Semantic::Off.cutoff(), None);
+
+        let q = parse_query("warp semantic:0.3");
+        assert_eq!(q.free_text, "warp", "it is no part of the words");
+        assert!(q.terms.is_empty(), "and no filter on a column");
+
+        for q in [
+            "semantic:maybe",
+            "semantic:1.5",
+            "semantic:-1",
+            "-semantic:off",
+        ] {
+            assert!(
+                parse_query(q)
+                    .refusal()
+                    .is_some_and(|why| why.contains("semantic")),
+                "{q}"
+            );
+        }
     }
 }

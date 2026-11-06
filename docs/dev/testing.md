@@ -567,9 +567,9 @@ commented with why — is in the test's source.
 `scripts/search_eval.py` scores the search box against an eval set: target
 rows of a library, each with queries a person might type to find it (a
 few remembered words, search keys like `from:` and `after:`, or a
-description in other words). It asks every query once per answer (the
-Fields, Words and Meaning tabs, and the fused answer a search with no
-tab gets), records where the target ranked and how long
+description in other words). It asks every query once per setting (`on`,
+the search as it opens, `off`, with `semantic:off`, and any cutoff named in
+`--modes`, such as `0.3`), records where the target ranked and how long
 each answer took, and prints hit rates at 1, 3 and 10, the mean
 reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. For a
@@ -578,13 +578,13 @@ page lands, read from the row's `link`: on the message, how many
 messages off, and whether the snippet shown came from it.
 
 `--modes app` asks each query the way the search card does, and is the
-number to quote for how long a search takes. The card sends six requests
-at once: the rows of the list (`limit=50`), one row of each answer for its
-count, and the groups behind the source chips. `ms` is how long until the
+number to quote for how long a search takes. The card sends two requests
+at once: the rows of the list (`limit=50`) and the groups behind the source
+chips. `ms` is how long until the
 rows arrive; the report also gives each request's time and how long until
 all of them answered. Run it on its own, with `--http`: each answer leaves
 work cached for the next, so a time taken after another answer of the
-same query says little, and the fused time in a plain run is too low.
+same query says little, and the time in a plain run is too low.
 
 What these times leave out, measured against the real card in a browser:
 the card waits 600 ms after the last keystroke before it asks, unless the

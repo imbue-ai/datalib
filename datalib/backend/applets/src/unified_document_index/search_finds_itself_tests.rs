@@ -1,9 +1,9 @@
 //! Every row of the TNG fixture, searched for by what it holds, is found:
 //! by each search key's value (exactly the rows holding that value), by
 //! each key that reads the search terms (`from:`, `to:`, `with:`, …), by
-//! each of its search terms on the Fields tab, and each document by its
-//! rarest word on the Words tab and, nearly always, by its opening words
-//! on the Meaning tab. Which source each search reached is a snapshot, so
+//! each of its search terms on the fields, and each document by its
+//! rarest word on the words and, nearly always, by its opening words
+//! on the meaning. Which source each search reached is a snapshot, so
 //! a fixture change that leaves a source unchecked by a search shows in
 //! review. A new key or term kind is checked with no change here.
 
@@ -17,8 +17,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, SqliteConnection};
 
 use super::qmd_search_tests::fixture_root;
-use super::tabs::SearchTab;
-use super::tests::{index_over, search_tab};
+use super::tests::{index_over, search, search_part, Part};
 use super::*;
 
 /// Which sources each search was checked on, and with how many rows.
@@ -59,16 +58,19 @@ impl Coverage {
 }
 
 /// Every row a search holds, reading every page.
-async fn every_uuid(s: &Index, q: &str, tab: Option<SearchTab>) -> Vec<SearchRow> {
+async fn every_uuid(s: &Index, q: &str, part: Option<Part>) -> Vec<SearchRow> {
     let mut rows = Vec::new();
-    let mut offset = None;
+    let mut offset = 0;
     loop {
-        let page = search_tab(s, q, tab, offset, results::MAX_PAGE, None).await;
+        let page = match part {
+            Some(part) => search_part(s, q, part, offset, results::MAX_PAGE).await,
+            None => search(s, q, Some(offset), results::MAX_PAGE, None).await,
+        };
         assert!(page.errors.is_empty(), "{q}: {:?}", page.errors);
         assert!(page.refused.is_empty(), "{q}: {:?}", page.refused);
         rows.extend(page.rows);
         match page.next_offset {
-            Some(next) => offset = Some(next),
+            Some(next) => offset = next,
             None => return rows,
         }
     }
@@ -362,11 +364,11 @@ async fn every_row_is_found_by_what_it_holds() {
         }
     }
 
-    // A term is found by its value on the Fields tab, among whatever else
+    // A term is found by its value on the fields, among whatever else
     // answers to the same words.
     for ((kind, value), holding) in terms {
         let q = format!("\"{value}\"");
-        let got: HashSet<String> = every_uuid(&s, &q, Some(SearchTab::Fields))
+        let got: HashSet<String> = every_uuid(&s, &q, Some(Part::Fields))
             .await
             .into_iter()
             .map(|r| r.uuid)
@@ -378,7 +380,7 @@ async fn every_row_is_found_by_what_it_holds() {
             .collect();
         if !missing.is_empty() {
             failures.push(format!(
-                "the Fields tab's `{q}` ({kind}) missed [{}]",
+                "the fields's `{q}` ({kind}) missed [{}]",
                 listed(&missing)
             ));
         }
@@ -387,15 +389,15 @@ async fn every_row_is_found_by_what_it_holds() {
         }
     }
 
-    // A document is found on the Words tab by the word of its text the
+    // A document is found on the words by the word of its text the
     // fewest documents hold.
     for (md, word) in rarest_words(&texts) {
-        let got = every_uuid(&s, &word, Some(SearchTab::Words)).await;
+        let got = every_uuid(&s, &word, Some(Part::Words)).await;
         if !got
             .iter()
             .any(|r| r.markdown_uuid.as_deref() == Some(md.as_str()))
         {
-            failures.push(format!("the Words tab's `{word}` missed document {md}"));
+            failures.push(format!("the words's `{word}` missed document {md}"));
         }
         let source = rows
             .values()
@@ -406,24 +408,24 @@ async fn every_row_is_found_by_what_it_holds() {
     }
 
     // Notion's table of contents is filed for the grid alone: its title
-    // finds its row on the Fields tab, and the Words tab, which reads qmd,
+    // finds its row on the fields, and the words, which reads qmd,
     // does not return it.
     let contents_rows = |got: Vec<SearchRow>| {
         got.iter()
             .filter(|r| r.kind == "Notion Table of Contents")
             .count()
     };
-    let by_title = every_uuid(&s, "Table-of-Contents", Some(SearchTab::Fields)).await;
+    let by_title = every_uuid(&s, "Table-of-Contents", Some(Part::Fields)).await;
     if contents_rows(by_title) != 1 {
-        failures.push("the Fields tab missed the table of contents by its title".to_string());
+        failures.push("the fields missed the table of contents by its title".to_string());
     }
-    let by_words = every_uuid(&s, "Table-of-Contents", Some(SearchTab::Words)).await;
+    let by_words = every_uuid(&s, "Table-of-Contents", Some(Part::Words)).await;
     if contents_rows(by_words) != 0 {
-        failures.push("the Words tab returned the table of contents".to_string());
+        failures.push("the words returned the table of contents".to_string());
     }
 
     // A document is among the ten nearest its own opening words on the
-    // Meaning tab. Vectors are near, not exact: a document with a twin
+    // meaning. Vectors are near, not exact: a document with a twin
     // (two chats between the same people) may lose its place to it, so
     // this asks for nearly every document and some of every source's.
     let mut meaning: BTreeMap<String, (usize, usize)> = BTreeMap::new();
@@ -433,7 +435,7 @@ async fn every_row_is_found_by_what_it_holds() {
         if q.is_empty() {
             continue;
         }
-        let got = search_tab(&s, &q, Some(SearchTab::Meaning), None, 10, None).await;
+        let got = search_part(&s, &q, Part::Meaning, 0, 10).await;
         assert!(got.errors.is_empty(), "{q}: {:?}", got.errors);
         let found = got
             .rows
@@ -457,7 +459,7 @@ async fn every_row_is_found_by_what_it_holds() {
         .fold((0, 0), |(f, a), (found, asked)| (f + found, a + asked));
     if found * 10 < asked * 9 {
         failures.push(format!(
-            "the Meaning tab found {found} of {asked} documents by their opening words; \
+            "the meaning found {found} of {asked} documents by their opening words; \
              lost {lost:?}"
         ));
     }
@@ -468,7 +470,7 @@ async fn every_row_is_found_by_what_it_holds() {
                 .filter(|l| l.contains(&format!("({source})")))
                 .collect();
             failures.push(format!(
-                "the Meaning tab found {found} of {source}'s {asked} documents \
+                "the meaning found {found} of {source}'s {asked} documents \
                  by their opening words; lost {lost:?}"
             ));
         }

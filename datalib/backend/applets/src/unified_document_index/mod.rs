@@ -30,8 +30,7 @@ mod search_finds_itself_tests;
 mod search_terms;
 #[cfg(test)]
 mod serve_tests;
-pub(crate) mod tabs;
-mod warm;
+pub(crate) mod warm;
 
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{markdown_uuid_of_path, GridRow, GridRowColumn};
@@ -39,18 +38,17 @@ use datalib_unified_document_index::db::datalib_source_id;
 use datalib_unified_document_index::grid_columns::GridColumn;
 use datalib_unified_document_index::group::Within;
 use datalib_unified_document_index::qmd::index_state::{
-    resolve_markdown_states, DocReport, SummaryCache,
+    resolve_markdown_states, DocReport, IndexStamp, SummaryCache,
 };
 use datalib_unified_document_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdIndexReader, QmdIndexSummary,
 };
-use datalib_unified_document_index::query::{parse_query, Field, FreeTextMode, ParsedQuery};
+use datalib_unified_document_index::query::{parse_query, Field, ParsedQuery, Semantic};
 use datalib_unified_document_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_document_index::search::SearchRow;
 use datalib_unified_document_index::sort::{newest_first_by_date, Sort};
 use datalib_unified_document_index::view;
 use serde::{Deserialize, Serialize};
-use tabs::SearchTab;
 
 /// The step protocol's data-root variable, which the gateway sets for every
 /// applet it starts.
@@ -73,6 +71,7 @@ struct Index {
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
     keyed: Arc<tokio::sync::Mutex<results::KeyedCache>>,
+    coverage: Arc<tokio::sync::Mutex<results::VectorCoverage>>,
 }
 
 impl Index {
@@ -97,6 +96,7 @@ impl Index {
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
             keyed: Arc::default(),
+            coverage: Arc::default(),
             repo: Arc::new(repo),
             root,
         })
@@ -120,7 +120,7 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
         .build()
         .context("build tokio runtime")?;
     rt.block_on(async move {
-        let s = if embeds(&parse_query(p.q.as_deref().unwrap_or_default()), p.tab) {
+        let s = if embeds(&parse_query(p.q.as_deref().unwrap_or_default())) {
             open_with_models_verified(root).await?
         } else {
             let models = models::ModelGate::new(&root);
@@ -159,10 +159,10 @@ const EMBED_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 /// timeout to stay under, and every one starts it cold, loading its model.
 const ONE_SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Whether answering free text runs qmd's embedding model: the answer
-/// with no tab and the Meaning tab do; Fields and Words read tables.
-fn embeds(parsed: &ParsedQuery, tab: Option<SearchTab>) -> bool {
-    !parsed.free_text.is_empty() && matches!(tab, None | Some(SearchTab::Meaning))
+/// Whether answering free text runs qmd's embedding model. Fields and
+/// words read tables, so `semantic:off` needs none.
+fn embeds(parsed: &ParsedQuery) -> bool {
+    !parsed.free_text.is_empty() && parsed.semantic != Semantic::Off
 }
 
 pub fn serve(port: u16) -> Result<()> {
@@ -262,14 +262,16 @@ pub struct SearchParams {
     /// The group whose rows to list, as `[[column, value], …]` (see
     /// `grouping`); none for the whole search.
     pub within: Option<String>,
-    /// Which answer to free text: the grid's own fields, the words of the
-    /// documents, or their meaning. None answers as before tabs.
-    pub tab: Option<SearchTab>,
+    /// A search once had an answer per tab. It has one now, so a script
+    /// still naming a tab is refused, not given a different list quietly.
+    pub tab: Option<String>,
 }
+
+const TAB_IS_GONE: &str = "`tab` is gone: a search has one answer, every way of matching merged. \
+                           Write `semantic:off` in the query to leave out search by meaning";
 
 /// Which part of a search one request asks for.
 struct PageSpec<'a> {
-    tab: Option<SearchTab>,
     sort: &'a [Sort],
     within: &'a [Within],
     offset: usize,
@@ -384,6 +386,9 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         refused: vec![why],
         ..SearchResponse::unread(Vec::new())
     };
+    if p.tab.is_some() {
+        return refused(TAB_IS_GONE.to_string());
+    }
     if let Some(why) = parsed.refusal() {
         return refused(why);
     }
@@ -421,7 +426,6 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         }
     };
     let spec = PageSpec {
-        tab: p.tab,
         sort: &sort,
         within: &within,
         offset,
@@ -464,6 +468,19 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         }
         _ => None,
     };
+    // On the first page, for the line above the results: a later page and a
+    // group's rows have nothing to add to it.
+    let without_vectors = if read && offset == 0 && within.is_empty() {
+        match without_vectors(s, &q, &parsed).await {
+            Ok(counted) => counted,
+            Err(e) => {
+                errors.push(format!("count the documents without vectors: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut rows = page.rows;
     // The names and marks the config gives each source, read per
     // request: a rename lands on the next search, with no re-index.
@@ -477,13 +494,11 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         rows_spec: columns::rows_spec(),
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
-            "free_text_mode": match parsed.free_text_mode {
-                FreeTextMode::Hybrid => "hybrid",
-                FreeTextMode::Vsearch => "vsearch",
-            },
+            "semantic_cutoff": parsed.semantic.cutoff(),
             "qmd_error": qmd_error,
             "qmd_index_missing": qmd_index_missing,
-            "tab": p.tab.map(SearchTab::as_str),
+            "partial": page.partial,
+            "without_vectors": without_vectors,
         }),
         rows,
         total: page.total as u64,
@@ -535,6 +550,9 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
     if let Some(e) = echo["qmd_error"].as_str() {
         why.push(format!("qmd could not answer the free text: {e}"));
     }
+    if let Some(e) = echo["partial"].as_str() {
+        why.push(e.to_string());
+    }
     if echo["qmd_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
@@ -550,8 +568,6 @@ pub struct GroupParams {
     pub q: Option<String>,
     /// The grid columns to group by, outermost first: `source_ref,kind`.
     pub by: String,
-    /// As on [`SearchParams::tab`].
-    pub tab: Option<SearchTab>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -608,7 +624,7 @@ async fn groups_handler(
             return Json(out);
         }
     };
-    match group_list(&s, &q, &parsed, &by, p.tab).await {
+    match group_list(&s, &q, &parsed, &by).await {
         Ok(grouping) => {
             let sources = columns::Sources::read(&s.root);
             out.truncated = grouping.truncated;
@@ -642,14 +658,19 @@ async fn group_list(
     q: &str,
     parsed: &ParsedQuery,
     by: &[GridRowColumn],
-    tab: Option<SearchTab>,
 ) -> Result<datalib_unified_document_index::group::Grouping, SearchFailure> {
     let among = if parsed.free_text.is_empty() {
         None
     } else {
         let head = s.repo.head().await.map_err(index)?;
-        let (list, _, _) = ranked(s, q, parsed, head, tab).await?;
-        Some(list.iter().map(|e| e.uuid.clone()).collect::<Vec<_>>())
+        let answer = ranked(s, q, parsed, head).await?;
+        Some(
+            answer
+                .list
+                .iter()
+                .map(|e| e.uuid.clone())
+                .collect::<Vec<_>>(),
+        )
     };
     s.repo
         .group_counts(parsed, by, among.as_deref())
@@ -684,6 +705,8 @@ struct Page {
     total: usize,
     next_offset: Option<usize>,
     at: Option<String>,
+    /// What part of the search could not answer, when the rest did.
+    partial: Option<String>,
 }
 
 /// One page of the search, with qmd's score and matched words on each
@@ -694,9 +717,28 @@ async fn search_page(
     parsed: &ParsedQuery,
     spec: PageSpec<'_>,
 ) -> Result<Page, SearchFailure> {
-    let (list, at) = search_results(s, q, parsed, spec.tab, spec.sort, spec.within).await?;
+    let (list, at, partial) = search_results(s, q, parsed, spec.sort, spec.within).await?;
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
-    let (entries, next_offset) = results::page(&list, spec.offset, limit);
+    let (rows, next_offset) = page_rows(s, parsed, &list, spec.offset, limit).await?;
+    Ok(Page {
+        rows,
+        total: list.len(),
+        next_offset,
+        at,
+        partial,
+    })
+}
+
+/// The `limit` rows of `list` from `offset`, each landed and showing what
+/// matched, and where the next page starts.
+async fn page_rows(
+    s: &Index,
+    parsed: &ParsedQuery,
+    list: &[results::Entry],
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<SearchRow>, Option<usize>), SearchFailure> {
+    let (entries, next_offset) = results::page(list, offset, limit);
     land(s, parsed, entries).await?;
     let uuids: Vec<String> = entries.iter().map(|e| e.row().to_string()).collect();
     let mut rows = s.repo.rows_by_uuids(&uuids).await.map_err(index)?;
@@ -713,12 +755,61 @@ async fn search_page(
             show_hit(row, *hit);
         }
     }
-    Ok(Page {
-        rows,
-        total: list.len(),
-        next_offset,
-        at,
-    })
+    Ok((rows, next_offset))
+}
+
+/// How many of the documents this search could find search by meaning
+/// cannot reach; `None` where it was not asked to look, or no index has
+/// been built.
+async fn without_vectors(
+    s: &Index,
+    q: &str,
+    parsed: &ParsedQuery,
+) -> Result<Option<results::WithoutVectors>, SearchFailure> {
+    if !embeds(parsed) || search_terms::identifiers(&parsed.free_text).is_some() {
+        return Ok(None);
+    }
+    let Some(open) = s
+        .qmd_index
+        .open(&s.root)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
+    else {
+        return Ok(None);
+    };
+    let stamp = IndexStamp::of(&datalib_unified_document_index::qmd::qmd_index_path(
+        &s.root,
+    ));
+    let key = (
+        q.to_string(),
+        s.repo.head().await.map_err(index)?,
+        stamp.clone(),
+    );
+    let mut coverage = s.coverage.lock().await;
+    if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
+        return Ok(Some(counted.clone()));
+    }
+    let with_vectors = match coverage
+        .with_vectors
+        .as_ref()
+        .filter(|(at, _)| *at == stamp)
+    {
+        Some((_, read)) => read.clone(),
+        None => {
+            let read = open
+                .reader
+                .documents_with_vectors()
+                .await
+                .map_err(|e| SearchFailure::Qmd(format!("read qmd's vectors: {e}")))?;
+            let read = Arc::new(read);
+            coverage.with_vectors = Some((stamp, read.clone()));
+            read
+        }
+    };
+    let candidates = s.repo.documents_with_pages(parsed).await.map_err(index)?;
+    let counted = results::WithoutVectors::among(&candidates, &with_vectors);
+    coverage.last = Some((key, counted.clone()));
+    Ok(Some(counted))
 }
 
 /// qmd's score, and the words the hit matched in place of the row's
@@ -822,20 +913,19 @@ async fn search_results(
     s: &Index,
     q: &str,
     parsed: &ParsedQuery,
-    tab: Option<SearchTab>,
     sort: &[Sort],
     within: &[Within],
-) -> Result<(Arc<Vec<results::Entry>>, Option<String>), SearchFailure> {
+) -> Result<(Arc<Vec<results::Entry>>, Option<String>, Option<String>), SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
-        tab,
         sort: sort.to_vec(),
         within: within.to_vec(),
         at: s.repo.head().await.map_err(index)?,
     };
     if let Some(list) = s.results.get(&key) {
-        return Ok((list, key.at));
+        return Ok((list, key.at, None));
     }
+    let mut partial = None;
     let (list, at, keep) = if parsed.free_text.is_empty() {
         let listing = s
             .repo
@@ -849,9 +939,12 @@ async fn search_results(
             .collect();
         (list, listing.at, true)
     } else {
-        let (ranked, ranked_at, keep) = ranked(s, q, parsed, key.at.clone(), tab).await?;
+        let answer = ranked(s, q, parsed, key.at.clone()).await?;
+        partial = answer.partial;
+        let keep = answer.keep;
+        let ranked = answer.list;
         if sort.is_empty() && within.is_empty() {
-            return Ok((ranked, ranked_at));
+            return Ok((ranked, answer.at, partial));
         }
         // Sorting or grouping by a column reads every row's column, so
         // every hit is landed first: the slow way, and the rare one.
@@ -890,7 +983,16 @@ async fn search_results(
             list.clone(),
         );
     }
-    Ok((list, at))
+    Ok((list, at, partial))
+}
+
+/// A free-text search's ranked list, with the commit it was read at, whether
+/// it may be kept, and what part of the search could not answer.
+struct Ranked {
+    list: Arc<Vec<results::Entry>>,
+    at: Option<String>,
+    keep: bool,
+    partial: Option<String>,
 }
 
 /// qmd's ranking of a free-text search, narrowed to its structured terms:
@@ -903,64 +1005,33 @@ async fn ranked(
     q: &str,
     parsed: &ParsedQuery,
     at: Option<String>,
-    tab: Option<SearchTab>,
-) -> Result<(Arc<Vec<results::Entry>>, Option<String>, bool), SearchFailure> {
+) -> Result<Ranked, SearchFailure> {
     let key = results::Key {
         q: q.to_string(),
-        tab,
         sort: Vec::new(),
         within: Vec::new(),
         at,
     };
+    let cached = |list, at| Ranked {
+        list,
+        at,
+        keep: true,
+        partial: None,
+    };
     if let Some(list) = s.results.get(&key) {
-        return Ok((list, key.at, true));
+        return Ok(cached(list, key.at));
     }
     let _turn = s.results.turn(&key).await;
     if let Some(list) = s.results.get(&key) {
-        return Ok((list, key.at, true));
+        return Ok(cached(list, key.at));
     }
-    let (ranking, terms_at) = match tab {
-        Some(SearchTab::Fields) => fields_ranking(s, parsed).await?,
-        Some(SearchTab::Words) => (words_ranking(s, parsed).await?, None),
-        Some(SearchTab::Meaning) => (meaning_ranking(s, parsed).await?, None),
-        None => fused_ranking(s, parsed).await?,
-    };
-    // A row the ranking names is kept if the search's terms keep it. A
-    // document's hit was narrowed by them before it was ranked, and lands
-    // on a row they keep.
-    let rows: Vec<String> = ranking
-        .iter()
-        .filter(|(_, hit)| hit.document.is_none())
-        .map(|(uuid, _)| uuid.clone())
-        .collect();
-    // The keys, once worked out, answer from memory; a list of documents
-    // alone asks nothing.
-    let (kept, at): (std::collections::HashSet<String>, Option<String>) = if rows.is_empty() {
-        (Default::default(), key.at.clone())
-    } else if let Some(keyed) = keyed(s, parsed).await? {
-        let kept = rows
-            .into_iter()
-            .filter(|r| keyed.rows.contains(r))
-            .collect();
-        (kept, key.at.clone())
-    } else {
-        let listing = s
-            .repo
-            .filter_uuids(parsed, &rows, &[], &[])
-            .await
-            .map_err(index)?;
-        (listing.uuids.into_iter().collect(), listing.at)
-    };
+    let answer = fused_ranking(s, parsed).await?;
+    let (list, at) = entries_kept(s, parsed, answer.ranking, key.at.clone()).await?;
     // Terms written for another commit than the rows were read at may be
-    // a pass out: answer with them, and ask again next time.
-    let keep = terms_at.is_none_or(|t| t == at);
-    let list: Arc<Vec<results::Entry>> = Arc::new(
-        ranking
-            .into_iter()
-            .filter(|(uuid, hit)| hit.document.is_some() || kept.contains(uuid))
-            .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
-            .collect(),
-    );
+    // a pass out, and a part that failed may answer next time: answer with
+    // them, and ask again.
+    let keep = answer.terms_at.is_none_or(|t| t == at) && answer.partial.is_none();
+    let list: Arc<Vec<results::Entry>> = Arc::new(list);
     if keep {
         s.results.put(
             results::Key {
@@ -970,7 +1041,52 @@ async fn ranked(
             list.clone(),
         );
     }
-    Ok((list, at, keep))
+    Ok(Ranked {
+        list,
+        at,
+        keep,
+        partial: answer.partial,
+    })
+}
+
+/// A ranking's entries the search's terms keep, and the commit they were
+/// read at. A document's hit was narrowed by them before it was ranked, and
+/// lands on a row they keep.
+async fn entries_kept(
+    s: &Index,
+    parsed: &ParsedQuery,
+    ranking: Ranking,
+    at: Option<String>,
+) -> Result<(Vec<results::Entry>, Option<String>), SearchFailure> {
+    let rows: Vec<String> = ranking
+        .iter()
+        .filter(|(_, hit)| hit.document.is_none())
+        .map(|(uuid, _)| uuid.clone())
+        .collect();
+    // The keys, once worked out, answer from memory; a list of documents
+    // alone asks nothing.
+    let (kept, at): (std::collections::HashSet<String>, Option<String>) = if rows.is_empty() {
+        (Default::default(), at)
+    } else if let Some(keyed) = keyed(s, parsed).await? {
+        let kept = rows
+            .into_iter()
+            .filter(|r| keyed.rows.contains(r))
+            .collect();
+        (kept, at)
+    } else {
+        let listing = s
+            .repo
+            .filter_uuids(parsed, &rows, &[], &[])
+            .await
+            .map_err(index)?;
+        (listing.uuids.into_iter().collect(), listing.at)
+    };
+    let list = ranking
+        .into_iter()
+        .filter(|(uuid, hit)| hit.document.is_some() || kept.contains(uuid))
+        .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
+        .collect();
+    Ok((list, at))
 }
 
 /// One ranking of a search's rows, best first, each with its score and
@@ -980,8 +1096,8 @@ type Ranking = Vec<(String, results::Hit)>;
 /// The search terms' ranking, and the grid generation it was read at.
 type TermsRanking = (Ranking, Option<Option<String>>);
 
-/// The Fields tab: the ids, people, titles and names a row answers to,
-/// from the grid index's search terms.
+/// The ids, people, titles and names a row answers to, from the grid
+/// index's search terms.
 /// Every match when other terms narrow the search, since they are applied
 /// after this list.
 async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, SearchFailure> {
@@ -1011,33 +1127,82 @@ async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking,
     Ok((ranking, Some(found.grid_generation)))
 }
 
-/// The answer with no tab, which the CLI, the map and a link without a
-/// tab all get: Words, Meaning and Fields, each narrowed by the search's
-/// other terms, fused by reciprocal rank, one entry a document. A search of identifiers alone
-/// is Fields', whose match is exact; `qmd_vsearch:` is Meaning's.
-async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, SearchFailure> {
+/// A search's one ranking: its words, its fields and, unless `semantic:off`,
+/// its meaning, each narrowed by the search's other terms, fused by
+/// reciprocal rank, one entry a document. A search of identifiers alone is
+/// the fields', whose match is exact.
+///
+/// A part that fails costs that part and says so, since the rest are still
+/// true matches and search by meaning has a model to wait for: the first
+/// launch downloads it. With nothing else to show, the failure is the answer.
+async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Answer, SearchFailure> {
     if search_terms::identifiers(&parsed.free_text).is_some() {
-        return fields_ranking(s, parsed).await;
+        let (ranking, terms_at) = fields_ranking(s, parsed).await?;
+        return Ok(Answer {
+            ranking,
+            terms_at,
+            partial: None,
+        });
     }
-    if parsed.free_text_mode == FreeTextMode::Vsearch {
-        return Ok((meaning_ranking(s, parsed).await?, None));
-    }
-    let (fields, words, meaning) = tokio::try_join!(
+    let (fields, words, meaning) = tokio::join!(
         fields_ranking(s, parsed),
         words_ranking(s, parsed),
         meaning_ranking(s, parsed),
-    )?;
-    // Each cut to the depth fused: a rank past it adds next to nothing.
-    let rankings: Vec<Ranking> = [words, meaning, fields.0]
-        .into_iter()
-        .map(|mut r| {
-            r.truncate(QMD_DEPTH);
-            r
-        })
-        .collect();
+    );
+    let (fields, terms_at) = match fields {
+        Ok(fields) => (fields.0, fields.1),
+        Err(SearchFailure::Index(e)) => return Err(SearchFailure::Index(e)),
+        Err(e) => {
+            // The terms are the index's own: they fail with it.
+            tracing::warn!(error = %e, "the search terms could not answer");
+            (Vec::new(), None)
+        }
+    };
+    let mut failed: Option<SearchFailure> = None;
+    let mut part = |name: &str, answer: Result<Ranking, SearchFailure>| match answer {
+        Ok(ranking) => ranking,
+        Err(e) => {
+            tracing::error!(part = name, error = %e, "part of a search could not answer");
+            failed.get_or_insert(e);
+            Vec::new()
+        }
+    };
+    let words = part("words", words);
+    let meaning = part("meaning", meaning);
+    let mut rankings: [Ranking; 3] = [words, meaning, fields];
+    for r in &mut rankings {
+        // Each cut to the depth fused: a rank past it adds next to nothing.
+        r.truncate(QMD_DEPTH);
+    }
+    let partial = match failed {
+        Some(failure) if rankings.iter().all(Vec::is_empty) => return Err(failure),
+        Some(SearchFailure::Index(e)) => return Err(SearchFailure::Index(e)),
+        Some(failure) => Some(match failure {
+            SearchFailure::NoIndex => {
+                "No sync has built the search index yet, so these results match names and ids only"
+                    .to_string()
+            }
+            other => {
+                format!("Part of this search could not answer, so results may be missing: {other}")
+            }
+        }),
+        None => None,
+    };
     let uuids: Vec<String> = rankings.iter().flatten().map(|(u, _)| u.clone()).collect();
     let doc_of = s.repo.markdowns_of(&uuids).await.map_err(index)?;
-    Ok((fuse(&rankings, &doc_of), fields.1))
+    Ok(Answer {
+        ranking: fuse(&rankings, &doc_of),
+        terms_at,
+        partial,
+    })
+}
+
+/// A ranking, the grid generation the terms in it were read at, and what
+/// part of the search could not answer.
+struct Answer {
+    ranking: Ranking,
+    terms_at: Option<Option<String>>,
+    partial: Option<String>,
 }
 
 /// Reciprocal rank fusion, by document: a document scores the sum, over
@@ -1077,7 +1242,7 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
     fused
 }
 
-/// The Words tab: qmd's keyword index ranked by BM25, read from its own
+/// The words of every document: qmd's keyword index ranked by BM25, read from its own
 /// table so a source can answer with more than the 20 documents `qmd mcp`
 /// takes from each.
 async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
@@ -1125,12 +1290,16 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
     documents_of_hits(s, parsed, hits).await
 }
 
-/// The Meaning tab: the documents nearest the free text by cosine, scored
-/// here over qmd's stored vectors. Structured terms narrow the documents
-/// before any is scored, so a filter never empties a ranking cut too
-/// shallow to hold its rows; qmd only embeds the query.
+/// The documents nearest the free text by cosine, scored here over qmd's
+/// stored vectors, down to the search's cutoff, and none with `semantic:off`.
+/// Structured terms narrow the documents before any is scored, so a filter
+/// never empties a ranking cut too shallow to hold its rows; qmd only embeds
+/// the query.
 async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
     use datalib_unified_document_index::qmd::lex::{has_lex_syntax, strip_lex_syntax};
+    let Some(cutoff) = parsed.semantic.cutoff() else {
+        return Ok(Vec::new());
+    };
     let qmd = |e: anyhow::Error| SearchFailure::Qmd(format!("{e:#}"));
     let text = if has_lex_syntax(&parsed.free_text) {
         strip_lex_syntax(&parsed.free_text)
@@ -1172,13 +1341,17 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
             QMD_DEPTH,
         )
         .await;
-    let hits = hits.map_err(qmd)?;
+    let mut hits = hits.map_err(qmd)?;
+    let found = hits.len();
+    hits.retain(|h| h.score >= cutoff);
     tracing::info!(
         embed_ms = embedded.as_millis() as u64,
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
         among = among.map(|a| a.len()),
+        found,
         hits = hits.len(),
+        cutoff,
         "ranked a search by meaning"
     );
     documents_of_hits(s, parsed, hits).await
@@ -1318,7 +1491,7 @@ async fn ranked_rows(
     depth: usize,
 ) -> Result<Vec<SearchRow>, SearchFailure> {
     let head = s.repo.head().await.map_err(index)?;
-    let (list, _, _) = ranked(s, q, parsed, head, None).await?;
+    let list = ranked(s, q, parsed, head).await?.list;
     let uuids: Vec<String> = list.iter().take(depth).map(|e| e.uuid.clone()).collect();
     s.repo.rows_by_uuids(&uuids).await.map_err(index)
 }
@@ -2492,17 +2665,6 @@ mod tests {
         limit: usize,
         sort: Option<&str>,
     ) -> SearchResponse {
-        search_tab(s, q, None, offset, limit, sort).await
-    }
-
-    pub(super) async fn search_tab(
-        s: &Index,
-        q: &str,
-        tab: Option<SearchTab>,
-        offset: Option<usize>,
-        limit: usize,
-        sort: Option<&str>,
-    ) -> SearchResponse {
         let params = SearchParams {
             q: Some(q.to_string()),
             limit: Some(limit),
@@ -2510,9 +2672,60 @@ mod tests {
             sort: sort.map(String::from),
             through: None,
             within: None,
-            tab,
+            tab: None,
         };
         search_handler(State(s.clone()), Query(params)).await.0
+    }
+
+    /// One part of what a search merges, on its own, read the way a search
+    /// reads its pages: what each part finds has rules of its own, and the
+    /// merged answer would hide a part's misses behind another's hits.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Part {
+        Fields,
+        Words,
+        Meaning,
+    }
+
+    pub(super) async fn search_part(
+        s: &Index,
+        q: &str,
+        part: Part,
+        offset: usize,
+        limit: usize,
+    ) -> SearchResponse {
+        let parsed = parse_query(q);
+        assert_eq!(parsed.refusal(), None, "{q}");
+        let (parsed, _) = with_people(&s.root, q, parsed).await.unwrap();
+        let ranking = match part {
+            Part::Fields => fields_ranking(s, &parsed).await.map(|r| r.0),
+            Part::Words => words_ranking(s, &parsed).await,
+            Part::Meaning => meaning_ranking(s, &parsed).await,
+        };
+        let answered = async {
+            let at = s.repo.head().await.map_err(index)?;
+            let (list, _) = entries_kept(s, &parsed, ranking?, at).await?;
+            let (mut rows, next_offset) = page_rows(s, &parsed, &list, offset, limit).await?;
+            let sources = columns::Sources::read(&s.root);
+            for row in &mut rows {
+                sources.resolve(row);
+                row.link = link_of(row);
+            }
+            Ok::<_, SearchFailure>((rows, list.len(), next_offset))
+        };
+        match answered.await {
+            Ok((rows, total, next_offset)) => SearchResponse {
+                rows,
+                total: total as u64,
+                next_offset,
+                query_echo: serde_json::json!({ "qmd_error": null }),
+                ..SearchResponse::unread(Vec::new())
+            },
+            Err(e) => SearchResponse {
+                query_echo: serde_json::json!({ "qmd_error": e.to_string() }),
+                ..SearchResponse::unread(Vec::new())
+            },
+        }
     }
 
     pub(super) fn uuids(r: &SearchResponse) -> Vec<&str> {
@@ -2582,7 +2795,6 @@ mod tests {
             .expect("a committed index answers with its commit");
         let key = results::Key {
             q: String::new(),
-            tab: None,
             sort: Vec::new(),
             within: Vec::new(),
             at: Some(at.clone()),
@@ -2708,19 +2920,9 @@ mod tests {
     }
 
     pub(super) async fn groups(s: &Index, q: &str, by: &str) -> GroupsResponse {
-        groups_tab(s, q, by, None).await
-    }
-
-    pub(super) async fn groups_tab(
-        s: &Index,
-        q: &str,
-        by: &str,
-        tab: Option<SearchTab>,
-    ) -> GroupsResponse {
         let params = GroupParams {
             q: Some(q.to_string()),
             by: by.to_string(),
-            tab,
         };
         groups_handler(State(s.clone()), Query(params)).await.0
     }

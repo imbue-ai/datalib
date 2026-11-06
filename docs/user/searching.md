@@ -18,28 +18,41 @@ datalib-applet search ~/datalib 'warp core -from:riker is:document'
 A query is free text and `key:value` terms, in any order; everything
 must match. Free text looks for words in your documents:
 
-- **With no tab** (the app's **Best** tab, which a search opens on),
-  the words are answered the three ways below and the answers merged,
-  documents that rank well in more than one first.
-- **`--tab words`** (`tab=words`) matches the words themselves, ranked
-  by how well each document matches.
-- **`--tab meaning`** finds the documents closest in meaning, even with
-  none of your words in them. With a key that keeps only some of a
-  document's messages (`from:riker`, a day), the document is judged by
-  those messages alone.
-- **`--tab fields`** matches every word as the start of a value a row
-  is filed under: a name, an address, an id, a title, a label.
+- **By their fields:** every word as the start of a value a row is filed
+  under: a name, an address, an id, a title, a label.
+- **By their words:** the words themselves, ranked by how well each document
+  matches.
+- **By their meaning:** the documents closest in meaning, even with none of
+  your words in them. With a key that keeps only some of a document's messages
+  (`from:riker`, a day), the document is judged by those messages alone.
+
+All three are merged into one list, documents that rank well in more than one
+first.
+
+Every document has some similarity to any words, so meaning needs a cutoff, or
+every search would find every document:
+
+| you write | meaning |
+|---|---|
+| nothing | documents at a similarity of at least 0.25 count |
+| `semantic:0.4` | ask for a closer match; from 0 to 1, where 0 keeps every document |
+| `semantic:off` | leave meaning out. Faster from a shell, which then loads no model |
+
+A word or a field that matches counts however far off its meaning is.
 
 A search can be in another language than the document. Meaning crosses
 languages: a question in German or Italian finds an English document,
-and the other way round. Words and Fields match what you typed, so across
-languages they find only what the two spellings share, such as a name.
-Meaning covers a source only once its `embed` step has run, so a source
-with that step turned off answers in the words it is written in.
+and the other way round, though often at a lower similarity, so lower the
+cutoff if a foreign question finds little. Words and fields match what you
+typed, so across languages they find only what the two spellings share, such as
+a name. Meaning covers a source only once its `embed` step has run, so a source
+with that step turned off answers in the words it is written in. A line above
+the results says how many of the documents the search could have found have no
+vectors, and hovering says which sources they are in. From a shell or the API
+it is `query_echo.without_vectors`.
 
 Free text made only of ids and addresses (`picard@enterprise.org`,
-`tel:+12025550101`, a row's uuid) is looked up directly, whatever the
-tab: every row that names it, the ones it is most about first. A source's
+`tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's
 own id for a record counts too, where it is a uuid, dashed or not, and so
 does a link that ends in one: paste a Notion page's link to find the page.
 
@@ -70,14 +83,11 @@ as stored, case and all: `kind:Email`, not `kind:email`.
 `after:` and `before:` keep each message by its own time, and a
 document (a thread, a chat, an agent session) by its last message. A
 chat that runs over several days is kept for any day it was active,
-and without free text you see only that day's messages. With free text
-the tabs differ:
-
-- **Meaning** ranks the chat by its messages in the window alone.
-- **Words** ranks the whole chat by every word in it, then opens it at
-  the message in the window holding the most of your words. A chat can
-  rank for words it said on another day, and open on a message that
-  does not hold them.
+and without free text you see only that day's messages. With free text, meaning
+ranks the chat by its messages in the window alone, while words rank the whole
+chat by every word in it, then open it at the message in the window holding the
+most of your words. So a chat can rank for words it said on another day, and
+open on a message that does not hold them.
 
 `GET …/search/keys` lists every key a root has, and
 `…/search/values?key=…&typed=…` the values one takes, most rows first.
@@ -197,15 +207,23 @@ direction, so `touched_at:asc` opens on the oldest row that has a date. A
 sort this search does not have comes back in `errors`, and the rows in the
 default order. A row has several labels and people, so neither is a sort.
 
-Sorting a search with words reorders everything it found, however weakly it
-matched.
+Sorting a search with words reorders everything it found, down to the cutoff
+above. Raise the cutoff if a date-sorted search shows too much.
 
 The table's **group by** does the same with `--within` and `/search/groups`:
 every group with its count, then each group's rows a page at a time.
 
 ## When the search says no
 
-The answer's `refused` says why a query was not run: a key the search
+A part of the search that cannot answer costs that part, not the rest: while
+the embedding model is still downloading on a first launch, you still get what
+your words and fields match, with a line above the results saying what is
+missing, `query_echo.partial`. `datalib-applet search` prints those rows and
+exits 1.
+
+
+The answer's `refused` says why a query was not run: `tab=` or `--tab`, which a
+search no longer has, a key the search
 does not have, `is:` with a word it does not know, a `contact:` on a
 root without the contacts app, or `me` on a root whose index has not
 synced since it learned which handles are yours. `datalib-applet

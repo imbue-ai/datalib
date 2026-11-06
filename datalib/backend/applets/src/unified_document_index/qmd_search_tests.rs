@@ -7,9 +7,9 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use super::tabs::SearchTab;
-use super::tests::{groups, groups_tab, index_over, search, search_tab, search_within, uuids};
+use super::tests::{groups, index_over, search, search_part, search_within, uuids, Part};
 use super::*;
+use sqlx::ConnectOptions;
 
 /// A word the fixture's corpus uses across several sources.
 const QUERY: &str = "the enterprise";
@@ -211,16 +211,19 @@ async fn the_map_matches_the_documents_the_grid_finds() {
     }
 }
 
-/// `qmd_vsearch:` asks qmd's vector search alone, and says so.
+/// `qmd_vsearch:` and `qmd:` are older spellings of free text, kept for the
+/// searches saved with them: each answers as the bare words do.
 #[tokio::test]
-async fn a_vector_only_search_ranks_by_meaning() {
+async fn the_old_spellings_of_free_text_answer_as_free_text() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let r = search(&s, &format!("qmd_vsearch:\"{QUERY}\""), None, 10, None).await;
-    assert_eq!(qmd_error(&r), None);
-    assert_eq!(r.query_echo["free_text_mode"], "vsearch");
-    assert!(!r.rows.is_empty());
-    assert!(r.rows.iter().all(|row| row.score.is_some()));
+    let word = "warp";
+    let bare = search(&s, word, None, 1_000, None).await;
+    for q in [format!("qmd_vsearch:{word}"), format!("qmd:{word}")] {
+        let r = search(&s, &q, None, 1_000, None).await;
+        assert_eq!(qmd_error(&r), None, "{q}");
+        assert_eq!(uuids(&r), uuids(&bare), "{q}");
+    }
 }
 
 /// Structured terms alone light up the map without asking qmd, which a
@@ -238,9 +241,10 @@ async fn the_map_matches_structured_terms_without_qmd() {
     assert!(!matched.markdown_uuids.is_empty());
 }
 
-/// A root no sync has built a qmd index for answers free text with no
-/// rows and `qmd_index_missing`, on the grid and its groups: a state the
-/// grid explains, not a failure it shows as an error, and not an empty
+/// A root no sync has built a qmd index for still answers what the grid's
+/// own terms hold, and says the rest is missing. Words the terms do not hold
+/// get no rows and `qmd_index_missing`, on the grid and its groups: a state
+/// the grid explains, not a failure it shows as an error, and not an empty
 /// result that reads as "no matches". The map says why in its errors.
 #[tokio::test]
 async fn free_text_without_a_qmd_index_says_it_is_not_built() {
@@ -249,12 +253,23 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
     datalib_qmd_fixture::copy_grid_index(root.path());
     let s = index_over(root.path()).await;
 
-    let r = search(&s, QUERY, None, 10, None).await;
+    let named = search(&s, "enterprise", None, 10, None).await;
+    assert!(!named.rows.is_empty(), "the terms answer without qmd");
+    assert!(
+        named.query_echo["partial"]
+            .as_str()
+            .is_some_and(|why| why.contains("search index")),
+        "{:?}",
+        named.query_echo
+    );
+
+    const NOWHERE: &str = "xyzzyplugh";
+    let r = search(&s, NOWHERE, None, 10, None).await;
     assert!(r.rows.is_empty());
     assert!(qmd_index_missing(&r), "{:?}", r.query_echo);
     assert_eq!(qmd_error(&r), None);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
-    let g = groups(&s, QUERY, "kind").await;
+    let g = groups(&s, NOWHERE, "kind").await;
     assert!(g.groups.is_empty());
     assert!(g.qmd_index_missing);
     assert_eq!(g.qmd_error, None);
@@ -264,7 +279,7 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
     assert!(!qmd_index_missing(&structured));
 
     let params = map::MatchParams {
-        q: Some(QUERY.to_string()),
+        q: Some(NOWHERE.to_string()),
     };
     let matched = map::matches_handler(State(s.clone()), Query(params))
         .await
@@ -273,17 +288,16 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
     assert_eq!(matched.errors.len(), 1, "{:?}", matched.errors);
 }
 
-/// Each tab answers the same words its own way, and keeps its answer apart
-/// from the others': Fields from the search terms, each row saying which of
-/// its terms matched unless its title did; Words by BM25 from qmd's keyword index, best first;
-/// Meaning from qmd's vectors alone.
+/// Each part of a search answers the same words its own way: fields from the
+/// search terms, each row saying which of its terms matched unless its title
+/// did; words by BM25 from qmd's keyword index, best first; meaning from
+/// qmd's vectors alone.
 #[tokio::test]
-async fn each_tab_answers_free_text_its_own_way() {
+async fn each_part_answers_free_text_its_own_way() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
 
-    let fields = search_tab(&s, "enterprise", Some(SearchTab::Fields), None, 1_000, None).await;
-    assert_eq!(fields.query_echo["tab"], "fields");
+    let fields = search_part(&s, "enterprise", Part::Fields, 0, 1_000).await;
     assert!(
         !fields.rows.is_empty(),
         "no row's terms start with the word"
@@ -304,9 +318,8 @@ async fn each_tab_answers_free_text_its_own_way() {
         }
     }
 
-    let words = search_tab(&s, QUERY, Some(SearchTab::Words), None, 1_000, None).await;
+    let words = search_part(&s, QUERY, Part::Words, 0, 1_000).await;
     assert_eq!(qmd_error(&words), None);
-    assert_eq!(words.query_echo["tab"], "words");
     let ranked = scores(&words);
     assert!(
         ranked.windows(2).all(|w| w[0] >= w[1]),
@@ -317,11 +330,10 @@ async fn each_tab_answers_free_text_its_own_way() {
         "every score ties: {ranked:?}"
     );
 
-    let meaning = search_tab(&s, QUERY, Some(SearchTab::Meaning), None, 1_000, None).await;
+    let meaning = search_part(&s, QUERY, Part::Meaning, 0, 1_000).await;
     assert_eq!(qmd_error(&meaning), None);
-    assert_eq!(meaning.query_echo["tab"], "meaning");
     assert!(!meaning.rows.is_empty());
-    assert_ne!(uuids(&words), uuids(&meaning), "two tabs gave one answer");
+    assert_ne!(uuids(&words), uuids(&meaning), "two parts gave one answer");
 }
 
 /// A pasted address finds the emails it was copied on, not only the ones
@@ -346,7 +358,7 @@ async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
         "{matched:?}"
     );
 
-    let inbox = search_tab(&s, "inbox", Some(SearchTab::Fields), None, 1_000, None).await;
+    let inbox = search_part(&s, "inbox", Part::Fields, 0, 1_000).await;
     assert!(
         snippets(&inbox).contains("label: Inbox"),
         "{:?}",
@@ -378,19 +390,207 @@ async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
     }
 }
 
-/// The Words tab is scoped by `source:` like any search, and its groups
-/// count the same rows its pages list.
+/// With meaning left out, a search is scoped by `source:` like any other,
+/// and its groups count the same rows its pages list.
 #[tokio::test]
-async fn the_words_tab_narrows_and_groups_like_a_search() {
+async fn a_search_narrows_and_groups_with_meaning_left_out() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let narrowed = format!("{QUERY} source:slack");
-    let slack = search_tab(&s, &narrowed, Some(SearchTab::Words), None, 1_000, None).await;
+    let words = format!("{QUERY} semantic:off");
+    let slack = search(&s, &format!("{words} source:slack"), None, 1_000, None).await;
     assert!(slack.total > 0, "the fixture's slack source has the words");
     assert!(slack.rows.iter().all(|r| r.source_id == "slack"));
 
-    let all = search_tab(&s, QUERY, Some(SearchTab::Words), None, 1_000, None).await;
-    let by_source = groups_tab(&s, QUERY, "source_ref", Some(SearchTab::Words)).await;
+    let all = search(&s, &words, None, 1_000, None).await;
+    let by_source = groups(&s, &words, "source_ref").await;
     let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
     assert_eq!(counted, all.total);
+}
+
+/// A search is one list, however it matched: what the words find is in it,
+/// and what is near in meaning joins it above the cutoff. Every document has
+/// some similarity, so without a cutoff every search finds them all.
+#[tokio::test]
+async fn the_cutoff_decides_what_meaning_adds_to_the_words() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let total = |q: String| {
+        let s = &s;
+        async move {
+            let r = search(s, &q, None, 1_000, None).await;
+            assert_eq!(qmd_error(&r), None, "{q}");
+            assert!(r.refused.is_empty(), "{q}: {:?}", r.refused);
+            r.total
+        }
+    };
+    let off = total(format!("{QUERY} semantic:off")).await;
+    let strict = total(format!("{QUERY} semantic:1")).await;
+    let default = total(QUERY.to_string()).await;
+    let everything = total(format!("{QUERY} semantic:0")).await;
+    assert!(off > 0, "the words find something");
+    assert_eq!(
+        strict, off,
+        "nothing is that near, so only the words answer"
+    );
+    assert!(default >= off, "the words stay whatever the cutoff");
+    assert!(
+        default < everything,
+        "the default cutoff drops the far documents: {default} of {everything}"
+    );
+
+    let echoed = search(&s, &format!("{QUERY} semantic:0.4"), None, 1, None).await;
+    assert_eq!(echoed.query_echo["semantic_cutoff"], 0.4);
+    let echoed = search(&s, &format!("{QUERY} semantic:off"), None, 1, None).await;
+    assert_eq!(
+        echoed.query_echo["semantic_cutoff"],
+        serde_json::Value::Null
+    );
+}
+
+/// Words nothing holds are not near anything either: the search says it
+/// found nothing rather than list the library.
+#[tokio::test]
+async fn nonsense_finds_little_rather_than_everything() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let everything = search(&s, "xyzzy plugh semantic:0", None, 1_000, None).await;
+    let default = search(&s, "xyzzy plugh", None, 1_000, None).await;
+    assert!(
+        default.total * 4 < everything.total,
+        "{} of {}",
+        default.total,
+        everything.total
+    );
+}
+
+/// Above the results a person is told how many of the documents this search
+/// could find have no vectors. It counts the documents the filters leave, and
+/// only where meaning was asked for.
+#[tokio::test]
+async fn a_search_says_how_many_candidates_have_no_vectors() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let count = |r: &SearchResponse| r.query_echo["without_vectors"]["total"].as_u64();
+
+    let all = search(&s, QUERY, None, 1, None).await;
+    let all_count = count(&all).expect("a search by meaning counts");
+    let again = search(&s, QUERY, None, 1, None).await;
+    assert_eq!(
+        count(&again),
+        Some(all_count),
+        "the same search, the same count"
+    );
+
+    let by_source = &all.query_echo["without_vectors"]["by_source"];
+    let summed: u64 = by_source
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pair| pair[1].as_u64().unwrap())
+        .sum();
+    assert_eq!(summed, all_count);
+
+    let narrowed = search(&s, &format!("{QUERY} source:slack"), None, 1, None).await;
+    assert!(count(&narrowed).expect("it counts") <= all_count);
+
+    for (q, why) in [
+        (format!("{QUERY} semantic:off"), "meaning was not asked for"),
+        ("source:slack".to_string(), "there are no words to match"),
+        (
+            "picard@enterprise.starfleet".to_string(),
+            "an address is looked up, not searched by meaning",
+        ),
+    ] {
+        let r = search(&s, &q, None, 1, None).await;
+        assert_eq!(count(&r), None, "{q}: {why}");
+    }
+    let later = search(&s, QUERY, Some(1), 1, None).await;
+    assert_eq!(count(&later), None, "a later page has nothing to add");
+}
+
+/// A document filed for the grid alone, Notion's table of contents, is kept
+/// out of qmd on purpose, so it must not read as vectors still owed: every
+/// Notion library would carry a warning nothing could clear. A document that
+/// did lose its vectors is counted, under its source.
+#[tokio::test]
+async fn only_a_document_meant_to_have_vectors_counts_as_lacking_them() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let r = search(&s, QUERY, None, 1, None).await;
+    assert_eq!(
+        r.query_echo["without_vectors"]["total"], 0,
+        "the fixture embeds all it means to: {:?}",
+        r.query_echo["without_vectors"]
+    );
+    drop(s);
+
+    let index = datalib_unified_document_index::qmd::qmd_index_path(root.path());
+    let mut index = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&index)
+        .connect()
+        .await
+        .unwrap();
+    let removed = sqlx::query(
+        "DELETE FROM content_vectors WHERE hash = \
+           (SELECT hash FROM documents WHERE active = 1 AND collection = 'slack' LIMIT 1)",
+    )
+    .execute(&mut index)
+    .await
+    .unwrap();
+    assert!(removed.rows_affected() > 0, "the fixture embeds its slack");
+    sqlx::Connection::close(index).await.unwrap();
+
+    let s = index_over(root.path()).await;
+    let r = search(&s, QUERY, None, 1, None).await;
+    let missing = &r.query_echo["without_vectors"];
+    assert!(missing["total"].as_u64().unwrap() >= 1, "{missing:?}");
+    assert_eq!(missing["by_source"][0][0], "slack", "{missing:?}");
+}
+
+/// The first launch downloads the embedding model, and a search then must
+/// not lose its word matches to it, nor hide why meaning is missing.
+#[tokio::test]
+async fn a_search_keeps_its_words_when_meaning_cannot_answer_and_says_so() {
+    let root = fixture_root();
+    let mut s = index_over(root.path()).await;
+    let elsewhere = tempfile::tempdir().unwrap();
+    s.embedder = std::sync::Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
+        elsewhere.path(),
+        None,
+        std::sync::Arc::new(super::models::ModelGate::new(elsewhere.path())),
+        std::time::Duration::from_millis(1),
+    ));
+
+    let r = search(&s, QUERY, None, 1_000, None).await;
+    assert_eq!(qmd_error(&r), None);
+    assert!(!r.rows.is_empty(), "the words still answer");
+    let partial = r.query_echo["partial"].as_str().expect("and it says so");
+    assert!(partial.contains("could not answer"), "{partial}");
+    assert!(
+        super::unanswered(&r).iter().any(|why| why == partial),
+        "and a script hears it"
+    );
+
+    let off = search(&s, &format!("{QUERY} semantic:off"), None, 1_000, None).await;
+    assert_eq!(off.query_echo["partial"], serde_json::Value::Null);
+    assert_eq!(off.total, r.total, "the same words, with nothing missing");
+}
+
+/// A script still naming a tab is told, not handed a different list.
+#[tokio::test]
+async fn a_search_naming_a_tab_is_refused() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let params = super::SearchParams {
+        q: Some(QUERY.to_string()),
+        limit: Some(1),
+        offset: None,
+        sort: None,
+        through: None,
+        within: None,
+        tab: Some("words".to_string()),
+    };
+    let r = super::answer_search(&s, params).await;
+    assert!(r.rows.is_empty());
+    assert!(r.refused[0].contains("semantic:off"), "{:?}", r.refused);
 }

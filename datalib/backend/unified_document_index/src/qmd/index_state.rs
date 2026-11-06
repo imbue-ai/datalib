@@ -278,6 +278,30 @@ impl QmdIndexReader {
             .await
     }
 
+    /// The documents with at least one vector, by document id. An index no
+    /// embed step has written has none.
+    pub async fn documents_with_vectors(
+        &self,
+    ) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+        let paths = sqlx::query_scalar::<_, String>(
+            "SELECT d.path FROM documents d WHERE d.active = 1 AND EXISTS \
+               (SELECT 1 FROM content_vectors v WHERE v.hash = d.hash)",
+        )
+        .fetch_all(&self.pool)
+        .await;
+        match paths {
+            Ok(paths) => Ok(paths
+                .iter()
+                .filter_map(|p| datalib_schema::grid_rows::markdown_uuid_of_path(p))
+                .map(String::from)
+                .collect()),
+            Err(sqlx::Error::Database(e)) if e.message().contains("no such table") => {
+                Ok(Default::default())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     pub async fn summary(&self) -> Result<QmdIndexSummary, sqlx::Error> {
         let row = sqlx::query(
             "SELECT COUNT(*) AS documents, \

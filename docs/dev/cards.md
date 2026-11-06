@@ -530,17 +530,11 @@ besides components:
   sources the results come from, with their counts
   (`/search/groups?by=source_ref`), write and read its `source:`
   filter, so a filter that was clicked is the one that could have been
-  typed. Free text has four answers, a
-  small tab each at the start of that row (`grid/searchTabs.ts`):
-  **Best** (the other three fused, a search with no `tab=`), then
-  **Fields** (the search terms), **Words** (BM25 over qmd's keyword
-  index) and **Meaning** (qmd's vectors), the search's `tab=`. All four
-  are asked at once and Best opens as the search starts; if it fails,
-  the first tab with rows opens instead. A tab that comes back while
-  another is open shows a dot until it is looked at, and only a click
-  changes the tab shown. The list, the
-  table, its groups and the source chips all show the open tab's
-  answer. A **Sort** control beside the views' tabs orders either view
+  typed. Free text has one answer, whichever view shows it: the search
+  terms, the keyword index and the vectors merged by the server. A line
+  above the results says what the search could not reach: a part that
+  could not answer, and how many candidates have no vectors, with their
+  sources on hover (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
   (best match, newest, oldest, largest, smallest, author, title;
   `grid/searchSort.ts`). The card keeps one order, its `sort` state,
   which the control and the table's headers both write and both views

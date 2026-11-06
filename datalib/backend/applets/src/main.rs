@@ -27,7 +27,7 @@ const EXAMPLES: &[Example] = &[
     },
     Example {
         what: "the same search's next page, by the words of the documents",
-        command: "datalib-applet search ~/datalib 'warp core' --tab words --offset 20",
+        command: "datalib-applet search ~/datalib 'warp core semantic:off' --offset 20",
     },
 ];
 
@@ -103,11 +103,10 @@ struct SearchArgs {
     /// What you would type in the search box: `field:value` terms and
     /// free text (`datalib-step help search`). `''` lists every row.
     query: String,
-    /// Which answer to free text: `fields`, `words` or `meaning`. None is
-    /// the search box's own: identifiers from the search terms, the rest
-    /// from qmd's hybrid query.
-    #[arg(long, value_parser = parse_tab)]
-    tab: Option<unified_document_index::tabs::SearchTab>,
+    /// Gone: a search has one answer. Taken so a script still naming a tab
+    /// hears why, as `refused`, rather than a usage error.
+    #[arg(long, hide = true)]
+    tab: Option<String>,
     /// Rows in this page.
     #[arg(long)]
     limit: Option<usize>,
@@ -120,17 +119,6 @@ struct SearchArgs {
     /// One group's rows, as `[[column, value], …]`.
     #[arg(long)]
     within: Option<String>,
-}
-
-fn parse_tab(s: &str) -> Result<unified_document_index::tabs::SearchTab, String> {
-    use strum::VariantArray;
-    s.parse().map_err(|_| {
-        let tabs: Vec<&str> = unified_document_index::tabs::SearchTab::VARIANTS
-            .iter()
-            .map(|t| t.as_str())
-            .collect();
-        format!("one of {}", tabs.join(", "))
-    })
 }
 
 pub fn announce_port(port: u16) {

@@ -276,15 +276,6 @@ export const SEARCH_SETTLE = 90_000;
 
 // Type a query and wait until the grid has actually painted *its*
 // results.
-/// Open the answer tab `tab` of the free-text search on screen, and wait
-/// until the grid shows its rows.
-export async function pickAnswerTab(page: Page, tab: "best" | "fields" | "words" | "meaning") {
-  await page.locator(`.answer-tabs [data-tab="${tab}"]`).click();
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", tab, {
-    timeout: SEARCH_SETTLE,
-  });
-}
-
 export async function searchAndSettle(
   page: Page,
   q: string,

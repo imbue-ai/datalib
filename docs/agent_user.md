@@ -372,24 +372,26 @@ Pick the surface that fits the question:
 - **The search box, from the command line** — `datalib-applet search
   <data_root> '<query>'` answers a search exactly as the app's search
   box does, with no server and no token, and prints the JSON
-  `/search` would (below): the query language, `--tab`, `--limit`,
+  `/search` would (below): the query language, `--limit`,
   `--offset`, `--sort` and `--within` are the same. Page with
   `--offset` set to the answer's `next_offset`. It reads only, so it is
   safe beside a running sync or app.
 
   ```sh
   datalib-applet search ~/datalib 'from:picard after:2026-10-01 is:document' --limit 20
-  datalib-applet search ~/datalib 'warp core' --tab words
+  datalib-applet search ~/datalib 'warp core semantic:off'
   ```
 
   It exits 1, with each reason on stderr, when the answer is not the
   search you asked for: a query it refused (`refused`), an error, a
   free-text search qmd could not answer, or free text on a root with no
   search index yet (a source's words are searchable once its
-  `keyword_index` step has run). An empty answer with exit 0 means
-  nothing matched. Free text without `--tab` starts qmd and loads its
-  models, which takes 10–20 seconds on a large root; `--tab words` and
-  `--tab fields` take well under a second.
+  `keyword_index` step has run), or part of a search that could not
+  answer (`query_echo.partial`, with the rows the rest found). An empty
+  answer with exit 0 means nothing matched. Free text loads the embedding
+  model and the vectors first, each command afresh, which on a large root
+  takes tens of seconds; `semantic:off` in the query loads neither. A running
+  app holds them loaded, so `GET …/search` has no such wait.
 - **SQL over everything** — the `grid_rows` union table in
   `unified_document_index/grid_index/db.sqlite`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
@@ -490,15 +492,18 @@ Pick the surface that fits the question:
   `score` saying how (5 its own id, 4 its author or an addressee,
   3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
-  `tab=` picks how free text is answered, each its own list:
-  `fields` (the search terms, any word as the start of one), `words`
-  (every document's text by BM25, from qmd's keyword index, a document
-  holding the words as typed first) or `meaning` (the 1,000 documents
-  nearest the text by cosine over qmd's vectors). Each is ranked within
-  the rows the other terms leave, so `from:`, `after:` or `source:`
-  narrow what is ranked rather than what is kept. With no `tab`, the three
-  are fused by reciprocal rank, identifiers aside; the command line, the
-  map and the app's links all get that answer. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
+  Other free text has one answer: `score` is reciprocal rank fusion of the
+  search terms (any word as the start of one), every document's text by BM25
+  (from qmd's keyword index, a document holding the words as typed first) and
+  the documents nearest the text by cosine over qmd's vectors, one row a
+  document. `semantic:off` in the query leaves out the vectors, and
+  `semantic:0.4` asks for that similarity where the default is 0.25: a word or
+  a field that matches counts however far off its meaning is. All are ranked
+  within the rows the other terms leave, so `from:`, `after:` or `source:`
+  narrow what is ranked rather than what is kept. `query_echo.without_vectors`
+  says on the first page how many of the documents those terms leave have no
+  vectors yet, in all and by source, and `query_echo.partial` what part of the
+  search could not answer when the rest did. `tab=` is gone, and refused. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
   columns in turn, a row with no value last either way. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists

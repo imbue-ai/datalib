@@ -186,8 +186,12 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         keys.push(key("is", KeyValues::Words { words }));
     }
     if matches!(T::FREE_TEXT, FreeText::Qmd) {
-        keys.push(key("qmd", KeyValues::Text));
-        keys.push(key("qmd_vsearch", KeyValues::Text));
+        keys.push(key(
+            "semantic",
+            KeyValues::Words {
+                words: vec!["off", "on"],
+            },
+        ));
     }
     keys
 }
@@ -610,7 +614,12 @@ mod tests {
                 words: vec!["document"]
             }
         );
-        assert_eq!(values_of(&keys, "qmd_vsearch"), KeyValues::Text);
+        assert_eq!(
+            values_of(&keys, "semantic"),
+            KeyValues::Words {
+                words: vec!["off", "on"]
+            }
+        );
         assert_eq!(values_of(&keys, "from"), KeyValues::Person);
         assert_eq!(values_of(&keys, "label"), KeyValues::Text);
         let from = keys.iter().find(|k| k.key == "from").unwrap();
