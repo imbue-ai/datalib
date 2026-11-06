@@ -500,7 +500,7 @@ Pick the surface that fits the question:
   are fused by reciprocal rank, identifiers aside; the command line, the
   map and the app's links all get that answer. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
   and the `next_offset`; `sort=created_at:desc,author` orders by grid
-  columns in turn. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
+  columns in turn, a row with no value last either way. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
   counts the groups, and `within=[["kind","Chat"]]` on `search` lists
   one group), `GET /api/log?q=…` (the
   runner's log lines in the same grammar — keys `run:`, `process:`,

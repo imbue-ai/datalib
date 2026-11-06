@@ -177,6 +177,32 @@ An address you no longer use, or a handle no source can tell is yours
 (a second phone, an old login), is `me` once it is linked to a contact
 you marked as you.
 
+## Sorting and grouping
+
+A search with words comes best match first, and one without newest first.
+The app's **Sort** control and the table's column headers ask for another
+order; so do `--sort` and `sort=`:
+
+```sh
+datalib-applet search ~/datalib 'with:riker' --sort touched_at:desc
+datalib-applet search ~/datalib 'label:"Away"' --sort byte_size:desc,author_ref
+```
+
+A sort names a column of the grid and a direction, `:asc` (the default) or
+`:desc`, each column breaking the ties of the one before: `touched_at`,
+`created_at` and `modified_at` for dates, `byte_size` for size, `author_ref`
+for author, `subject_ref` for title, and any other column the table shows.
+Text ignores case, and a row with nothing there comes last in either
+direction, so `touched_at:asc` opens on the oldest row that has a date. A
+sort this search does not have comes back in `errors`, and the rows in the
+default order. A row has several labels and people, so neither is a sort.
+
+Sorting a search with words reorders everything it found, however weakly it
+matched.
+
+The table's **group by** does the same with `--within` and `/search/groups`:
+every group with its count, then each group's rows a page at a time.
+
 ## When the search says no
 
 The answer's `refused` says why a query was not run: a key the search

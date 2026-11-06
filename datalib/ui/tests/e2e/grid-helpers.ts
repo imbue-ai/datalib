@@ -748,6 +748,23 @@ export async function inDocFrame(page: Page, selector: string, timeout = 10_000)
   return hit!;
 }
 
+/// Serve the live stream as one frame per connection, reconnecting fast:
+/// heartbeats until `commit()`, an index commit after it.
+export async function stubStream(page: Page): Promise<() => void> {
+  let committed = false;
+  await page.route("**/api/sync/stream", (route) => {
+    const frame = committed ? { kind: "index_changed" } : { kind: "heartbeat" };
+    return route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+      body: `retry: 200\nevent: root\ndata: ${JSON.stringify(frame)}\n\n`,
+    });
+  });
+  return () => {
+    committed = true;
+  };
+}
+
 /// Puts `text` in a search field over what it held, as a person typing
 /// would. Playwright's `fill` leaves the field's CodeMirror editor as it
 /// was in WebKit, with no error, so a spec never fills one.

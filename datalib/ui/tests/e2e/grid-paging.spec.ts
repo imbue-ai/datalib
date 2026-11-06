@@ -67,6 +67,9 @@ test("a header sort orders the whole search", async ({ page, request }) => {
   );
   expect(openedOn, "the fixture's oldest row is past the first page").not.toContain(oldest);
 
+  // A date's first click is its newest, the second its oldest.
+  await searchHeader(page, "touched_at").click();
+  await gridSettled(page);
   await searchHeader(page, "touched_at").click();
   await expect.poll(async () => (await api(page)).first).toBe(oldest);
   expect((await held(page)).loaded, "a sort loaded every row").toBeLessThan(
@@ -117,6 +120,8 @@ test("the Now button returns to now, and only a newest-first date order has one"
   await searchHeader(page, "kind").click();
   await expect(now).toBeHidden();
   await searchHeader(page, "touched_at").click();
-  await searchHeader(page, "touched_at").click();
   await expect(now, "Touched, newest first, is by a date").toBeVisible();
+  await gridSettled(page);
+  await searchHeader(page, "touched_at").click();
+  await expect(now, "Touched, oldest first, has its now at the far end").toBeHidden();
 });

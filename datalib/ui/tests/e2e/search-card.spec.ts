@@ -3,7 +3,7 @@
 // have typed.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards, typeInto } from "./grid-helpers";
+import { GRID, shownCards, stubStream, typeInto } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
 const input = (page: Page) => shownCards(page).getByTestId("search-input");
@@ -15,6 +15,33 @@ const listShows = (page: Page) => shownCards(page).locator(".sc-main");
 const tableShows = (page: Page) => shownCards(page).locator(".grid-wrap");
 const chips = (page: Page) =>
   shownCards(page).getByRole("group", { name: "Sources" }).getByRole("button");
+const sortPick = (page: Page) => shownCards(page).getByTestId("search-sort");
+const pickedResult = (page: Page) => shownCards(page).locator(".sc-result.is-picked");
+
+const SEARCH_PATH = "/applet/unified_document_index/search";
+
+/// The first document the server lists for `sort`, by the title the list
+/// shows for it.
+async function firstTitle(page: Page, sort: string): Promise<string> {
+  const params = new URLSearchParams({ q: "is:document", limit: "1", sort });
+  const resp = await page.request.get(`${SEARCH_PATH}?${params}`);
+  expect(resp.ok()).toBeTruthy();
+  const { rows } = (await resp.json()) as { rows: { conversation_name: string | null }[] };
+  expect(rows[0]?.conversation_name, `${sort} leads with a titled row`).toBeTruthy();
+  return rows[0].conversation_name!;
+}
+
+/// Does `act`, and waits for the rows it should ask for: named by the
+/// order, since a view just shown first catches up on the one before.
+async function asksFor(page: Page, sort: string, act: () => Promise<unknown>) {
+  await Promise.all([
+    page.waitForResponse((r) => {
+      const url = new URL(r.url());
+      return url.pathname === SEARCH_PATH && url.searchParams.get("sort") === sort && r.ok();
+    }),
+    act(),
+  ]);
+}
 
 test("the list and the table are two views of one query", async ({ page }) => {
   // As a browser that has never picked a view: the suite's own pick of
@@ -92,4 +119,65 @@ test("a source chip writes the source filter, and a typed one lights the chip", 
 
   await typeInto(input(page), narrowed);
   await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
+});
+
+test("the sort control orders either view, and agrees with the table's headers", async ({
+  page,
+}) => {
+  await page.goto(GRID);
+  await viewTab(page, "List and preview").click();
+  await expect(results(page).first()).toBeVisible({ timeout: 10_000 });
+  await expect(sortPick(page).locator("option:checked")).toHaveText("Newest first");
+
+  await asksFor(page, "subject_ref:asc", () =>
+    sortPick(page).selectOption({ label: "Title A to Z" }),
+  );
+  await expect(results(page).first()).toContainText(await firstTitle(page, "subject_ref:asc"));
+
+  // The table shows the same order, marked on its header.
+  await viewTab(page, "Table").click();
+  const subject = shownCards(page).locator(".slick-header-column", { hasText: "Subject" });
+  await expect(subject.locator(".slick-sort-indicator-asc")).toBeVisible();
+
+  // A date's first click is its newest, which the control then names.
+  const touched = shownCards(page).locator(".slick-header-column", { hasText: "Touched" });
+  await asksFor(page, "touched_at:desc", () => touched.click());
+  await expect(sortPick(page).locator("option:checked")).toHaveText("Newest first");
+  await expect(subject.locator(".slick-sort-indicator-asc")).toHaveCount(0);
+
+  // Size is a hidden column, with no header to hold the order.
+  await asksFor(page, "byte_size:desc", () =>
+    sortPick(page).selectOption({ label: "Largest first" }),
+  );
+
+  await page.reload();
+  await expect(sortPick(page).locator("option:checked")).toHaveText("Largest first");
+  await viewTab(page, "List and preview").click();
+  await expect(results(page).first()).toContainText(await firstTitle(page, "byte_size:desc"));
+  await expect(results(page).first()).toContainText(/\d (B|kB|MB)/);
+});
+
+/// A sync used to drop the list back to its first page and move the pick
+/// to its first result, whatever the person had scrolled to.
+test("the list keeps what is loaded and picked when the index moves", async ({ page }) => {
+  const commit = await stubStream(page);
+  await page.goto(GRID);
+  await viewTab(page, "List and preview").click();
+  await expect(results(page)).toHaveCount(50, { timeout: 10_000 });
+
+  await shownCards(page).getByRole("button", { name: "Show more" }).click();
+  await expect(results(page)).toHaveCount(100);
+  await results(page).nth(70).click();
+  const title = await pickedResult(page).locator(".sc-title").innerText();
+
+  const reread = page.waitForResponse((r) => {
+    const url = new URL(r.url());
+    return url.pathname === SEARCH_PATH && url.searchParams.get("limit") === "100";
+  });
+  commit();
+  await reread;
+  await expect(results(page)).toHaveCount(100);
+  await expect(pickedResult(page).locator(".sc-title")).toHaveText(title);
+
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });

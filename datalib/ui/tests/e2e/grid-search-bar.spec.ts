@@ -35,7 +35,7 @@ const topRows = (page: Page, n: number) =>
 /// A shift-click adds a second column to the sort, and the server orders
 /// the whole search by both, the first breaking ties by the second.
 test("a shift-click sorts by a second column too", async ({ page, request }) => {
-  const expected = await searchUuids(request, "q=&limit=10&sort=kind:asc,touched_at:asc");
+  const expected = await searchUuids(request, "q=&limit=10&sort=kind:asc,touched_at:desc");
   await openGrid(page);
   await searchHeader(page, "kind").click();
   await searchHeader(page, "touched_at").click({ modifiers: ["Shift"] });
