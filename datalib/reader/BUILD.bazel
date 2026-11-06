@@ -1,0 +1,83 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+# The imbue-datalib-reader package: the module people import and the page PyPI
+# shows. Its wheels are built by scripts/release/stage_reader_wheels.sh
+# (docs/dev/release_steps.md §"The reader wheels").
+exports_files(
+    ["datalib_reader.py"],
+    visibility = ["//visibility:public"],
+)
+
+# This package's contribution to `//:python_sources`, which lints it.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)
+
+py_binary(
+    name = "make_reader_wheel",
+    srcs = ["//:scripts/release/make_reader_wheel.py"],
+    main = "//:scripts/release/make_reader_wheel.py",
+)
+
+# A wheel around this host's library, for the tests that read stores through the
+# package. They unpack it, so its platform tag says nothing about this host; the
+# wheels that ship come from scripts/release/stage_reader_wheels.sh.
+genrule(
+    name = "host_wheel",
+    srcs = [
+        "README.md",
+        "datalib_reader.py",
+        "//:LICENSE",
+        "//third-party/doltlite:shipped_library",
+    ],
+    outs = ["host_wheel.whl"],
+    cmd = """
+        mv "$$($(location :make_reader_wheel) \\
+            --version 0.0.0 \\
+            --target manylinux \\
+            --arch x86_64 \\
+            --module $(location datalib_reader.py) \\
+            --library $(location //third-party/doltlite:shipped_library) \\
+            --readme $(location README.md) \\
+            --license LICENSE=$(location //:LICENSE) \\
+            --out-dir "$$(mktemp -d)")" $@
+    """,
+    tools = [":make_reader_wheel"],
+    visibility = [
+        "//datalib/backend/doltlite_facts:__pkg__",
+        "//tools:__pkg__",
+    ],
+)
+
+# medium: it zips a 4 MB library and starts Python and the shell many times, 19s
+# of a small test's 60s on a loaded mac.
+py_test(
+    name = "reader_wheel_test",
+    size = "medium",
+    srcs = ["reader_wheel_test.py"],
+    args = [
+        "$(rootpath //:scripts/release/make_reader_wheel.py)",
+        "$(rootpath datalib_reader.py)",
+        "$(rootpath README.md)",
+        "$(rootpath //:LICENSE)",
+        "$(rootpath //third-party/doltlite:LICENSE.md)",
+        "$(rootpath //third-party/doltlite:APACHE_LICENSE)",
+        "$(rootpath //third-party/doltlite:shipped_library)",
+        "$(rootpath //third-party/doltlite:library_copts)",
+        "$(rootpath //third-party/doltlite:doltlite)",
+    ],
+    data = [
+        "README.md",
+        "datalib_reader.py",
+        "//:LICENSE",
+        "//:scripts/release/make_reader_wheel.py",
+        "//third-party/doltlite:APACHE_LICENSE",
+        "//third-party/doltlite:LICENSE.md",
+        "//third-party/doltlite:doltlite",
+        "//third-party/doltlite:library_copts",
+        "//third-party/doltlite:shipped_library",
+    ],
+    main = "reader_wheel_test.py",
+)

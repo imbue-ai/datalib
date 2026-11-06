@@ -83,7 +83,7 @@ A version lives in **four** places and they must all move together:
 | 1 | `MODULE.bazel` → `http_archive(name = "doltlite_amalgamation")` — the library |
 | 2 | `MODULE.bazel` → `http_archive(name = "doltlite_autoconf")` — the CLI's `shell.c` |
 | 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
-| 4 | `pyproject.toml` → `doltlite==…`, the PyPI wheel the Python docs recommend; then regenerate `requirements.txt` (AGENTS.md §"Python deps") |
+| 4 | `pyproject.toml` → `doltlite==…`, dolthub's PyPI wheel, behind `import doltlite` in the Python docs; then regenerate `requirements.txt` (AGENTS.md §"Python deps") |
 
 and two files ride along: `LICENSE.md` and `APACHE_LICENSE`, upstream's
 notices at the pinned version, which every release ships under
@@ -121,7 +121,10 @@ Steps:
    reader in two processes), and
    `//datalib/backend/doltlite_facts:python_package_test` and
    `:python_reader_test` (the PyPI wheel at the new pin, and the shipped
-   library). Where a fact moved, fix
+   library). A PR that moves the pin also runs `reader-wheels.yml`, which
+   compiles it on glibc 2.17, musl and a Mac and reads a store under each
+   ([`release_steps.md`](../../docs/dev/release_steps.md) §"The reader wheels").
+   Where a fact moved, fix
    [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md) first, then the
    test, and add a row to its § Versions table saying what the new pin
    brought.
@@ -134,7 +137,7 @@ Steps:
 
 | Path                        | Purpose                                                                |
 |-----------------------------|------------------------------------------------------------------------|
-| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `cli_version_test`. |
+| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `library_copts` (the flags, for the reader wheels' compile), `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
 | `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` check compares `DOLTLITE_VERSION` with itself, so pin drift is `//tools:version_pins_test`'s job. |
