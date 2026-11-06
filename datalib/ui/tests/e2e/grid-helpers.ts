@@ -771,22 +771,26 @@ export async function stubStream(page: Page): Promise<() => void> {
 /// would. Playwright's `fill` leaves the field's CodeMirror editor as it
 /// was in WebKit, with no error, so a spec never fills one.
 export async function typeInto(field: Locator, text: string) {
+  const page = field.page();
+  // On a page that opens on a search card, wait until the toolbar's box speaks
+  // for it: the card's query arrives then, and Enter before it opens a new tab.
+  if (
+    (await field.getAttribute("data-testid")) === "search-input" &&
+    decodeURIComponent(page.url()).includes("searchView(")
+  ) {
+    await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
+      timeout: SEARCH_SETTLE,
+    });
+  }
   await field.click();
   await field.press("ControlOrMeta+a");
   if (text === "") await field.press("Backspace");
-  else await field.page().keyboard.insertText(text);
+  else await page.keyboard.insertText(text);
 }
 
 /// Runs `text` from the toolbar's search box, which asks only on Enter.
 export async function runSearch(page: Page, text: string) {
   const field = page.getByTestId("search-input");
-  // On a page that opens on a search card, wait until the box speaks for it:
-  // until then, Enter has no search to change and opens a new tab.
-  if (decodeURIComponent(page.url()).includes("searchView(")) {
-    await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
-      timeout: SEARCH_SETTLE,
-    });
-  }
   await typeInto(field, text);
   await field.press("Enter");
 }
