@@ -6,6 +6,7 @@
 // which CodeMirror mounts in whatever root the field is in; a chip's is
 // the host's `chip.css`.
 import { onBeforeUnmount, onMounted, useTemplateRef, watch } from "vue";
+import { startCompletion } from "@codemirror/autocomplete";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, placeholder as placeholderText } from "@codemirror/view";
 import { surface } from "@/surface";
@@ -26,6 +27,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [query: string];
   submit: [];
+  submitNew: [];
   escape: [];
 }>();
 
@@ -46,6 +48,7 @@ onMounted(() => {
           base: () => props.base,
           openCard: (source) => (props.openCard ?? surface.value?.showCard)?.(source),
           onSubmit: () => emit("submit"),
+          onSubmitNew: () => emit("submitNew"),
           onEscape: () => emit("escape"),
         }),
         hint.of(placeholderText(props.placeholder ?? "")),
@@ -87,6 +90,14 @@ defineExpose({
   focus: () => view?.focus(),
   selectAll: () => view?.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }),
   blur: () => view?.contentDOM.blur(),
+  /// The caret after the text and its suggestions open: a key just added
+  /// is waiting for its value.
+  suggestAtEnd: () => {
+    if (!view) return;
+    view.focus();
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    startCompletion(view);
+  },
 });
 
 onBeforeUnmount(() => {

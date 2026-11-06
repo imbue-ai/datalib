@@ -162,7 +162,7 @@ test("a contact picked with @ finds everything that reached its handles", async 
   expect(byHandle, "the fixture names Picard's address").toBeGreaterThan(0);
 
   await page.goto(GRID);
-  const field = shownCards(page).getByTestId("search-input");
+  const field = page.getByTestId("search-input");
   await typeInto(field, "@jean");
   const offered = shownCards(page).locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
   await expect(offered).toBeVisible();

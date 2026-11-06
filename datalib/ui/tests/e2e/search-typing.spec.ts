@@ -7,7 +7,7 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import { EVERY_ROW, SEARCH_ROWS, shownCards } from "./grid-helpers";
 
-const field = (page: Page) => shownCards(page).getByTestId("search-input");
+const field = (page: Page) => page.getByTestId("search-input");
 const shownQuery = (page: Page) => page.locator(".grid-wrap");
 
 /// The query each request to the search applet asked, as it went out.

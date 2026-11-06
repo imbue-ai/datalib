@@ -6,7 +6,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { GRID, shownCards, stubStream, typeInto } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
-const input = (page: Page) => shownCards(page).getByTestId("search-input");
+const input = (page: Page) => page.getByTestId("search-input");
 const viewTab = (page: Page, name: string) =>
   shownCards(page).getByRole("tab", { name, exact: true });
 const results = (page: Page) =>

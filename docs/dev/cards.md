@@ -520,16 +520,24 @@ besides components:
   which a Browse does because it names columns. A card whose view was
   picked keeps it in its own state. A view stays mounted once shown, so
   switching keeps each one's selection and scroll; a hidden view asks
-  nothing and catches up when shown. The search bar is the one search
-  field (`search/SearchField.vue`, on CodeMirror 6), which the toolbar
-  and the run log share: it offers keys and values from the table's
-  `…/keys` and `…/values` and draws a source, group or step value as
-  its chip ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-  § "The field"). The query string is the card's
-  only record of a search (`cards/search.ts`): the chips for the
-  sources the results come from, with their counts
-  (`/search/groups?by=source_ref`), write and read its `source:`
-  filter, so a filter that was clicked is the one that could have been
+  nothing and catches up when shown. A search card has no box of its own:
+  the toolbar's (`components/CommandBox.vue`) is the box of the search
+  card last used among those on screen (`search/searchCards.ts`). What is
+  typed there is a draft until Enter runs it; with no search card on screen,
+  Enter shows the Search card and runs it there, and ⌘Enter opens a card of
+  its own. A source's own documents (`oneSource`) and a grid over any other
+  table keep a box beside them, which asks as it is typed in. Either box is
+  the one search field (`search/SearchField.vue`, on CodeMirror 6), which the
+  run log shares: it offers keys and values from the table's `…/keys` and
+  `…/values` and draws a source, group or step value as its chip
+  ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+  § "The field"). The arrow in the toolbar's box opens the advanced panel
+  (`components/SearchPanel.vue`): meaning on or off and its cutoff, one row
+  per document, the sources the results come from with their counts
+  (`/search/groups?by=source_ref`), which it leaves out once the search is
+  narrowed to one source, and filters to start. The query string is the
+  card's only record of a search (`cards/search.ts`): the panel reads all of
+  it from the query and writes it back, so what was clicked is what could have been
   typed. Free text has one answer, whichever view shows it: the search
   terms, the keyword index and the vectors merged by the server. A line
   above the results says what the search could not reach: a part that

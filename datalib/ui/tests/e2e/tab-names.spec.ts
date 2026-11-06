@@ -10,7 +10,7 @@ const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {
   const card = page.locator(".ct-main");
-  await typeInto(card.getByTestId("search-input"), q);
+  await typeInto(card.page().getByTestId("search-input"), q);
   await expect(card.locator(".grid-wrap")).toHaveAttribute("data-shown-query", q);
 }
 

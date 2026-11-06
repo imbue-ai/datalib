@@ -73,7 +73,7 @@ test.describe("toolbar", () => {
       "aria-selected",
       "true",
     );
-    await expect(card.getByTestId("search-input")).toHaveAttribute(
+    await expect(card.page().getByTestId("search-input")).toHaveAttribute(
       "data-query",
       new RegExp(`source:${group}`),
     );

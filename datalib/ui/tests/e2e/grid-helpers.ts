@@ -764,4 +764,7 @@ export async function typeInto(field: Locator, text: string) {
   await field.press("ControlOrMeta+a");
   if (text === "") await field.press("Backspace");
   else await field.page().keyboard.insertText(text);
+  // The toolbar's box runs what it holds on Enter; a grid's own box asks as
+  // it is typed in.
+  if ((await field.getAttribute("data-testid")) === "search-input") await field.press("Enter");
 }

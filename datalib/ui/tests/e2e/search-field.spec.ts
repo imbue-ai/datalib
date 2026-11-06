@@ -5,7 +5,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { GRID, shownCards, typeInto } from "./grid-helpers";
 
-const field = (page: Page) => shownCards(page).getByTestId("search-input");
+const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => shownCards(page).locator(".cm-tooltip-autocomplete");
 
 test("a key, then a source picked from its values, is drawn as the source's chip", async ({

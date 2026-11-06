@@ -1,21 +1,78 @@
 <script setup lang="ts">
-// The search box in the toolbar: type, press Enter, and a search card
-// opens on what you typed. ⌘K (Ctrl+K elsewhere) puts the caret here
-// from anywhere in the app.
-import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
+// The search box in the toolbar: the search box of the search card on screen
+// (`search/searchCards.ts`). What is typed here is only a draft until Enter
+// runs it. With no search card on screen, Enter shows the Search card and runs
+// it there; ⌘Enter (Ctrl+Enter elsewhere) opens a card of its own. ⌘K puts the
+// caret here from anywhere in the app. The pull-down is the advanced panel.
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import { SEARCH } from "@/api";
 import "@/cards/chip.css";
+import { withToken } from "@/grid/query";
 import SearchField from "@/search/SearchField.vue";
-import { searchFor } from "@/surface";
+import { activeSearch } from "@/search/searchCards";
+import { searchFor, showCard, SEARCH_CARD } from "@/surface";
+import SearchPanel from "./SearchPanel.vue";
 
-const query = ref("");
+const draft = ref("");
 const input = useTemplateRef<InstanceType<typeof SearchField>>("input");
+const box = useTemplateRef<HTMLFormElement>("box");
+const panelOpen = ref(false);
+
+/// A search asked for with no card on screen to run it, until one shows.
+let waiting: string | null = null;
+function run(q: string) {
+  const card = activeSearch.value;
+  if (card) card.run(q);
+  else {
+    waiting = q;
+    showCard(SEARCH_CARD);
+  }
+}
+
+watch(
+  [activeSearch, () => activeSearch.value?.query.value],
+  ([card]) => {
+    if (card && waiting !== null) {
+      const q = waiting;
+      waiting = null;
+      card.run(q);
+    }
+    draft.value = card?.query.value ?? "";
+  },
+  { immediate: true },
+);
 
 function submit() {
-  const q = query.value.trim();
-  if (!q) return;
-  searchFor(q);
-  query.value = "";
+  run(draft.value.trim());
+}
+
+function submitNew() {
+  const q = draft.value.trim();
+  if (q) searchFor(q);
+}
+
+function apply(q: string) {
+  draft.value = q;
+  run(q);
+}
+
+function addKey(key: string) {
+  draft.value = withToken(draft.value, `${key}:`);
+  void nextTick(() => input.value?.suggestAtEnd());
+}
+
+function clear() {
+  apply("");
+  input.value?.focus();
+}
+
+/// Escape closes the panel, then puts back what the card is showing.
+function escape() {
+  if (panelOpen.value) {
+    panelOpen.value = false;
+    return;
+  }
+  draft.value = activeSearch.value?.query.value ?? "";
   input.value?.blur();
 }
 
@@ -26,14 +83,33 @@ function onKey(ev: KeyboardEvent) {
     input.value?.selectAll();
   }
 }
-onMounted(() => window.addEventListener("keydown", onKey));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
+function onPointerDown(ev: PointerEvent) {
+  if (panelOpen.value && box.value && !ev.composedPath().includes(box.value)) {
+    panelOpen.value = false;
+  }
+}
+onMounted(() => {
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("pointerdown", onPointerDown);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKey);
+  window.removeEventListener("pointerdown", onPointerDown);
+});
 
+const settled = computed(() => activeSearch.value?.settled.value ?? draft.value);
 const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
 </script>
 
 <template>
-  <form class="command-box" role="search" @submit.prevent="submit">
+  <form
+    ref="box"
+    class="command-box"
+    role="search"
+    @submit.prevent="submit"
+    @keydown.esc="panelOpen = false"
+    @contextmenu="activeSearch?.openFeedback($event)"
+  >
     <svg class="command-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path
         fill="currentColor"
@@ -42,19 +118,52 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
     </svg>
     <SearchField
       ref="input"
-      v-model="query"
+      v-model="draft"
       :base="SEARCH"
       label="Search your data"
       placeholder="Search your data"
+      testid="search-input"
       @submit="submit"
-      @escape="input?.blur()"
+      @submit-new="submitNew"
+      @escape="escape"
     />
+    <button
+      v-if="draft.length > 0"
+      type="button"
+      class="command-clear"
+      aria-label="Clear search"
+      title="Clear search"
+      data-testid="search-clear"
+      @click="clear"
+    >
+      ×
+    </button>
     <kbd class="command-kbd">{{ shortcut }}</kbd>
+    <button
+      type="button"
+      class="command-more"
+      :class="{ 'is-on': panelOpen }"
+      :aria-expanded="panelOpen"
+      aria-label="Advanced search"
+      title="Advanced search"
+      data-testid="search-advanced"
+      @click="panelOpen = !panelOpen"
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+    </button>
+    <SearchPanel
+      v-if="panelOpen"
+      :query="draft"
+      :settled="settled"
+      @apply="apply"
+      @add-key="addKey"
+    />
   </form>
 </template>
 
 <style scoped>
 .command-box {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -86,5 +195,34 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
   padding: 0 5px;
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
+}
+.command-clear,
+.command-more {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--datalib-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.command-clear:hover,
+.command-more:hover,
+.command-more.is-on {
+  color: var(--datalib-fg);
+  background: var(--datalib-hover);
+}
+.command-more svg {
+  width: var(--datalib-icon-size);
+  height: var(--datalib-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 </style>
