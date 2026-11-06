@@ -75,6 +75,11 @@ test("aligned starts draw two runs from 0 and one hover reads both", async ({ pa
       ]),
     );
 
+  // The first answer to reach the chart replaces its empty plot with one
+  // of two lines (a digit per line, then two per line for its band). A
+  // measure or a hover made before that lands on the plot being thrown away.
+  await expect(card.locator(".ts-plot")).toHaveAttribute("data-shown", "111111");
+
   // Halfway along the axis is fifteen minutes into both runs.
   const over = card.locator(".u-over");
   const r = await over.evaluate((el) => {
