@@ -8,7 +8,9 @@ in a PR of its own.
 
     python3 scripts/release/pin_release.py vX.Y.Z
 
-Refuses a release that is a draft or is not immutable.
+Refuses a release that is a draft, is not immutable, or that no successful
+release.yml run on this tag's commit built: during that run the tag has no
+release, and a writer could publish their own on it.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ REPO = "imbue-ai/datalib"
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL = "scripts/install.sh"
 DOCKER_DOC = "docs/user/docker.md"
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
 VERSION_SHAPE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 PINNED_IMAGE = re.compile(r"(ghcr\.io/imbue-ai/datalib@)sha256:[0-9a-f]{64}")
 IMAGE_PINS_IN_DOCKER_DOC = 2
@@ -64,6 +67,25 @@ def release_problems(release: dict[str, Any]) -> list[str]:
     if release.get("immutable") is not True:
         problems.append("it is not immutable, so its assets can still be replaced")
     return problems
+
+
+def built_by_release_workflow(
+    runs: list[dict[str, Any]], tag: str, commit: str
+) -> bool:
+    """Whether release.yml succeeded on a push of `tag` at the commit the tag names.
+
+    The commit is what makes this mean anything. A branch can be named like a
+    tag and carry an edited workflow, and its run reports the same name; the
+    tag's own commit holds the real one, which publishes or fails.
+    """
+    return any(
+        run.get("path") == RELEASE_WORKFLOW
+        and run.get("event") == "push"
+        and run.get("head_branch") == tag
+        and run.get("head_sha") == commit
+        and run.get("conclusion") == "success"
+        for run in runs
+    )
 
 
 def tarball_hashes(release: dict[str, Any]) -> dict[str, str]:
@@ -104,6 +126,28 @@ def main() -> int:
         return 1
     release = json.loads(gh_bytes("api", f"repos/{REPO}/releases/tags/{args.version}"))
     problems = release_problems(release)
+    commit = json.loads(gh_bytes("api", f"repos/{REPO}/commits/tags/{args.version}"))[
+        "sha"
+    ]
+    runs = json.loads(
+        gh_bytes(
+            "api",
+            "-X",
+            "GET",
+            f"repos/{REPO}/actions/workflows/{Path(RELEASE_WORKFLOW).name}/runs",
+            "-f",
+            f"branch={args.version}",
+            "-f",
+            f"head_sha={commit}",
+            "-f",
+            "event=push",
+        )
+    )["workflow_runs"]
+    if not built_by_release_workflow(runs, args.version, commit):
+        problems.append(
+            f"no successful {RELEASE_WORKFLOW} run on the tag's commit {commit}, "
+            "so someone other than the release may have published it"
+        )
     if problems:
         print(
             f"ERROR: not pinning {args.version}: {'; '.join(problems)}", file=sys.stderr

@@ -166,6 +166,7 @@ tag ruleset says nothing about this: no tag moves.
 | guard | what it stops | what it does not stop |
 |---|---|---|
 | `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
+| `pin_release.py` pins only a release whose tag's commit has a successful `release.yml` run on a tag push | A writer's own release, on a new tag or an old one, being written into `install.sh` and the Docker page. A branch named like the tag does not pass: its run is on another commit. None of the 28 `v*` tags with no release has a successful run (measured) | Anyone reading the release page or naming the tag themselves |
 | `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
 | Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
 | One job creates, uploads, reads back and publishes (`release_steps.md` §"Draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
@@ -180,6 +181,11 @@ tag ruleset says nothing about this: no tag moves.
   to move it: mark an older release latest, or publish a new release on one of the
   28 old `v*` tags that have none. The second comes from GitHub's docs, which do
   not rule it out, and has not been tried.
+- **A writer can take a new tag while its release builds.** No release exists
+  during the run, about 50 minutes, so a writer could publish an immutable one of
+  their own on the tag. `publish_release.py` finds it and fails the run, and
+  `pin_release.py` then refuses that tag, but the version number is lost: cut the
+  next one. Reasoned from the code and GitHub's docs, not tried.
 - **Old releases stay replaceable.** GitHub's docs say immutability "will only
   apply to future releases". They do not say whether publishing a release again
   locks it, and nobody has tried. Doing so would lock whatever bytes are there
@@ -226,6 +232,7 @@ Each line is a command that shows it.
 | `main` takes changes only through a PR | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[].type'` includes `pull_request` |
 | `main`'s required checks can come only from GitHub Actions | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[] \| select(.type=="required_status_checks") \| .parameters.required_status_checks[].integration_id'` says `15368` for each |
 | A workflow that names no permissions gets a read-only token | `gh api repos/imbue-ai/datalib/actions/permissions/workflow --jq .default_workflow_permissions` says `read`. `can_approve_pull_request_reviews` stays `true` because `cargo-update.yml` opens its PR with the workflow's token, and the one setting covers both |
+| A workflow can run an action only by its full commit hash, so whoever controls an action's tag cannot change what runs. This covers actions nested in other actions; local ones are exempt | `gh api repos/imbue-ai/datalib/actions/permissions --jq .sha_pinning_required` says `true` |
 | Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
 | Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
 | `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
