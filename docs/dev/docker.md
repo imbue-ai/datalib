@@ -49,6 +49,9 @@ Linux gnu tarballs the same release just produced, so what a user pulls
 is byte-for-byte what `curl | sh` installs on a glibc host. A failed mac
 job does not stop the image, so `:latest` can be ahead of the release
 ([`release_steps.md`](release_steps.md) §"What one failed job costs").
+The user's page names the image by digest, not by a tag, and each release
+carries that digest as its `docker-image.digest` asset
+([`security_posture.md`](security_posture.md)).
 
 ## The demo library
 

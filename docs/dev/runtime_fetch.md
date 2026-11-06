@@ -4,7 +4,7 @@ The code is
 `datalib/backend/runtime/src/node_runtime.rs` (where a runtime is looked
 for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
 (the fetch), `scripts/stage_runtime.sh` (what a runtime holds) and the
-`runtime` and `publish-runtime` jobs in `.github/workflows/release.yml`
+`runtime` and `publish-release` jobs in `.github/workflows/release.yml`
 (how it is published).
 
 `qmd` (semantic search) and `latchkey` (credentials) are Node programs.
@@ -44,7 +44,7 @@ way (`datalib_qmd_models`).
 
 The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` (through
 `scripts/release/stage_runtime_asset.sh`, the step as a script) on
-each host platform, and `publish-runtime` publishes what it stages:
+each host platform, and `publish-release` publishes what it stages:
 
 ```
 runtime-aarch64-apple-darwin.tar.gz        node/ + qmd/<v>/ + latchkey/<v>/
@@ -84,8 +84,8 @@ cpu  runtime-x86_64-unknown-linux-gnu.tar.gz       <sha256> <bytes> https://gith
 cuda runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  <sha256> <bytes> https://…
 ```
 
-The binaries tarball is what `scripts/install.sh` verifies against its
-own `.sha256`, so the manifest is as pinned as the binaries, and the URL
+The binaries tarball is what `scripts/install.sh` verifies against the
+hash it pins, so the manifest is as pinned as the binaries, and the URL
 is the release's own, versioned, never `latest`. A checkout build has no
 manifest: a miss names the candidates and the fixes.
 

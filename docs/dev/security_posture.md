@@ -125,6 +125,7 @@ That does nothing about the build scripts that run once one starts.
 | The write key is a secret of the `main-ci` environment, which only `main` may use (check 21, and a setting below) | A PR's code, or a workflow edited on a branch, getting the key before it merges | Anything that runs on `main` |
 | BuildKit pinned by digest, and each image built on its own architecture, so no emulator image runs (check 21) | Whoever controls a tag on Docker Hub running code in a job that can push the image, or changing what assembles it | A bad version someone pins deliberately, and the runner image itself |
 | Publish and sign jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, or rewriting a published release | Bad code in what it builds |
+| What a build made reaches those jobs outside the checkout, and the sign job's archive passes `unpack_compiled_app.py` (check 21) | A build replacing a script or the Tauri CLI that the sign job then runs with the key in reach, by an archive entry or a planted artifact | A bad binary inside the allowed paths, which gets signed. Nothing in the sign job runs it (`sign-staged.sh`), and `macos-app-verify` runs it with no key |
 | The `v*` tag ruleset | Anyone outside the team starting or moving a release | What a release does once started |
 
 ### What is still open
@@ -158,31 +159,56 @@ rather than on a run:
 ## A release is swapped after it is built
 
 Someone holding a write-access account could replace a published tarball and
-the `.sha256` beside it, and everyone who then ran `install.sh` would install
-what they chose. The `v*` tag ruleset says nothing about this: no tag moves.
+the `.sha256` beside it, or publish a release of their own and mark it latest.
+Anyone following `releases/latest` would then install what they chose. The `v*`
+tag ruleset says nothing about this: no tag moves.
 
 | guard | what it stops | what it does not stop |
 |---|---|---|
-| Immutable releases (a setting below), and a release is a draft until it is whole ([`release_steps.md`](release_steps.md) §"Draft, then publish") | Replacing or removing an asset of a published release, or moving its tag | A release published before the setting went on. Replacing an asset of a draft, in the minutes before it publishes |
-| The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing a new release under a new tag name and marking it latest, which is what `releases/latest/download/…` follows | Marking an older release as latest, which GitHub still allows on an immutable one |
-| `install.sh` refuses a tarball with a missing or wrong checksum | A damaged or partly swapped download | A rewritten release: the checksum comes from the same place. It is the immutable release that makes the pair worth checking |
+| `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
+| `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
+| Immutable releases (a setting below) | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
+| One job creates, uploads, reads back and publishes (`release_steps.md` §"Draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
+| The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing under a new tag name | A release on a tag that already exists, and marking an older release latest, which GitHub allows even on an immutable one |
+| The Mac app's signature and notarization | A swapped dmg passing Gatekeeper, for someone who clicks through `releases/latest` | Bad code we signed ourselves |
 
 ### What is still open
 
-- **Releases older than the setting stay replaceable.** GitHub's docs say the
-  setting applies only to future releases, so a writer could replace an old
-  release's assets and mark it latest. It goes away as they are removed or if
-  republishing them turns out to lock them, which nobody has tried here.
-- **`install.sh` itself is read from `main`,** so it is as trusted as a merge,
-  and merging takes a green CI and no review.
+- **`releases/latest` can still be moved by anyone with write access.** This
+  no longer reaches `curl | sh` or the Docker page. It reaches a person following
+  the README's link to the dmg, where the signature is the guard. Two ways remain
+  to move it: mark an older release latest, or publish a new release on one of the
+  28 old `v*` tags that have none. The second comes from GitHub's docs, which do
+  not rule it out, and has not been tried.
+- **Old releases stay replaceable.** GitHub's docs say immutability "will only
+  apply to future releases". They do not say whether publishing a release again
+  locks it, and nobody has tried. Doing so would lock whatever bytes are there
+  now, not show that they are ours.
+- **Deleting old releases would not help, and would break things.** Their tags
+  remain, so a writer could publish a new release on one, and an installed build
+  fetches its Node runtime from its own release on first use. Keep them.
+- **A moved image tag.** A workflow on any branch can ask for `packages: write`,
+  so it can probably move `ghcr.io/imbue-ai/datalib:latest` and
+  `datalib_devcontainer:latest`, which `main`'s CI runs in holding the write key.
+  The "refuse to move latest" step in `devcontainer.yml` is in a file that branch
+  can edit. Neither has been tried, and the packages' Actions access settings
+  cannot be read through the API. The real fix is a push credential in an
+  environment only `v*` tags may use, as `main-ci` is for `main`, with the
+  repository's own access to the package removed.
+- **`install.sh` is read from `main`, so it is as trusted as a merge,** and
+  merging takes a green CI and no review. A PR's run uses that PR's own workflow
+  files, so a writer can edit a required check to pass. Binding the checks to
+  GitHub Actions stops a status posted by hand and nothing more. An unreviewed
+  merge is the easiest way into a signed release, and immutability then locks that
+  release in.
 - **Nothing outside GitHub vouches for a tarball.** The Mac app is signed, and
   the tarballs are not; a person trusts GitHub's account of what the tag built.
 
 ### What has not been shown
 
-A release's `gh` calls can run only on a real tag (`release_steps.md`), so no
-test covers the draft-then-publish path, and whether the settings below hold
-is something only those commands can say.
+`publish_release.py` has run only against a stand-in for GitHub's API, so its
+real calls are first tried by a tag's run. Whether the settings below hold is
+something only those commands can say.
 
 ## The settings this rests on
 
@@ -192,6 +218,10 @@ Each line is a command that shows it.
 | setting | check |
 |---|---|
 | Immutable releases on | `gh api repos/imbue-ai/datalib/immutable-releases` says `"enabled":true` |
+| `main` takes changes only through a PR | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[].type'` includes `pull_request` |
+| `main`'s required checks can come only from GitHub Actions | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[] \| select(.type=="required_status_checks") \| .parameters.required_status_checks[].integration_id'` says `15368` for each |
+| A workflow that names no permissions gets a read-only token | `gh api repos/imbue-ai/datalib/actions/permissions/workflow --jq .default_workflow_permissions` says `read`. `can_approve_pull_request_reviews` stays `true` because `cargo-update.yml` opens its PR with the workflow's token, and the one setting covers both |
+| Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
 | Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
 | `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
 | The release org's key is only in `main-ci` | `gh secret list --repo imbue-ai/datalib` does not name `BUILD_BUDDY_RELEASE_API_KEY`; `gh secret list --env main-ci --repo imbue-ai/datalib` does |

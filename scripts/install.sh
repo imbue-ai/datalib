@@ -3,7 +3,7 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 #
-# Downloads the latest release tarball from
+# Downloads the release this script pins, below, from
 #   https://github.com/imbue-ai/datalib/releases
 # unpacks it whole into ${DATALIB_LIB_DIR:-$HOME/.local/lib/datalib} and
 # links each binary into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
@@ -21,7 +21,9 @@
 #   DATALIB_INSTALL_DIR   where the binaries are linked (default ~/.local/bin)
 #   DATALIB_LIB_DIR       where the tarball is unpacked (default
 #                             ~/.local/lib/datalib); replaced on every install
-#   DATALIB_VERSION       release tag to install (default: latest)
+#   DATALIB_VERSION       release tag to install (default: the one pinned below;
+#                             `latest` also means that one). Any other tag is
+#                             checked only against the checksum beside it
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
 #                             auto-detected; see libc detection below)
 #
@@ -38,6 +40,23 @@ REPO="imbue-ai/datalib"
 INSTALL_DIR="${DATALIB_INSTALL_DIR:-${HOME}/.local/bin}"
 LIB_DIR="${DATALIB_LIB_DIR:-${HOME}/.local/lib/datalib}"
 VERSION="${DATALIB_VERSION:-latest}"
+
+# The release installed by default, and each tarball's hash. Not
+# `releases/latest`: anyone holding write access can move that to a release of
+# their own (docs/dev/security_posture.md). So this is as trusted as a merge to
+# `main`, and nothing later can change what it installs.
+# scripts/release/pin_release.py writes these.
+PINNED_VERSION="v0.50.0"
+pinned_sha256() {
+    case "$1" in
+        aarch64-apple-darwin) echo 60d9a5ed57e3d5e24b8788fc6bbfd095f35a405c09b358e263e4dcf5e043736f ;;
+        aarch64-unknown-linux-gnu) echo 0eece34cd172657ecf9ec1460ca926e944f02e0e00ab46f97c8a30c0e8ca6365 ;;
+        aarch64-unknown-linux-musl) echo 5737194b9df3e553c6f020550e4557de9e4aea807ffc28521ce37142912a9286 ;;
+        x86_64-unknown-linux-gnu) echo ad75f3f58bb03989da641eeadb26e9e5ce396c994d81ef2d3a0d8df7a6be4236 ;;
+        x86_64-unknown-linux-musl) echo 91ca9217a22f37324822f7f81a9d9c8226360e1f5c298878e231680dd9c077f2 ;;
+        *) echo "" ;;
+    esac
+}
 
 say() { printf 'datalib-install: %s\n' "$1"; }
 err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
@@ -92,13 +111,14 @@ need mv
 need uname
 
 # --- resolve download URL ---
-if [ "${VERSION}" = "latest" ]; then
-    url="https://github.com/${REPO}/releases/latest/download/${TARBALL}"
-    sha_url="${url}.sha256"
-else
-    url="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
-    sha_url="${url}.sha256"
+expected=""
+if [ "${VERSION}" = "latest" ] || [ "${VERSION}" = "${PINNED_VERSION}" ]; then
+    VERSION="${PINNED_VERSION}"
+    expected="$(pinned_sha256 "${TRIPLE}")"
+    [ -n "${expected}" ] || err "this script pins no hash for ${TRIPLE}"
 fi
+url="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+sha_url="${url}.sha256"
 
 # --- download to tmpdir ---
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t datalib-install)"
@@ -111,12 +131,15 @@ if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
 fi
 
 # --- checksum verification ---
-# A tarball that cannot be checked is not installed. The sidecar comes from
-# the same release, so this catches a damaged or swapped download rather than
-# a release someone rewrote; docs/dev/security_posture.md has what stops that.
-if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
-        -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}"; then
-    err "could not fetch the checksum (${sha_url}); not installing"
+# A tarball that cannot be checked is not installed. A tag this script does not
+# pin is checked against the sidecar from its own release, which catches a
+# damaged download rather than a release someone rewrote.
+if [ -z "${expected}" ]; then
+    if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
+            -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}"; then
+        err "could not fetch the checksum (${sha_url}); not installing"
+    fi
+    read -r expected _ < "${tmpdir}/${TARBALL}.sha256" || true
 fi
 # Linux ships `sha256sum`; macOS ships `shasum`.
 if command -v sha256sum >/dev/null 2>&1; then
@@ -128,7 +151,6 @@ else
 fi
 say "verifying checksum"
 actual="${actual%% *}"
-read -r expected _ < "${tmpdir}/${TARBALL}.sha256" || true
 [ -n "${expected:-}" ] && [ "${expected}" = "${actual}" ] \
     || err "checksum mismatch for ${TARBALL}: expected '${expected:-}', got '${actual}'; not installing"
 
