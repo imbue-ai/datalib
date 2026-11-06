@@ -367,8 +367,9 @@ def run(args: argparse.Namespace) -> None:
 
 # The field of a row each sortable column shows, and how to read it.
 def as_stamp(value: Any) -> datetime.datetime:
-    stamp = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.timezone.utc)
+    # This runs on the host's python3, which may predate `Z` and `datetime.UTC`.
+    stamp = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))  # noqa: FURB162
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.timezone.utc)  # noqa: UP017
 
 
 SORT_FIELDS: dict[str, tuple[str, Callable[[Any], Any]]] = {
@@ -490,8 +491,10 @@ def first_pages(args: argparse.Namespace) -> None:
 def first_pages_report(record: dict[str, Any]) -> str:
     budget = record["budget_ms"]
     lines = [
-        f"{len(record['first_pages'])} ordered searches via {record['via']}; "
-        f"the first request of all, opening the index, took {record['opening_ms']} ms",
+        (
+            f"{len(record['first_pages'])} ordered searches via {record['via']}; "
+            f"the first request of all, opening the index, took {record['opening_ms']} ms"
+        ),
         "",
         "| search | sort | rows | first page ms | next page ms | again ms | problems |",
         "|---|---|---|---|---|---|---|",
