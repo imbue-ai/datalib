@@ -1047,13 +1047,9 @@ fn refresh_sweep_key(channel_id: &str) -> String {
 /// down to its own oldest message, and the last page down to the
 /// stretch's bottom.
 fn settled(stretch: &Span, top: Option<&str>, page: &[String], last: bool) -> Option<Span> {
-    let hi = top.or(page.iter().max().map(String::as_str))?;
-    let lo = if last {
-        stretch.lo.as_str()
-    } else {
-        page.iter().min()?.as_str().max(stretch.lo.as_str())
-    };
-    (lo <= hi).then(|| Span::new(lo, hi))
+    let hi = top.or(page.iter().max().map(String::as_str));
+    let oldest = page.iter().min().map(String::as_str);
+    coverage::settled(stretch, hi, oldest, !last)
 }
 
 /// `has_more` with no cursor to ask with: not a listing of anything.

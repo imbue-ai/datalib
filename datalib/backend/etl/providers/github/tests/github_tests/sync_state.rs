@@ -157,7 +157,7 @@ async fn a_capped_search_carries_on_no_further_than_the_floor() {
     );
 }
 
-/// More results share one `updated_at` than one search will answer, so
+/// As many results share one `updated_at` as one search will answer, so
 /// there is no narrower search to ask. The run ends, with a warning that
 /// says what is missing, and the next run asks again: the row stays while
 /// that is still so, and goes when it no longer is.

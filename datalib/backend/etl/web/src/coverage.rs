@@ -14,6 +14,10 @@
 //! Where a walk's top is the newest thing it saw, the top says nothing
 //! about when anyone last looked. A provider whose scopes can fall behind
 //! one another records that apart, in `coverage_checked`.
+//!
+//! A walk newest first that upstream cuts off asks again below the oldest
+//! thing it was given. [`settled`] and [`next_below`] are that decision;
+//! the requests and the paging stay the walk's.
 
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, Transaction};
@@ -126,6 +130,55 @@ pub fn merged(mut spans: Vec<Span>) -> Vec<Span> {
         }
     }
     out
+}
+
+/// The part of `asked` one answer of a newest-first walk settles: from
+/// `top`, where the walk began, down to the oldest thing the answer
+/// held, or down to the bottom of `asked` when it was not `cut_off`. A
+/// walk with no `top` has seen nothing to claim up to, and an answer cut
+/// off with no `oldest` says nothing of where it stopped.
+pub fn settled(
+    asked: &Span,
+    top: Option<&str>,
+    oldest: Option<&str>,
+    cut_off: bool,
+) -> Option<Span> {
+    let hi = top?;
+    let lo = if cut_off {
+        oldest?.max(asked.lo.as_str())
+    } else {
+        asked.lo.as_str()
+    };
+    (lo <= hi).then(|| Span::new(lo, hi))
+}
+
+/// What a newest-first walk still has to ask after one answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Next {
+    /// Nothing: the answer was whole, or reached the bottom of what was
+    /// asked.
+    Done,
+    /// This much, whose top is the oldest thing the answer held. The top
+    /// is asked for again, since others may share its stamp, and it is
+    /// below the top asked for last time, so a walk that follows this
+    /// ends.
+    Below(Span),
+    /// The answer was cut off and asking below it would get no further:
+    /// its oldest is no older than the top that was asked for, or it has
+    /// no oldest. What to do then is the walk's to decide.
+    Stuck,
+}
+
+pub fn next_below(asked: &Span, oldest: Option<&str>, cut_off: bool) -> Next {
+    if !cut_off {
+        return Next::Done;
+    }
+    match oldest {
+        None => Next::Stuck,
+        Some(oldest) if oldest >= asked.hi.as_str() => Next::Stuck,
+        Some(oldest) if oldest <= asked.lo.as_str() => Next::Done,
+        Some(oldest) => Next::Below(Span::new(asked.lo.as_str(), oldest)),
+    }
 }
 
 /// The spans of `scope` this store holds, lowest first.
@@ -249,6 +302,140 @@ mod tests {
             ]),
             [s("10", "40"), s("50", "70")]
         );
+    }
+
+    #[test]
+    fn an_answer_settles_from_the_top_down_to_where_it_stopped() {
+        let asked = s("20", "90");
+        assert_eq!(
+            settled(&asked, Some("90"), Some("70"), true),
+            Some(s("70", "90")),
+            "cut off: down to its oldest"
+        );
+        assert_eq!(
+            settled(&asked, Some("90"), Some("70"), false),
+            Some(s("20", "90")),
+            "whole: down to the bottom, however old its oldest"
+        );
+        assert_eq!(
+            settled(&asked, Some("90"), None, false),
+            Some(s("20", "90")),
+            "whole and empty looked at everything"
+        );
+        assert_eq!(
+            settled(&asked, Some("90"), Some("10"), true),
+            Some(s("20", "90")),
+            "a result under what was asked says nothing of what is under it"
+        );
+        assert_eq!(
+            settled(&asked, Some("90"), None, true),
+            None,
+            "cut off with nothing to say where"
+        );
+        assert_eq!(settled(&asked, None, Some("70"), true), None, "no top");
+        assert_eq!(
+            settled(&asked, Some("10"), None, false),
+            None,
+            "a top under the bottom is no span"
+        );
+    }
+
+    #[test]
+    fn a_cut_off_answer_leaves_what_is_below_its_oldest() {
+        let asked = s("20", "90");
+        for oldest in [None, Some("70")] {
+            assert_eq!(next_below(&asked, oldest, false), Next::Done, "whole");
+        }
+        assert_eq!(
+            next_below(&asked, Some("70"), true),
+            Next::Below(s("20", "70"))
+        );
+        for reached in ["20", "10"] {
+            assert_eq!(
+                next_below(&asked, Some(reached), true),
+                Next::Done,
+                "reached the bottom at {reached}"
+            );
+        }
+        for no_further in [None, Some("90"), Some("95")] {
+            assert_eq!(
+                next_below(&asked, no_further, true),
+                Next::Stuck,
+                "{no_further:?}"
+            );
+        }
+        assert_eq!(
+            next_below(&s("50", "50"), Some("50"), true),
+            Next::Stuck,
+            "a gap of one stamp, still cut off, did not reach its bottom"
+        );
+    }
+
+    /// A walk over stamps newest first, `cap` results to an answer,
+    /// following what the two functions say: the stamps it listed, what
+    /// it held at the end, how many answers it took, and whether it got
+    /// stuck.
+    fn walk(stamps: &[&str], cap: usize, gap: &Span) -> (Vec<String>, Vec<Span>, usize, bool) {
+        let top = gap.hi.clone();
+        let (mut asked, mut listed, mut held) = (gap.clone(), Vec::new(), Vec::new());
+        for answers in 1..=stamps.len() + 2 {
+            let mut hits: Vec<&str> = stamps
+                .iter()
+                .copied()
+                .filter(|t| *t >= asked.lo.as_str() && *t <= asked.hi.as_str())
+                .collect();
+            hits.sort();
+            hits.reverse();
+            let cut_off = hits.len() > cap;
+            hits.truncate(cap);
+            let oldest = hits.last().copied();
+            listed.extend(hits.iter().map(|t| t.to_string()));
+            held.extend(settled(&asked, Some(&top), oldest, cut_off));
+            match next_below(&asked, oldest, cut_off) {
+                Next::Done => return (listed, merged(held), answers, false),
+                Next::Stuck => return (listed, merged(held), answers, true),
+                Next::Below(rest) => {
+                    assert!(rest.hi < asked.hi, "the top must fall: {rest:?}");
+                    asked = rest;
+                }
+            }
+        }
+        panic!("a walk of {} stamps did not end", stamps.len());
+    }
+
+    /// However the stamps fall, a walk lists every one of them, settles
+    /// the whole gap, and ends, as long as fewer share one stamp than an
+    /// answer holds.
+    #[test]
+    fn a_walk_lists_everything_and_ends() {
+        let gap = s("", "99");
+        for (stamps, cap) in [
+            (vec![], 2),
+            (vec!["10"], 2),
+            (vec!["10", "20"], 2),
+            (vec!["10", "20", "30", "40", "50"], 2),
+            (vec!["10", "20", "20", "30", "30", "40"], 3),
+            (vec!["10", "20", "20", "20", "30"], 4),
+        ] {
+            let (listed, held, _, stuck) = walk(&stamps, cap, &gap);
+            assert!(!stuck, "{stamps:?}");
+            assert_eq!(held, std::slice::from_ref(&gap), "{stamps:?}");
+            for stamp in &stamps {
+                assert!(listed.iter().any(|t| t == stamp), "{stamp} of {stamps:?}");
+            }
+        }
+    }
+
+    /// As many share one stamp as an answer holds, and the top is asked
+    /// for again: the walk ends at that stamp, holding what is above it
+    /// and not what is below.
+    #[test]
+    fn a_tie_wider_than_an_answer_ends_the_walk_stuck() {
+        let (listed, held, answers, stuck) = walk(&["10", "20", "20", "20", "30"], 2, &s("", "99"));
+        assert!(stuck);
+        assert_eq!(answers, 2, "one reaching the tie, and one that is all tie");
+        assert_eq!(held, [s("20", "99")]);
+        assert!(!listed.iter().any(|t| t == "10"));
     }
 
     #[tokio::test]

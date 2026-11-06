@@ -28,7 +28,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
-use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::coverage::{self, Next, Span};
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Loop, Outcome};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -384,49 +384,20 @@ fn covered(gap: &Span, now: &str, search: &Search, listed: &[Listed]) -> Option<
     if search.incomplete {
         return None;
     }
-    let newest = stamps(listed).max();
     let hi = if gap.hi.as_str() >= now {
-        covered_hi(now, newest).to_string()
+        covered_hi(now, stamps(listed).max())
     } else {
-        gap.hi.clone()
+        gap.hi.as_str()
     };
-    let lo = if search.truncated {
-        stamps(listed).min()?.to_string()
-    } else {
-        gap.lo.clone()
-    };
-    Some(Span::new(lo, hi))
+    coverage::settled(gap, Some(hi), stamps(listed).min(), search.truncated)
 }
 
-/// What a search of `gap` leaves to ask.
-#[derive(Debug, PartialEq, Eq)]
-enum Left {
-    /// Nothing, this run: the search answered whole, or was cut off at or
-    /// under the bottom of the gap, or answered incomplete, which the next
-    /// run asks again.
-    Nothing,
-    /// The forge cut the search off above the bottom of the gap, so this
-    /// much of it is still to search. Its top is the oldest result, which
-    /// is asked for again: others may share its stamp.
-    Below(Span),
-    /// The forge cut the search off, and a search below its results would
-    /// get no further: the oldest of them is no older than the top of what
-    /// was asked for, or none of them says when it was updated.
-    Stuck { oldest: Option<String> },
-}
-
-fn left_of(gap: &Span, search: &Search, listed: &[Listed]) -> Left {
-    if search.incomplete || !search.truncated {
-        return Left::Nothing;
-    }
-    match stamps(listed).min() {
-        None => Left::Stuck { oldest: None },
-        Some(oldest) if oldest >= gap.hi.as_str() => Left::Stuck {
-            oldest: Some(oldest.to_string()),
-        },
-        Some(oldest) if oldest <= gap.lo.as_str() => Left::Nothing,
-        Some(oldest) => Left::Below(Span::new(gap.lo.clone(), oldest)),
-    }
+/// What a search of `gap` leaves to ask. An incomplete answer leaves
+/// nothing this run: it says nothing of where it stopped, and the next
+/// run asks again.
+fn left_of(gap: &Span, search: &Search, listed: &[Listed]) -> Next {
+    let cut_off = search.truncated && !search.incomplete;
+    coverage::next_below(gap, stamps(listed).min(), cut_off)
 }
 
 /// The row a search that got no further leaves: nothing failed, but a
@@ -558,15 +529,15 @@ impl<F: Forge> Searches<'_, F> {
             }
             tracing::info!(scope, count = listed.len(), "search stored");
             match left_of(&gap, &search, &listed) {
-                Left::Nothing => return Ok(GapEnd::Done),
-                Left::Below(rest) => {
+                Next::Done => return Ok(GapEnd::Done),
+                Next::Below(rest) => {
                     tracing::info!(scope, below = %rest.hi, "the search was cut off; carrying on");
                     gap = rest;
                 }
-                Left::Stuck { oldest } => {
+                Next::Stuck => {
                     self.found.push(RunProblem::listing_cut_off(
                         &name,
-                        stuck_detail(listed.len(), oldest.as_deref()),
+                        stuck_detail(listed.len(), stamps(&listed).min()),
                     ));
                     return Ok(GapEnd::Done);
                 }
@@ -1074,51 +1045,18 @@ mod tests {
         );
     }
 
-    /// Each answer a search can give, and what it leaves of the gap.
+    /// The decision itself is `coverage`'s, tested there. What is the
+    /// forges' own is that an incomplete answer ends the gap for this run,
+    /// truncated or not.
     #[test]
     fn a_cut_off_search_leaves_what_is_below_its_oldest_result() {
         let gap = Span::new(T1, NOW);
         let two = [listed(3, T3), listed(2, T2)];
-        assert_eq!(
-            left_of(&gap, &search(2, false, false), &two),
-            Left::Nothing,
-            "answered whole"
-        );
-        assert_eq!(
-            left_of(&gap, &search(2, true, true), &two),
-            Left::Nothing,
-            "incomplete says nothing of where it stopped; the next run asks again"
-        );
+        assert_eq!(left_of(&gap, &search(2, false, false), &two), Next::Done);
+        assert_eq!(left_of(&gap, &search(2, true, true), &two), Next::Done);
         assert_eq!(
             left_of(&gap, &search(2, true, false), &two),
-            Left::Below(Span::new(T1, T2))
-        );
-        assert_eq!(
-            left_of(&Span::new(T2, NOW), &search(2, true, false), &two),
-            Left::Nothing,
-            "it reached the bottom of the gap"
-        );
-        assert_eq!(
-            left_of(
-                &Span::new("", T2),
-                &search(2, true, false),
-                &[listed(2, T2)]
-            ),
-            Left::Stuck {
-                oldest: Some(T2.to_string())
-            },
-            "the oldest is the stamp the search was bounded by: no further down"
-        );
-        assert_eq!(
-            left_of(
-                &Span::new(T2, T2),
-                &search(2, true, false),
-                &[listed(2, T2)]
-            ),
-            Left::Stuck {
-                oldest: Some(T2.to_string())
-            },
-            "a gap of one stamp that is still cut off did not reach its bottom"
+            Next::Below(Span::new(T1, T2))
         );
         assert_eq!(
             left_of(
@@ -1126,20 +1064,8 @@ mod tests {
                 &search(2, true, false),
                 &[listed(3, ""), listed(2, "")]
             ),
-            Left::Stuck { oldest: None }
-        );
-        assert_eq!(
-            left_of(&gap, &search(0, true, false), &[]),
-            Left::Stuck { oldest: None },
-            "says it has more, and answers nothing"
-        );
-        let ahead = "2369-04-15T10:00:00Z";
-        assert_eq!(
-            left_of(&gap, &search(1, true, false), &[listed(4, ahead)]),
-            Left::Stuck {
-                oldest: Some(ahead.to_string())
-            },
-            "every result is above the top: a search below would be open at the top again"
+            Next::Stuck,
+            "no stamp says where it stopped"
         );
     }
 

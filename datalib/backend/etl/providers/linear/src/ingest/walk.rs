@@ -16,7 +16,7 @@
 //! and written once. Only a page that is all one stamp falls back to
 //! the cursor.
 
-use datalib_etl_web::coverage::{self, Span};
+use datalib_etl_web::coverage::{self, Next, Span};
 use serde_json::{json, Value};
 
 /// A span's ends are Linear stamps (`2026-10-21T05:38:45.862Z`), which
@@ -93,33 +93,26 @@ pub fn step(
         .top
         .clone()
         .or_else(|| stamps.first().map(|s| s.to_string()));
-    let oldest = stamps.last().map(|s| s.to_string());
-    if !has_next || oldest.is_none() {
-        // Read down to the gap's floor.
-        return Step {
-            cover: top.map(|hi| Span::new(gap.lo.clone(), hi)),
-            next: None,
-        };
-    }
-    let oldest = oldest.expect("checked above");
-    let cover = top.clone().map(|hi| Span::new(oldest.clone(), hi));
-    let next = if pos.upper.as_deref() == Some(oldest.as_str()) {
-        Position {
+    let oldest = stamps.last().copied();
+    // A page with nothing on it ends the walk, whatever `has_next` says.
+    let cut_off = has_next && oldest.is_some();
+    let asked = Span::new(gap.lo.as_str(), pos.upper.as_deref().unwrap_or(END_OF_TIME));
+    let cover = coverage::settled(&asked, top.as_deref(), oldest, cut_off);
+    let next = match coverage::next_below(&asked, oldest, cut_off) {
+        Next::Done => None,
+        Next::Below(rest) => Some(Position {
+            upper: Some(rest.hi),
+            after: None,
+            top,
+        }),
+        // A page of one stamp: the cursor takes it past the tie.
+        Next::Stuck => Some(Position {
             upper: pos.upper.clone(),
             after: end_cursor,
             top,
-        }
-    } else {
-        Position {
-            upper: Some(oldest),
-            after: None,
-            top,
-        }
+        }),
     };
-    Step {
-        cover,
-        next: Some(next),
-    }
+    Step { cover, next }
 }
 
 #[cfg(test)]
