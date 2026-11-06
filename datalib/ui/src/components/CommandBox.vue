@@ -9,7 +9,7 @@ import { SEARCH } from "@/api";
 import "@/cards/chip.css";
 import { withToken } from "@/grid/query";
 import SearchField from "@/search/SearchField.vue";
-import { activeSearch } from "@/search/searchCards";
+import { activeSearch, draftAfterMove } from "@/search/searchCards";
 import { searchFor, showCard, SEARCH_CARD } from "@/surface";
 import SearchPanel from "./SearchPanel.vue";
 
@@ -20,24 +20,40 @@ const panelOpen = ref(false);
 
 /// A search asked for with no card on screen to run it, until one shows.
 let waiting: string | null = null;
+/// What the cards last gave the box, or what it last asked of one.
+let shown = "";
 function run(q: string) {
   const card = activeSearch.value;
   if (card) card.run(q);
   else {
     waiting = q;
+    shown = draft.value;
     showCard(SEARCH_CARD);
   }
 }
 
 watch(
   [activeSearch, () => activeSearch.value?.query.value],
-  ([card]) => {
+  ([card], [before]) => {
     if (card && waiting !== null) {
       const q = waiting;
       waiting = null;
       card.run(q);
     }
-    draft.value = card?.query.value ?? "";
+    const query = card?.query.value ?? "";
+    const inBox = box.value?.contains(document.activeElement) ?? false;
+    const next = draftAfterMove({
+      draft: draft.value,
+      shown,
+      query,
+      hadCard: before != null,
+      inBox,
+    });
+    shown = query;
+    if (next === draft.value) return;
+    draft.value = next;
+    // Whoever is in the box and has not typed yet types over this, not after it.
+    if (inBox) void nextTick(() => input.value?.selectAll());
   },
   { immediate: true },
 );

@@ -3,7 +3,7 @@
 // over the query it still is (docs/dev/plans/search_autocomplete.md).
 
 import { test, expect, type Page } from "@playwright/test";
-import { cardOf, GRID, typeInto } from "./grid-helpers";
+import { cardOf, GRID, SEARCH_SETTLE, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => page.locator(".cm-tooltip-autocomplete");
@@ -37,10 +37,45 @@ test("what is typed while the app loads stays when the search card arrives", asy
   await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
   await expect(field(page)).toHaveAttribute("data-query", "warp");
   // It is still a draft: the card shows its own search until Enter.
-  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "is:document");
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "is:document", {
+    timeout: SEARCH_SETTLE,
+  });
   await field(page).press("Enter");
-  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp");
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp", {
+    timeout: SEARCH_SETTLE,
+  });
   await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
+
+/// Enter before there is a card runs the search once there is one, and the box
+/// then shows what ran; what is typed after that Enter is a new draft, and stays.
+test("Enter while the app loads runs the search when the search card arrives", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "source:slack ");
+  await field(page).press("Enter");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "source:slack", {
+    timeout: SEARCH_SETTLE,
+  });
+  await expect(field(page)).toHaveAttribute("data-query", "source:slack");
+});
+
+test("what is typed after an Enter while the app loads stays too", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "source:slack");
+  await field(page).press("Enter");
+  await typeInto(field(page), "source:slack warp");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "source:slack", {
+    timeout: SEARCH_SETTLE,
+  });
+  await expect(field(page)).toHaveAttribute("data-query", "source:slack warp");
 });
 
 /// Someone who has clicked in and not typed yet gets the card's query, and
