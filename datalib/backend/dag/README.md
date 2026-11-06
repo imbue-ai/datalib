@@ -285,7 +285,11 @@ succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
 asks whether to re-render now and opens one request rooted at the list
 if so. A sync that does not reach such a step leaves it alone; the grid
 index reads a render store in another shape as the index had it, with a
-warning. A step that fails to answer costs that source only. The pass
+warning. A rebuild of the index has nothing to keep, so a source whose
+render step stays turned off then has no rows until it re-renders. Its
+collection stays in the qmd index with its embeddings, and a search reads
+only the sources the grid holds, so it leaves search too and costs a
+search nothing. A step that fails to answer costs that source only. The pass
 writes only raw stores, each in place, so the app stays usable while it
 runs: a pill where the sync indicator sits says how each source is
 going, and every Sync on the Sources card is disabled

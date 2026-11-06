@@ -135,6 +135,73 @@ async fn warming_reads_what_the_first_searches_would_wait_for() {
     assert!(messages > 0, "no document's messages were read");
 }
 
+/// A source the qmd index holds and the grid does not, as a turned-off one
+/// is once its render store falls behind a change of shape: a search draws
+/// nothing from it, so its hits take no place in the ranking's cut and its
+/// vectors are neither held nor scored.
+#[tokio::test]
+async fn a_search_reads_only_the_sources_the_grid_holds() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let plain = parse_query(QUERY);
+    let gone = search(&s, QUERY, None, 1_000, None).await.rows[0]
+        .source_id
+        .clone();
+    let named = parse_query(&format!("source:{gone} {QUERY}"));
+    assert!(
+        !word_hits(&s, &named).await.unwrap().is_empty(),
+        "the source has hits to lose"
+    );
+    meaning_ranking(&s, &plain).await.unwrap();
+    let open = s.qmd_index.open(&s.root).await.unwrap().unwrap();
+    let (every_vector, _) = open.vectors.held().await;
+
+    let db = datalib_runtime::layout::grid_index_db(root.path());
+    let pool = datalib_etl_render::grid_index::open_index(&db)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM grid_rows WHERE source_id = ?")
+        .bind(&gone)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let hits = word_hits(&s, &plain).await.unwrap();
+    assert!(!hits.is_empty(), "the other sources still answer");
+    let documents: Vec<String> = hits
+        .iter()
+        .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
+        .collect();
+    let with_rows = s
+        .repo
+        .documents_kept(&parse_query(""), &documents)
+        .await
+        .unwrap();
+    assert_eq!(documents.len(), hits.len());
+    for document in &documents {
+        assert!(with_rows.contains(document), "no row for {document}");
+    }
+    assert!(
+        word_hits(&s, &named).await.unwrap().is_empty(),
+        "naming the source reads no more of it"
+    );
+
+    let fresh = index_over(root.path()).await;
+    meaning_ranking(&fresh, &plain).await.unwrap();
+    let open = fresh.qmd_index.open(&fresh.root).await.unwrap().unwrap();
+    let (vectors, _) = open.vectors.held().await;
+    assert!(vectors > 0, "the other sources' vectors are read");
+    assert!(
+        vectors < every_vector,
+        "{vectors} of {every_vector} vectors held with a source out of the grid"
+    );
+}
+
 /// `source:` scopes the ranking, not only the rows the grid keeps: a
 /// source whose hits rank below another source's still answers in full.
 #[tokio::test]
