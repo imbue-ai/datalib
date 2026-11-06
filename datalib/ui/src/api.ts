@@ -143,6 +143,11 @@ export type QueryEcho = {
   // True when free text was asked before any sync built a qmd index: no
   // rows, and not a failure.
   qmd_index_missing?: boolean;
+  // What part of the search could not answer, when the rest did.
+  partial?: string | null;
+  // How many documents the search could find have no vectors; on a search
+  // by meaning's first page.
+  without_vectors?: { total: number; by_source: [string, number][] } | null;
   [key: string]: unknown;
 };
 
@@ -640,17 +645,12 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 /// for free text). `through` names a row the page must reach, however
 /// far past `offset` it is. `within` narrows it to one group,
 /// `[[column, value], …]` as JSON.
-/// Which answer to free text a search asks for: the grid's own fields,
-/// the words of the documents, or their meaning. Mirrors `SearchTab` in
-/// `applets/src/unified_document_index/tabs.rs`.
-export type SearchTab = "fields" | "words" | "meaning";
 
 export type SearchPageSpec = {
   offset?: number;
   sort?: string | null;
   through?: string | null;
   within?: string | null;
-  tab?: SearchTab | null;
 };
 
 export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
@@ -680,7 +680,6 @@ export async function fetchRows<Row>(
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
-  if (spec.tab) params.set("tab", spec.tab);
   const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
@@ -716,10 +715,8 @@ export async function fetchGroups<Row = SearchRow>(
   by: string,
   signal?: AbortSignal,
   url: string = SEARCH,
-  tab: SearchTab | null = null,
 ): Promise<GroupsResponse<Row>> {
   const params = new URLSearchParams({ q, by });
-  if (tab) params.set("tab", tab);
   const r = await getJson<GroupsResponse<Row>>(`${url}/groups?${params.toString()}`, signal, {
     toast: false,
   });

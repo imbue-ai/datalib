@@ -47,7 +47,7 @@ test("keys typed at speed are one search", async ({ page }) => {
 });
 
 /// The space before the next word, left long enough to settle, asked
-/// for the whole search again: every tab, the page and the source chips.
+/// for the whole search again: the rows and the source chips.
 test("a space before the next word asks nothing new", async ({ page }) => {
   await opened(page);
   await field(page).pressSequentially("warp core", { delay: 60 });
@@ -70,10 +70,10 @@ test("a search typed past is given up, every request of it", async ({ page }) =>
 
   await field(page).pressSequentially("warp", { delay: 60 });
   const first = () => sent.filter((s) => s.q === "warp").map((s) => s.request);
-  // The page, the four tabs' counts and the source chips.
+  // The rows and the source chips.
   await expect
     .poll(() => first().length, { message: "the first search never went out" })
-    .toBeGreaterThanOrEqual(6);
+    .toBeGreaterThanOrEqual(2);
   await field(page).pressSequentially(" core", { delay: 60 });
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core");
 

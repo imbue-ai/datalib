@@ -1170,6 +1170,37 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
     }
 
+    async fn documents_with_pages(
+        &self,
+        q: &ParsedQuery,
+    ) -> Result<Vec<(String, String)>, RepoError> {
+        let (where_sql, params) = build_where(q);
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let joiner = if where_sql.is_empty() {
+            " WHERE"
+        } else {
+            " AND"
+        };
+        // Audited: as `matching` — a literal table name and `build_where`'s
+        // static column names; every value is bound.
+        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT markdown_uuid, source_id FROM {}{where_sql}{joiner} \
+             markdown_uuid IS NOT NULL AND qmd_path IS NOT NULL AND qmd_path NOT LIKE ?",
+            at.grid_rows
+        )));
+        for p in &params {
+            query = query.bind(p);
+        }
+        query = query.bind(format!("%/{}/%", datalib_runtime::layout::UNINDEXED_DIR));
+        match query.fetch_all(&mut *at.tx).await {
+            Ok(rows) => Ok(rows),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     async fn documents_kept(
         &self,
         q: &ParsedQuery,

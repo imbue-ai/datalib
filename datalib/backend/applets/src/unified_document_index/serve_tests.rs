@@ -226,7 +226,7 @@ fn the_search_command_answers_what_the_search_box_gets() {
             &[("limit", "2"), ("offset", "2"), ("sort", "created_at:asc")],
         ),
         ("picard@enterprise.starfleet", &[("limit", "5")]),
-        ("enterprise", &[("tab", "fields"), ("limit", "5")]),
+        ("enterprise semantic:off", &[("limit", "5")]),
         ("enterprise", &[("tab", "words"), ("limit", "5")]),
         ("frm:picard", &[]),
     ];
@@ -256,7 +256,10 @@ fn the_search_command_answers_what_the_search_box_gets() {
             "{stderr}"
         );
         if refused {
-            assert!(stderr.contains("`frm:`"), "{stderr}");
+            assert!(
+                stderr.contains("`frm:`") || stderr.contains("`tab` is gone"),
+                "{stderr}"
+            );
         }
     }
     server.kill().ok();

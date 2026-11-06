@@ -4,7 +4,7 @@
 // One of the Search card's two views (GridCard.ce.vue hosts it and owns
 // the query); the other is the table.
 import { onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
-import type { SearchResponse, SearchRow, SearchTab } from "@/api";
+import type { SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
 import { oneAtATime, subscribeLive } from "@/live";
@@ -35,13 +35,12 @@ const props = defineProps<{
   // Whether this view is the one shown. A hidden list asks nothing, and
   // catches up when it is shown again.
   active: boolean;
-  // The answer to free text the host shows; null for a search without
-  // free text. While `waiting`, no tab has opened yet, and the list asks
-  // nothing rather than show an answer that would then be replaced.
-  tab: SearchTab | null;
   // The order the host asks for; null for the search's own.
   sort: string | null;
-  waiting: boolean;
+}>();
+const emit = defineEmits<{
+  // What the answer said beyond its rows, for the host's line above them.
+  answered: [echo: SearchResponse["query_echo"]];
 }>();
 const api = useApi();
 
@@ -57,9 +56,9 @@ const loading = ref(false);
 const picked = ref<SearchRow | null>(null);
 // The query the results on screen answer; null before the first answer.
 const shownQuery = ref<string | null>(null);
-// That query with the tab and the order it was answered in.
+// That query with the order it was answered in.
 let answered: string | null = null;
-const keyNow = () => `${props.tab ?? ""}\u0000${props.sort ?? ""}\u0000${props.query}`;
+const keyNow = () => `${props.sort ?? ""}\u0000${props.query}`;
 const pageOf = (r: SearchResponse): Page<SearchRow, number> => ({
   rows: r.rows,
   next: r.next_offset,
@@ -81,7 +80,6 @@ function report(q: string, outcome: "rows" | "refused" | "failed", more = {}) {
     card_type: props.ctx.cardType,
     view: "list",
     q,
-    tab: props.tab,
     sort: props.sort,
     outcome,
     ...more,
@@ -107,7 +105,7 @@ async function run(keepPick = false) {
       again ? Math.max(PAGE, results.value.length) : PAGE,
       ctrl.signal,
       { toast: false },
-      { tab: props.tab, sort: props.sort, through: again ? (picked.value?.uuid ?? null) : null },
+      { sort: props.sort, through: again ? (picked.value?.uuid ?? null) : null },
     );
     if (ctrl.signal.aborted) return;
     const echo = page.query_echo;
@@ -118,6 +116,7 @@ async function run(keepPick = false) {
         : (echo?.qmd_error ?? null));
     // A query the search cannot read yet leaves the last results up.
     if (page.refused?.length) return report(q, "refused");
+    emit("answered", echo);
     win = firstWindow(pageOf(page));
     results.value = win.rows;
     total.value = page.total;
@@ -150,7 +149,7 @@ async function more() {
       fetch.limit,
       undefined,
       {},
-      { offset: fetch.from, tab: props.tab, sort: props.sort },
+      { offset: fetch.from, sort: props.sort },
     );
     // A page of a search since replaced lines up with nothing on screen.
     if (key !== keyNow() || !win) return;
@@ -167,9 +166,9 @@ async function more() {
 }
 
 watch(
-  () => [props.query, props.tab, props.sort, props.waiting, props.active] as const,
-  ([, , , waiting, active]) => {
-    if (active && !waiting && keyNow() !== answered) void run();
+  () => [props.query, props.sort, props.active] as const,
+  ([, , active]) => {
+    if (active && keyNow() !== answered) void run();
   },
 );
 
@@ -253,7 +252,7 @@ function when(iso: string | null): string {
 const listEl = useTemplateRef<HTMLDivElement>("listEl");
 const rowsEl = useTemplateRef<HTMLUListElement>("rowsEl");
 const refresh = oneAtATime(async () => {
-  if (props.active && !props.waiting) await run(true);
+  if (props.active) await run(true);
   else {
     shownQuery.value = null;
     answered = null;
@@ -261,7 +260,7 @@ const refresh = oneAtATime(async () => {
 });
 let stop: (() => void) | null = null;
 onMounted(() => {
-  if (props.active && !props.waiting) void run();
+  if (props.active) void run();
   stop = subscribeLive(
     {
       root: (e) => {
@@ -335,7 +334,7 @@ onBeforeUnmount(() => {
           <button class="sc-link" @click="more">Show more</button>
         </li>
         <li v-if="!loading && results.length === 0 && !notice" class="sc-empty">
-          Nothing matches. Try fewer words, or another tab.
+          Nothing matches. Try fewer words.
         </li>
       </ul>
       <section class="sc-preview" aria-label="Preview">

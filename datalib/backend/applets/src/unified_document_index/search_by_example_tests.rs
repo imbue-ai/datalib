@@ -24,8 +24,7 @@ use datalib_schema::search_terms::SearchTermKind;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
 
-use super::tabs::SearchTab;
-use super::tests::{index_over, search, search_tab, uuids};
+use super::tests::{index_over, search, search_part, uuids, Part};
 use super::Index;
 
 /// 2369-04-15 08:30:00 UTC.
@@ -422,8 +421,11 @@ async fn how_it_is_filed(
 }
 
 /// The rows a query finds, by readable id, sorted.
-async fn found(s: &Index, q: &str, tab: Option<SearchTab>) -> Vec<String> {
-    let r = search_tab(s, q, tab, None, 50, None).await;
+async fn found(s: &Index, q: &str, part: Option<Part>) -> Vec<String> {
+    let r = match part {
+        Some(part) => search_part(s, q, part, 0, 50).await,
+        None => search(s, q, None, 50, None).await,
+    };
     assert!(r.refused.is_empty() && r.errors.is_empty(), "{q}: {r:?}");
     let mut rows: Vec<String> = uuids(&r).into_iter().map(String::from).collect();
     rows.sort();
@@ -647,9 +649,9 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
     }
 
-    // The Fields tab matches free text against every term a row answers
+    // The fields matches free text against every term a row answers
     // to: a bare word as the start of one, a quoted word whole.
-    let fields = Some(SearchTab::Fields);
+    let fields = Some(Part::Fields);
     for (q, want) in [
         // The two ids that start with it, and riker-email's author too.
         ("rik", vec!["riker-email", "riker-thread"]),
@@ -674,10 +676,10 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // Keys narrow it as anywhere else.
         ("riker -from:riker", vec!["riker-thread"]),
     ] {
-        assert_eq!(found(&s, q, fields).await, want, "Fields tab: {q}");
+        assert_eq!(found(&s, q, fields).await, want, "fields: {q}");
     }
 
-    // There is no `id:` key; a row's id is found on the Fields tab.
+    // There is no `id:` key; a row's id is found on the fields.
     for q in ["id:riker", r#"id:"riker""#] {
         let r = search(&s, q, None, 50, None).await;
         assert!(r.rows.is_empty(), "{q}: {:?}", uuids(&r));
@@ -696,7 +698,7 @@ async fn a_row_links_to_its_page_at_the_row() {
     let tmp = tempfile::tempdir().unwrap();
     render_cast(tmp.path()).await;
     let s = index_over(tmp.path()).await;
-    let r = search_tab(&s, "riker", Some(SearchTab::Fields), None, 50, None).await;
+    let r = search_part(&s, "riker", Part::Fields, 0, 50).await;
     let link_of = |uuid: &str| {
         let row = r.rows.iter().find(|row| row.uuid == uuid).unwrap();
         (row.markdown_uuid.clone().unwrap(), row.link.clone())

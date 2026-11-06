@@ -5,8 +5,7 @@
 // Also which words of a snippet to mark.
 import { filterToken, isFilterWord, queryWords, unquoteValue } from "@/grid/query";
 
-/// The two predicates that carry free text (`datalib_unified_document_index`'s
-/// `FreeTextMode`): words and meaning together, or meaning alone.
+/// The older spellings of free text, which saved searches may hold.
 const HYBRID = "qmd:";
 const MEANING = "qmd_vsearch:";
 /// `source:`, and `source_id:`, its older spelling a saved query may hold.

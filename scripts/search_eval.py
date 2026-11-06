@@ -2,13 +2,14 @@
 """Scores the search box against a set of queries whose answers are known.
 
 An eval set names target rows and, for each, queries a person might type to
-find it. `run` asks every query of the search applet once per answer (each
-tab, and the fused answer a search with no tab gets), records where the
-target ranked and how long each answer took, and prints the scores; `compare`
-says which queries moved between two runs; `show` prints what a query found,
-for judging the rest of the list by eye. `--modes app` instead sends each
-query the way the app does, every request at once, and times what a person
-waits for: run it on its own, since each answer leaves the others cached.
+find it. `run` asks every query of the search applet once per setting (`on`,
+the search as it opens; `off`, with `semantic:off`; or a cutoff such as `0.3`,
+to weigh one against another), records where the target ranked and how long
+each answer took, and prints the scores; `compare` says which queries moved
+between two runs; `show` prints what a query found, for judging the rest of
+the list by eye. `--modes app` instead sends each query the way the app does,
+every request at once, and times what a person waits for: run it on its own,
+since each answer leaves the others cached.
 
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
 "queries": [{"q", "style"}]}]}. A row counts as the target when it is the
@@ -47,8 +48,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-TABS = ["fields", "words", "meaning"]
-MODES = [*TABS, "fused"]
+MODES = ["on", "off"]
 APP = "app"
 BUDGET_MS = 1000
 DEFAULT_APPLET = "bazel-bin/datalib/backend/bin/datalib-applet"
@@ -128,9 +128,8 @@ def connect(
 
 
 def search(get: Callable[[str], Any], q: str, mode: str, depth: int) -> dict[str, Any]:
-    params = {"q": q, "limit": str(depth)}
-    if mode != "fused":
-        params["tab"] = mode
+    asked = q if mode == "on" else f"{q} semantic:{mode}"
+    params = {"q": asked, "limit": str(depth)}
     return read_answer(get, "/search?" + urllib.parse.urlencode(params))
 
 
@@ -249,42 +248,24 @@ APP_PAGE = 50
 QUERY_WORD = re.compile(r'-?[A-Za-z_][\w.]*:"(?:[^"\\]|\\.)*"?|"(?:[^"\\]|\\.)*"?|\S+')
 FILTER_WORD = re.compile(r"^-?[A-Za-z_][\w.]*:")
 SOURCE_WORD = re.compile(r"^(source|source_id):")
-CARRIES_TEXT = ("qmd:", "qmd_vsearch:")
-
-
-def has_free_text(q: str) -> bool:
-    return any(
-        w.startswith(CARRIES_TEXT) or not FILTER_WORD.match(w)
-        for w in QUERY_WORD.findall(q)
-    )
 
 
 def app_requests(q: str) -> dict[str, str]:
     """What the search card sends for a new search, by what each is for: the
-    rows of the list it opens on (ui/src/cards/SearchList.ce.vue), one row of
-    each tab for its count (`askTabs` in GridCard.ce.vue), and the groups
-    behind the source chips, which ignore the query's own source
+    rows of the list it opens on (ui/src/cards/SearchList.ce.vue), and the
+    groups behind the source chips, which ignore the query's own source
     (`loadSources`)."""
 
-    def rows(limit: int, tab: str | None = None) -> str:
-        params = {"q": q, "limit": str(limit)}
-        if tab:
-            params["tab"] = tab
-        return "/search?" + urllib.parse.urlencode(params)
-
+    rows = urllib.parse.urlencode({"q": q, "limit": str(APP_PAGE)})
     others = [w for w in QUERY_WORD.findall(q) if not SOURCE_WORD.match(w)]
     chips = urllib.parse.urlencode({"q": " ".join(others), "by": "source_ref"})
-    asked = {"rows": rows(APP_PAGE), "chips": "/search/groups?" + chips}
-    if has_free_text(q):
-        asked["count best"] = rows(1)
-        asked |= {f"count {tab}": rows(1, tab) for tab in TABS}
-    return asked
+    return {"rows": "/search?" + rows, "chips": "/search/groups?" + chips}
 
 
 def ask_as_app(get: Callable[[str], Any], q: str) -> dict[str, Any]:
     """Every request at once, as the card sends them. `ms` is how long until
     the rows arrive, which is what a person waits for; `settled_ms` is how
-    long until the tabs and the chips have answered too."""
+    long until the chips have answered too."""
     asked = app_requests(q)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(asked)) as pool:
         running = {
@@ -299,8 +280,10 @@ def run(args: argparse.Namespace) -> None:
     evals = json.loads(Path(args.evals).read_text())
     modes = args.modes.split(",")
     for m in modes:
-        if m not in [*MODES, APP]:
-            raise SystemExit(f"--modes: {m!r} is not one of {', '.join(MODES)}, {APP}")
+        if m not in [*MODES, APP] and not re.fullmatch(r"0?\.\d+|0|1", m):
+            raise SystemExit(
+                f"--modes: {m!r} is not one of {', '.join(MODES)}, {APP}, or a cutoff"
+            )
     if APP in modes and len(modes) > 1:
         raise SystemExit(
             f"--modes: ask {APP} on its own: an answer asked first leaves the next "
@@ -454,7 +437,12 @@ def corpus_line(held: dict[str, int]) -> str:
 
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
-    modes = [m for m in [*MODES, APP, "ui"] if any(m in r["modes"] for r in results)]
+    cutoffs = sorted({m for r in results for m in r["modes"]} - {*MODES, APP, "ui"})
+    modes = [
+        m
+        for m in [*MODES, *cutoffs, APP, "ui"]
+        if any(m in r["modes"] for r in results)
+    ]
     lines = [
         (
             f"{len(results)} queries over {len({r['id'] for r in results})} targets, "
@@ -547,14 +535,14 @@ def requests_table(results: list[dict[str, Any]]) -> list[str]:
 
 
 def load(path: str) -> dict[str, Any]:
-    """A results file, its fused answer under that name: older files call it
-    `default`, and before it existed qmd's hybrid stood in its place."""
+    """A results file, its merged answer as `on`: older files call it `fused`
+    or `default`, and before it existed qmd's hybrid stood in its place."""
     record = json.loads(Path(path).read_text())
     for r in record["results"]:
         modes = r["modes"]
-        for old in ("default", "hybrid"):
-            if old in modes and "fused" not in modes:
-                modes["fused"] = modes.pop(old)
+        for old in ("fused", "default", "hybrid"):
+            if old in modes and "on" not in modes:
+                modes["on"] = modes.pop(old)
     return record
 
 
@@ -698,7 +686,7 @@ def audit_me(args: argparse.Namespace) -> None:
     server = connect(args, root)
 
     def ask(q: str, limit: int = 0) -> dict[str, Any]:
-        answer = search(server.get, q, "fields", limit)
+        answer = search(server.get, q, "off", limit)
         if answer.get("error"):
             raise SystemExit(f"{q!r}: {answer['error']}")
         return answer
@@ -752,7 +740,7 @@ def main() -> None:
     r.add_argument(
         "--modes",
         default=",".join(MODES),
-        help=f"answers to ask for, of {','.join(MODES)}; or {APP} alone",
+        help=f"settings to ask with, of {','.join(MODES)} or a cutoff; or {APP} alone",
     )
     r.add_argument(
         "--depth", type=int, default=20, help="rows to read from each answer"

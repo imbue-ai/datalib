@@ -181,3 +181,48 @@ test("the list keeps what is loaded and picked when the index moves", async ({ p
 
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+/// A search is one request for its rows, whichever view shows, and what it
+/// could not reach is said above them in both.
+test("a search says above its results what it could not reach, in either view", async ({
+  page,
+}) => {
+  const asked: URL[] = [];
+  await page.route(`**${SEARCH_PATH}?**`, async (route) => {
+    const url = new URL(route.request().url());
+    asked.push(url);
+    const response = await route.fetch();
+    const body = (await response.json()) as { query_echo: Record<string, unknown> };
+    if (url.searchParams.get("q")?.startsWith("warp core")) {
+      body.query_echo.without_vectors = { total: 1511, by_source: [["slack", 1511]] };
+      body.query_echo.partial = "Part of this search could not answer";
+    }
+    await route.fulfill({ response, json: body });
+  });
+  await page.goto(GRID);
+  await viewTab(page, "List and preview").click();
+  await expect(results(page).first()).toBeVisible({ timeout: 10_000 });
+  const notices = shownCards(page).getByTestId("search-notice");
+  await expect(notices).toHaveCount(0);
+
+  asked.length = 0;
+  await typeInto(input(page), "warp core");
+  await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await expect(notices).toHaveText([
+    "Part of this search could not answer",
+    "1,511 candidates lack semantic embedding vectors",
+  ]);
+  await expect(notices.nth(1)).toHaveAttribute("title", /slack 1,511/);
+  expect(asked.filter((u) => u.searchParams.get("q") === "warp core").length).toBe(1);
+  expect(asked.some((u) => u.searchParams.has("tab"))).toBe(false);
+
+  await viewTab(page, "Table").click();
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await expect(notices).toHaveCount(2);
+
+  await typeInto(input(page), "tea semantic:off");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off");
+  await expect(notices).toHaveCount(0);
+
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
