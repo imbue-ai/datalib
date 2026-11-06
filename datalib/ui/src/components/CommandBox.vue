@@ -120,6 +120,7 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
     ref="box"
     class="command-box"
     role="search"
+    :data-on-search-card="activeSearch !== null"
     @submit.prevent="submit"
     @keydown.esc="panelOpen = false"
     @contextmenu="activeSearch?.openFeedback($event)"

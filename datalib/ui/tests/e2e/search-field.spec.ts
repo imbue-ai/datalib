@@ -3,10 +3,62 @@
 // over the query it still is (docs/dev/plans/search_autocomplete.md).
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, typeInto } from "./grid-helpers";
+import { cardOf, GRID, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => page.locator(".cm-tooltip-autocomplete");
+const onSearchCard = (page: Page) => page.locator(".command-box");
+const shownQuery = (page: Page) => cardOf(page, "searchView()").locator(".grid-wrap");
+
+/// The toolbar's box is up before the app's first read of the config lands,
+/// and no card mounts until it does. Holding that read keeps the search card
+/// away for as long as a spec needs; the function it returns lets it through.
+async function holdTheCards(page: Page): Promise<() => void> {
+  let letThrough!: () => void;
+  const mayLand = new Promise<void>((land) => (letThrough = land));
+  await page.route("**/api/config", async (route) => {
+    await mayLand;
+    await route.continue();
+  });
+  return letThrough;
+}
+
+/// The search card arriving wrote its query over whatever was in the box, so
+/// someone quick lost what they typed, and specs that typed straight after a
+/// page load failed on a box holding `is:document`.
+test("what is typed while the app loads stays when the search card arrives", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "warp");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  // It is still a draft: the card shows its own search until Enter.
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "is:document");
+  await field(page).press("Enter");
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
+
+/// Someone who has clicked in and not typed yet gets the card's query, and
+/// typing replaces it rather than landing on the end of it.
+test("typing replaces the query a search card brought to a box already clicked in", async ({
+  page,
+}) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await field(page).click();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document");
+  await page.keyboard.type("warp");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
 
 test("a key, then a source picked from its values, is drawn as the source's chip", async ({
   page,
