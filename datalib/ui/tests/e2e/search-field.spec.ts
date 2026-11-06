@@ -3,7 +3,7 @@
 // over the query it still is (docs/dev/plans/search_autocomplete.md).
 
 import { test, expect, type Page } from "@playwright/test";
-import { cardOf, GRID, SEARCH_SETTLE, typeInto } from "./grid-helpers";
+import { cardOf, GRID, SEARCH_SETTLE, tabLabels, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => page.locator(".cm-tooltip-autocomplete");
@@ -76,6 +76,23 @@ test("what is typed after an Enter while the app loads stays too", async ({ page
     timeout: SEARCH_SETTLE,
   });
   await expect(field(page)).toHaveAttribute("data-query", "source:slack warp");
+});
+
+/// A draft typed with no search on screen goes with the person to the Search
+/// tab, where Enter would run it; Escape puts back what that tab shows.
+test("what is typed off a search tab stays when the Search tab is clicked", async ({ page }) => {
+  await page.goto("/");
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+  await typeInto(field(page), "warp");
+  await tabLabels(page)
+    .filter({ hasText: /^Search$/ })
+    .click();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+  // The first closes any suggestions; the next puts back what is shown.
+  await field(page).press("Escape");
+  await field(page).press("Escape");
+  await expect(field(page)).toHaveAttribute("data-query", "is:document");
 });
 
 /// Someone who has clicked in and not typed yet gets the card's query, and
