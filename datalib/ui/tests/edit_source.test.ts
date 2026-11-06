@@ -290,10 +290,7 @@ ${render}`;
     expect(ingest.params).toMatchObject({
       gmail: {
         user_id: "me",
-        fetch: [
-          { labels: ["Inbox"] },
-          { labels: ["Sent"], since: "-90d", whole_threads: false },
-        ],
+        fetch: [{ labels: ["Inbox"] }, { labels: ["Sent"], since: "-90d", whole_threads: false }],
       },
     });
     expect(saved(after)).toBe(after);
