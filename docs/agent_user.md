@@ -54,6 +54,7 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── grid_index/db.sqlite        # the grid_rows SQL index and each row's search terms (plain SQLite) — query this
 │   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
+├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
     ├── runs/runs.sqlite            # every run's step states, log lines and metrics (plain SQLite)
@@ -534,6 +535,85 @@ Pick the surface that fits the question:
   caching the value; `DATALIB_TOKEN=<value>` pins it. The onboarding
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
   are readable without it.
+
+## Building a tool or app on datalib
+
+[Building on datalib](user/building_on_datalib.md) has the details.
+Two decisions come first: whether to read the mirror at all, and where
+to keep what your app adds to it.
+
+**Decide what belongs on the mirror and what belongs on the API.**
+datalib is, for now, about getting your data out of its silos en masse.
+It can also take a targeted part of a source: only recent history
+(`since`), particular Slack channels (`channels`), particular mail
+labels (`only_extract_labels`). Some things make less sense to build on
+it:
+
+- An app designed around always asking for the latest content may do
+  better querying the service's API directly. The mirror is only as
+  fresh as its last sync.
+- An app that publishes (sends a message, files a label, makes an
+  event) must use the API to do so. datalib only reads.
+
+Many apps successfully combine the two, say reading history in bulk
+from the mirror and using the API for the newest items and for every
+write. datalib is designed for this: a raw store re-uses the service's
+identifiers, so an id from an API response finds its row in the mirror,
+and a row in the mirror names what to send the API. A few ids are
+normalized on the way in, such as Gmail's, which are padded to 16 hex
+digits; the "Which id is which" tables in [Reading the raw
+stores](user/raw_stores.md) give the mapping. [Building on
+datalib](user/building_on_datalib.md) § "When to ask the service
+instead" lists, source by source, what the mirror does not hold, and §
+"Your app's own writes" says how a write reaches it.
+
+**Extend the raw stores from beside them; never modify them.** To
+annotate or extend what a source downloaded (a tag, a score, a field
+you extracted), don't write to `<group>/ingest/entities.doltlite_db`.
+Each raw store has one writer, its `ingest` step: a writable session's
+commits are overwritten by the next sync without an error, and a
+transaction left open stalls the sync.
+
+Instead, create a parallel store of your own, a *sidecar*, whose rows
+refer to records by their primary keys in the raw store (Slack's
+`messages.id`, Gmail's `emails.id`). Those keys are meant to be stable,
+so a row of yours stays attached to its record as the mirror syncs. Two
+things to allow for:
+
+- A record can leave the mirror for a while or for good: a reset empties
+  the store until the next sync brings the records back, and a windowed
+  calendar drops events the window has moved past. Treat a key with no
+  row as "not here now", and keep your row.
+- A rare migration changes what an id looks like, as when v0.46.0 changed
+  Gmail's thread ids from decimal to hex. The release notes list every
+  one under "Changes to the raw stores".
+
+A sidecar can be doltlite, plain SQLite or any other backing store. **We
+recommend doltlite** for its version control: every commit is kept, so
+you can see what changed and when. You can always delete history you
+have, but you can't recover history you never kept. `datalib-doltlite
+<file>` creates one; commit each change with `SELECT dolt_commit('-Am',
+'<what changed>')`, and keep to one writing process per file.
+
+Where it lives depends on whether it can be rebuilt. Data computed from
+the mirror belongs in a step's own tree ([Building on
+datalib](user/building_on_datalib.md) § "Your app's derived data as a
+step"), which then runs whenever the mirror moves. Data nothing could
+rebuild, such as a person's notes, stays out of `<data_root>/<group>/`,
+because deleting a group deletes that directory. An app writing such
+data keeps it in `<data_root>/datalib_curated/<your_app>/`, one
+directory per app, which no reset or deletion of a source touches, or
+in a clearly marked folder of its own under the data root, with a name
+no group uses. Neither is for a step, which writes only its own tree.
+
+The contacts app is this pattern in datalib itself. Its store,
+`datalib_curated/datalib_contacts/contacts.doltlite_db`, is a doltlite
+file of its own that makes every write a commit, and no reset or removal
+of a source touches it. It adds who a handle is without changing any
+raw store. Its rows refer to a person's handles
+(`email:riker@enterprise.org`) rather than a raw store's keys, since one
+person spans many sources. See [the contacts
+doc](dev/contacts.md) § "The contacts app".
 
 ## Extending datalib
 

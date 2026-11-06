@@ -142,7 +142,7 @@ is BuildBuddy's isolation unit: its own cache, its own keys) keep
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY`, in the `main-ci` environment | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | the same |
+| release | `BUILD_BUDDY_RELEASE_API_KEY`, in the `main-ci` environment | `test.yml` on a `push` to `main` — code that came through a PR (`--config=buildbuddy-release`; the rule is in [`security_posture.md`](security_posture.md) §"The settings this rests on") | the same |
 
 Two BuildBuddy *organizations*, each on its own subdomain
 (`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only

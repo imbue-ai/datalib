@@ -41,61 +41,81 @@ files, the commit, a stand-in for `cargo-about`). The header of each
 script lists them. A script calls another through `"$BASH"`, so the
 bash that runs the outer one runs the inner one too.
 
-The publish steps — `gh release create`, `upload` and `edit` — stay
-out of the scripts, in `release.yml` and
-`.github/actions/publish-release-assets`. They are the part that cannot
-run anywhere else.
+Publishing is a script too, `scripts/release/publish_release.py`, and
+`//:publish_release_test` runs it against a stand-in for GitHub's API. Only
+a tag's run shows that the real API takes its calls.
 
 ## Draft, then publish
 
-A release is a draft until every job has succeeded, and then it is
-published once, whole. `create-release` makes the one draft, each
-`publish-*` job attaches its assets, and `publish-release`, which needs
-every job that makes an asset, publishes it.
+No release exists until every other job has succeeded. Then
+`publish-release`, the one job that can write to a release, does all of this
+in one step:
 
-The repository's immutable-releases setting is on, so from that moment
-GitHub refuses any change to the assets or the tag, to anyone. That is what
-makes `.sha256` beside a tarball worth checking: nobody with write access
-can replace both. It also means nothing can be added later, so:
+1. **Takes each asset from the artifact that should hold it.** Each artifact
+   has an exact list of files, and anything missing or extra stops the job
+   before a release exists. Without this, a build's artifact could carry a
+   file named like the dmg and replace it on the release. It also checks each
+   `.sha256` against its file, and the dmg against the hash `macos-app-verify`
+   reported, because a later upload can replace an artifact but cannot change
+   another job's output.
+2. **Removes any draft already on this tag**, a failed attempt's or anyone
+   else's, and stops if the tag already has a published release.
+3. **Creates a draft and uploads**, trying once more if the upload fails.
+4. **Reads the draft back and compares digests.** GitHub reports each asset's
+   digest while it is still a draft (measured on v0.51.0's). A name or digest
+   that differs, including an asset nobody here made, stops the job and leaves
+   the draft unpublished.
+5. **Publishes it** and marks it latest.
+6. **Reads it back again**, and fails loudly if an asset differs, if it is not
+   immutable, or if `releases/latest` is not this tag. It cannot undo a
+   publish, so this is an alarm rather than a guard.
+
+So a release is writable by us only for as long as the upload takes, rather
+than for the whole run (50 minutes for v0.50.0), and a failed job leaves
+nothing open.
+
+The repository's immutable-releases setting is on, so from step 5 GitHub
+refuses any change to the assets or the tag, to anyone. Nothing can be added
+later, so:
 
 - **A failed job holds the whole release back.** `releases/latest` still
-  points at the previous release, so `install.sh` and the README's link get
-  that one, complete. Re-run the failed jobs (`gh run rerun <id> --failed`);
-  they attach to the same draft, replacing what they had uploaded, and
-  `publish-release` runs after them.
-- **A leg that cannot be fixed soon** leaves a choice: publish what is on
-  the draft by hand (`gh release edit vX.Y.Z --draft=false --latest`),
-  knowing the missing asset can never join it, or cut a patch release.
+  points at the previous release. Re-run the failed jobs (`gh run rerun <id>
+  --failed`), and `publish-release` runs after them.
+- **A leg that cannot be fixed soon** means cutting a patch release. A tag's
+  run executes the tag's own tree, so a fix needs a new tag either way.
 - **The title and notes stay editable**, as GitHub's docs say, so the notes
   can still be written after publishing.
 
-A job reads what an earlier one made from this run's artifacts, not from
-the release: a `contents: read` token cannot be counted on to see a draft,
-and no build job should need more than that. The manifest's URLs do name
-the tag, so a runtime fetch works only once the release is published, and
-nothing in the workflow fetches one: the Docker image and the Mac app carry
-theirs.
+A job reads what an earlier one made from this run's artifacts, never from the
+release. The manifest's URLs do name the tag, so a runtime fetch works only
+once the release is published, and nothing in the workflow fetches one: the
+Docker image and the Mac app carry theirs.
+
+### Pinning what people get by default
+
+`scripts/install.sh` and `docs/user/docker.md` name a release by version and
+hash, not by `latest`, for the reason in
+[`security_posture.md`](security_posture.md). After a release publishes,
+`python3 scripts/release/pin_release.py vX.Y.Z` rewrites both from what GitHub
+reports, and refuses a release that is a draft or is not immutable. Until that
+PR lands, people get the previous release, which still works.
 
 ### What one failed job costs
 
-A failed mac leg holds back the Linux tarballs too. They wait on the draft,
-where nothing installs from them: a release is published complete or not at
-all, because once published the missing asset can never be added.
+Nothing is published until everything has succeeded, because once published a
+missing asset can never be added.
 
-| what failed | missing from the draft | Docker image | `releases/latest` |
-|---|---|---|---|
-| the mac leg of `runtime` | its runtime asset, the mac tarball | tagged | previous release |
-| the mac leg of `build` | the mac tarball | tagged | previous release |
-| a musl leg of `build` | that tarball | tagged | previous release |
-| a gnu leg of `build` | that tarball | not tagged | previous release |
-| a gnu leg of `runtime` | its runtime asset, its gnu and musl tarballs | not tagged | previous release |
-| a `macos-app-*` job | the dmg | tagged | previous release |
+| what failed | Docker image | `releases/latest` |
+|---|---|---|
+| the mac leg of `runtime` or `build` | tagged | previous release |
+| a musl leg of `build` | tagged | previous release |
+| a gnu leg of `build` or `runtime` | not tagged | previous release |
+| a `macos-app-*` job | tagged | previous release |
 
-The Docker image does not wait for the release. It carries its own runtime,
-so it works while the release is still a draft, and `docker-publish` checks
-the tagged image against the walkthrough. So `ghcr.io/…:latest` can be a
-version ahead of `releases/latest` until the release is published. An image
-needs both gnu legs, so losing either tags nothing.
+The Docker image does not wait for the release. It carries its own runtime, and
+`docker-publish` checks the tagged image against the walkthrough. So
+`ghcr.io/…:latest` can be a version ahead of `releases/latest` until the release
+is published. An image needs both gnu legs, so losing either tags nothing.
 
 ### What a re-run does
 
@@ -105,15 +125,17 @@ a matrix job that failed runs only its failed legs.
 
 | what failed | what runs again |
 |---|---|
-| a `build` leg | that leg, `publish-tarballs`, both `docker-image` legs, `docker-publish`, `publish-release` |
-| a `runtime` leg | that leg, `publish-runtime`, all five `build` legs, and the rest of the row above |
-| a `macos-app-*` job | the rest of that chain, `publish-macos-app`, `publish-release` |
+| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `publish-release` |
+| a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
+| a `macos-app-*` job | the rest of that chain, `publish-release` |
+| `publish-release` | it alone, which removes its own draft and starts again |
 
 So re-running a failed `build` leg rebuilds both images, and the version tag
 and `:latest` move to the new ones. A job that a re-run repeats also uploads
 its artifact again, and `download-artifact` takes the same-named artifact
-with the highest id, which is not always the newest. So the two uploads a
-re-run can repeat, `tarball-*` and `docker-digest-*`, say `overwrite: true`.
+with the highest id, which is not always the newest. So the uploads a re-run
+can repeat, `tarball-*`, `docker-digest-*` and `docker-image-digest`, say
+`overwrite: true`.
 
 ### Trying the job graph on a branch
 
@@ -146,7 +168,7 @@ to wait for.
 | job | runs on it | holds |
 |---|---|---|
 | `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
-| `create-release`, `publish-runtime`, `publish-tarballs`, `publish-macos-app`, `publish-release` | `gh release`, nothing built | `contents: write` |
+| `publish-release` | `gh`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
@@ -159,6 +181,18 @@ build command in a job that holds one, and requires every
 `actions/checkout` to say `persist-credentials: false` so the token is
 not left in `.git/config`. `cargo-update.yml`'s `pull-request` job is
 the one checkout that keeps it, because it pushes.
+
+**An artifact is not trusted to hold what its name says.** A build script
+that reads the runner's memory has the token that uploads artifacts, so it can
+upload under any name. So check 21 requires every download in `release.yml` to
+land under `runner.temp`: in the checkout, a planted file would replace the
+script a later step runs. The sign job's archive goes through
+`scripts/release/unpack_compiled_app.py`, never `tar`: it reads the whole
+archive first, takes only `binaries/`, `runtime/`, `licenses/` and
+`target/release/datalib-tauri`, refuses a link or anything else that is not a
+plain file or directory, and places nothing if any entry fails. An archive
+unpacked by plain `tar` replaced both `build-signed-app.sh` and the Tauri CLI
+in a test on bsdtar; the attack itself has not been run on a runner.
 
 **Compile, sign and verify are phases of
 `datalib/tauri/build-signed-app.sh`**, and `compile` and `verify` refuse
@@ -300,14 +334,16 @@ matches.
   `licenses/rust-crates.md` from the crate sources, so it needs `cargo`
   and the network. The release runner and the tauri bundle both make
   this same call.
-- Signing, notarization, and the asset uploads. `macos-app-sign` can
+- Signing, notarization, and the real API's answers to
+  `publish_release.py`. `macos-app-sign` can
   be tried on a branch with an ad-hoc identity (`-`), which proves the
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
-- Publishing the draft and `releases/latest` moving to it: `gh release
-  create`, `upload` and `edit` need a real release, and a tag's run is the
-  only one this workflow makes. The release procedure checks the result.
+- Publishing and `releases/latest` moving to it: these need a real release,
+  and a tag's run is the only one this workflow makes. A mistake there fails
+  `publish-release`, and since a tag's run executes the tag's own tree, the fix
+  takes a new tag. The script's last step checks the result.
 - The Docker jobs' pushes. Their builds and the tagging can be tried on a
   branch with a release's published tarballs and `imagetools create
   --dry-run`, but only a tag pushes. Their Docker Hub images come through
