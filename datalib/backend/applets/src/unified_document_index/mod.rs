@@ -2923,4 +2923,73 @@ mod tests {
         assert_eq!(uuids(&unknown), ["c-3", "c-2"]);
         assert_eq!(unknown.errors.len(), 1, "{:?}", unknown.errors);
     }
+
+    /// "Oldest first" and "smallest first" once opened on every row with
+    /// no date or no size, and a lowercase name sorted after every capital.
+    #[tokio::test]
+    async fn a_sort_puts_rows_with_no_value_last_either_way_and_ignores_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let row = |uuid: &str, created: &str, author: Option<&str>, size: Option<i64>| {
+            document_row(uuid, created, "Chat")
+                .author(author.map(String::from))
+                .byte_size(size)
+                .build()
+                .unwrap()
+        };
+        let mut undated = row("no-date", "2026-01-02T09:00:00+00:00", None, None);
+        undated.created_at = None;
+        index_rows(
+            tmp.path(),
+            vec![
+                row(
+                    "old",
+                    "2026-01-01T09:00:00+00:00",
+                    Some("jlpicard"),
+                    Some(10),
+                ),
+                row("new", "2026-01-03T09:00:00+00:00", Some("Worf"), Some(30)),
+                row("blank", "2026-01-02T09:00:00+00:00", Some(""), Some(20)),
+                undated,
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+        let order = |sort: &'static str| {
+            let s = &s;
+            async move {
+                let r = search(s, "", None, 10, Some(sort)).await;
+                assert!(r.errors.is_empty(), "{sort}: {:?}", r.errors);
+                uuids(&r).iter().map(|u| u.to_string()).collect::<Vec<_>>()
+            }
+        };
+
+        assert_eq!(
+            order("created_at:asc").await,
+            ["old", "blank", "new", "no-date"]
+        );
+        assert_eq!(
+            order("created_at:desc").await,
+            ["new", "blank", "old", "no-date"]
+        );
+        assert_eq!(
+            order("byte_size:asc").await,
+            ["old", "blank", "new", "no-date"]
+        );
+        assert_eq!(
+            order("byte_size:desc").await,
+            ["new", "blank", "old", "no-date"]
+        );
+
+        let authors = order("author_ref:asc").await;
+        assert_eq!(authors[..2], ["old", "new"], "jlpicard sorts before Worf");
+        let backwards = order("author_ref:desc").await;
+        assert_eq!(backwards[..2], ["new", "old"]);
+        for blanks in [&authors, &backwards] {
+            assert!(
+                blanks[2..].contains(&"blank".to_string())
+                    && blanks[2..].contains(&"no-date".to_string()),
+                "a blank name and no name come last: {blanks:?}"
+            );
+        }
+    }
 }

@@ -119,6 +119,13 @@ import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchCoverage, type SearchCoverage } from "@/grid/searchCoverage";
+import {
+  chosenSort,
+  sortChoices,
+  sortersOf,
+  sortOfSorters,
+  startsDescending,
+} from "@/grid/searchSort";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { redrawChanged } from "@/grid/redrawChanged";
 import { handedOf, isEmpty, patchRows, type Handed, type RowPatch } from "@/grid/rowPatch";
@@ -230,6 +237,8 @@ words anywhere in a document) and <b>Meaning</b> (documents about the same thing
 <b>Best</b>, which opens first, merges the three; a dot on another tab says it has found
 something you have not looked at. Filters narrow the
 search: <code>author:worf</code>, <code>before:2371-01-01</code>, <code>-kind:contact</code>.</p>
+<p><b>Sort</b> orders the results in either view: best match, newest or oldest, largest or
+smallest, by author or by title. A result with nothing to sort by comes last.</p>
 <p>The chips under the box say which sources the results come from, and how many each;
 pick one to see only its results. A chip and the tick box write a filter into the search
 box, the same one you could type.</p>
@@ -503,7 +512,8 @@ const boxEl = ref<HTMLDivElement | null>(null);
 let restoring = false;
 
 /// What the URL keeps of the grid's shape: every column in order with
-/// whether it is hidden and how wide it is, the sort, the grouping.
+/// whether it is hidden and how wide it is, and the grouping. A card
+/// saved by an older build also has its sort here.
 type Layout = {
   cols: { id: string; hidden?: boolean; width?: number }[];
   sort?: { id: string; asc: boolean }[];
@@ -535,6 +545,20 @@ function decodeLayout(s: string): Layout | null {
 // defaults (so a pristine grid serializes to a short segment).
 let colsEncoded: string | null = initialState.get("cols");
 
+/// The order the rows are asked for in, as `/search` spells it. Both views
+/// read it; the control and the table's headers both write it. It lives
+/// here and not on the headers because the list shows before the grid
+/// exists, and a hidden column, Size by default, has no header to mark.
+const sortOrder = ref<string | null>(
+  initialState.get("sort") ??
+    sortOfSorters(
+      (colsEncoded ? (decodeLayout(colsEncoded)?.sort ?? []) : []).map((s) => ({
+        columnId: s.id,
+        direction: s.asc ? "ASC" : "DESC",
+      })),
+    ),
+);
+
 function saveState() {
   if (restoring) return;
   const params = new URLSearchParams();
@@ -543,6 +567,7 @@ function saveState() {
   if (query.value !== (props.q ?? "")) params.set("q", query.value);
   if (sel.value) params.set("sel", sel.value);
   if (colsEncoded) params.set("cols", colsEncoded);
+  if (sortOrder.value) params.set("sort", sortOrder.value);
   if (viewPicked) params.set("view", view.value);
   props.ctx.host.setState(params.toString());
 }
@@ -555,11 +580,8 @@ function readLayout(): Layout {
     ...(c.hidden ? { hidden: true } : {}),
     ...(c.width ? { width: c.width } : {}),
   }));
-  const sort = grid
-    .getSortColumns()
-    .map((s) => ({ id: String(s.columnId), asc: s.sortAsc !== false }));
   const group = groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
-  return { cols, ...(sort.length ? { sort } : {}), ...(group.length ? { group } : {}) };
+  return { cols, ...(group.length ? { group } : {}) };
 }
 
 // Reflect any user-driven column change (resize / sort / move /
@@ -611,15 +633,17 @@ function applySort(sorters: CurrentSorter[]) {
 /// which order to ask for.
 const serverOrder = () => 0;
 
-/// The sort the rows are asked for in, as `/search` spells it: the
-/// headers' once the grid exists, the persisted layout's before.
-function currentSort(): string | null {
-  const layout = colsEncoded ? decodeLayout(colsEncoded) : null;
-  const sorters: CurrentSorter[] = vueGrid
-    ? vueGrid.sortService.getCurrentLocalSorters()
-    : (layout?.sort ?? []).map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" }));
-  if (sorters.length === 0) return null;
-  return sorters.map((s) => `${s.columnId}:${String(s.direction).toLowerCase()}`).join(",");
+const headerSort = (s: CurrentSorter) => ({
+  columnId: s.columnId,
+  direction: String(s.direction),
+});
+
+/// The control's pick: the rows in that order, in whichever view shows.
+function pickSort(sort: string) {
+  sortOrder.value = sort || null;
+  applySort(sortersOf(sortOrder.value));
+  saveState();
+  void runSearch(query.value);
 }
 
 function rowKey(row: Row): string {
@@ -836,6 +860,8 @@ function answered(q: string, outcome: "rows" | "refused" | "failed", more = {}) 
 /// has one answer.
 const tabs = ref<TabsState | null>(null);
 const tab = computed<SearchTab | null>(() => (tabs.value?.open ? apiTab(tabs.value.open) : null));
+/// Whether the search has words to rank, so no sort means best match.
+const ranksFreeText = computed(() => freeText(settledQuery.value) !== "");
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -900,7 +926,7 @@ async function runSearch(q: string, refresh = false) {
   grouped = null;
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
-  const sort = currentSort();
+  const sort = sortOrder.value;
   const t = tab.value;
   const again = refresh && win !== null && shown?.q === q && shown.sort === sort && shown.tab === t;
   const limit = again ? refreshLimit(win!) : PAGE;
@@ -1060,7 +1086,7 @@ async function seek(uuid: string): Promise<number | null> {
 async function runGrouped(q: string, refresh: boolean) {
   inflight?.abort();
   const ctrl = (inflight = new AbortController());
-  const sort = currentSort();
+  const sort = sortOrder.value;
   const by = groupedBy();
   const t = tab.value;
   const was = grouped;
@@ -1724,14 +1750,12 @@ const extraColumns: Column[] = [
 function applyInitialLayout() {
   if (!vueGrid) return;
   applyPresetColumns();
-  if (!colsEncoded) return;
-  const layout = decodeLayout(colsEncoded);
-  if (!layout) return;
-  applyColumns(layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })));
-  if (layout.sort?.length) {
-    applySort(layout.sort.map((s) => ({ columnId: s.id, direction: s.asc ? "ASC" : "DESC" })));
+  const layout = colsEncoded ? decodeLayout(colsEncoded) : null;
+  if (layout) {
+    applyColumns(layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })));
   }
-  if (layout.group?.length && groupingPlugin) {
+  applySort(sortersOf(sortOrder.value));
+  if (layout?.group?.length && groupingPlugin) {
     restoring = true;
     groupingPlugin.setDroppedGroups(layout.group);
     restoring = false;
@@ -1768,11 +1792,15 @@ watch(
         entity: (uri) => entities.lookup(uri),
       },
     });
+    const descendingFirst = new Set(
+      specs.filter((s) => startsDescending(s.type)).map((s) => s.field),
+    );
     const at = typed.findIndex((c) => c.id === "project") + 1;
     const own = qmd() ? extraColumns : [];
     gridColumns.value = [...typed.slice(0, at), ...own, ...typed.slice(at)].map((c) => ({
       ...c,
       sortComparer: serverOrder,
+      defaultSortAsc: !descendingFirst.has(String(c.id)),
       ...(c.grouping
         ? { grouping: { ...c.grouping, formatter: trueCount(c.grouping.formatter!) } }
         : {}),
@@ -2389,8 +2417,11 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
 // width, the adaptive visibility above) never does.
 function onGridStateChanged(change: GridStateChange) {
   if (restoring) return;
-  updateCols();
   const type = change.change?.type;
+  if (type === "sorter" && vueGrid) {
+    sortOrder.value = sortOfSorters(vueGrid.sortService.getCurrentLocalSorters().map(headerSort));
+  }
+  updateCols();
   if (type === "sorter") void runSearch(query.value);
   if (type === "columns") onColumnsShown();
 }
@@ -2508,6 +2539,18 @@ onBeforeUnmount(() => {
           {{ g.sample.source_ref?.label ?? g.sample.source_id }} {{ g.count.toLocaleString() }}
         </button>
       </div>
+      <label class="sort-pick">
+        <span class="sort-label">Sort</span>
+        <select
+          data-testid="search-sort"
+          :value="chosenSort(sortOrder, ranksFreeText)"
+          @change="pickSort(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="c in sortChoices(sortOrder, ranksFreeText)" :key="c.sort" :value="c.sort">
+            {{ c.label }}
+          </option>
+        </select>
+      </label>
       <div class="view-tabs" role="tablist" aria-label="View">
         <button
           v-for="v in VIEWS"
@@ -2532,6 +2575,7 @@ onBeforeUnmount(() => {
       :query="settledQuery"
       :active="view === 'list'"
       :tab="tab"
+      :sort="sortOrder"
       :waiting="tabs !== null && tabs.open === null"
     />
 
@@ -2704,9 +2748,26 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: var(--datalib-accent);
 }
-.view-tabs {
+.sort-pick {
   flex: 0 0 auto;
   margin-left: auto;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--datalib-muted);
+  white-space: nowrap;
+}
+.sort-pick select {
+  height: var(--datalib-control-h);
+  font: inherit;
+  color: var(--datalib-fg);
+  background: var(--datalib-bg);
+  border: 1px solid var(--datalib-border);
+  border-radius: var(--datalib-radius);
+}
+.view-tabs {
+  flex: 0 0 auto;
   display: flex;
   gap: 2px;
   margin-bottom: -1px;

@@ -540,7 +540,15 @@ besides components:
   another is open shows a dot until it is looked at, and only a click
   changes the tab shown. The list, the
   table, its groups and the source chips all show the open tab's
-  answer. The toolbar's search box (⌘K)
+  answer. A **Sort** control beside the views' tabs orders either view
+  (best match, newest, oldest, largest, smallest, author, title;
+  `grid/searchSort.ts`). The card keeps one order, its `sort` state,
+  which the control and the table's headers both write and both views
+  read: the list shows before the grid exists, and Size is a hidden
+  column with no header to hold it. The list loads a page at a time with
+  **Show more**, on the table's `grid/pagedWindow.ts`; when the index
+  moves it reads again as many rows as it holds, through the picked one,
+  so a sync costs nobody their place. The toolbar's search box (⌘K)
   opens one. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does one click on a
   Document cell's link (the problems grid's); double-click on the row
@@ -553,7 +561,8 @@ besides components:
   button beside the row count scrolls back there. Any other order has
   no now and no button; going oldest first, now is at the far end of
   every row, which the grid would have to load to reach.
-  Persists `q`/`sel`/`cols`/`view` state. A search given no `q` opens on
+  Persists `q`/`sel`/`cols`/`sort`/`view` state (a card saved before
+  `sort` keeps its order in `cols`, read once). A search given no `q` opens on
   `is:document`, one row per document; the empty bar suggests filters
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 
