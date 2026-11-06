@@ -110,7 +110,9 @@ per app, so each can be managed or deleted on its own. Nothing can
 rebuild it: no reset or source deletion touches it, and its store
 refuses a schema it cannot reach rather than rebuilding
 (`doltlite_raw::open_curated`). No group or step may claim the name
-(`datalib_dag::config::CURATED_DIR`).
+(`datalib_dag::config::CURATED_DIR`). An app built outside datalib may
+keep a directory of its own here too, so a store found here need not be
+ours.
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
