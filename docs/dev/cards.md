@@ -523,8 +523,9 @@ besides components:
   nothing and catches up when shown. A search card has no box of its own:
   the toolbar's (`components/CommandBox.vue`) is the box of the search
   card last used among those on screen (`search/searchCards.ts`). What is
-  typed there is a draft until Enter runs it; with no search card on screen,
-  Enter shows the Search card and runs it there, and ⌘Enter opens a card of
+  typed there is a draft until Enter runs it, in that card, as an address bar
+  does in its tab. With no search card on screen, Enter opens one, and ⌘Enter
+  always does, so a search that should stay open beside another gets a tab of
   its own. A source's own documents (`oneSource`) and a grid over any other
   table keep a box beside them, which asks as it is typed in. Either box is
   the one search field (`search/SearchField.vue`, on CodeMirror 6), which the

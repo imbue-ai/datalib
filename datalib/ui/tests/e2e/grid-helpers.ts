@@ -780,6 +780,13 @@ export async function typeInto(field: Locator, text: string) {
 /// Runs `text` from the toolbar's search box, which asks only on Enter.
 export async function runSearch(page: Page, text: string) {
   const field = page.getByTestId("search-input");
+  // On a page that opens on a search card, wait until the box speaks for it:
+  // until then, Enter has no search to change and opens a new tab.
+  if (decodeURIComponent(page.url()).includes("searchView(")) {
+    await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
+      timeout: SEARCH_SETTLE,
+    });
+  }
   await typeInto(field, text);
   await field.press("Enter");
 }
