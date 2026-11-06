@@ -148,7 +148,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
       return kinds.length > 0 && kinds.every((k) => /^Slack /.test(k.trim()));
     })
     .toBe(true);
-  expect(await columnValues(page, "kind")).toContain("Slack Message");
+  await expect.poll(() => columnValues(page, "kind")).toContain("Slack Message");
   await expect(name).toHaveText(/ documents$/);
 
   // Slack's preset: the subject (a channel or DM) and an author, and no
