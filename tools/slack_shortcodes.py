@@ -1,6 +1,6 @@
 """Write slack_shortcodes.tsv from iamcal/emoji-data's emoji.json.
 
-    python3 tools/slack_shortcodes.py <emoji.json> > third-party/emoji-data/slack_shortcodes.tsv
+    uv run python tools/slack_shortcodes.py <emoji.json> > third-party/emoji-data/slack_shortcodes.tsv
 
 One line per shortcode Slack knows, `<shortcode>\t<codepoints>`, the
 codepoints as emoji.json writes them (hex, `-`-separated). A skin-tone

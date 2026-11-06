@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Repo-hygiene lints that cannot run as Bazel tests.
 
 These checks need to look at the repo as a whole — every tracked file,
@@ -321,7 +321,7 @@ def _repo_root() -> Path:
     `git ls-files` would find nothing. Bazel sets
     `BUILD_WORKSPACE_DIRECTORY` to the real workspace for exactly this
     case; prefer it, and fall back to the `__file__` walk so a direct
-    `python3 scripts/lint_repo.py` still works.
+    `uv run python scripts/lint_repo.py` still works.
     """
     if ws := os.environ.get("BUILD_WORKSPACE_DIRECTORY"):
         return Path(ws)

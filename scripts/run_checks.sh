@@ -56,7 +56,7 @@ if [[ -n "$LINT_REPO" && -x "$LINT_REPO" ]]; then
   "$LINT_REPO"
 else
   # Direct invocation outside `bazel run` (or a layout without runfiles).
-  python3 scripts/lint_repo.py
+  uv run python scripts/lint_repo.py
 fi
 
 # --- Lint + typecheck, via bazel ---

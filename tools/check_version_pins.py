@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Assert that every duplicated version pin in the workspace agrees.
 
 A "pin family" is one upstream version that is written down in more than

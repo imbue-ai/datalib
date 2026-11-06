@@ -192,7 +192,7 @@ published from a local machine — the tag is the trigger.
 
     ```sh
     git fetch origin && git checkout -b pin-vX.Y.Z origin/main
-    python3 scripts/release/pin_release.py vX.Y.Z
+    uv run python scripts/release/pin_release.py vX.Y.Z
     ```
 
     Open a PR with what it changed, and land it like any other.

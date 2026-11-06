@@ -97,7 +97,7 @@ Docker image and the Mac app carry theirs.
 hash, not by `latest`, for the reason in
 [`security_posture.md`](security_posture.md), and `test.yml` and
 `cargo-update.yml` name the devcontainer image by digest for the same reason.
-After a release publishes, `python3 scripts/release/pin_release.py vX.Y.Z`
+After a release publishes, `uv run python scripts/release/pin_release.py vX.Y.Z`
 rewrites all four from what GitHub reports, which needs `gh` to hold
 `read:packages` (`gh auth refresh -s read:packages`). Wait for that tag's
 `devcontainer.yml` first, or it stops for want of the image. It refuses a release that is a draft, is not immutable, or has no

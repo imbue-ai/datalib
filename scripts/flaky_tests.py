@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Which tests have been flaking, from CI reruns.
 
 Hitting "re-run failed jobs" replays the *same commit*, so a commit
