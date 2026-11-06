@@ -1,10 +1,15 @@
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Public patches consumed by crate_universe annotations in MODULE.bazel.
 exports_files(
     # DOLTLITE_VERSION below is read by //tools:version_pins_test.
-    glob(["*.patch"]) + ["BUILD.bazel"],
+    glob(["*.patch"]) + [
+        "APACHE_LICENSE",
+        "BUILD.bazel",
+        "LICENSE.md",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -172,7 +177,8 @@ cc_library(
 # here that is nothing.
 #
 # Not on the musl platforms. Those binaries are fully static, and a static
-# toolchain's shared library is one nothing we have tested can load.
+# toolchain's shared library is one nothing we have tested can load. The musl
+# reader wheel compiles in a musllinux image instead (`:library_copts`).
 config_setting(
     name = "musl",
     constraint_values = [
@@ -207,6 +213,17 @@ cc_binary(
     linkopts = DOLTLITE_LINKOPTS,
     linkshared = True,
     target_compatible_with = ["@platforms//os:macos"],
+)
+
+# The flags above for a compile outside Bazel, one per line as the compiler
+# sees them, so Bazel's own escaping of the version's quotes comes off. The
+# reader wheels compile in images whose libc sets what they can run on
+# (scripts/release/stage_reader_wheels.sh), and take these rather than a copy.
+write_file(
+    name = "library_copts",
+    out = "library_copts.txt",
+    content = [copt.replace('\\"', '"') for copt in DOLTLITE_LIBRARY_COPTS],
+    visibility = ["//datalib/reader:__pkg__"],
 )
 
 # What this platform ships: `//datalib/backend:dist` takes it, so the

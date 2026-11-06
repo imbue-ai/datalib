@@ -736,17 +736,17 @@ command = "sh -c 'mkdir -p notes/ingest && cp -R \"$HOME/notes/.\" notes/ingest/
 
 A python step using inputs + progress + outcome, which opens each
 download that moved at the commit it was started against. It works under
-any Python, uv's included. Save the reader in
-[Reading a store from Python](doltlite.md#calling-the-library-directly)
-as `doltlite_reader.py` beside it, and point `command` at any Python:
-`/path/to/python3 /path/to/step.py`. Under a release install there is
-nothing to install; otherwise that Python needs the `doltlite` wheel.
+any Python, uv's included. Give that Python the reader in
+[Reading a store from Python](doltlite.md#calling-the-library-directly):
+`imbue-datalib-reader` on Linux, or anywhere the module saved as
+`datalib_reader.py` beside the step. Then point `command` at it:
+`/path/to/python3 /path/to/step.py`.
 
 ```python
 #!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys
 
-from doltlite_reader import Store
+from datalib_reader import Store
 
 def lines(name): return [p for p in os.environ.get(name, "").split("\n") if p]
 

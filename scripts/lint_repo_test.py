@@ -8,10 +8,62 @@ from lint_repo import (
     checkout_token_settings,
     floating_images,
     floating_npx,
+    reader_grant_problems,
     release_grant_problems,
     release_key_problems,
     unliteral_opens,
 )
+
+
+class ReaderWheelGrantsTest(unittest.TestCase):
+    """The workflow that publishes to PyPI answers to the release's rules."""
+
+    GOOD = """\
+jobs:
+  wheels:
+    steps:
+      - uses: bazel-contrib/setup-bazel@abc # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+      - run: scripts/release/stage_reader_wheels.sh out
+  publish:
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@abc # v8
+        with:
+          path: ${{ runner.temp }}/wheels
+      - uses: pypa/gh-action-pypi-publish@abc # v1
+"""
+
+    def test_the_real_shape_passes(self) -> None:
+        self.assertEqual(reader_grant_problems(self.GOOD), [])
+
+    def test_a_build_cannot_hold_the_publish_grant(self) -> None:
+        text = self.GOOD.replace(
+            "  wheels:\n", "  wheels:\n    permissions:\n      id-token: write\n"
+        )
+        self.assertEqual(
+            reader_grant_problems(text), ["job wheels grants id-token: write"]
+        )
+
+    def test_the_publish_job_cannot_build(self) -> None:
+        text = self.GOOD.replace(
+            "      - uses: pypa/", "      - run: bazel build //x\n      - uses: pypa/"
+        )
+        problems = reader_grant_problems(text)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("runs a build", problems[0])
+
+    def test_it_reads_no_cache(self) -> None:
+        text = self.GOOD.replace("disk-cache: false", "disk-cache: true")
+        self.assertEqual(
+            reader_grant_problems(text),
+            ["a release reads no cache: setup-bazel needs disk-cache: false"],
+        )
 
 
 class FloatingNpxTest(unittest.TestCase):

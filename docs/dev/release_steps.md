@@ -153,6 +153,63 @@ Make one leg `exit 1` when `github.run_attempt` is 1, then run `gh run rerun
 the rule that catches people is that a job with no `if` is skipped when
 anything up its chain failed, not only the jobs it names.
 
+## The reader wheels
+
+`imbue-datalib-reader` puts [the reader module](doltlite.md#calling-the-library-directly)
+and `libdoltlite` on PyPI, so that `uv add imbue-datalib-reader` works on Linux.
+It has its own workflow,
+[`reader-wheels.yml`](../../.github/workflows/reader-wheels.yml), and a tag starts
+it beside `release.yml`, for two reasons. `pin_release.py` refuses a tag whose
+`release.yml` run is not green, so a PyPI failure in that run would block pinning
+a release that is fine. And a run's artifacts reach only its own jobs, so nothing
+`release.yml` compiles can plant a wheel here. A failure here costs PyPI that
+version and costs the release nothing.
+
+There are four wheels, one per architecture (x86_64, aarch64) and libc:
+
+| wheel | compiled in | runs on |
+|---|---|---|
+| `manylinux_2_17` (also tagged `manylinux2014`) | `quay.io/pypa/manylinux2014_<arch>`, glibc 2.17 | any glibc from 2.17 on |
+| `musllinux_1_2` | `quay.io/pypa/musllinux_1_2_<arch>`, musl 1.2 | Alpine and other musl from 1.2 on |
+
+The library's symbol versions come from the libc it is linked against, which is
+why each one is compiled in an old image rather than by Bazel on the runner. The
+source and flags still come from Bazel (`//third-party/doltlite:rename_amalgamation`
+and `:library_copts`), so there is no second list of them.
+
+| step | script | what it does |
+|---|---|---|
+| `wheels` job, each architecture | `scripts/release/stage_reader_wheels.sh <out-dir>` | Compiles in each image with no network, writes the wheel with `make_reader_wheel.py` (the standard library, no build backend), and fails unless that image's `auditwheel` agrees with the tag the wheel claims |
+| the same job | `scripts/release/check_reader_wheels.sh <wheel-dir>` | Installs with `pip` on glibc 2.17, Debian and Alpine, and with `uv add` under uv's own Python on Debian and Alpine, each given both libcs' wheels to choose from, and reads a store the pinned shell wrote, mounted read-only, with `sqlite3` beside it and, on Debian and Alpine, stock SQLite loaded globally |
+| `publish` job, on a tag | `pypa/gh-action-pypi-publish` | Uploads all four, with attestations. PyPI never lets a file be replaced; a re-run uploads only what is missing |
+
+It runs on a PR that touches the module, these scripts, the workflow or the
+doltlite pin, and by hand with `gh workflow run reader-wheels.yml`. On a tag, the
+script stops unless the tag is the version in `datalib/backend/Cargo.toml`.
+`//datalib/reader:reader_wheel_test` runs on every `bazel test //...`: the wheel's
+layout and `RECORD`, the same bytes from the same inputs, the module on the doc's
+page word for word, and that a wheel uses its own library whatever is on the `PATH`.
+
+To run the two scripts on a mac, where the arm64 images run natively:
+
+```sh
+BAZEL=bazelisk scripts/release/stage_reader_wheels.sh /tmp/wheels
+```
+
+```sh
+BAZEL=bazelisk scripts/release/check_reader_wheels.sh /tmp/wheels
+```
+
+Set `READER_ARCH=x86_64` for the other architecture, which runs under an emulator
+and takes far longer to compile.
+
+**Setting it up on PyPI, once.** Nothing here can do this. On pypi.org, under an
+account the team shares, add a *pending publisher* for `imbue-datalib-reader`:
+owner `imbue-ai`, repository `datalib`, workflow `reader-wheels.yml`, environment
+`pypi`. Then restrict that GitHub environment to `v*` tags, which
+[`security_posture.md`](security_posture.md) §"The settings this rests on" checks.
+A pending publisher does not reserve the name; the first upload does.
+
 ## Who holds what
 
 A release compiles a great deal of other people's code: on a cache miss
@@ -178,9 +235,12 @@ to wait for.
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
 | `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
 | `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
+| `reader-wheels.yml`'s `wheels` | Bazel fetching doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
+| `reader-wheels.yml`'s `publish` | `pypa/gh-action-pypi-publish`, no checkout | `id-token: write`, which only PyPI takes |
 
 A build job hands what it made to the next through an artifact.
-`scripts/lint_repo.py` check 21 holds each grant to its job, refuses a
+`scripts/lint_repo.py` check 21 holds each grant to its job, in `release.yml`
+and `reader-wheels.yml` both, refuses a
 build command in a job that holds one, and requires every
 `actions/checkout` to say `persist-credentials: false` so the token is
 not left in `.git/config`. `cargo-update.yml`'s `pull-request` job is
@@ -330,6 +390,9 @@ matches.
 
 ## What stays release-only
 
+- The upload to PyPI, in `reader-wheels.yml`. PRs build and check the same
+  wheels, but only a tag's run can publish, so the first tag after setting it
+  up is what first tries it.
 - The `runtime` legs on the real runners, with their own bash and
   their own filesystem — the tests make the same calls, not the same
   machine.

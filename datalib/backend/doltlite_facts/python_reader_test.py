@@ -27,7 +27,7 @@ SHIPPED_LIBRARY = Path(sys.argv[3]).resolve()
 
 def reader_from_doc() -> str:
     blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
-    found = [b for b in blocks if b.startswith("# doltlite_reader.py")]
+    found = [b for b in blocks if b.startswith("# datalib_reader.py")]
     assert len(found) == 1, f"expected one reader in {DOC}, found {len(found)}"
     return found[0]
 
@@ -39,9 +39,9 @@ def wheel_dir() -> Path:
 
 
 READER_DIR = tempfile.TemporaryDirectory()
-(Path(READER_DIR.name) / "doltlite_reader.py").write_text(reader_from_doc())
+(Path(READER_DIR.name) / "datalib_reader.py").write_text(reader_from_doc())
 sys.path.insert(0, READER_DIR.name)
-reader = importlib.import_module("doltlite_reader")
+reader = importlib.import_module("datalib_reader")
 
 
 def cli(store: Path, statement: str) -> str:
@@ -207,7 +207,7 @@ class TheReader(WithAStore):
             shims,
             "-c",
             "import os\n"
-            "from doltlite_reader import Store\n"
+            "from datalib_reader import Store\n"
             f"print(Store({str(self.store)!r}).query('SELECT count(*) FROM t'))\n"
             "print([k for k in os.environ if 'DOLTLITE' in k or k.startswith('DYLD')])",
         )
@@ -236,7 +236,7 @@ class FindingTheLibrary(WithAStore):
 
     def load(self, path: Path, with_wheel: bool) -> subprocess.CompletedProcess[str]:
         code = (
-            "import doltlite_reader as r\n"
+            "import datalib_reader as r\n"
             "print(r._lib._name)\n"
             f"print(r.Store({str(self.store)!r}).query('SELECT count(*) FROM t'))\n"
             f"print(r.Store({str(self.store)!r}).query("

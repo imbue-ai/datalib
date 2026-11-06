@@ -250,6 +250,7 @@ def _scan(root: Path) -> set[str]:
 # all three; this check is what makes forgetting one an error.
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
+    "datalib/reader",
     "scripts",
     "tests/fixtures",
     "tools",
@@ -397,6 +398,9 @@ _RELEASE_WRITE_GRANTS = {
     "docker-image": {"packages"},
     "docker-publish": {"packages"},
 }
+# Publishes on a tag, so what holds for a release holds for it.
+_READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
+_READER_WRITE_GRANTS = {"publish": {"id-token"}}
 _CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
 _PERSIST = re.compile(r"^\s*persist-credentials:\s*(true|false)\b")
 _JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
@@ -529,15 +533,26 @@ def signing_unpack_problems(text: str) -> list[str]:
 
 
 def release_grant_problems(text: str) -> list[str]:
+    return signing_unpack_problems(text) + publishing_problems(
+        text, _RELEASE_WRITE_GRANTS
+    )
+
+
+def reader_grant_problems(text: str) -> list[str]:
+    return publishing_problems(text, _READER_WRITE_GRANTS)
+
+
+def publishing_problems(text: str, write_grants: dict[str, set[str]]) -> list[str]:
+    """A workflow that publishes: each write grant on the job meant to hold it, no
+    build in such a job, and no cache anywhere."""
     grants, bodies = workflow_write_grants(text)
     problems: list[str] = artifact_download_problems(text)
-    problems += signing_unpack_problems(text)
     for job, granted in grants.items():
-        allowed = _RELEASE_WRITE_GRANTS.get(job, set()) if job else set()
+        allowed = write_grants.get(job, set()) if job else set()
         for permission in sorted(granted - allowed):
             where = f"job {job}" if job else "the workflow's default"
             problems.append(f"{where} grants {permission}: write")
-    for job, allowed in _RELEASE_WRITE_GRANTS.items():
+    for job, allowed in write_grants.items():
         for permission in sorted(allowed - grants.get(job, set())):
             problems.append(f"job {job} needs {permission}: write to do its work")
         for line in bodies.get(job, []):
@@ -609,6 +624,10 @@ def _check_workflow_tokens(root: Path) -> int:
     release = ".github/workflows/release.yml"
     problems += [
         f"{release}: {p}" for p in release_grant_problems((root / release).read_text())
+    ]
+    problems += [
+        f"{_READER_WORKFLOW}: {p}"
+        for p in reader_grant_problems((root / _READER_WORKFLOW).read_text())
     ]
     if not problems:
         print(

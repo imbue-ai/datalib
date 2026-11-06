@@ -133,34 +133,48 @@ each one. There are two ways to keep a store open from Python:
 ### Calling the library directly
 
 The engine is also a library, `libdoltlite`, with SQLite's C API, so
-`ctypes` can call it and no module has to be replaced. **A release
-install already has it**, at `lib/libdoltlite.so` (`.dylib` on a mac)
-beside `datalib-doltlite` in the unpacked tree, and in the docker image.
-It is built from the source the binaries are built from, so it always
-matches your stores and there is nothing to install.
-
-The musl tarballs and the desktop app do not carry it, and a checkout
-has it only under `bazel-bin`. There, install dolthub's **`doltlite`**
-package from PyPI, which carries a copy:
+`ctypes` can call it and no module has to be replaced. **On Linux, install
+the package that carries both**:
 
 ```sh
-pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
+uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
 ```
 
-Install the version your shell prints: a release that changes the
-storage format refuses our stores. Wheels exist for macOS on arm64 and
-for glibc Linux (manylinux) on x86_64 and aarch64. With neither the
-library nor a wheel (musl, an Intel mac), use the shell:
+Wheels exist for x86_64 and aarch64: `manylinux_2_17` for any glibc from
+glibc 2.17 on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right
+one. Each version carries the library that release's binaries were built
+from. There is no source distribution.
+
+**Anywhere else, save the module below as `datalib_reader.py`**, the import
+is the same, and it finds a library in this order:
+
+1. A release install's, at `lib/libdoltlite.so` (`.dylib` on a mac) beside
+   `datalib-doltlite` in the unpacked tree, and in the docker image. It is
+   built from the source the binaries are built from, so it always matches
+   your stores and there is nothing to install. The musl tarballs and the
+   desktop app do not carry it.
+2. dolthub's **`doltlite`** package from PyPI, which carries a copy, for
+   the desktop app and for a checkout, which has the library only under
+   `bazel-bin`:
+
+   ```sh
+   pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
+   ```
+
+   Install the version your shell prints: a release that changes the
+   storage format refuses our stores. That package has wheels for macOS on
+   arm64 and for glibc Linux on x86_64 and aarch64.
+
+On an Intel mac there is neither, so use the shell:
 `datalib-doltlite -readonly -json`.
 
-Save this as `doltlite_reader.py`:
-
 ```python
-# doltlite_reader.py
+# datalib_reader.py
 """Read a doltlite store from any Python, uv's included, by calling libdoltlite:
-the one a datalib release installs, or else the one in the `doltlite` wheel. It
-never imports that package: importing it is what replaces sqlite3 and, on macOS,
-restarts the interpreter."""
+the one beside this file when it came from the imbue-datalib-reader wheel, else
+the one a datalib release installs, else the one in dolthub's `doltlite` wheel.
+It never imports that package: importing it is what replaces sqlite3 and, on
+macOS, restarts the interpreter."""
 
 import ctypes as c
 import importlib.util
@@ -174,13 +188,16 @@ _name = "libdoltlite.dylib" if sys.platform == "darwin" else "libdoltlite.so"
 
 
 def _find_library():
+    beside = Path(__file__).parent / _name
+    if beside.is_file():
+        return beside
     shell = shutil.which("datalib-doltlite")
     if shell:
         shipped = Path(shell).resolve().parent / "lib" / _name
         if shipped.is_file():
             return shipped
     wheel = importlib.util.find_spec("doltlite")  # finds it without running it
-    if wheel:
+    if wheel and wheel.origin:
         return Path(wheel.origin).parent / "_lib" / _name
     raise ImportError(
         f"no {_name}: put a datalib release's datalib-doltlite on the PATH, "
@@ -307,7 +324,7 @@ def _column(stmt, i):
 ```
 
 ```python
-from doltlite_reader import Store
+from datalib_reader import Store
 
 with Store(f"{root}/gmail/ingest/entities.doltlite_db") as store:  # main
     rows = store.query("SELECT subject FROM emails WHERE id = ?", email_id)
@@ -329,22 +346,29 @@ What to know about it:
   was imported first. So `sqlite3` still cannot read a store, and a child
   process inherits nothing. The library opens plain SQLite files too,
   such as a source's `blobs.sqlite`.
-- **It looks for the release's library first**, through
+- **Installed from the wheel, it uses the library in the wheel**, whatever
+  is on the `PATH`, so a pinned version means the same engine everywhere.
+- **Saved by hand, it looks for the release's library first**, through
   `datalib-doltlite` on the `PATH`, following the link `install.sh` made.
   A step finds it even when the `PATH` you start from does not hold it,
   since the runner puts its own directory on a step's `PATH`.
 - **A program that stays up across an upgrade keeps the old library.**
   If that upgrade changed the storage format, the store is refused until
   the program restarts.
-- **The wheel route leans on a private layout**, the wheel's `_lib/`
-  directory. It cannot ask the package for the path: importing anything
-  under `doltlite` runs the bootstrap described below.
+- **dolthub's wheel leans on a private layout**, its `_lib/` directory.
+  The module cannot ask that package for the path: importing anything under
+  `doltlite` runs the bootstrap described below. Our own wheel has no such
+  dependency.
 
 `//datalib/backend/doltlite_facts:python_reader_test` runs this code as
 it is written here, with both libraries, under the Python build uv
 fetches (python-build-standalone, which `rules_python` brings too), on
 CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
 host's `python3`, which loads SQLite as a shared library.
+`//datalib/reader:reader_wheel_test` holds this text to the file the wheel
+is built from, and `scripts/release/check_reader_wheels.sh` installs the
+wheels on glibc 2.17, a current Debian and Alpine, with `pip` and with `uv`
+([`release_steps.md`](release_steps.md) §"The reader wheels").
 
 Measured on a mac against real stores: a lookup by primary key on an open
 connection took about 0.01 ms. The same lookup cost about 15 ms when each

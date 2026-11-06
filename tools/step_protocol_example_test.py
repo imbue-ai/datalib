@@ -80,8 +80,8 @@ class StepProtocolExample(unittest.TestCase):
         self.control.mkdir()
         (base / "producer.py").write_text(PRODUCER)
         (base / "example.py").write_text(block_from_doc(DOC, "#!/usr/bin/env python3"))
-        (base / "doltlite_reader.py").write_text(
-            block_from_doc(DOLTLITE_DOC, "# doltlite_reader.py")
+        (base / "datalib_reader.py").write_text(
+            block_from_doc(DOLTLITE_DOC, "# datalib_reader.py")
         )
         py = sys.executable
         producer = f"{py} {base / 'producer.py'} {self.control} {CLI}"

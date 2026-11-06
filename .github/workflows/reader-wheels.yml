@@ -1,0 +1,105 @@
+# Builds the imbue-datalib-reader wheels and checks them on the Pythons they are
+# for: on a PR that could change them, and on every `v*` tag, which also
+# publishes them to PyPI. docs/dev/release_steps.md §"The reader wheels".
+#
+# On its own rather than in release.yml. `pin_release.py` refuses a tag whose
+# release.yml run is not green, so a PyPI outage there would block pinning a
+# release that is fine, and a run's artifacts reach only that run's jobs, so
+# nothing release.yml compiles can plant a wheel here.
+#
+# A tag's run follows release.yml's rules, and `lint_repo.py` check 21 holds it
+# to them: no cache of any kind, and the job that can publish builds nothing.
+name: reader-wheels
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/reader-wheels.yml
+      - MODULE.bazel  # where the doltlite pin's archives are named
+      - datalib/reader/**
+      - scripts/release/*reader*
+      - third-party/doltlite/**
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reader-wheels-${{ github.ref }}
+  # Never a tag's run, which may be publishing.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  wheels:
+    name: wheels (${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-latest
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No cache, as in release.yml's build job; see its comment.
+      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      - name: Build this architecture's manylinux and musllinux wheels
+        run: scripts/release/stage_reader_wheels.sh "${RUNNER_TEMP}/wheels"
+
+      - name: Install them on each Python they are for, and read a store
+        run: scripts/release/check_reader_wheels.sh "${RUNNER_TEMP}/wheels"
+
+      # compression-level 0: a wheel is a zip already.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reader-wheels-${{ matrix.arch }}
+          overwrite: true
+          path: ${{ runner.temp }}/wheels/*.whl
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Trusted publishing: PyPI takes this job's OIDC token, so no secret exists to
+  # steal. It accepts one only from this file in the `pypi` environment, which
+  # only a `v*` tag may use (docs/dev/security_posture.md §"The settings this
+  # rests on"). No checkout, so the only code here is the publish action.
+  publish:
+    name: publish to PyPI
+    needs: wheels
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      id-token: write  # PyPI's trusted publishing, and the attestations it uploads
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reader-wheels-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/wheels
+
+      # The action runs in a container that sees only the workspace.
+      - name: Move the wheels where the publish action looks
+        run: mv "${RUNNER_TEMP}/wheels" dist && ls -la dist
+
+      # skip-existing: PyPI never lets a file be replaced, so re-running a
+      # publish that got partway uploads only what is missing.
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
