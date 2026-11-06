@@ -25,7 +25,19 @@ pub fn container(home: &Path) -> PathBuf {
     home.join("Library").join("Group Containers").join(GROUP_ID)
 }
 
+/// Spotlight holds the paths of what it indexes, and no guard stops a program
+/// asking it, so the folder's name keeps it out (`launcher::noindex`). A
+/// real `Libraries` is still the folder until the launch that moves it.
 pub fn libraries_dir(container: &Path) -> PathBuf {
+    let plain = plain_libraries_dir(container);
+    if std::fs::symlink_metadata(&plain).is_ok_and(|meta| meta.is_dir()) {
+        plain
+    } else {
+        container.join("Libraries.noindex")
+    }
+}
+
+pub fn plain_libraries_dir(container: &Path) -> PathBuf {
     container.join("Libraries")
 }
 
@@ -170,14 +182,17 @@ mod tests {
         std::os::unix::fs::symlink(&outside, libraries_dir(&c).join("out")).unwrap();
 
         assert!(is_protected(&mail, &c));
-        assert!(is_protected(&c.join("Libraries/../Libraries/Mail"), &c));
+        assert!(is_protected(
+            &c.join("Libraries.noindex/../Libraries.noindex/Mail"),
+            &c
+        ));
         assert!(
             is_protected(&home.join("Datalib/into"), &c),
             "a link from outside into the container"
         );
         assert!(!is_protected(&outside, &c));
         assert!(!is_protected(
-            &c.join("Libraries/../../../../Datalib/Mail"),
+            &c.join("Libraries.noindex/../../../../Datalib/Mail"),
             &c
         ));
         assert!(
@@ -196,6 +211,17 @@ mod tests {
             !is_protected(&mail, &container(&home.join("nobody"))),
             "nothing is in a container that is not there"
         );
+    }
+
+    /// New libraries go where Spotlight will not look, but a real
+    /// `Libraries` is used until the launch that can move it.
+    #[test]
+    fn the_libraries_folder_is_the_real_one_until_it_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let c = tmp.path();
+        assert_eq!(libraries_dir(c), c.join("Libraries.noindex"));
+        std::fs::create_dir_all(c.join("Libraries")).unwrap();
+        assert_eq!(libraries_dir(c), c.join("Libraries"));
     }
 
     /// The folder has to match the bundle identifier, or clearing it clears

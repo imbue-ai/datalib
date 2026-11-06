@@ -199,6 +199,7 @@ fn launcher_resolve(app: AppHandle, input: String, protect: bool) -> serde_json:
             "shown_path": launcher::tilde(&root, &home),
             "path": root.to_string_lossy(),
             "target": launcher::classify(&root).as_str(),
+            "spotlight_indexes": launcher::spotlight_indexes(&root),
         }),
         None => serde_json::Value::Null,
     }
@@ -617,13 +618,45 @@ fn libraries_dir(app: &AppHandle) -> PathBuf {
 }
 
 /// The folders whose libraries the screen lists whether or not they were
-/// opened: `~/Datalib`, and on macOS the protected one.
+/// opened: `launcher::libraries_dir`, and on macOS the protected one.
 fn libraries_dirs(app: &AppHandle) -> Vec<PathBuf> {
     let mut dirs = vec![libraries_dir(app)];
     if let Some(container) = protected_container(app) {
         dirs.push(protected::libraries_dir(&container));
     }
     dirs
+}
+
+/// Before any server starts, so nothing has a library open by its old path
+/// but another copy of the app or a sync, which hold the folder where it is.
+fn move_libraries_out_of_spotlight(app: &AppHandle) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some(home) = home_dir(app) else { return };
+    let mut folders = vec![home.join("Datalib")];
+    if let Some(container) = protected_container(app) {
+        if container.is_dir() {
+            folders.push(protected::plain_libraries_dir(&container));
+        }
+    }
+    let recents = launcher::recents_file(&home);
+    for old in folders {
+        match launcher::move_out_of_spotlight(&recents, &old) {
+            Ok(launcher::OutOfSpotlight::Moved | launcher::OutOfSpotlight::AlreadyOut) => {}
+            Ok(launcher::OutOfSpotlight::Busy(open)) => eprintln!(
+                "{} stays where it is for now: {} is open",
+                old.display(),
+                open.display()
+            ),
+            Ok(launcher::OutOfSpotlight::BothExist) => eprintln!(
+                "{} stays where it is: {} is there too",
+                old.display(),
+                launcher::noindex(&old).display()
+            ),
+            Err(e) => eprintln!("could not move {}: {e}", old.display()),
+        }
+    }
 }
 
 /// Before any web view opens, and only for someone who has protected
@@ -772,6 +805,7 @@ fn main() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            move_libraries_out_of_spotlight(&handle);
             clear_old_web_cache(&handle);
             if let Some(file) = zoom_file(&handle) {
                 *handle.state::<PageZoom>().0.lock().unwrap() = zoom::load(&file);

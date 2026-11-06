@@ -9,7 +9,15 @@
 dev_library_root() {
   local arg="${1:-}"
   case "$arg" in
-    "")    echo "$HOME/Datalib/Default" ;;
+    "")
+      # The folder the desktop app uses (`launcher::libraries_dir`). Once it
+      # has moved, `~/Datalib` is a link to it.
+      if [[ "$(uname -s)" == Darwin && ! -e "$HOME/Datalib" ]]; then
+        echo "$HOME/Datalib.noindex/Default"
+      else
+        echo "$HOME/Datalib/Default"
+      fi
+      ;;
     "~")   echo "$HOME" ;;
     "~/"*) echo "$HOME/${arg#\~/}" ;;
     *)     echo "$arg" ;;

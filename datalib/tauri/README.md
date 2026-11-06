@@ -93,10 +93,25 @@ opens and asks.
 ## The libraries screen
 
 It lists the recent libraries (`~/.datalib/recent-roots.json`), then
-any other library in the libraries folder, `~/Datalib`, or in the
+any other library in the libraries folder or in the
 protected folder (below), by name. The libraries folder is not in
 `~/Documents`, `~/Desktop` or `~/Downloads` because macOS asks before
 an app reads those.
+
+**On a Mac the libraries folder is `~/Datalib.noindex`**, because
+Spotlight indexes a person's home folder and skips a folder whose name
+ends in `.noindex`, with everything under it. Without that, any program
+could ask Spotlight for what is in a library. An empty
+`.metadata_never_index` file does nothing, and an extended attribute
+did nothing either (macOS 26.7.2). At launch the app renames an existing `~/Datalib`, or
+the protected folder's `Libraries`, moves the recent list along, and
+leaves a link at the old name, so a script or an agent naming
+`~/Datalib/Default` keeps working; Spotlight does not follow the link.
+It waits for a later launch while a library in the folder is open
+(`launcher::move_out_of_spotlight`). A library made elsewhere is not moved:
+the new-library line says Spotlight will index it unless the folder's
+name ends in `.noindex`.
+
 Each shows the source
 count, size and last sync that `datalib-http` last wrote to its
 `system/library-summary.json`; one whose folder is gone stays listed as
@@ -191,7 +206,7 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 
 On macOS 15 or later, "New library" can put the library in a folder only
 Datalib opens without asking: the app group container
-`~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
+`~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries.noindex/`.
 macOS guards a group container: any other app that reaches in
 (Terminal, an AI agent's shell, Finder) makes it ask the person first,
 and a yes lasts as long as that app runs. An app with Full Disk Access

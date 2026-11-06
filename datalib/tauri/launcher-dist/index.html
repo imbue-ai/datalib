@@ -6,7 +6,7 @@
 
   It lists the libraries, each with what the server last wrote down
   about it (sources, size, last sync), and makes a new one from a name
-  or a folder. A plain name is a library in ~/Datalib, and the first
+  or a folder. A plain name is a library in the libraries folder, and the first
   one's name is filled in for you.
 
   This is the ONLY page the shell bundles. Once a library is chosen the
@@ -706,6 +706,9 @@
             protect ? "Creates the protected library " : "Creates ",
             code(protect ? input.trim() : r.shown_path),
           );
+          if (r.spotlight_indexes) {
+            what.append(". Spotlight will index it, unless the folder's name ends in ", code(".noindex"));
+          }
           ok = true;
         } else if (r.target === "library") {
           what.append(code(r.shown_path), " is already a library. ");

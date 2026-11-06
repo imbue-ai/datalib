@@ -133,7 +133,8 @@ specific ports with `DATALIB_PORT` (Vite) and `DATALIB_BIND`
 (backend). Ctrl-C tears both down.
 
 The data root is the positional arg to `bazelisk run //datalib:dev` (or
-`:serve`), else `~/Datalib/Default`, the library the desktop app opens
+`:serve`), else `~/Datalib/Default` (on a Mac with no `~/Datalib`,
+`~/Datalib.noindex/Default`), the library the desktop app opens
 first; `dev_library_root` in
 `datalib/dev_lib.sh` is where both launchers decide it. It is the
 *directory*, not the config file: `datalib-http` takes it as a required

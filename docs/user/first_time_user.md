@@ -230,6 +230,13 @@ What that means for datalib today:
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
 
+#### Keeping your libraries out of Spotlight (macOS)
+
+Spotlight indexes your home folder, and any program can ask it what it found.
+So on a Mac, Datalib keeps libraries in `~/Datalib.noindex`, a name Spotlight
+skips. `~/Datalib` still works, as a link to it. If you make a library in a
+folder of your own, end that folder's name in `.noindex` to keep it out too.
+
 #### Which apps have you let in? (macOS)
 
 A protected folder is only as closed as the permissions you've handed

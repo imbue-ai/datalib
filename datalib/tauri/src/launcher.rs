@@ -15,11 +15,108 @@ pub fn recents_file(home: &Path) -> PathBuf {
     home.join(".datalib").join("recent-roots.json")
 }
 
-/// Where a library given by name lives: `Datalib` in the home
-/// directory. Not in Documents, Desktop or Downloads: macOS asks the
-/// person for permission before an app reads those.
+/// Where a library given by name lives: in the home directory, not in
+/// Documents, Desktop or Downloads, where macOS asks the person for
+/// permission before an app reads them. On a Mac the folder's name keeps
+/// Spotlight out ([`noindex`]); until [`move_out_of_spotlight`] has moved
+/// a real `Datalib`, that is still the folder.
 pub fn libraries_dir(home: &Path) -> PathBuf {
-    home.join("Datalib")
+    let plain = home.join("Datalib");
+    if cfg!(target_os = "macos") && !is_real_dir(&plain) {
+        noindex(&plain)
+    } else {
+        plain
+    }
+}
+
+/// Spotlight skips a folder named `*.noindex` and all that is under it,
+/// and drops what it held when one is renamed. An empty
+/// `.metadata_never_index` file inside does nothing (measured, macOS 26).
+pub fn noindex(dir: &Path) -> PathBuf {
+    let mut name = dir.as_os_str().to_owned();
+    name.push(".noindex");
+    PathBuf::from(name)
+}
+
+/// Whether Spotlight would index a library at `path`. Only a Mac has it.
+pub fn spotlight_indexes(path: &Path) -> bool {
+    let kept_out = path
+        .components()
+        .any(|part| part.as_os_str().to_string_lossy().ends_with(".noindex"));
+    cfg!(target_os = "macos") && !kept_out
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutOfSpotlight {
+    Moved,
+    /// There is no real folder at the old name, so nothing to move.
+    AlreadyOut,
+    /// A library in it is open; the next launch tries again.
+    Busy(PathBuf),
+    /// Both names are folders. Neither is touched, and the old one is used.
+    BothExist,
+}
+
+/// Rename `old` to [`noindex`] of it, and leave a link at the old name, so
+/// that a script or an agent still naming `~/Datalib/Default` keeps
+/// working; Spotlight does not follow a link. Whole-folder and only while
+/// no library in it is open, because a server opens its stores by path.
+pub fn move_out_of_spotlight(recents_file: &Path, old: &Path) -> std::io::Result<OutOfSpotlight> {
+    let new = noindex(old);
+    if !is_real_dir(old) {
+        replace_recent_folder(recents_file, old, &new)?;
+        return Ok(OutOfSpotlight::AlreadyOut);
+    }
+    if new.exists() {
+        return Ok(OutOfSpotlight::BothExist);
+    }
+    let names: Vec<_> = std::fs::read_dir(old)?
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    if let Some(open) = names.iter().find(|name| in_use(&old.join(name))) {
+        return Ok(OutOfSpotlight::Busy(old.join(open)));
+    }
+    std::fs::rename(old, &new)?;
+    for name in &names {
+        drop_own_data_root(&new.join(name).join("config.toml"), &old.join(name))?;
+    }
+    link_old_name(&new, old)?;
+    replace_recent_folder(recents_file, old, &new)?;
+    Ok(OutOfSpotlight::Moved)
+}
+
+#[cfg(unix)]
+fn link_old_name(new: &Path, old: &Path) -> std::io::Result<()> {
+    let beside = new.file_name().expect("the folder has a name");
+    std::os::unix::fs::symlink(beside, old)
+}
+
+#[cfg(not(unix))]
+fn link_old_name(_new: &Path, _old: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Point every recent library under `from` at the same place under `to`.
+/// Also run when the folder has already moved, for a run cut short.
+fn replace_recent_folder(file: &Path, from: &Path, to: &Path) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(file).unwrap_or_default();
+    let recents = parse_recents(&existing);
+    if !recents.iter().any(|p| p.starts_with(from)) {
+        return Ok(());
+    }
+    let roots: Vec<PathBuf> = recents
+        .into_iter()
+        .map(|p| match p.strip_prefix(from) {
+            Ok(rest) => to.join(rest),
+            Err(_) => p,
+        })
+        .collect();
+    write_recents(file, &roots)
 }
 
 pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
@@ -385,6 +482,152 @@ pub fn display_name(root: &Path) -> String {
     root.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod out_of_spotlight_tests {
+    use super::*;
+
+    fn make_library(dir: &Path) {
+        std::fs::create_dir_all(dir.join("system")).unwrap();
+        std::fs::write(dir.join("config.toml"), "steps = []\n").unwrap();
+    }
+
+    /// The folder moves whole, the old path still reaches each library
+    /// through a link, and the recent list names the new place. A recent
+    /// library elsewhere is left alone, even one sharing the name's start.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_moves_and_its_old_path_keeps_working() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        let new = tmp.path().join("Datalib.noindex");
+        let work = old.join("Work");
+        let elsewhere = tmp.path().join("Datalib-elsewhere");
+        make_library(&work);
+        make_library(&elsewhere);
+        record_recent(&f, &elsewhere).unwrap();
+        record_recent(&f, &work).unwrap();
+
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::Moved
+        );
+
+        assert!(is_real_dir(&new.join("Work")));
+        assert!(!is_real_dir(&old), "the old name is now a link");
+        assert!(old.join("Work/config.toml").is_file());
+        let listed: Vec<PathBuf> = libraries(&f, &[]).into_iter().map(|l| l.path).collect();
+        assert_eq!(listed, vec![new.join("Work"), elsewhere]);
+    }
+
+    /// A config that spells out its own folder would keep naming the old
+    /// path once the link is gone.
+    #[test]
+    fn a_config_naming_its_own_folder_stops_naming_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        let work = old.join("Work");
+        make_library(&work);
+        std::fs::write(
+            work.join("config.toml"),
+            format!("data_root = \"{}\"\nsteps = []\n", work.display()),
+        )
+        .unwrap();
+
+        move_out_of_spotlight(&f, &old).unwrap();
+
+        let moved = noindex(&old).join("Work/config.toml");
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "steps = []\n");
+    }
+
+    /// A server opens its stores by path, so an open library holds the
+    /// whole folder where it is until the next launch.
+    #[test]
+    fn an_open_library_keeps_the_folder_where_it_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        let open = old.join("Open");
+        make_library(&open);
+        make_library(&old.join("Closed"));
+        let held = std::fs::File::create(open.join("system/lock")).unwrap();
+        held.lock().unwrap();
+
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::Busy(open.clone())
+        );
+        assert!(is_real_dir(&open));
+        assert!(!noindex(&old).exists());
+
+        drop(held);
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::Moved
+        );
+    }
+
+    /// Nothing decides between two real folders, so nothing is touched.
+    #[test]
+    fn two_real_folders_are_both_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        make_library(&old.join("Work"));
+        std::fs::create_dir_all(noindex(&old)).unwrap();
+
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::BothExist
+        );
+        assert!(is_real_dir(&old.join("Work")));
+    }
+
+    /// A launch cut short after the rename leaves the recent list naming
+    /// the old folder; the next one finishes it.
+    #[test]
+    fn the_next_launch_finishes_a_move_cut_short() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        make_library(&noindex(&old).join("Work"));
+        record_recent(&f, &old.join("Work")).unwrap();
+
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::AlreadyOut
+        );
+        let listed: Vec<PathBuf> = libraries(&f, &[]).into_iter().map(|l| l.path).collect();
+        assert_eq!(listed, vec![noindex(&old).join("Work")]);
+    }
+
+    #[test]
+    fn someone_who_never_had_the_folder_gets_nothing_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("recent-roots.json");
+        let old = tmp.path().join("Datalib");
+        assert_eq!(
+            move_out_of_spotlight(&f, &old).unwrap(),
+            OutOfSpotlight::AlreadyOut
+        );
+        assert!(!f.exists());
+        assert!(!old.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_new_library_goes_in_the_folder_spotlight_skips_once_it_can() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        assert_eq!(libraries_dir(home), home.join("Datalib.noindex"));
+        assert!(!spotlight_indexes(&libraries_dir(home).join("Work")));
+        assert!(spotlight_indexes(&home.join("projects/lib")));
+        std::fs::create_dir_all(home.join("Datalib")).unwrap();
+        assert_eq!(libraries_dir(home), home.join("Datalib"));
+    }
 }
 
 #[cfg(test)]
