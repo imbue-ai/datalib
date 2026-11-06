@@ -7,13 +7,20 @@ DACTAL's tabular UI. It sits in the card registry alongside
 in any card, e.g. in an empty card's header type:
 
 ```
-dactalView()                                      # explore recent rows
+dactalView()                                      # load recent rows, list the datasets
 dactalView({ load: "source:slack", q: "rows/conversation_name" })
 ```
 
 `opts.load` is a Datalib search that seeds the working set; `opts.q` is the
 initial DACTAL query. Both reach the page in the host's `dactal:init`
 message, never in its URL.
+
+With no query — `opts.q` left out, or the query box cleared and run —
+the page lists the datasets a query can start from, as DACTAL's own
+query page does: the working set's (`rows` first, each with its item
+count), then the engine's own (`annotators`, `query history`), faded. A
+click on one of ours runs `<name>???sample:@<=10`, ten of its items; on
+one of the engine's, the bare name.
 
 It is **data-agnostic**: there is no per-provider code. The page takes
 whatever `/applet/unified_document_index/search` returns — fetched by the host card,
@@ -91,8 +98,9 @@ dactalView() card ──► <iframe sandbox="allow-scripts"> ──► /dactal/i
     over it. Reuses DACTAL's engine + renderer but not its host page (no
     saved-query store / AI assist / adapters). Also carries the CSP — see
     caveat 5.
-  - `main.js` — that page's own logic (query bar, render loop, the globals
-    the vendored renderer expects). Split out of `index.html` so the CSP
+  - `main.js` — that page's own logic (query bar, dataset list, render
+    loop, the globals the vendored renderer expects: `dactal`, `dactaldb`,
+    `runQuery`, `audioshown`, `query_results`). Split out of `index.html` so the CSP
     can forbid inline script.
   - `calc.js` — the query language's inline math (`rows.[=score/total]`):
     a small parser for arithmetic, in place of the `eval` the engine shipped
