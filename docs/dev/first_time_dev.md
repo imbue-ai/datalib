@@ -117,6 +117,20 @@ bazelisk run //datalib:dev_tng
 tiny fixture (Thucydides 1.1, both languages) so you can exercise the
 bilingual `edges` UI.
 
+### Run the desktop app
+
+The desktop app is the main way to use datalib. To build it from this
+checkout and launch it (macOS):
+
+```sh
+./run-app.sh                     # a folder picker chooses the library
+./run-app.sh ~/Datalib/Default   # open this library directly
+```
+
+It Bazel-builds the bundled binaries, builds the Tauri shell in
+`datalib/tauri/` and opens the `.app`. A rebuild with nothing changed
+takes seconds. More in [`datalib/tauri/README.md`](../../datalib/tauri/README.md).
+
 ### Launch the dev UI against your own data
 
 Full dev — backend (`datalib_http_bin`) **and** Vite (`pnpm dev`) at the

@@ -44,9 +44,9 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # launches it. Optional data-root arg skips the folder picker. Every
 # build below bundles `-c opt` binaries, as the release tarballs do;
 # DATALIB_COMPILATION_MODE=fastbuild builds quicker and syncs about
-# twice as slowly.
-./run.sh
-./run.sh ~/Datalib/Default
+# twice as slowly. From the repo root:
+./run-app.sh
+./run-app.sh ~/Datalib/Default
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which

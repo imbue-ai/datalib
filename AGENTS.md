@@ -663,6 +663,7 @@ bazelisk test //...                                   # source of truth
 bazelisk test //datalib/backend/...                   # narrower, still bazel
 bazelisk build //tests/fixtures:ingested_tng          # rebuild the fixture ingest
 bazelisk build //datalib/backend:bin                  # stage every shipped binary
+./run-app.sh [<data_root>]                            # build and launch the desktop app (macOS)
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
