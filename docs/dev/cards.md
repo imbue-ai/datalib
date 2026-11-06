@@ -550,8 +550,7 @@ besides components:
   column with no header to hold it. The list loads a page at a time with
   **Show more**, on the table's `grid/pagedWindow.ts`; when the index
   moves it reads again as many rows as it holds, through the picked one,
-  so a sync costs nobody their place. The toolbar's search box (⌘K)
-  opens one. Its table is the grid below, over the search: row click
+  so a sync costs nobody their place. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does one click on a
   Document cell's link (the problems grid's); double-click on the row
   opens it as a standalone single-column page in a new tab. In an

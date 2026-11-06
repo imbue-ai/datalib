@@ -64,14 +64,14 @@ test("right-click on the chip offers its copies, and a double-click opens the pe
     .poll(() => page.evaluate(() => (window as unknown as { __copied?: string }).__copied))
     .toBe(value);
 
-  const bar = page.locator('[data-testid="search-input"]');
-  const query = (await bar.getAttribute("data-query")) ?? "";
+  const grid = page.locator(".grid-wrap").first();
+  const query = (await grid.getAttribute("data-shown-query")) ?? "";
   await chip.dblclick();
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
   await expect(card.locator(".person-section").first()).toHaveClass(/person-seen-here/);
   // The grid's own search is left as it was.
-  await expect(bar).toHaveAttribute("data-query", query);
+  await expect(grid).toHaveAttribute("data-shown-query", query);
 });
 
 /// The Source cell is a group chip (docs/dev/chips.md): datalib-http

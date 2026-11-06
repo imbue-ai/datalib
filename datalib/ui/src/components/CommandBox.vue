@@ -42,10 +42,21 @@ watch(
   { immediate: true },
 );
 
-/// The caret leaves with the search, so Enter on a picked row opens it.
+/// Hands the keyboard back to the page. Blurring alone does not: the page's
+/// text selection stays in the field, and a grid puts back the selection it
+/// finds after each click, which takes the focus back here too, so Enter on a
+/// row just picked would search again rather than open it.
+function letGo() {
+  input.value?.blur();
+  const selection = window.getSelection();
+  if (selection?.anchorNode && box.value?.contains(selection.anchorNode)) {
+    selection.removeAllRanges();
+  }
+}
+
 function submit() {
   run(draft.value.trim());
-  input.value?.blur();
+  letGo();
 }
 
 function submitNew() {
@@ -75,7 +86,7 @@ function escape() {
     return;
   }
   draft.value = activeSearch.value?.query.value ?? "";
-  input.value?.blur();
+  letGo();
 }
 
 function onKey(ev: KeyboardEvent) {
@@ -85,13 +96,11 @@ function onKey(ev: KeyboardEvent) {
     input.value?.selectAll();
   }
 }
-/// A click elsewhere takes the panel away, and the caret, so Enter on a row
-/// just picked opens it. A grid does not take the caret itself when the click
-/// lands on a chip in a cell.
+/// A click elsewhere takes the panel away, and the caret.
 function onPointerDown(ev: PointerEvent) {
   if (box.value && ev.composedPath().includes(box.value)) return;
   panelOpen.value = false;
-  input.value?.blur();
+  letGo();
 }
 onMounted(() => {
   window.addEventListener("keydown", onKey);

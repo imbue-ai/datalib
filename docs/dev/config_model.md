@@ -410,9 +410,9 @@ a file, at boot or on any change to it, keeping the old text as
 So the lists are what decides which indexes a source reaches. A render
 step named by neither fan-in renders and reaches nothing. Named by
 `grid_index` alone, its rows are in the grid and its documents open and
-filter, but free text typed into the search bar will not find it in
-the Words or Meaning tabs, which read qmd's index, so leaving a source
-out costs keyword search as well as semantic. Which is still a reasonable thing
+filter, but free text will not find it by its words or its meaning, which
+are read from qmd's index, only by the fields the grid holds, so leaving a
+source out costs keyword search as well as semantic. Which is still a reasonable thing
 to want, because embedding is the slow part of a sync — though turning
 off just its `embed` step keeps keyword search.
 

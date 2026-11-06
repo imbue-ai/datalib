@@ -3,7 +3,15 @@
 // have typed.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards, stubStream, runSearch } from "./grid-helpers";
+import {
+  firstRowUuid,
+  GRID,
+  gridSettled,
+  openRowByUuid,
+  runSearch,
+  shownCards,
+  stubStream,
+} from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
 const input = (page: Page) => page.getByTestId("search-input");
@@ -264,4 +272,38 @@ test("a search says above its results what it could not reach, in either view", 
   await expect(notices).toHaveCount(0);
 
   await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
+/// The box's editor keeps the page's text selection, and a grid puts back the
+/// selection it finds after a click, which once took the focus back to the box:
+/// Enter on a row just picked then searched again rather than opening it.
+test("after a search, Enter on a row picked by a click opens the row", async ({ page }) => {
+  await page.goto(GRID);
+  await runSearch(page, "is:document");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "is:document");
+  await gridSettled(page);
+  const uuid = await firstRowUuid(page);
+  await openRowByUuid(page, uuid);
+  await expect(page.locator(".chat-preview").first()).toBeVisible({ timeout: 10_000 });
+  await expect(input(page)).not.toBeFocused();
+});
+
+/// The default is written twice, in the server's query parser and in the
+/// panel's reading of a query with no `semantic:`. They must agree, or the
+/// slider shows a cutoff the search is not using.
+test("the panel shows the cutoff the server searches at by default", async ({ page }) => {
+  const params = new URLSearchParams({ q: "warp core", limit: "1" });
+  const resp = await page.request.get(`${SEARCH_PATH}?${params}`);
+  expect(resp.ok()).toBeTruthy();
+  const { query_echo: echo } = (await resp.json()) as {
+    query_echo: { semantic_cutoff: number };
+  };
+  await page.goto(GRID);
+  await runSearch(page, "warp core");
+  await openPanel(page);
+  await expect(page.getByTestId("search-cutoff")).toHaveValue(String(echo.semantic_cutoff));
+  await expect(input(page), "the default is written as nothing").toHaveAttribute(
+    "data-query",
+    "warp core",
+  );
 });

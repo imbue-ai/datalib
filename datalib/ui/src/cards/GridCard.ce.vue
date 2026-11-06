@@ -11,8 +11,8 @@
 // the one query: a list with a preview (SearchList.ce.vue) and this
 // table, picked by the tabs above them. A new search opens on the view
 // picked last (searchViewPref.ts). Both stay mounted once shown, so
-// switching keeps each one's selection and scroll. The source chips rewrite the query
-// (cards/search.ts) rather than keep state beside it.
+// switching keeps each one's selection and scroll. Its search box is the
+// toolbar's (search/searchCards.ts), and its query is the one thing it keeps.
 //
 // A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
 // or the row menu opens the row's document as a new card via
@@ -2220,9 +2220,6 @@ function chipAt(e: SlickEventData): HTMLElement | null {
 }
 
 function onClick(e: SlickEventData, args: OnClickEventArgs) {
-  // The keyboard follows the click, so Enter opens the row just picked. The
-  // grid takes it only for a click on the bare cell, not on a chip inside one.
-  args.grid.focus();
   // A chip is a link; a click on it selects the row and nothing more —
   // the mail client its href would open is not what a click here asks.
   if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();

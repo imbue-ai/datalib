@@ -171,9 +171,8 @@ is a search card's rows reaching the screen, in the table or the list.
 `ui.doc_shown` is a document's body drawn in its frame. Each line has
 `ms`, `outcome` (rows, refused or failed for a search; shown or failed
 for a document) and `trigger`: `open` counts from the card opening,
-`search` from the card asking a search it has not shown. That second
-clock starts once the search bar's pause for typing is over, not at
-the keystroke. A wait of two seconds or more is a `warn`, so
+`search` from the card asking a search it has not shown, which in a search
+card is Enter in the toolbar's box. A wait of two seconds or more is a `warn`, so
 `target:ui.search_answered min_level:warn` in the log card lists the
 slow ones. On a page in the background, which draws nothing, the wait
 ends when the answer arrives and the line says `hidden`
