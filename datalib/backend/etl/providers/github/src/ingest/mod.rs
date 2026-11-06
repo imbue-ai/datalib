@@ -22,7 +22,8 @@ use datalib_etl_forge_ingest_common::{
     Listed, Search, SyncOptions,
 };
 use datalib_etl_web::http::{
-    default_retryability, HttpResponse, HttpService, LatchkeySettings, Retryability,
+    default_retryability, parse_retry_after, HttpResponse, HttpService, LatchkeySettings,
+    Retryability,
 };
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -120,14 +121,26 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-/// GitHub's retry classifier. The default one already treats the
-/// *secondary* rate limit (HTTP 429) and 5xx as retryable; GitHub's
-/// *primary* rate limit is instead a `403` with `x-ratelimit-remaining:
-/// 0` plus an `x-ratelimit-reset` epoch telling us when the window
-/// resets. Map that to a retry with the computed wait so the shared loop
-/// respects it.
+/// How long to wait out a limit GitHub names no wait for. Its docs ask for
+/// at least a minute.
+const WAIT_OUT_A_LIMIT: Duration = Duration::from_secs(60);
+
+/// GitHub's retry classifier. A rate limit is a `403` or a `429`, and the
+/// status does not tell a limit from a refusal. In the order GitHub's docs
+/// give: `retry-after` is the wait; otherwise `x-ratelimit-remaining: 0`
+/// means wait for `x-ratelimit-reset`; otherwise a secondary limit, which
+/// says so in its message, is at least a minute. The search API has a
+/// limit of its own, 30 requests a minute, which a long search can reach.
 fn github_retryability(resp: &HttpResponse) -> Retryability {
-    if resp.status == 403 && resp.header("x-ratelimit-remaining") == Some("0") {
+    if !matches!(resp.status, 403 | 429) {
+        return default_retryability(resp);
+    }
+    if let Some(wait) = parse_retry_after(resp.header("retry-after")) {
+        return Retryability::Retry {
+            retry_after: Some(wait),
+        };
+    }
+    if resp.header("x-ratelimit-remaining") == Some("0") {
         let retry_after = resp.header("x-ratelimit-reset").and_then(|reset| {
             reset.parse::<i64>().ok().map(|ts| {
                 let now = chrono::Utc::now().timestamp();
@@ -136,7 +149,16 @@ fn github_retryability(resp: &HttpResponse) -> Retryability {
         });
         return Retryability::Retry { retry_after };
     }
-    default_retryability(resp)
+    let secondary = resp
+        .body_str()
+        .to_ascii_lowercase()
+        .contains("secondary rate limit");
+    if resp.status == 429 || secondary {
+        return Retryability::Retry {
+            retry_after: Some(WAIT_OUT_A_LIMIT),
+        };
+    }
+    Retryability::Accept
 }
 
 /// A PR as fetched: its record and its three child lists, each whole.
@@ -322,17 +344,16 @@ static CHILDREN: [Child; 3] = [
 ];
 
 /// The search-issues request for one discovery scope, bounded by
-/// `updated_at` as [`since_param`] makes it.
+/// `updated_at`. The top is the whole stamp, because a search cut off at
+/// GitHub's cap carries on from its oldest result, and a date could not
+/// get past a day with more results than one search answers. The bottom
+/// is [`since_param`]'s date.
 pub fn search_url(scope: &str, bounds: &Bounds) -> String {
     let mut q = format!("is:pr {scope}");
     match (&bounds.lo, &bounds.hi) {
-        (Some(lo), Some(hi)) => q.push_str(&format!(
-            " updated:{}..{}",
-            since_param(lo),
-            since_param(hi)
-        )),
+        (Some(lo), Some(hi)) => q.push_str(&format!(" updated:{}..{hi}", since_param(lo))),
         (Some(lo), None) => q.push_str(&format!(" updated:>={}", since_param(lo))),
-        (None, Some(hi)) => q.push_str(&format!(" updated:<={}", since_param(hi))),
+        (None, Some(hi)) => q.push_str(&format!(" updated:<={hi}")),
         (None, None) => {}
     }
     format!(
@@ -341,8 +362,8 @@ pub fn search_url(scope: &str, bounds: &Bounds) -> String {
     )
 }
 
-/// Search takes a date: a stamp's 10-char prefix is the date, which asks
-/// for the whole day either end of what a bound names.
+/// Search takes a date, or a date and time. A bottom bound's 10-char prefix
+/// is its date, which reaches down to the start of that day.
 pub fn since_param(stamp: &str) -> String {
     stamp.get(..10).unwrap_or(stamp).to_string()
 }
@@ -441,6 +462,87 @@ mod tests {
         assert_eq!(n, 1650);
     }
 
+    fn answer(status: u16, headers: &[(&str, &str)], body: &str) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: headers
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            body: body.as_bytes().to_vec(),
+            duration_ms: 0,
+        }
+    }
+
+    /// A limit is a wait whichever status it comes as, and the wait is the
+    /// one GitHub names. A 403 that is no limit is a refusal, for the
+    /// caller to report.
+    #[test]
+    fn a_limit_is_waited_out_and_a_refusal_is_not() {
+        let waits = |r: &HttpResponse| match github_retryability(r) {
+            Retryability::Retry {
+                retry_after: Some(d),
+            } => Some(d.as_secs()),
+            Retryability::Retry { retry_after: None } => panic!("no wait named for {r:?}"),
+            Retryability::Accept => None,
+        };
+        for status in [403, 429] {
+            assert_eq!(
+                waits(&answer(status, &[("retry-after", "7")], "")),
+                Some(7),
+                "{status}: retry-after is the wait"
+            );
+            assert_eq!(
+                waits(&answer(
+                    status,
+                    &[("retry-after", "7"), ("x-ratelimit-remaining", "0")],
+                    ""
+                )),
+                Some(7),
+                "{status}: retry-after comes first"
+            );
+            let reset = (chrono::Utc::now().timestamp() + 1000).to_string();
+            let until_reset = waits(&answer(
+                status,
+                &[
+                    ("x-ratelimit-remaining", "0"),
+                    ("x-ratelimit-reset", &reset),
+                ],
+                "",
+            ))
+            .unwrap();
+            assert!(
+                (900..=1001).contains(&until_reset),
+                "{status}: {until_reset}"
+            );
+            assert_eq!(
+                waits(&answer(
+                    status,
+                    &[("x-ratelimit-remaining", "11")],
+                    r#"{"message":"You have exceeded a secondary rate limit."}"#
+                )),
+                Some(60),
+                "{status}: a secondary limit names no wait: at least a minute"
+            );
+        }
+        assert_eq!(waits(&answer(429, &[], "")), Some(60));
+        assert_eq!(
+            waits(&answer(
+                403,
+                &[("x-ratelimit-remaining", "11")],
+                r#"{"message":"Resource not accessible by personal access token"}"#
+            )),
+            None,
+            "a refusal"
+        );
+        assert_eq!(
+            waits(&answer(503, &[("retry-after", "7")], "")),
+            Some(7),
+            "the rest is the shared classifier's"
+        );
+        assert_eq!(waits(&answer(200, &[("retry-after", "7")], "")), None);
+    }
+
     /// The wizard says to paste a link, and a link copied from a browser
     /// can point inside the PR. The fragment used to be read as the PR
     /// number, which failed the whole sync.
@@ -462,10 +564,12 @@ mod tests {
         assert!(parse_pr_ref("https://github.com/enterprise/warp-core/issues/42").is_err());
     }
 
-    /// A bound is a date, either end; the run's now is spelled as the
-    /// search's `updated_at` so the two sort together.
+    /// The bottom is a date and the top a whole stamp; the run's now is
+    /// spelled as the search's `updated_at` so the two sort together. The
+    /// forms were checked against GitHub's own answers: a range may mix
+    /// them, and a stamp at the top includes that stamp.
     #[test]
-    fn a_search_is_bounded_by_dates_in_githubs_own_spelling() {
+    fn a_search_is_bounded_in_githubs_own_spelling() {
         let q = |b: Bounds| {
             let url = search_url("author:@me", &b);
             urlencoding::decode(url.split("q=").nth(1).unwrap().split('&').next().unwrap())
@@ -487,14 +591,14 @@ mod tests {
                 lo: None,
                 hi: Some(hi.clone())
             }),
-            "is:pr author:@me updated:<=2369-04-15"
+            "is:pr author:@me updated:<=2369-04-15T00:00:00Z"
         );
         assert_eq!(
             q(Bounds {
                 lo: Some(lo),
                 hi: Some(hi)
             }),
-            "is:pr author:@me updated:2369-04-12..2369-04-15"
+            "is:pr author:@me updated:2369-04-12..2369-04-15T00:00:00Z"
         );
         let at = datalib_time::parse_strict("2369-04-15T02:00:00+02:00").unwrap();
         assert_eq!(stamp(&at), "2369-04-15T00:00:00Z");

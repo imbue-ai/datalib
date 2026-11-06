@@ -60,12 +60,12 @@ const SINCE: &str = "2369-04-15T00:00:00.000Z";
 /// The project before and after upstream moved: MR 1 was edited and
 /// discussed again, and MR 3 appeared.
 #[derive(Clone, Copy)]
-enum Edition {
+pub(crate) enum Edition {
     Before,
     After,
 }
 
-fn tape(dir: &Path, edition: Edition) -> PathBuf {
+pub(crate) fn tape(dir: &Path, edition: Edition) -> PathBuf {
     let t = dir.join(match edition {
         Edition::Before => "before",
         Edition::After => "after",
@@ -117,6 +117,9 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
 
 struct Gitlab {
     playback: PathBuf,
+    /// The run's pinned clock. A run at the clock of the one before it
+    /// has nothing to search: what that one covered reaches it.
+    now: datalib_time::IsoOffsetTimestamp,
     /// A store an earlier run left, which every run of this rig starts
     /// from in place of an empty one.
     earlier: Option<PathBuf>,
@@ -157,7 +160,7 @@ impl Rig for Gitlab {
                     stop,
                     ..Default::default()
                 },
-                ..FetchOptions::new(db.clone(), crate::tng_now())
+                ..FetchOptions::new(db.clone(), self.now.clone())
             }),
         );
         playback::scope(&self.playback, download).await.map(|_| ())
@@ -191,6 +194,7 @@ async fn a_first_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let rig = Gitlab {
         playback: tape(d.path(), Edition::Before),
+        now: crate::tng_now(),
         earlier: None,
     };
     for how in [How::Kill, How::Stop] {
@@ -210,6 +214,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let first = Gitlab {
         playback: tape(d.path(), Edition::Before),
+        now: crate::tng_now(),
         earlier: None,
     };
     let earlier = d.path().join("earlier");
@@ -220,6 +225,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
 
     let rig = Gitlab {
         playback: tape(d.path(), Edition::After),
+        now: datalib_time::parse_strict("2369-04-16T00:00:00+00:00").unwrap(),
         earlier: Some(earlier),
     };
     for how in [How::Kill, How::Stop] {

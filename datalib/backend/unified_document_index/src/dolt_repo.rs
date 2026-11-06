@@ -716,6 +716,22 @@ impl IndexRepo for DoltRepo {
         Ok(self.pinned().await?.map(|at| at.commit))
     }
 
+    async fn source_ids(&self) -> Result<Vec<String>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        // Audited: `grid_rows` is a literal table name.
+        let query = format!("SELECT DISTINCT source_id FROM {}", at.grid_rows);
+        match sqlx::query_scalar(sqlx::AssertSqlSafe(query))
+            .fetch_all(&mut *at.tx)
+            .await
+        {
+            Ok(sources) => Ok(sources),
+            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(e.to_string())),
+        }
+    }
+
     async fn ordered_uuids(
         &self,
         q: &ParsedQuery,

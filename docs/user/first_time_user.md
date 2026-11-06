@@ -203,7 +203,9 @@ What that means for datalib today:
   app with Full Disk Access: a Terminal holding it got in with no
   prompt. It starts with no
   sign-ins, in a latchkey store of its own inside the library, whose key
-  is a keychain item named `Datalib Latchkey - <folder name>`. You sign
+  is a keychain item named `Datalib Latchkey - <folder name>`. macOS
+  does not ask for your password to use that item, because Datalib made
+  it. You sign
   in to its sources in Datalib, and `latchkey curl` run anywhere else
   cannot find those sign-ins. What you already signed in to in
   `~/.latchkey` stays there, as reachable as it was. **Only the folder

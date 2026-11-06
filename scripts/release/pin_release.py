@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Point install.sh, the Docker page and CI's image at one published release.
 
 Each names it by version and hash rather than following `latest`, which anyone
@@ -6,7 +6,7 @@ holding write access can move (docs/dev/security_posture.md). The release
 procedure runs this once a release has published, and lands the result in a PR
 of its own, whose CI is the first run in the new devcontainer image.
 
-    python3 scripts/release/pin_release.py vX.Y.Z
+    uv run python scripts/release/pin_release.py vX.Y.Z
 
 Refuses a release that is a draft, is not immutable, or that no successful
 release.yml run on this tag's commit built: during that run the tag has no

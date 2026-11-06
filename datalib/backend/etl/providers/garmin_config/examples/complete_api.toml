@@ -1,6 +1,5 @@
 # Garmin Connect over the API the Connect phone app uses, signed in through
-# latchkey's Garmin plugin (`latchkey auth browser garmin`), with every
-# option set, and keyword-searchable.
+# latchkey's Garmin plugin, with every option set, and keyword-searchable.
 [[groups]]
 id = "garmin"
 name = "Garmin Connect"

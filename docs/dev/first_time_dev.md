@@ -11,6 +11,10 @@ just want to *run* the released tools against your own data, start with the
 # build driver (it also answers to `bazel`).
 brew install bazelisk
 
+# Only to run a script from `scripts/` or `tools/` by hand: `uv`, which runs
+# it on the Python the repo pins. The build and the tests do not use it.
+brew install uv
+
 # That is all: Node, qmd and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
 # latchkey and qmd through a staged `runtime/` tree (the dev launchers

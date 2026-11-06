@@ -43,6 +43,8 @@ names! { APPLET_PROTOCOL:
 
 names! { LATCHKEY:
     LATCHKEY_GATEWAY,
+    LATCHKEY_ENCRYPTION_KEY,
+    LATCHKEY_KEYRING_SERVICE_NAME,
 }
 
 /// macOS's allocator setting the runner turns to `0` for every step:

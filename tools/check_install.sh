@@ -146,6 +146,16 @@ install
 [[ ! -L "$bin/git-hash" ]] || complain "the link an earlier install made to git-hash survived the upgrade"
 [[ -L "$bin/runtime.manifest" ]] || complain "the upgrade removed a link it did not make"
 
+# A wrapper may install into a folder of its own and link the binaries onto the
+# PATH after this script ends, so the advice to add that folder is conditional.
+install
+grep -q "If nothing else links these binaries" "$work/install.log" \
+    || complain "a folder off the PATH got no conditional advice: $(cat "$work/install.log")"
+run_installer "$stubs:$bin:$PATH" "$lib" "$bin" \
+    || complain "the install with its folder on the PATH failed: $(cat "$work/install.log")"
+! grep -q "is not on your PATH" "$work/install.log" \
+    || complain "a folder already on the PATH was called missing from it"
+
 # --- the pinned release: installed by default, and checked against the pin ---
 pin_to() { # the hash this copy of the script pins for the fake tarball's triple
     TRIPLES_HASH="$1" PYTHONPATH="$(dirname "$pin_release")" python3 -c '

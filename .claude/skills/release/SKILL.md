@@ -164,6 +164,11 @@ published from a local machine — the tag is the trigger.
     succeeded, and a re-run of just the failed jobs finishes it.
     Once published it is immutable: its assets can never change
     (`docs/dev/release_steps.md` §"Draft, then publish").
+
+    The tag also starts `reader-wheels.yml`, which publishes
+    `imbue-datalib-reader` to PyPI: `gh run list --workflow=reader-wheels.yml
+    --limit 1`. It is separate, so a failure there holds nothing back; re-run
+    its failed jobs, and if it still fails, say so when you report the release.
 11. Confirm the artifacts landed: `gh release view vX.Y.Z` should list
     the per-triple tarballs and the macOS dmg, and not say `draft: true`.
     The last job has already checked that it is immutable, holds what the
@@ -192,7 +197,7 @@ published from a local machine — the tag is the trigger.
 
     ```sh
     git fetch origin && git checkout -b pin-vX.Y.Z origin/main
-    python3 scripts/release/pin_release.py vX.Y.Z
+    uv run python scripts/release/pin_release.py vX.Y.Z
     ```
 
     Open a PR with what it changed, and land it like any other.

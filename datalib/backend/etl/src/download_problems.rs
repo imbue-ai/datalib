@@ -219,6 +219,21 @@ impl RunProblem {
         )
     }
 
+    /// A listing the service cuts off however it is asked, so a stretch of
+    /// it is out of reach. A warning: every request was answered, and
+    /// nothing failed that a later attempt could mend, but what it would
+    /// not list is not in the mirror.
+    pub fn listing_cut_off(name: &str, detail: impl Into<String>) -> Self {
+        use datalib_problems::{Reason, Severity};
+        Self::new(
+            RunProblemKind::Listing,
+            name,
+            detail,
+            Reason::FetchFailed,
+            Severity::Warning,
+        )
+    }
+
     pub fn phase(name: &str, detail: impl Into<String>) -> Self {
         use datalib_problems::{Reason, Severity};
         Self::new(

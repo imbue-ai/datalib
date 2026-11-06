@@ -11,7 +11,7 @@ The input is a Garmin source's FIT activity files, exported one time
 series per activity and record field:
 
 ```sh
-python3 -I scripts/fit_time_series_export.py \
+uv run python -I scripts/fit_time_series_export.py \
     <root>/<garmin source>/ingest/blobs.sqlite > /tmp/series.jsonl
 bazelisk build -c opt //datalib/backend/etl/time_series:measure_chunks
 bazel-bin/datalib/backend/etl/time_series/measure_chunks /tmp/series.jsonl /tmp/measure

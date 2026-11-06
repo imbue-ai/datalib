@@ -41,6 +41,9 @@ pub trait IndexRepo: Send + Sync {
     /// The commit the index is at now, or `None` when it has none yet.
     async fn head(&self) -> Result<Option<String>, RepoError>;
 
+    /// Every source holding a row.
+    async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
+
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
     /// or newest first with none. Its free text is qmd's; nothing here

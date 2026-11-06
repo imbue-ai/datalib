@@ -29,6 +29,13 @@ has. Anything that can run commands as you can use them to act as you
 on that service — see the warning in the first-time guide before
 storing any.
 
+The `latchkey auth` commands here sign in on the machine you run them
+on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
+holds the credentials instead, and those commands may be refused or sign
+in somewhere else: sign in, or ask for access, wherever that gateway is
+managed. Either way, `datalib-step probe <type>` says whether the
+sign-in works.
+
 ## Apple Messages
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a

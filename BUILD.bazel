@@ -3,6 +3,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
     ".bazelrc",  # read by //tools:qmd_model_cache_path_test
+    "LICENSE",  # in the reader wheel, read by //datalib/reader:reader_wheel_test
     ".github/workflows/release.yml",  # its rustc pin, read by //tools:version_pins_test
     "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
@@ -15,6 +16,7 @@ exports_files([
     # //tools:check_binaries_test: release.yml's steps, as scripts.
     "scripts/latchkey-wrapper.sh",
     "scripts/release/check_binaries.sh",
+    "scripts/release/make_reader_wheel.py",
     "scripts/release/stage_runtime_asset.sh",
     "scripts/release/stage_tarball.sh",
     "scripts/stage_runtime.sh",
@@ -43,6 +45,7 @@ filegroup(
     name = "python_sources",
     srcs = glob(["scripts/**/*.py"]) + [
         "//datalib/backend/doltlite_facts:python_sources",
+        "//datalib/reader:python_sources",
         "//tests/fixtures:python_sources",
         "//tools:python_sources",
     ],

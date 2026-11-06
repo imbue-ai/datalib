@@ -640,11 +640,11 @@ sync does not move the answers between two runs:
 bazelisk build //datalib/backend:bin
 export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
 DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
-python3 scripts/search_eval.py compare before.json after.json   # what moved
-python3 scripts/search_eval.py show after.json --missed words   # what a query found
-python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
+uv run python scripts/search_eval.py compare before.json after.json   # what moved
+uv run python scripts/search_eval.py show after.json --missed words   # what a query found
+uv run python scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
 ```
 
 A run is worth keeping when it measures a change or a new baseline.
@@ -660,8 +660,8 @@ build the applet from that same checkout, or the commit says nothing.
 Thad's history is beside his eval set, in `search_eval/history/`:
 
 ```bash
-python3 scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
-python3 scripts/search_eval.py history <dir>
+uv run python scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
+uv run python scripts/search_eval.py history <dir>
 ```
 
 Without `--http` it starts its own `datalib-applet unified_document_index`

@@ -1,15 +1,15 @@
 <script setup lang="ts">
 // The search box in the toolbar: the search box of the search card on screen
 // (`search/searchCards.ts`). What is typed here is only a draft until Enter
-// runs it. With no search card on screen, Enter shows the Search card and runs
-// it there; ⌘Enter (Ctrl+Enter elsewhere) opens a card of its own. ⌘K puts the
-// caret here from anywhere in the app. The pull-down is the advanced panel.
+// runs it, in that card, as an address bar does in its tab. With no search card
+// on screen, Enter opens one; ⌘Enter (Ctrl+Enter elsewhere) always does. ⌘K puts
+// the caret here from anywhere in the app. The pull-down is the advanced panel.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import { SEARCH } from "@/api";
 import "@/cards/chip.css";
 import { withToken } from "@/grid/query";
 import SearchField from "@/search/SearchField.vue";
-import { activeSearch } from "@/search/searchCards";
+import { activeSearch, draftAfterMove } from "@/search/searchCards";
 import { searchFor, showCard, SEARCH_CARD } from "@/surface";
 import SearchPanel from "./SearchPanel.vue";
 
@@ -18,26 +18,40 @@ const input = useTemplateRef<InstanceType<typeof SearchField>>("input");
 const box = useTemplateRef<HTMLFormElement>("box");
 const panelOpen = ref(false);
 
-/// A search asked for with no card on screen to run it, until one shows.
-let waiting: string | null = null;
+/// What the cards last gave the box, or what Enter last asked for with none on
+/// screen. A draft that differs was typed since.
+let shown = "";
+
+/// On a search card, its search changes. Anywhere else there is nothing to
+/// change, so a search opens a tab of its own, and the box with nothing in it
+/// shows the Search card.
 function run(q: string) {
   const card = activeSearch.value;
   if (card) card.run(q);
   else {
-    waiting = q;
-    showCard(SEARCH_CARD);
+    shown = draft.value;
+    if (q) searchFor(q);
+    else showCard(SEARCH_CARD);
   }
 }
 
 watch(
   [activeSearch, () => activeSearch.value?.query.value],
-  ([card]) => {
-    if (card && waiting !== null) {
-      const q = waiting;
-      waiting = null;
-      card.run(q);
-    }
-    draft.value = card?.query.value ?? "";
+  ([card], [before]) => {
+    const query = card?.query.value ?? "";
+    const inBox = box.value?.contains(document.activeElement) ?? false;
+    const next = draftAfterMove({
+      draft: draft.value,
+      shown,
+      query,
+      hadCard: before != null,
+      inBox,
+    });
+    shown = query;
+    if (next === draft.value) return;
+    draft.value = next;
+    // Whoever is in the box and has not typed yet types over this, not after it.
+    if (inBox) void nextTick(() => input.value?.selectAll());
   },
   { immediate: true },
 );
@@ -112,7 +126,9 @@ onBeforeUnmount(() => {
 });
 
 const settled = computed(() => activeSearch.value?.settled.value ?? draft.value);
-const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
+const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
+const shortcut = onMac ? "⌘K" : "Ctrl K";
+const newTabKey = onMac ? "⌘Enter" : "Ctrl+Enter";
 </script>
 
 <template>
@@ -120,6 +136,7 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
     ref="box"
     class="command-box"
     role="search"
+    :data-on-search-card="activeSearch !== null"
     @submit.prevent="submit"
     @keydown.esc="panelOpen = false"
     @contextmenu="activeSearch?.openFeedback($event)"
@@ -169,6 +186,8 @@ const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
       v-if="panelOpen"
       :query="draft"
       :settled="settled"
+      :on-search-card="activeSearch !== null"
+      :new-tab-key="newTabKey"
       @apply="apply"
       @add-key="addKey"
     />

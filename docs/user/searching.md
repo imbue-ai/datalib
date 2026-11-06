@@ -1,8 +1,9 @@
 # Searching your mirror
 
 One query language answers everywhere you can search datalib: the
-search box at the top of the app (Enter runs it, ⌘Enter opens it in a new
-card, and its arrow opens Advanced search, whose every setting writes the same
+search box at the top of the app (Enter runs it in the search tab you are on,
+or a new tab from anywhere else; ⌘Enter always opens a new tab; and its arrow
+opens Advanced search, whose every setting writes the same
 words into the box), `datalib-applet search <data_root> '<query>'`
 from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_document_index/search?q=…` on a running
@@ -52,6 +53,11 @@ with that step turned off answers in the words it is written in. A line above
 the results says how many of the documents the search could have found have no
 vectors, and hovering says which sources they are in. From a shell or the API
 it is `query_echo.without_vectors`.
+
+A search covers the sources the document index holds. A source turned off can
+leave it after an upgrade changes how documents are stored, because a turned-off
+source does not re-render, and a warning on its row says so. Turn it on and sync
+it to bring it back; what it has already embedded is kept.
 
 Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's

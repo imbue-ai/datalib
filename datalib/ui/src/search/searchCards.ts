@@ -25,6 +25,27 @@ export function activeOf(entries: readonly CardEntry[]): SearchCard | null {
   return active?.card ?? null;
 }
 
+export type BoxMove = {
+  /** What the box holds. */
+  draft: string;
+  /** What the cards last gave the box. A draft that differs was typed. */
+  shown: string;
+  /** The query of the card now on screen, or "" with none. */
+  query: string;
+  /** Whether a card was on screen before this move. */
+  hadCard: boolean;
+  /** Whether the keyboard is in the box. */
+  inBox: boolean;
+};
+
+/// What the box holds once its card, or that card's query, has moved. The box
+/// follows the card, except over typed text that is still being worked on, or
+/// that a card arriving would replace: a card can land long after the box is up.
+export function draftAfterMove(move: BoxMove): string {
+  const typed = move.draft !== move.shown;
+  return typed && (move.inBox || !move.hadCard) ? move.draft : move.query;
+}
+
 const entries = shallowRef<CardEntry[]>([]);
 let clock = 0;
 

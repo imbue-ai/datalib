@@ -1,7 +1,6 @@
 # The meetings booked with you on Calendly, through Calendly's API,
 # signed in through latchkey's `calendly` service with a personal access
-# token (`latchkey auth set calendly -H "Authorization: Bearer <token>"`),
-# with every option set, and searchable.
+# token, with every option set, and searchable.
 [[groups]]
 id = "calendar"
 name = "Calendly"

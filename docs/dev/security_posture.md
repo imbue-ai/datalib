@@ -223,6 +223,24 @@ tag ruleset says nothing about this: no tag moves.
 real calls are first tried by a tag's run. Whether the settings below hold is
 something only those commands can say.
 
+## A bad wheel reaches PyPI
+
+`imbue-datalib-reader` runs inside the programs that read a person's library, and
+anyone can install it by name, so it is worth the same care as a tarball.
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| Trusted publishing: no PyPI token exists, and PyPI takes an upload only from `reader-wheels.yml` in the `pypi` environment | A leaked token, or a workflow on a branch uploading | A merge to `main` that changes the workflow, which a later tag then runs |
+| The `pypi` environment takes only `v*` tags (a setting below), and only `datalib-release` may create one | Anyone else starting an upload | What a tag's run does once started |
+| The wheels build in a workflow of their own, with no cache, and the Linux ones in images named by digest, compiling with no network | Anything `release.yml` compiles planting a wheel, and whoever controls an image's tag choosing the compiler | A bad image someone pins deliberately, and the mac leg, which compiles on GitHub's runner image |
+| PyPI never lets a file be replaced, and the upload carries attestations of the workflow that built it | Swapping a published version | A new version from a compromised run, and a person who does not check attestations |
+
+Still open: who owns the project on PyPI. An owner's account can add a publisher
+or a maintainer, and nothing in this repository can see that. A person's own
+lockfile pins a wheel's hash; a bare `pip install` follows whatever is latest.
+None of this has run yet: a PR run has built and checked the wheels, and the first
+upload will be the next tag's.
+
 ## The settings this rests on
 
 Each of these lives in GitHub, not in the tree, so no test or lint can see it.
@@ -238,6 +256,7 @@ Each line is a command that shows it.
 | Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
 | Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
 | `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
+| `pypi` may deploy only from a `v*` tag | `gh api repos/imbue-ai/datalib/environments/pypi/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `v*`, `tag`, and nothing else |
 | The release org's key is only in `main-ci` | `gh secret list --repo imbue-ai/datalib` does not name `BUILD_BUDDY_RELEASE_API_KEY`; `gh secret list --env main-ci --repo imbue-ai/datalib` does |
 
 ## Another program running as you
@@ -295,6 +314,7 @@ is not what this section defends, and the desktop app does not use it.
 | The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
 | The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
 | Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
+| The web view's disk cache, which would hold documents and search results | The server of a protected library answers everything but `/assets/`, the app's own code, `Cache-Control: no-store` (`keep_off_disk`), and the shell empties `~/Library/Caches/com.imbue.datalib/WebKit/NetworkCache` at launch for anyone with a protected folder, which clears what earlier builds stored | A library's pages in the web view's memory while it runs | The cache's files opened from a shell with no prompt (measured, 2,142 files). `disk_cache` tests, and the header read off a real server. That WKWebView obeys it follows from the standard and has not been measured |
 | An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
 
 **`TMPDIR` only moves what follows it.** Rust's `temp_dir()` and Node's
@@ -309,11 +329,15 @@ length (measured up to 94 bytes), which holds no library content.
 
 These all put something from a protected library outside its folder:
 
-- **The web view's disk cache.** The app sets no separate store for its
-  WKWebView, the server marks `/data` blobs cacheable for a year, and the
-  installed app had about 300 MB under `~/Library/Caches/com.imbue.datalib`.
-  Only the files were counted, so whether a protected library's content is in
-  there is not known.
+- **The web view's other storage.** `~/Library/WebKit/com.imbue.datalib` holds
+  what the UI puts in `localStorage`: display settings and which source groups
+  are expanded, so some source ids. Not read, only named from the UI's source.
+- **Spotlight's index.** It holds the path of files in the folder, source ids
+  included: 121 paths on a real container, found with `mdfind`, which no guard
+  stops. Three words searched for in the files' contents matched nothing, so
+  whether it holds any content is not known. A folder named `*.noindex` keeps
+  everything under it out, and clears what was indexed when renamed; an empty
+  `.metadata_never_index` file does nothing (both measured on macOS 26.7.2).
 - **A credential pasted into the wizard** is on `latchkey`'s command line for
   the second that runs. It needs a change upstream
   ([`latchkey.md`](latchkey.md)).

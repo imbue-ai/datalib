@@ -5,7 +5,7 @@ WAL, as qmd's index is between checkpoints. `doltlite_facts_test` reads them
 through doltlite, which cannot write a WAL itself.
 
 Run with any Python whose `sqlite3` is stock SQLite:
-`python3 scripts/make_doltlite_wal_fixture.py`.
+`uv run python scripts/make_doltlite_wal_fixture.py`.
 """
 
 import os

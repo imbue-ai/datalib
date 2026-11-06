@@ -410,17 +410,17 @@ Stock SQLite cannot open a raw store, so your program needs one of two
 things, in this order:
 
 1. **A connection in your own process.** A query on an open connection
-   takes about 0.01 ms. From Python, under any interpreter, uv's
-   included, use the short module in
-   [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python).
-   It calls `libdoltlite`, which a release installs beside
+   takes about 0.01 ms. From Python, under any interpreter, uv's included,
+   `uv add imbue-datalib-reader`
+   ([Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)).
+   It calls `libdoltlite`, which a release also installs beside
    `datalib-doltlite` under `lib/`. The library has SQLite's C API, so any
    language that can call C can do the same. It is built from the same
    source as the binaries, so it matches your stores.
 2. **The shell, as a subprocess.** `datalib-doltlite -readonly -json`
    costs a process start and a store open per query, about 15 ms. Use it
-   where there is no library: a musl tarball, or the desktop app with no
-   `doltlite` wheel installed.
+   where there is no library: outside Python on a musl tarball, or on an Intel
+   Mac.
 
 ## Your app's derived data as a step
 

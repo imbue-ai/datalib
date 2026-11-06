@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """What it costs to keep time-series points in a doltlite index, and to
 bring them up to date after a sync appended a few points to every series.
 The dated results are in `hack/doltlite_time_series_cost/README.md`.
 
     bazelisk build //third-party/doltlite:doltlite
-    python3 scripts/doltlite_time_series_cost.py [scratch_dir] [points ...]
-    INT_KEYS=1 python3 scripts/doltlite_time_series_cost.py ...   # integer series keys
+    uv run python scripts/doltlite_time_series_cost.py [scratch_dir] [points ...]
+    INT_KEYS=1 uv run python scripts/doltlite_time_series_cost.py ...   # integer series keys
 
 For each size it loads `SERIES` series of equal length into
 `time_series_points` keyed `(time_series_id, t)`, commits and gcs, then

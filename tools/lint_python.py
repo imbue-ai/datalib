@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Hermetic ruff gate: `ruff check` + `ruff format --check` under Bazel.
 
 Replaces the `uv run ruff ...` half of `scripts/run_checks.sh`. The
