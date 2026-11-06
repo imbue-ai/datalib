@@ -1,6 +1,6 @@
 # GitHub pull requests and their review threads, over GitHub's API, signed
-# in through latchkey (`latchkey auth browser github`). An empty `api`
-# table mirrors every PR you wrote, commented on or were mentioned in.
+# in through latchkey. An empty `api` table mirrors every PR you wrote,
+# commented on or were mentioned in.
 [[groups]]
 id = "github"
 name = "GitHub"

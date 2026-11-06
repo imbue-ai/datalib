@@ -295,6 +295,7 @@ is not what this section defends, and the desktop app does not use it.
 | The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
 | The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
 | Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
+| The web view's disk cache, which would hold documents and search results | The server of a protected library answers everything but `/assets/`, the app's own code, `Cache-Control: no-store` (`keep_off_disk`), and the shell empties `~/Library/Caches/com.imbue.datalib/WebKit/NetworkCache` at launch for anyone with a protected folder, which clears what earlier builds stored | A library's pages in the web view's memory while it runs | The cache's files opened from a shell with no prompt (measured, 2,142 files). `disk_cache` tests, and the header read off a real server. That WKWebView obeys it follows from the standard and has not been measured |
 | An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
 
 **`TMPDIR` only moves what follows it.** Rust's `temp_dir()` and Node's
@@ -309,11 +310,15 @@ length (measured up to 94 bytes), which holds no library content.
 
 These all put something from a protected library outside its folder:
 
-- **The web view's disk cache.** The app sets no separate store for its
-  WKWebView, the server marks `/data` blobs cacheable for a year, and the
-  installed app had about 300 MB under `~/Library/Caches/com.imbue.datalib`.
-  Only the files were counted, so whether a protected library's content is in
-  there is not known.
+- **The web view's other storage.** `~/Library/WebKit/com.imbue.datalib` holds
+  what the UI puts in `localStorage`: display settings and which source groups
+  are expanded, so some source ids. Not read, only named from the UI's source.
+- **Spotlight's index.** It holds the path of files in the folder, source ids
+  included: 121 paths on a real container, found with `mdfind`, which no guard
+  stops. Three words searched for in the files' contents matched nothing, so
+  whether it holds any content is not known. A folder named `*.noindex` keeps
+  everything under it out, and clears what was indexed when renamed; an empty
+  `.metadata_never_index` file does nothing (both measured on macOS 26.7.2).
 - **A credential pasted into the wizard** is on `latchkey`'s command line for
   the second that runs. It needs a change upstream
   ([`latchkey.md`](latchkey.md)).

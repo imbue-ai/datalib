@@ -68,6 +68,17 @@ pub fn temp_dir(root: &Path) -> PathBuf {
     root.join("system").join("tmp")
 }
 
+/// Where the web view keeps its disk cache. A server now tells it to store
+/// nothing from a protected library, but an earlier build's responses can
+/// still be here, outside the folder. Only a cache: nothing is lost.
+pub fn web_cache(home: &Path) -> PathBuf {
+    home.join("Library")
+        .join("Caches")
+        .join("com.imbue.datalib")
+        .join("WebKit")
+        .join("NetworkCache")
+}
+
 /// The variables a protected library's server starts with, which every
 /// program it runs inherits. `root` is the library's real path. latchkey
 /// makes the store in the library and its key in the keychain the first
@@ -184,6 +195,18 @@ mod tests {
         assert!(
             !is_protected(&mail, &container(&home.join("nobody"))),
             "nothing is in a container that is not there"
+        );
+    }
+
+    /// The folder has to match the bundle identifier, or clearing it clears
+    /// nothing and the old responses stay.
+    #[test]
+    fn the_web_cache_is_under_the_apps_identifier() {
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains(r#""identifier": "com.imbue.datalib""#));
+        assert_eq!(
+            web_cache(Path::new("/Users/x")),
+            PathBuf::from("/Users/x/Library/Caches/com.imbue.datalib/WebKit/NetworkCache")
         );
     }
 

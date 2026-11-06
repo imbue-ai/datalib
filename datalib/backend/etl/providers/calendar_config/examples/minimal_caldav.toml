@@ -1,6 +1,5 @@
-# Any other CalDAV server (iCloud, Nextcloud, Radicale, …). Register a
-# latchkey service for the server's host (`latchkey services register`),
-# then give it an app password with `latchkey auth set`.
+# Any other CalDAV server (iCloud, Nextcloud, Radicale, …), signed in through
+# a latchkey service registered for the server's host, with an app password.
 [[groups]]
 id = "calendar"
 name = "CalDAV Calendar"

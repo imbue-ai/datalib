@@ -278,11 +278,13 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
         );
         return anyhow::Error::new(Upstream::CredentialRefused).context(GmailApiError::Refused(
             format!(
-                "Gmail API {url} → HTTP {}: {body}\n\
-             If this says ACCESS_TOKEN_SCOPE_INSUFFICIENT, re-run \
-             `latchkey auth browser google-gmail` and approve every scope. \
-             If it says the credential is missing, run that command for the first time.",
+                "Gmail API {url} → HTTP {}: {body}\n{}.",
                 resp.status,
+                datalib_etl_web::latchkey::sign_in_advice(
+                    "If this says ACCESS_TOKEN_SCOPE_INSUFFICIENT, re-run \
+                     `latchkey auth browser google-gmail` and approve every scope. \
+                     If it says the credential is missing, run that command for the first time"
+                ),
             ),
         ));
     }

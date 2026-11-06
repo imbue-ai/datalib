@@ -1,6 +1,6 @@
-# Your Todoist over its API, signed in through latchkey
-# (`latchkey auth browser todoist`, or paste the API token from
-# Settings → Integrations → Developer), with every option set.
+# Your Todoist over its API, signed in through latchkey (by browser, or with
+# the API token from Settings → Integrations → Developer), with every option
+# set.
 [[groups]]
 id = "todoist"
 name = "Todoist"

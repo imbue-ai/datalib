@@ -47,9 +47,26 @@ test("what is typed while the app loads stays when the search card arrives", asy
   await expect(field(page)).toHaveAttribute("data-query", "warp");
 });
 
-/// Enter before there is a card runs the search once there is one, and the box
-/// then shows what ran; what is typed after that Enter is a new draft, and stays.
-test("Enter while the app loads runs the search when the search card arrives", async ({ page }) => {
+/// Typed text stays after the keyboard has left the box, too: someone can click
+/// away, or to another window, before the card has come.
+test("what is typed while the app loads stays after a click away", async ({ page }) => {
+  const letThrough = await holdTheCards(page);
+  await page.goto(GRID);
+  await typeInto(field(page), "warp");
+  await field(page).blur();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
+
+  letThrough();
+  await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "true");
+  await expect(field(page)).toHaveAttribute("data-query", "warp");
+});
+
+/// Enter before there is a card opens one on the search, and the box then shows
+/// what ran; what is typed after that Enter is a new draft, and stays.
+const ownCard = (page: Page) =>
+  cardOf(page, 'searchView({"q":"source:slack"})').locator(".grid-wrap");
+
+test("Enter while the app loads opens the search, and the box shows what ran", async ({ page }) => {
   const letThrough = await holdTheCards(page);
   await page.goto(GRID);
   await typeInto(field(page), "source:slack ");
@@ -57,7 +74,7 @@ test("Enter while the app loads runs the search when the search card arrives", a
   await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
 
   letThrough();
-  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "source:slack", {
+  await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
     timeout: SEARCH_SETTLE,
   });
   await expect(field(page)).toHaveAttribute("data-query", "source:slack");
@@ -69,10 +86,11 @@ test("what is typed after an Enter while the app loads stays too", async ({ page
   await typeInto(field(page), "source:slack");
   await field(page).press("Enter");
   await typeInto(field(page), "source:slack warp");
+  await field(page).blur();
   await expect(onSearchCard(page)).toHaveAttribute("data-on-search-card", "false");
 
   letThrough();
-  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "source:slack", {
+  await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
     timeout: SEARCH_SETTLE,
   });
   await expect(field(page)).toHaveAttribute("data-query", "source:slack warp");

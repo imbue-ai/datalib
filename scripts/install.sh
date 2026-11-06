@@ -211,7 +211,8 @@ case ":${PATH}:" in
         ;;
     *)
         say ""
-        say "${INSTALL_DIR} is not on your PATH. Add it with one of:"
+        say "${INSTALL_DIR} is not on your PATH. If nothing else links these binaries"
+        say "onto it, so that \`datalib-step\` does not run in a new shell, add it with one of:"
         say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc"
         say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc"
         ;;

@@ -119,7 +119,9 @@ header, and a step's `params` sub-tables come after its plain keys — a
   walkthroughs for getting cookies/tokens/exports:
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
-  `latchkey auth set …` recipe for that provider.
+  `latchkey auth set …` recipe for that provider. With `LATCHKEY_GATEWAY`
+  set, a latchkey gateway holds the credentials: the hint says so, and
+  signing in or asking for access happens wherever that gateway is managed.
 - **How far back (and ahead)**: every source that can mirror part of
   its history takes `since` in its method table (`[steps.params.api]`,
   `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
