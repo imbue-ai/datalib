@@ -14,6 +14,9 @@ pub struct TransportFacts {
     pub thread_id: String,
     pub mailbox_ids: Vec<String>,
     pub keywords: Vec<String>,
+    /// Upstream's line of the body, as plain text. `None` makes one from
+    /// the bytes ([`preview`]).
+    pub preview: Option<String>,
 }
 
 pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Value {
@@ -35,6 +38,7 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
         "keywords": Value::Object(keywords_obj),
         "size": raw.len(),
         "hasAttachment": has_attachment(msg),
+        "preview": facts.preview.clone().unwrap_or_else(|| preview(msg)),
     });
     let obj = envelope.as_object_mut().expect("envelope is an object");
     if let Some(r) = received_at(msg) {
@@ -80,6 +84,20 @@ pub fn synthesize(raw: &[u8], msg: &Message<'_>, facts: &TransportFacts) -> Valu
         obj.insert("references".into(), Value::Array(refs));
     }
     envelope
+}
+
+/// The most a preview holds: what RFC 8621 allows a JMAP server's.
+const PREVIEW_CHARS: usize = 256;
+/// Asked of the parser in bytes, and before white space collapses, so
+/// enough to fill [`PREVIEW_CHARS`] of text in any script.
+const PREVIEW_BYTES: usize = 4 * 1024;
+
+/// A line of the message's body as plain text: its first text part, else
+/// its first HTML part with the markup taken out. Empty when it has no text.
+pub fn preview(msg: &Message<'_>) -> String {
+    let body = msg.body_preview(PREVIEW_BYTES).unwrap_or_default();
+    let words: Vec<&str> = body.split_whitespace().collect();
+    words.join(" ").chars().take(PREVIEW_CHARS).collect()
 }
 
 /// Gmail's own id for a message or a thread. Its top bits are the time
@@ -203,6 +221,7 @@ Make it so.\r\n";
             thread_id: "thr-1".into(),
             mailbox_ids: vec!["mbox-inbox".into(), "mbox-work".into()],
             keywords: vec!["$seen".into()],
+            preview: None,
         }
     }
 
@@ -317,6 +336,56 @@ Make it so.\r\n";
         assert_eq!(strip_angle("abc@d"), "abc@d");
     }
 
+    #[test]
+    fn a_preview_is_the_text_body_on_one_line() {
+        let msg = parse(EML).unwrap();
+        assert_eq!(preview(&msg), "Make it so.");
+        let raw = b"From: a@b\r\nSubject: s\r\n\r\nTea,\r\n\r\n   Earl Grey,\thot.\r\n";
+        assert_eq!(preview(&parse(raw).unwrap()), "Tea, Earl Grey, hot.");
+    }
+
+    /// Most mail with no text part is marketing HTML. Its markup, styles and
+    /// entities are not what a person reads.
+    #[test]
+    fn a_preview_of_html_mail_is_its_text() {
+        let raw = b"From: a@b\r\nSubject: s\r\nContent-Type: text/html\r\n\r\n\
+<html><head><style>p { color: red }</style></head>\
+<body><p>Tea &amp; biscuits</p><p>in Ten Forward</p></body></html>\r\n";
+        assert_eq!(
+            preview(&parse(raw).unwrap()),
+            "Tea & biscuits in Ten Forward"
+        );
+    }
+
+    /// No more than a JMAP server may send, cut on a character.
+    #[test]
+    fn a_long_preview_stops_at_the_limit() {
+        let raw = format!("From: a@b\r\nSubject: s\r\n\r\n{}\r\n", "é".repeat(9000));
+        let got = preview(&parse(raw.as_bytes()).unwrap());
+        assert_eq!(got.chars().count(), PREVIEW_CHARS);
+        assert!(got.chars().all(|c| c == 'é'), "{got}");
+    }
+
+    /// Empty, not absent: "the bytes were read and hold no text" is what
+    /// stops a store asking again.
+    #[test]
+    fn a_message_with_no_body_has_an_empty_preview() {
+        let raw = b"From: a@b\r\nSubject: nothing\r\n\r\n";
+        let msg = parse(raw).unwrap();
+        assert_eq!(preview(&msg), "");
+        assert_eq!(synthesize(raw, &msg, &facts())["preview"], "");
+    }
+
+    #[test]
+    fn upstreams_preview_is_kept_over_one_made_from_the_bytes() {
+        let msg = parse(EML).unwrap();
+        let facts = TransportFacts {
+            preview: Some("As Gmail put it".into()),
+            ..facts()
+        };
+        assert_eq!(synthesize(EML, &msg, &facts)["preview"], "As Gmail put it");
+    }
+
     /// Two transports handing the same bytes and the same facts to this
     /// function must produce byte-identical envelopes — that is the whole
     /// reason it exists.
@@ -349,9 +418,13 @@ mod stored_facts {
             thread_id: String::new(),
             mailbox_ids: vec![],
             keywords: vec![],
+            preview: None,
         };
         let mut env = synthesize(raw, &msg, &facts);
         let obj = env.as_object_mut().unwrap();
+        // The row's preview column, not its payload; pinned by the tests
+        // of `preview` above.
+        obj.remove("preview");
         for transport in ["id", "blobId", "threadId", "mailboxIds", "keywords", "size"] {
             obj.remove(transport);
         }

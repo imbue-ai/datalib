@@ -9,6 +9,7 @@ pub mod gmail_api;
 pub mod labels;
 pub mod listed;
 pub mod mbox;
+mod preview;
 pub mod schema_raw;
 pub mod session;
 
@@ -102,14 +103,16 @@ pub(crate) async fn refile_mailboxes(
         let mut after = String::new();
         loop {
             let batch = db.emails_filed_under(from, &after, REFILE_BATCH).await?;
-            let Some((last, _, _)) = batch.last() else {
+            let Some((last, ..)) = batch.last() else {
                 break;
             };
             after = last.clone();
             let rows: Vec<EmailRow> = batch
                 .into_iter()
-                .filter_map(|(_, account, payload)| {
-                    EmailRow::from_jmap_envelope(&account, &refiled(payload, from, to.as_deref()))
+                .filter_map(|(_, account, payload, preview)| {
+                    let refiled = refiled(payload, from, to.as_deref());
+                    let row = EmailRow::from_jmap_envelope(&account, &refiled)?;
+                    Some(EmailRow { preview, ..row })
                 })
                 .collect();
             upsert_emails(db, now, &rows).await?;
@@ -188,11 +191,11 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
 /// block; set `1` to restore strictly-serial fetching.
 const DEFAULT_BLOB_CONCURRENCY: usize = 8;
 
-/// Envelope-only `Email/get` properties. Body parts (`bodyValues`,
-/// `textBody`, `htmlBody`, `preview`) are deliberately omitted: the
-/// canonical body source is the `.eml` blob in the shared CAS, and
-/// render `mail-parse`s it on demand so the JMAP and mbox sources
-/// feed identical inputs into the renderer.
+/// Envelope-only `Email/get` properties, and the server's `preview` for
+/// the row's column. Body parts (`bodyValues`, `textBody`, `htmlBody`) are
+/// deliberately omitted: the canonical body source is the `.eml` blob in
+/// the shared CAS, and render `mail-parse`s it on demand so the JMAP and
+/// mbox sources feed identical inputs into the renderer.
 const EMAIL_GET_PROPERTIES: &[&str] = &[
     "id",
     "blobId",
@@ -207,6 +210,7 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
     "messageId",
     "hasAttachment",
     "attachments",
+    "preview",
 ];
 
 #[derive(Debug, Clone)]
@@ -299,7 +303,7 @@ pub struct FetchSummary {
 
 /// The config key a [`datalib_etl::download_problems::DownloadProblem`]
 /// about the label filter names.
-pub(crate) const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
+pub const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
 
 /// Session, mailboxes, emails, blobs: the four ticks the outer bar
 /// makes whatever the run turns out to hold.
@@ -538,6 +542,9 @@ async fn run_sync(
     let blobs = sync_blobs(db, session, account_id, opts, bar, found, &mut summary).await;
     bar.did(1);
     blobs?;
+    if !opts.control.stop.requested() {
+        preview::fill_from_held_bytes(db, opts.sealer.as_ref(), &opts.control.stop).await?;
+    }
 
     info!(
         event = "jmap_download_complete",
@@ -1559,6 +1566,33 @@ mod tests {
     }
 
     /// A row re-keyed onto a new id carries its emails with it.
+    /// A refile rebuilds the row from its payload, which leaves the preview
+    /// out, and the row has to keep it.
+    #[tokio::test]
+    async fn refiling_keeps_the_preview() {
+        let (_d, db) = tmp_db().await;
+        let row = EmailRow::from_jmap_envelope(
+            "A",
+            &json!({
+                "id": "E1", "blobId": "B1", "threadId": "T1",
+                "mailboxIds": {"M1": true}, "preview": "Make it so.",
+            }),
+        )
+        .unwrap();
+        let now = IsoOffsetTimestamp::now_local();
+        upsert_emails(&db, &now, &[row]).await.unwrap();
+        refile_mailboxes(&db, &now, &[("M1".to_string(), Some("M2".to_string()))])
+            .await
+            .unwrap();
+        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(preview.as_deref(), Some("Make it so."));
+        assert_eq!(joined_mailboxes(&db, "E1").await, ["M2"]);
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn refiling_onto_a_new_id_moves_every_email() {
         let (_d, db) = tmp_db().await;

@@ -120,7 +120,7 @@ const K_ONLY_LABELS: &str = "only_extract_labels";
 
 /// The `ingested_files` scopes of the two ways an mbox is read: on its
 /// own, and as the Takeout a Gmail API sync starts from.
-const READ_SCOPE: &str = "email/mbox_read";
+pub(super) const READ_SCOPE: &str = "email/mbox_read";
 const SEED_SCOPE: &str = "email/takeout_seed";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -1307,6 +1307,7 @@ impl Accumulator {
                 thread_id: thread_id.clone(),
                 mailbox_ids,
                 keywords,
+                preview: None,
             },
         );
 
@@ -1930,6 +1931,49 @@ mod tests {
         let joins = db.load_email_joins().await.unwrap();
         assert_eq!(joins.keywords[&picard.id], ["$flagged"]);
         assert!(!joins.keywords.contains_key(&riker.id));
+        // An mbox has no snippet, so the row's line comes from the message.
+        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails WHERE id = ?")
+            .bind(&picard.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            preview.as_deref(),
+            Some("Number One, set a course for Risa.")
+        );
+    }
+
+    /// A Takeout says who is muted in a label, the one place a message
+    /// keeps it. It is a mark, not a keyword of the row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_takeouts_muted_label_is_a_mark() {
+        let body = TWO_MSG_MBOX.replace("Inbox,Sent", "Inbox,Sent,Muted");
+        let (_d, path) = write_tmp_mbox(&body);
+        let work = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&work.path().join("e.doltlite_db"))
+            .await
+            .unwrap();
+        fetch(FetchOptions {
+            input_path: path,
+            ..FetchOptions::new(db.clone())
+        })
+        .await
+        .unwrap();
+        let muted: Vec<(String, i64)> =
+            sqlx::query_as("SELECT id, muted FROM read_marks ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            muted,
+            [
+                ("0000000000000457".to_string(), 0),
+                ("00000000000008ae".to_string(), 1),
+            ]
+        );
+        let joins = db.load_email_joins().await.unwrap();
+        assert!(!joins.keywords.values().flatten().any(|k| k == "$muted"));
+        db.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -807,7 +807,10 @@ mod tests {
             let page = examples_page(t.as_str()).unwrap();
             for m in ingest_methods(t) {
                 for &kind in ExampleKind::VARIANTS {
-                    let example = source_docs(t).example(kind, m.path).unwrap();
+                    let Some(example) = source_docs(t).example(kind, m.path) else {
+                        assert_eq!(kind, ExampleKind::Sections, "{t}/{}", m.path);
+                        continue;
+                    };
                     assert!(
                         page.contains(&format!("## {t} by `{}`, {}", m.path, kind.as_str())),
                         "{t}/{}: no heading:\n{page}",

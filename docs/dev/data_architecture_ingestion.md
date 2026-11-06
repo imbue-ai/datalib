@@ -246,7 +246,7 @@ Two rules follow:
 - **Normalize at render time, not download time.** Decoding a binary wire encoding to JSON of the **same** semantic content is **not normalization** — every field upstream sent us is still present, with the same values. Normalization means pre-shaping into our internal model (renaming fields, collapsing shapes, dropping subtrees, projecting), which we defer to render.
 - **Don't pollute payloads with downloader-synthesized keys.** `_fetched_at`, `_listing_update_time` etc. are bookkeeping, not upstream data; promote them to real columns on the entity table (or its `_bookkeeping` sidecar), not into the JSON.
 
-One upstream field moves out of the payload rather than staying in it: whether the person has read something. It changes often and on its own, so it lives in the store's narrow `read_marks` table (`datalib_etl::read_marks`), still in the same store, and the payload leaves it out (SMS's `read`, Signal's `IncomingMessageDetails.read`).
+One upstream field moves out of the payload rather than staying in it: whether the person has read something, and on mail whether its thread is muted. It changes often and on its own, so it lives in the store's narrow `read_marks` table (`datalib_etl::read_marks`), still in the same store, and the payload leaves it out (SMS's `read`, Signal's `IncomingMessageDetails.read`).
 
 Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or index into qmd can be recomputed from raw without re-touching the network. A provider's `RENDER_VERSION` is the explicit lever for "force a rebake of every document even when payloads are unchanged."
 

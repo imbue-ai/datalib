@@ -232,6 +232,45 @@ owes what its listing now names and its store does not hold
 (`data_architecture_ingestion.md` §"What is left to fetch"). YoLink's
 per-device `start` predates the grammar and still takes a day only.
 
+**Several things, each with its own window: `fetch`.** A method whose
+source has parts worth fetching to different depths takes repeated
+`fetch` sections, each saying what it selects, in that source's own words,
+and how far back:
+
+```toml fragment
+[[steps.params.gmail.fetch]]
+labels = ["Inbox"]
+
+[[steps.params.gmail.fetch]]
+labels = ["Sent"]
+since = "-90d"
+```
+
+Whatever the source, the sections mean the same:
+
+- **What is fetched is the union.** Sections only add, so their order says
+  nothing and a new one can never lose what another reaches.
+- **A thing two sections select gets the wider window**, and a section with
+  no `since` is the widest (`datalib_time::widest_start`).
+- **A section selecting nothing named takes everything** within its window.
+  A name upstream does not have selects nothing and is a `config:` problem,
+  and never reads as that.
+- **`fetch` replaces the method's own window and selection keys**, and the
+  older keys are read as one section. A config with both is refused, since
+  which of the two won would show only in what the mirror holds.
+
+Only Gmail has it today (`labels`, `since`, `whole_threads`;
+[`getting_your_data.md`](../user/getting_your_data.md) § "Different labels to
+different depths" is the person's version). A new source's sections would
+select in its own words, as Slack's could by `channels` and `dms`.
+
+**No wizard form writes `fetch`.** A form's fields are single settings, and
+a repeated table is none. The config editor is the way in. Reopening such a
+source in its form lists `fetch` among the keys it keeps
+(`untouchedSettings`), but its answers read as if there were no filter, and
+choosing labels there writes the older keys beside `fetch`, which the load
+refuses. `datalib/ui/tests/edit_source.test.ts` pins the keeping.
+
 The window is a key of each method rather than one range under
 `[steps.params.common]`: `common` is per step too, so it would save no
 typing, and two places to say one thing would need a rule for which

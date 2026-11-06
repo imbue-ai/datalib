@@ -326,6 +326,84 @@ a day. Ask the record of when the download looked instead:
   since a conversation can fall behind the rest of its source. The rule
   for one message is in [raw_stores.md](raw_stores.md) § "Slack".
 
+## Usable in minutes, complete later: a staged `since`
+
+A first sync of a large source can take hours: a whole Gmail mailbox
+goes at about 80 messages a minute, which is Google's quota. To have
+something useful in minutes, sync a short window first, then widen it.
+Each record is still fetched once, because a source owes what its listing
+names and its store does not hold.
+
+This works for any source whose `since` backfills: Slack, Claude and
+ChatGPT, Gmail, Todoist and Garmin
+([config_model.md](../dev/config_model.md) § "Time windows"). A calendar
+is the exception: a windowed one is listed whole every run, and an event
+outside the window goes. The steps below use Gmail; for another source
+change the table and the step's name, and read its own line under "What
+the source still owes" for step 5, where it has one.
+
+1. **Start with a short window**, in the source's params:
+
+   ```toml fragment
+   [steps.params.gmail]
+   since = "-3d"
+   ```
+
+2. **Sync it and wait.** The run ends with a seal, so everything it
+   fetched is readable:
+
+   ```sh
+   datalib-dag <data_root>/config.toml --sync gmail/ingest --by myapp
+   ```
+
+   Your app can start now. From this run on, the source follows the
+   mailbox's change history, so later syncs pick up new mail, archives
+   and relabels for a few quota units.
+
+3. **Widen the window.** Set `since` to what you want in the end
+   (`"-365d"`, a date, or remove it for the whole mailbox). See "Changing
+   the config while a sync runs": with no app up, let the open requests
+   finish first, or the loop runs the old params.
+
+4. **Backfill without waiting for it.** File the sync and go on; older
+   mail arrives newest first while your app works from what is there:
+
+   ```sh
+   curl -X POST -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+     -d '{"roots": ["gmail/ingest"], "by": "myapp"}' <origin>/api/requests
+   ```
+
+   With no app up, `datalib-dag --sync` waits for its request, so run it
+   as a background job. Keep your regular syncs going meanwhile: asking
+   again while the backfill runs starts no second copy ("Nothing syncs on
+   its own").
+
+5. **Know when it is done:** the newest `sync_runs` row is `ok` and
+   started after your edit, and the count in "What the source still owes"
+   above is zero. A `listed_whole` row says nothing here, since the short
+   window's walk already wrote it.
+
+A few things to keep in mind:
+
+- **Start narrow.** Widening backfills, but narrowing does not cancel
+  what a wider listing already owes.
+- **What you compute from history is over the short window** until the
+  backfill finishes (who the account has written to, where a thread
+  starts). Work it out again when the mirror moves, as you would anyway.
+- **A kept message brings its whole thread** with `only_extract_labels`
+  and `whole_threads`, so a short window can still bring in older mail.
+- **Not everything needs the same depth.** On Gmail, `fetch` sections give
+  each label its own `since`: all of the Inbox and 90 days of Sent, say
+  ([getting_your_data.md](getting_your_data.md) § "Different labels to
+  different depths"). They are written in the config; the Add source form
+  does not support them.
+- **Fastmail and other JMAP mail has no `since`,** though the Gmail table
+  of the same source does. It needs no stages for this: a run writes every
+  message's envelope and preview before it downloads any `.eml`.
+- **A Takeout does the most**, if you have one: it supplies the old mail
+  and leaves only the labels to ask for
+  ([getting_your_data.md](getting_your_data.md) § "Gmail").
+
 ## Reading from your program
 
 Stock SQLite cannot open a raw store, so your program needs one of two

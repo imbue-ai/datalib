@@ -21,6 +21,8 @@ pub struct Email {
     pub thread: String,
     pub flagged: bool,
     pub seen: bool,
+    pub muted: bool,
+    pub preview: String,
 }
 
 #[derive(Clone)]
@@ -50,6 +52,8 @@ impl Account {
                         thread: format!("T{id}"),
                         flagged: false,
                         seen: true,
+                        muted: false,
+                        preview: format!("Preview of log {id}"),
                     };
                     (id.to_string(), email)
                 })
@@ -75,6 +79,9 @@ impl Account {
         if e.flagged {
             keywords["$flagged"] = json!(true);
         }
+        if e.muted {
+            keywords["$muted"] = json!(true);
+        }
         Some(json!({
             "id": id,
             "blobId": format!("B{id}"),
@@ -85,6 +92,7 @@ impl Account {
             "receivedAt": "2026-09-01T10:00:00Z",
             "size": 256,
             "hasAttachment": false,
+            "preview": e.preview,
         }))
     }
 }
@@ -363,7 +371,7 @@ pub fn email_get_args(ids: &[&str]) -> Value {
         "properties": [
             "id", "blobId", "threadId", "mailboxIds", "keywords", "from",
             "subject", "sentAt", "receivedAt", "size", "messageId",
-            "hasAttachment", "attachments",
+            "hasAttachment", "attachments", "preview",
         ],
     })
 }

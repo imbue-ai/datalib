@@ -285,9 +285,10 @@ the files and settings match the stamp, the run skips the read.
 All three ways into mail write one schema. Fastmail and other JMAP
 servers send JMAP's own objects; the Gmail API and mbox files are made
 to look like them, so `payload` is a JMAP-shaped **envelope**: who,
-when, subject, labels. **There is no body in the envelope and no
-snippet.** The message itself, headers, body and attachments, is the
-original RFC 5322 `.eml`, stored whole in `blobs.sqlite`.
+when, subject, labels. **There is no body in the envelope.** The message
+itself, headers, body and attachments, is the original RFC 5322 `.eml`,
+stored whole in `blobs.sqlite`. To show a line of a message without
+opening that, read `emails.preview`.
 
 **Which id is which, for Gmail:**
 
@@ -321,7 +322,8 @@ files mail (Inbox, Sent, a label you made, the inbox categories) is a
 row in `mailboxes`, and an email's labels are its `email_mailboxes`
 rows (also `payload -> '$.mailboxIds'`). A label that is a flag is a
 keyword in `email_keywords` (also `payload -> '$.keywords'`). Whether
-a message was read is its row in `read_marks`:
+a message was read, and whether its thread is muted, is its row in
+`read_marks`:
 
 | Gmail | in the mirror |
 |---|---|
@@ -330,7 +332,7 @@ a message was read is its row in `read_marks`:
 | `IMPORTANT` | keyword `$important` |
 | `INBOX`, `SENT`, `DRAFT`, `TRASH`, `SPAM` | a mailbox with `role` `inbox`, `sent`, `drafts`, `trash`, `junk` |
 | `CATEGORY_*`, your own labels | a mailbox with no role |
-| muted | not kept |
+| muted (no label: the search `is:muted`) | `read_marks.muted` = 1 (and 0 without it) |
 
 For Gmail, `emails.label_ids` puts them back together: every label id
 the message carries, as the API spells them, `STARRED` and `IMPORTANT`
@@ -358,6 +360,15 @@ asks whether a message is in the inbox.
   thread held in part.
 - **`emails.blob_id` is not the CAS key for JMAP** (it is JMAP's own
   blob id). Always go through `email_blobs.blake3`.
+- **`emails.preview` is for showing, not for searching or quoting.**
+  Gmail's snippet and a JMAP server's preview are cut where the service
+  chose and may skip part of the message, and it is NULL for a message
+  whose `.eml` is not held yet. For the text itself, read the `.eml`.
+- **A muted thread is any of its messages being muted.** Muting belongs
+  to a thread, and the mark is on each email: ask
+  `EXISTS (SELECT 1 FROM read_marks r JOIN emails e ON e.id = r.id
+  WHERE e.thread_id = ? AND r.muted = 1)`. On Gmail a mute shows after
+  the next sync, which asks every time.
 
 ### `accounts`
 
@@ -421,6 +432,7 @@ One row per message.
 | `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column) |
 | `has_attachment` | 1 if the message has an attachment |
 | `label_ids` | Gmail only: its label ids as a sorted JSON array (see "Labels") |
+| `preview` | a line of the body as plain text, at most about 256 characters: Gmail's snippet with its HTML entities decoded, a JMAP server's `preview`, or, where those give none, made from the `.eml`. Empty for a message with no text, NULL until the `.eml` is held or if it will not parse. Not in `payload` |
 
 ### `email_mailboxes`
 
@@ -441,19 +453,21 @@ Which keywords (flags) each email has, rewritten with it the same way.
 |---|---|
 | `id` | `<email id>#<keyword>` |
 | `email_id` | the `emails.id` |
-| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen`, which is in `read_marks` |
+| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen` or `$muted`, which are in `read_marks` |
 
 ### `read_marks`
 
-Whether each email was read, one row per email, rewritten with it and
-gone with it. JMAP's `$seen`, Gmail's `UNREAD` and an mbox's `Unread`
-label all land here and nowhere else.
+Whether each email was read and whether its thread is muted, one row per
+email, rewritten with it and gone with it. JMAP's `$seen`, Gmail's
+`UNREAD` and an mbox's `Unread` label land here and nowhere else, and so
+do JMAP's `$muted`, an mbox's `Muted` label and Gmail's `is:muted` search.
 
 | column | what it holds |
 |---|---|
 | `id` | the `emails.id` |
 | `read` | 1 if it was read, 0 if not |
 | `read_through` | NULL for email (another source's mark on a whole conversation) |
+| `muted` | 1 if it is in a muted thread, 0 if not; NULL where nothing has said yet (Gmail, when the search failed) |
 
 ### `email_blobs`
 
@@ -716,6 +730,7 @@ thread it follows.
 | `id` | the conversation id, or a thread's `{team}#{channel}#{ts}` |
 | `read_through` | the `ts` of the last message read |
 | `read` | NULL; Slack marks nothing message by message |
+| `muted` | NULL; the download does not ask |
 
 ### `bookmarks`
 
