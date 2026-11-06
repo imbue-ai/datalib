@@ -112,6 +112,18 @@ py_test(
     main = "scripts/lint_repo_test.py",
 )
 
+# The order check `search_eval.py first-pages` trusts.
+py_test(
+    name = "search_eval_test",
+    size = "small",
+    srcs = [
+        "scripts/search_eval.py",
+        "scripts/search_eval_test.py",
+    ],
+    imports = ["scripts"],
+    main = "scripts/search_eval_test.py",
+)
+
 # release.yml's steps that are Python, and the one the release procedure runs.
 py_test(
     name = "unpack_compiled_app_test",
