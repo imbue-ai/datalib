@@ -388,17 +388,27 @@ fn messages_list_url(
     label_id: Option<&str>,
     after: Option<i64>,
 ) -> String {
+    // A `since` before 1970 is negative seconds, which Slack answered with
+    // nothing (#1048). No mail is older than the epoch.
+    let q = after.map(|secs| format!("after:{}", secs.max(0)));
+    search_url(user_id, page_token, page_size, label_id, q.as_deref())
+}
+
+fn search_url(
+    user_id: &str,
+    page_token: Option<&str>,
+    page_size: u32,
+    label_id: Option<&str>,
+    q: Option<&str>,
+) -> String {
     let mut url = format!("{BASE}/{user_id}/messages?maxResults={page_size}&includeSpamTrash=true");
     if let Some(id) = label_id {
         url.push_str("&labelIds=");
         url.push_str(&percent_encode(id));
     }
-    if let Some(secs) = after {
-        // A `since` before 1970 is negative seconds, which Slack answered
-        // with nothing (#1048). No mail is older than the epoch.
-        let secs = secs.max(0);
+    if let Some(q) = q {
         url.push_str("&q=");
-        url.push_str(&percent_encode(&format!("after:{secs}")));
+        url.push_str(&percent_encode(q));
     }
     if let Some(token) = page_token {
         url.push_str("&pageToken=");
@@ -420,8 +430,25 @@ pub async fn list_messages(
         client,
     )
     .await?;
+    Ok(message_page(&v))
+}
+
+/// A page of the messages of the muted threads. Muting is no label: it is
+/// absent from `labels.list` and `labelIds=MUTED` is refused, so a search
+/// is the one way to ask.
+pub async fn list_muted(
+    user_id: &str,
+    client: &Client,
+    page_token: Option<&str>,
+    page_size: u32,
+) -> Result<MessagePage> {
+    let url = search_url(user_id, page_token, page_size, None, Some("is:muted"));
+    Ok(message_page(&get_json(&url, client).await?))
+}
+
+fn message_page(v: &Value) -> MessagePage {
     let messages = v.get("messages").and_then(Value::as_array);
-    Ok(MessagePage {
+    MessagePage {
         ids: messages
             .map(|a| a.iter().filter_map(|m| str_field(m, "id")).collect())
             .unwrap_or_default(),
@@ -432,9 +459,9 @@ pub async fn list_messages(
                     .collect()
             })
             .unwrap_or_default(),
-        next_page_token: str_field(&v, "nextPageToken"),
+        next_page_token: str_field(v, "nextPageToken"),
         result_size_estimate: v.get("resultSizeEstimate").and_then(Value::as_u64),
-    })
+    }
 }
 
 pub async fn get_message_raw(user_id: &str, client: &Client, id: &str) -> Result<GmailMessage> {
@@ -472,8 +499,15 @@ pub struct GmailMessage {
     /// `internalDate`, epoch **milliseconds** as a string.
     pub internal_date_ms: Option<i64>,
     pub size_estimate: Option<u64>,
+    /// Gmail's `snippet` as plain text; `None` when it had nothing to say.
+    pub preview: Option<String>,
     /// The decoded RFC 5322 source.
     pub raw: Vec<u8>,
+}
+
+/// Gmail's `snippet` is HTML-escaped (`it&#39;s`), though it is no HTML.
+fn snippet_as_text(snippet: &str) -> Option<String> {
+    Some(mail_parser::html_to_text(snippet).trim().to_string()).filter(|text| !text.is_empty())
 }
 
 impl GmailMessage {
@@ -495,6 +529,7 @@ impl GmailMessage {
             history_id: str_field(v, "historyId"),
             internal_date_ms: str_field(v, "internalDate").and_then(|s| s.parse().ok()),
             size_estimate: v.get("sizeEstimate").and_then(Value::as_u64),
+            preview: str_field(v, "snippet").as_deref().and_then(snippet_as_text),
             id,
         })
     }
@@ -637,6 +672,41 @@ mod tests {
     /// ANDs repeated `labelIds`, so a request naming two labels asks for
     /// their intersection. Configs name several labels meaning "any of",
     /// and that request answers a different question.
+    #[test]
+    fn asks_for_the_muted_messages_by_a_search() {
+        assert_eq!(
+            search_url("me", None, 500, None, Some("is:muted")),
+            format!("{BASE}/me/messages?maxResults=500&includeSpamTrash=true&q=is%3Amuted")
+        );
+    }
+
+    /// On a real account 7 of 25 snippets carried an entity. A list of
+    /// mail showing `&#39;` is the bug.
+    #[test]
+    fn a_snippet_is_stored_as_the_text_it_stands_for() {
+        let v = json!({
+            "id": "1", "threadId": "1",
+            "snippet": "Captain&#39;s log: tea &amp; biscuits &lt;hot&gt;",
+        });
+        assert_eq!(
+            GmailMessage::from_json(&v).unwrap().preview.as_deref(),
+            Some("Captain's log: tea & biscuits <hot>")
+        );
+    }
+
+    /// An empty snippet is no answer: the preview is then made from the
+    /// message.
+    #[test]
+    fn an_empty_or_absent_snippet_is_no_preview() {
+        for v in [
+            json!({ "id": "1", "snippet": "" }),
+            json!({ "id": "1", "snippet": " " }),
+            json!({ "id": "1" }),
+        ] {
+            assert_eq!(GmailMessage::from_json(&v).unwrap().preview, None, "{v}");
+        }
+    }
+
     #[test]
     fn asks_for_at_most_one_label_per_request() {
         let filtered = messages_list_url("me", None, 500, Some("Label_7"), None);

@@ -561,6 +561,67 @@ then lists only the mail after it, which takes minutes where a whole
 mailbox takes hours. Mail older than a sliding `since` stays mirrored,
 and an earlier `since` brings the older mail in on the next sync.
 
+### Different labels to different depths
+
+One `since` has to suit the whole source. To fetch each part of the
+mailbox as far back as it is useful, say all of the Inbox but only 90 days
+of Sent, write `fetch` sections in the config. **The Add source form cannot
+write these; see below.**
+
+```toml fragment
+[[steps.params.gmail.fetch]]
+labels = ["Inbox"]
+
+[[steps.params.gmail.fetch]]
+labels = ["Sent"]
+since = "-90d"
+whole_threads = false
+```
+
+Each section takes three settings, all optional:
+
+| setting | what it means | unset |
+|---|---|---|
+| `labels` | the labels this section takes, named as `only_extract_labels` names them | the whole mailbox |
+| `since` | the oldest mail this section takes, written as `since` above | all of it |
+| `whole_threads` | whether a message under these labels brings the rest of its thread, however old | true |
+
+What is fetched is the **union** of the sections:
+
+- **They only add.** Their order does not matter, and adding one never
+  loses mail another reaches.
+- **A label in two sections goes as far back as either asks**, and a section
+  with no `since` goes furthest. A message that carries labels from two
+  sections comes in if either section reaches it.
+- **A label that does not exist takes nothing.** It shows as a problem on the
+  source, and the other sections still run. If no label in any section
+  exists, the sync fails rather than mirror the whole mailbox.
+- **`since` bounds the listing, not what happens later.** New mail under a
+  label always comes in. So does an older message that is relabeled, whatever
+  its age, and mail a sliding `since` moves past stays mirrored.
+- **An earlier `since` in one section walks only that section's labels on the
+  next sync**, and fetches only the mail it newly reaches.
+
+`fetch` replaces `only_extract_labels`, `whole_threads` and `since` in the
+`gmail` table, which say the same thing for one section. A source that sets
+`fetch` beside any of them does not load, and the error names the keys to
+move. Moving them into a section fetches nothing again.
+
+**The Add source form does not support sections.** Add them by editing the
+config, either in the Manage tab's config editor or in the file. Reopening
+such a source in the form is safe with care:
+
+- The form lists `fetch` among the settings it has no field for, and saving
+  keeps your sections exactly as written.
+- It has no way to show them, so its "Which mail?" and "How far back?" answers
+  read "The whole account" and "Everything" whatever your sections say.
+- **Do not choose labels or a start date there.** That writes the older keys
+  beside `fetch`, and the source stops loading until you remove one or the
+  other.
+
+Only Gmail has sections. Fastmail and other JMAP mail, and an `.mbox` on its
+own, take `only_extract_labels` and `whole_threads` for the whole source.
+
 ### Your own Google OAuth client
 
 Every Google source signs in through an OAuth client in a Google Cloud

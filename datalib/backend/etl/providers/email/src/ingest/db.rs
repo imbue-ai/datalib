@@ -164,9 +164,9 @@ impl RawDb {
         mailbox_id: &str,
         after: &str,
         limit: usize,
-    ) -> Result<Vec<(String, String, Value)>> {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT e.id, e.account_id, json(e.payload) FROM email_mailboxes m
+    ) -> Result<Vec<(String, String, Value, Option<String>)>> {
+        let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT e.id, e.account_id, json(e.payload), e.preview FROM email_mailboxes m
              JOIN emails e ON e.id = m.email_id
              WHERE m.mailbox_id = ? AND e.id > ?
              ORDER BY e.id
@@ -179,10 +179,10 @@ impl RawDb {
         .await
         .with_context(|| format!("select the emails filed under {mailbox_id}"))?;
         rows.into_iter()
-            .map(|(id, account, payload)| {
+            .map(|(id, account, payload, preview)| {
                 let v = serde_json::from_str(&payload)
                     .with_context(|| format!("parse the payload of email {id}"))?;
-                Ok((id, account, v))
+                Ok((id, account, v, preview))
             })
             .collect()
     }
@@ -743,6 +743,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(migrated, fresh);
+        db.close().await;
+    }
+
+    /// The ninth rung, on a store whose `read_marks` predates the column: a
+    /// `$muted` keyword becomes a mark and leaves the row, what nothing has
+    /// said stays NULL, and an mbox is read again for its labels.
+    #[tokio::test]
+    async fn the_ninth_rung_moves_muted_into_read_marks() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("j.doltlite_db");
+        {
+            let ddl: Vec<String> = full_ddl();
+            let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+            let pool = dr::open(&path, &ddl).await.unwrap();
+            for sql in [
+                "ALTER TABLE read_marks DROP COLUMN muted",
+                r#"INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
+                   ('E1', jsonb('{"id":"E1","keywords":{"$flagged":true,"$muted":true}}'), 'A1', 'T1', 'B1'),
+                   ('E2', jsonb('{"id":"E2","keywords":{}}'), 'A1', 'T2', 'B2')"#,
+                r#"INSERT INTO email_keywords (id, email_id, keyword) VALUES
+                   ('E1#$flagged', 'E1', '$flagged'), ('E1#$muted', 'E1', '$muted')"#,
+                "INSERT INTO read_marks (id, read) VALUES ('E1', 1), ('E2', 0)",
+                "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc, tz_offset)
+                 VALUES ('email/mbox_read', '', 'h', 1, '2026-01-01T00:00:00Z', '+00:00'),
+                        ('email/takeout_seed', '', 'h', 1, '2026-01-01T00:00:00Z', '+00:00')",
+                "UPDATE _datalib_meta SET value = '8' WHERE key = 'schema_version'",
+            ] {
+                sqlx::query(sql).execute(&pool).await.unwrap();
+            }
+            dr::commit_run(&pool, "the eighth rung's rows")
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        let db = RawDb::open(&path).await.expect("the ninth rung carries it");
+        let marks: Vec<(String, Option<i64>)> =
+            sqlx::query_as("SELECT id, muted FROM read_marks ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            marks,
+            [("E1".to_string(), Some(1)), ("E2".to_string(), None)]
+        );
+        let keywords: Vec<String> = sqlx::query_scalar("SELECT keyword FROM email_keywords")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(keywords, ["$flagged"]);
+        let payload: String =
+            sqlx::query_scalar("SELECT json(payload) FROM emails WHERE id = 'E1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(payload, r#"{"id":"E1","keywords":{"$flagged":true}}"#);
+        let stamps: Vec<String> = sqlx::query_scalar("SELECT scope FROM ingested_files")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(stamps, ["email/takeout_seed"]);
         db.close().await;
     }
 

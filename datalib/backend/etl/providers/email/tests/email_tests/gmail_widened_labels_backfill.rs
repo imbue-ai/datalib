@@ -38,8 +38,9 @@ async fn an_unchanged_filter_replays_history_only() {
     let second = h.run(&["datalib"]).await;
     assert_eq!(second.emails_upserted, 0, "{second:?}");
     assert!(second.walked.is_empty(), "{second:?}");
-    // profile + labels + history.list: the run must not have walked.
-    assert_eq!(second.quota_units_spent, 4, "{second:?}");
+    // profile + labels + history.list + the muted search: the run must not
+    // have walked.
+    assert_eq!(second.quota_units_spent, 9, "{second:?}");
     assert_eq!(h.mirrored().await, ids(&[UNDER_LIB]));
 }
 
@@ -80,7 +81,7 @@ async fn a_removed_filter_walks_the_whole_account() {
 
     let again = h.run(&[]).await;
     assert!(again.walked.is_empty(), "{again:?}");
-    assert_eq!(again.quota_units_spent, 4, "{again:?}");
+    assert_eq!(again.quota_units_spent, 9, "{again:?}");
 }
 
 fn ids(v: &[&str]) -> BTreeSet<String> {
@@ -100,7 +101,9 @@ impl Harness {
         self.0
             .run(|db| {
                 let mut opts = FetchOptions::new(db);
-                opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
+                opts.sections = vec![gmail_api::Section::labels(
+                    labels.iter().map(|s| s.to_string()).collect(),
+                )];
                 gmail_api::fetch(opts)
             })
             .await

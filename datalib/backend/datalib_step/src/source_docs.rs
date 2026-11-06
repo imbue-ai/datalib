@@ -412,11 +412,13 @@ mod tests {
             for m in methods {
                 for &kind in ExampleKind::VARIANTS {
                     let Some(example) = docs.example(kind, m.path) else {
-                        missing.push(format!(
-                            "{t}: no {} example for `{}`",
-                            kind.as_str(),
-                            m.path
-                        ));
+                        if kind != ExampleKind::Sections {
+                            missing.push(format!(
+                                "{t}: no {} example for `{}`",
+                                kind.as_str(),
+                                m.path
+                            ));
+                        }
                         continue;
                     };
                     let name = format!("{t}/{}_{}", kind.as_str(), m.path);
@@ -435,7 +437,7 @@ mod tests {
                         ExampleKind::Minimal => {
                             assert_eq!(holds, [m.path], "{name}: holds the method it is named for")
                         }
-                        ExampleKind::Complete => assert!(
+                        ExampleKind::Complete | ExampleKind::Sections => assert!(
                             holds.contains(&m.path),
                             "{name}: holds the method it is named for, not only {holds:?}"
                         ),
@@ -454,7 +456,7 @@ mod tests {
                             missing.push(format!("{name}: declares no `{needed}` step"));
                         }
                     }
-                    if kind == ExampleKind::Complete {
+                    if kind != ExampleKind::Minimal {
                         written
                             .entry(m.path)
                             .or_default()

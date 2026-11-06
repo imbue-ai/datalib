@@ -287,6 +287,10 @@ pub enum ExampleKind {
     Minimal,
     /// Every option the params take, each with a comment.
     Complete,
+    /// The method written as `fetch` sections, which cannot sit beside the
+    /// keys they replace in [`Self::Complete`]. Only a method with `fetch`
+    /// has one.
+    Sections,
 }
 
 impl ExampleKind {

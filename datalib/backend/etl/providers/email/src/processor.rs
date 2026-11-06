@@ -7,7 +7,9 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_web::http::LatchkeySettings;
 
-use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
+use datalib_etl_email_config::{
+    EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, GmailFetch, MboxSync,
+};
 use std::path::PathBuf;
 
 use crate::ingest;
@@ -40,6 +42,7 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
         Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi {
             gmail: gmail.clone(),
             takeout: config.takeout(),
+            fetch: config.gmail_fetch(),
         }),
         // Planning never touches the filesystem — `datalib-dag --check`
         // and the schema tests run where the data is not — so whether the
@@ -74,6 +77,7 @@ enum ExtractMode {
     GmailApi {
         gmail: EmailGmailApi,
         takeout: Option<PathBuf>,
+        fetch: Vec<GmailFetch>,
     },
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
     Mbox {
@@ -148,7 +152,11 @@ impl DataProcessor for EmailIngest {
                         s.blobs_errored,
                     )
                 }
-                ExtractMode::GmailApi { gmail, takeout } => {
+                ExtractMode::GmailApi {
+                    gmail,
+                    takeout,
+                    fetch,
+                } => {
                     if let Some(path) = takeout
                         .as_ref()
                         .filter(|p| !ingest::mbox::is_mbox_input(p))
@@ -159,13 +167,24 @@ impl DataProcessor for EmailIngest {
                             path.display()
                         ));
                     }
-                    let since = match gmail.since.as_deref() {
-                        Some(s) => Some(
-                            datalib_time::TimeBound::parse(s)?
-                                .instant(&datalib_time::parse_strict(ctx.now)?),
-                        ),
-                        None => None,
-                    };
+                    let now = datalib_time::parse_strict(ctx.now)?;
+                    let sections = fetch
+                        .iter()
+                        .map(|section| {
+                            let since = section
+                                .since
+                                .as_deref()
+                                .map(|s| Ok::<_, anyhow::Error>(
+                                    datalib_time::TimeBound::parse(s)?.instant(&now),
+                                ))
+                                .transpose()?;
+                            Ok(ingest::gmail_api::Section {
+                                labels: section.labels.clone(),
+                                whole_threads: section.whole_threads(),
+                                since,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     let cache = match takeout {
                         Some(_) => Some(host_fingerprints().await?),
                         None => None,
@@ -177,9 +196,12 @@ impl DataProcessor for EmailIngest {
                         latchkey: self.latchkey.clone(),
                         takeout: takeout.clone(),
                         cache,
-                        only_labels: self.only_extract_labels.clone(),
-                        whole_threads: self.whole_threads,
-                        since,
+                        sections,
+                        labels_setting: if gmail.fetch.is_some() {
+                            ingest::gmail_api::K_FETCH_LABELS
+                        } else {
+                            ingest::K_ONLY_EXTRACT_LABELS
+                        },
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
                         progress: ctx.progress.clone(),

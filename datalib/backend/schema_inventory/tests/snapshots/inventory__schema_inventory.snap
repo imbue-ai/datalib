@@ -461,6 +461,7 @@ emails
     cc_json
     has_attachment
     label_ids
+    preview
 emails_bookkeeping
     id
     fetched_at_utc
@@ -512,6 +513,7 @@ read_marks
     id
     read_through
     read
+    muted
 thread_members
     id
     thread_id
@@ -1336,6 +1338,7 @@ read_marks
     id
     read_through
     read
+    muted
 recipients
     id
     payload
@@ -1487,6 +1490,7 @@ read_marks
     id
     read_through
     read
+    muted
 saved_items
     id
     payload
@@ -1571,6 +1575,7 @@ read_marks
     id
     read_through
     read
+    muted
 sms_attachments
     id
     message_id

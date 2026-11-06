@@ -238,6 +238,21 @@ pub fn put_gmail_account(playback: &Path, history_id: &str, labels: Value) {
         &format!("{GMAIL}/labels"),
         &json!({ "labels": labels }),
     );
+    put_gmail_muted(playback, &[]);
+}
+
+/// The ids Gmail's `is:muted` search names, asked once a run.
+pub fn put_gmail_muted(playback: &Path, ids: &[&str]) {
+    let messages: Vec<Value> = ids.iter().map(|id| json!({ "id": id })).collect();
+    put_gmail(
+        playback,
+        &gmail_muted_url(),
+        &json!({ "messages": messages }),
+    );
+}
+
+pub fn gmail_muted_url() -> String {
+    format!("{GMAIL}/messages?maxResults=500&includeSpamTrash=true&q=is%3Amuted")
 }
 
 pub fn inbox_label() -> Value {
@@ -293,6 +308,7 @@ pub fn gmail_message(id: &str, label_ids: &[&str], subject: &str) -> Value {
         "threadId": id,
         "labelIds": label_ids,
         "internalDate": "1788000000000",
+        "snippet": format!("snippet of {subject}"),
         "raw": base64url(eml.as_bytes()),
     })
 }

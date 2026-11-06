@@ -140,6 +140,8 @@ fn before() -> Account {
                 thread: format!("T{}", 1 + (n - 1) / 20),
                 flagged: false,
                 seen: true,
+                muted: false,
+                preview: format!("Preview of log {}", id(n)),
             },
         );
     }
@@ -160,6 +162,8 @@ fn after() -> Account {
             thread: "T3".into(),
             flagged: false,
             seen: true,
+            muted: false,
+            preview: "Preview of log M56".into(),
         },
     );
     a.emails.get_mut("M03").unwrap().mailboxes = vec!["MB3".into()];

@@ -205,9 +205,15 @@ impl ThreadRow {
 /// Gmail's own ids, keyed by [`super::envelope::GmailId::key`] whether
 /// the API or a Takeout named them. `label_ids` is set only for a message
 /// Gmail's API answered for: its label ids as a sorted JSON array
-/// ([`labels::gmail_label_ids`]). Whether it was read is not here but in
-/// `read_marks` ([`FetchedEmail`]): neither the payload's `keywords` nor
-/// `label_ids` holds `$seen` or `UNREAD`.
+/// ([`labels::gmail_label_ids`]). Whether it was read or muted is not here
+/// but in `read_marks` ([`FetchedEmail`]): neither the payload's `keywords`
+/// nor `label_ids` holds `$seen`, `$muted` or `UNREAD`.
+///
+/// `preview` is a line of the body as plain text, for a list of mail to
+/// show without opening the `.eml`: upstream's where it gave one, else made
+/// from the bytes. Empty for a message with no text, and NULL until the
+/// bytes it could be made from are held. The payload leaves it out, as it
+/// leaves out the body.
 #[derive(Debug, Clone, RawTable)]
 #[raw_table(
     table = "emails",
@@ -231,6 +237,7 @@ pub struct EmailRow {
     pub cc_json: Option<String>,
     pub has_attachment: Option<i64>,
     pub label_ids: Option<String>,
+    pub preview: Option<String>,
 }
 
 /// What `_source.via` says of a row the Gmail API answered for.
@@ -244,14 +251,11 @@ impl EmailRow {
     /// parts in the JMAP response are deliberately ignored — render
     /// reads them out of the `.eml` blob.
     pub fn from_jmap_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
-        let envelope: Cow<'_, Value> = match envelope.pointer(SEEN_POINTER) {
-            Some(_) => {
-                let mut copy = envelope.clone();
-                copy["keywords"].as_object_mut()?.remove(SEEN);
-                Cow::Owned(copy)
-            }
-            None => Cow::Borrowed(envelope),
-        };
+        let preview = envelope
+            .get("preview")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let envelope = without_what_the_row_keeps_elsewhere(envelope)?;
         let id = envelope.get("id")?.as_str()?.to_string();
         let blob_id = envelope.get("blobId")?.as_str()?.to_string();
         let thread_id = envelope.get("threadId")?.as_str()?.to_string();
@@ -326,6 +330,7 @@ impl EmailRow {
             cc_json,
             has_attachment: Some(has_attachment as i64),
             label_ids,
+            preview,
         })
     }
 
@@ -360,28 +365,53 @@ impl EmailRow {
 pub const SEEN: &str = "$seen";
 const SEEN_POINTER: &str = "/keywords/$seen";
 
+/// The keyword for a message of a muted thread: a JMAP server's own, an
+/// mbox's `Muted` label. Kept as a read mark, as [`SEEN`] is. The Gmail API
+/// names no such label: `gmail_api` asks a search instead.
+pub const MUTED: &str = "$muted";
+const MUTED_POINTER: &str = "/keywords/$muted";
+
+fn without_what_the_row_keeps_elsewhere(envelope: &Value) -> Option<Cow<'_, Value>> {
+    if envelope.get("preview").is_none()
+        && envelope.pointer(SEEN_POINTER).is_none()
+        && envelope.pointer(MUTED_POINTER).is_none()
+    {
+        return Some(Cow::Borrowed(envelope));
+    }
+    let mut copy = envelope.clone();
+    copy.as_object_mut()?.remove("preview");
+    if let Some(keywords) = copy.get_mut("keywords").and_then(Value::as_object_mut) {
+        keywords.remove(SEEN);
+        keywords.remove(MUTED);
+    }
+    Some(Cow::Owned(copy))
+}
+
 /// An email as upstream answered for it: the row, and whether it has been
-/// read, which the store keeps in `read_marks` rather than among the
-/// keywords. A mark changes often and on its own; on the row it would
-/// rewrite the whole envelope each time.
+/// read or muted, which the store keeps in `read_marks` rather than among
+/// the keywords. A mark changes often and on its own; on the row it would
+/// rewrite the whole envelope each time. `muted` is `None` when this answer
+/// could not say.
 #[derive(Debug, Clone)]
 pub struct FetchedEmail {
     pub row: EmailRow,
     pub read: bool,
+    pub muted: Option<bool>,
 }
 
 impl FetchedEmail {
     /// [`EmailRow::from_jmap_envelope`], read when the envelope carries
-    /// `$seen`.
+    /// `$seen` and muted when it carries `$muted`.
     pub fn from_jmap_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
         Some(Self {
             read: envelope.pointer(SEEN_POINTER).is_some(),
+            muted: Some(envelope.pointer(MUTED_POINTER).is_some()),
             row: EmailRow::from_jmap_envelope(account_id, envelope)?,
         })
     }
 
     pub fn mark(&self) -> ReadMarkRow {
-        ReadMarkRow::read(self.row.id(), self.read)
+        ReadMarkRow::read(self.row.id(), self.read).with_muted(self.muted)
     }
 }
 
@@ -546,7 +576,51 @@ pub const LADDER: &[Migration] = &[
         name: "whether an email was read moves from $seen to read_marks",
         apply: |conn| Box::pin(move_seen_into_read_marks(conn)),
     },
+    Migration {
+        version: 9,
+        name: "whether an email is muted joins read_marks",
+        apply: |conn| Box::pin(add_muted_to_read_marks(conn)),
+    },
 ];
+
+/// The column is made here because a mark is written from `$muted` below,
+/// before an open adds what the DDL declares. A store that climbed rung 8
+/// in this same open has it already. An mbox is read again for its `Muted`
+/// labels, which no row kept; the Gmail API's are asked for every run, and
+/// a JMAP server's were the keyword moved here.
+async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
+    let has_column: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('read_marks') WHERE name = 'muted')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !has_column {
+        sqlx::query("ALTER TABLE read_marks ADD COLUMN muted INTEGER NULL")
+            .execute(&mut *conn)
+            .await?;
+    }
+    for sql in [
+        "UPDATE read_marks SET muted = 1
+          WHERE id IN (SELECT email_id FROM email_keywords WHERE keyword = '$muted')",
+        "DELETE FROM email_keywords WHERE keyword = '$muted'",
+        "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$muted\"')))
+          WHERE payload -> '$.keywords.\"$muted\"' IS NOT NULL",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    let has_stamps: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if has_stamps {
+        sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
+            .bind(super::mbox::READ_SCOPE)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
 
 /// Every email gets a mark, read where it had `$seen`; then `$seen` leaves
 /// the keyword rows and the payload, and `UNREAD` the Gmail label ids. The
