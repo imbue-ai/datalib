@@ -2513,7 +2513,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-
 .grid-column {
   display: flex;
   flex-direction: column;
