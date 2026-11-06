@@ -6,6 +6,7 @@
 // which CodeMirror mounts in whatever root the field is in; a chip's is
 // the host's `chip.css`.
 import { onBeforeUnmount, onMounted, useTemplateRef, watch } from "vue";
+import { startCompletion } from "@codemirror/autocomplete";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, placeholder as placeholderText } from "@codemirror/view";
 import { surface } from "@/surface";
@@ -32,6 +33,7 @@ const emit = defineEmits<{
 const host = useTemplateRef<HTMLDivElement>("host");
 const hint = new Compartment();
 let view: EditorView | null = null;
+let typed = false;
 
 onMounted(() => {
   const el = host.value;
@@ -60,12 +62,19 @@ onMounted(() => {
         EditorView.updateListener.of((u) => {
           const q = u.state.doc.toString();
           if (u.docChanged && q !== props.modelValue) emit("update:modelValue", q);
+          typed ||= u.transactions.some((t) => t.isUserEvent("input"));
         }),
       ],
     }),
   });
   if (props.autofocus) view.focus();
-  void keysOf(props.base).then((keys) => view?.dispatch({ effects: setKeys.of(keys) }));
+  void keysOf(props.base).then((keys) => {
+    if (!view) return;
+    view.dispatch({ effects: setKeys.of(keys) });
+    // The menu found no keys for what was typed while they were on their
+    // way, and asks again only on the next edit, which a paste may not have.
+    if (typed && view.hasFocus) startCompletion(view);
+  });
 });
 
 watch(

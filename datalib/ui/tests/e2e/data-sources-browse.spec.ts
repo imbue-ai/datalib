@@ -8,6 +8,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  fillConfigEditor,
   cardOf,
   expandGroup,
   type GridApi,
@@ -58,7 +59,7 @@ async function openManage(page: Page) {
 
 async function writeConfig(page: Page, text: string): Promise<void> {
   await openManage(page);
-  await page.locator(".m2-editor").fill(text);
+  await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 }
@@ -148,7 +149,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
       return kinds.length > 0 && kinds.every((k) => /^Slack /.test(k.trim()));
     })
     .toBe(true);
-  expect(await columnValues(page, "kind")).toContain("Slack Message");
+  await expect.poll(() => columnValues(page, "kind")).toContain("Slack Message");
   await expect(name).toHaveText(/ documents$/);
 
   // Slack's preset: the subject (a channel or DM) and an author, and no

@@ -131,6 +131,26 @@ test("a name picked for from: is quoted, to be matched whole", async ({ page }) 
   await expect(field(page)).toHaveAttribute("data-query", 'from:"Gemini" ');
 });
 
+/// Text put in the field before the keys arrive, as a paste is, had no
+/// menu: nothing asked again when they landed.
+test("what was typed before the keys arrived gets its menu when they do", async ({ page }) => {
+  let letKeysLand!: () => void;
+  const keysMayLand = new Promise<void>((land) => (letKeysLand = land));
+  await page.route("**/search/keys", async (route) => {
+    await keysMayLand;
+    await route.continue();
+  });
+  await page.goto(GRID);
+  await typeInto(field(page), "from:gemin");
+  await expect(field(page)).toHaveAttribute("data-query", "from:gemin");
+  // Long enough for the menu to have asked and found no keys, which shows
+  // on nothing to wait for. Too short only means this test proves less: it
+  // cannot go red on a slow machine, since the keys are then there first.
+  await page.waitForTimeout(500);
+  letKeysLand();
+  await expect(menu(page).getByText("Gemini", { exact: true })).toBeVisible();
+});
+
 /// A Tab pressed while the values for what was just typed are still on
 /// their way, as on a loaded machine, waits for them and takes the first,
 /// rather than doing nothing and moving focus away.

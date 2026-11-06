@@ -2,7 +2,13 @@
 // account row's check, and each label picker's own list.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml, row, showSignIn } from "./wizard-helpers";
-import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  fillConfigEditor,
+  expandGroup,
+  pickRowMenu,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+} from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -184,7 +190,7 @@ test.beforeEach(async ({ page, request }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });

@@ -173,6 +173,9 @@ test("a chart's hover reads the distance from T0", async ({ page, request }) => 
   });
   const { doc } = await openYolinkCharts(page, request);
   const chart = doc.locator("[data-time-series]").first();
+  // The unit is drawn with the plot that replaces the empty one when the
+  // answer arrives; a hover before that is lost with the empty plot.
+  await expect(chart.locator(".ts-unit").first()).toHaveText("°C");
   const over = chart.locator(".u-over");
   const r = await over.evaluate((el) => {
     const b = el.getBoundingClientRect();

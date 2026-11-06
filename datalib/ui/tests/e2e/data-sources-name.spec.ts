@@ -1,9 +1,11 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
+  fillConfigEditor,
+  GRID,
   savedConfig,
   nameCell,
   expandGroup,
@@ -73,9 +75,10 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
@@ -212,7 +215,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
   expect(without).not.toBe(text);
   expect(without).not.toContain("fetch-only/render_markdown");
-  await editor.fill(without);
+  await fillConfigEditor(page, without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 
@@ -259,7 +262,7 @@ test("editing a source keeps what the form has no field for", async ({ page }) =
     'group = "hand-tuned"\nfunction = "ingest"\n# pinned by hand\ncode_version = "7"\n',
   );
   expect(tuned).not.toBe(text);
-  await editor.fill(tuned);
+  await fillConfigEditor(page, tuned);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 
@@ -439,6 +442,74 @@ test("a download-only source gets its render step, and no Rendering section", as
   expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
+});
+
+/// The Sources tab, with `answer` deciding what every read of the config
+/// gets from then on. The tab is opened from the search so that the app's
+/// own first read has already passed.
+async function openSourcesWhileReading(page: Page, answer: (route: Route) => Promise<void>) {
+  await page.goto(GRID);
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
+  await page.route("**/api/config", async (r) => {
+    if (r.request().method() === "GET") await answer(r);
+    else await r.fallback();
+  });
+  await page.getByRole("treeitem", { name: "Sources", exact: true }).click();
+}
+
+async function fillInPhotos(page: Page) {
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
+  await nameField(page).fill("Photos");
+  await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
+}
+
+/// The form opened before the card had read the config: added to the text
+/// it held then, which was none, the new source became the whole file, and
+/// the id it suggested could turn out to be taken once the read landed.
+test("Add source waits for the config, and what it adds keeps the rest", async ({
+  page,
+  request,
+}) => {
+  let letReadLand!: () => void;
+  const readMayLand = new Promise<void>((land) => (letReadLand = land));
+  await openSourcesWhileReading(page, async (r) => {
+    await readMayLand;
+    await r.fallback();
+  });
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(wizard(page)).toHaveCount(0);
+  letReadLand();
+  await fillInPhotos(page);
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Photos.")).toBeVisible();
+  const saved = await savedConfig(request);
+  expect(saved).toContain('group = "photos"\nfunction = "ingest"');
+  for (const [entry] of original.matchAll(/^id = "[^"]+"$/gm)) expect(saved).toContain(entry);
+});
+
+test("Add source says so when the config cannot be read, and opens nothing", async ({
+  page,
+  request,
+}) => {
+  await openSourcesWhileReading(page, (r) => r.fulfill({ status: 500, body: "disk trouble" }));
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText(/could not be read, so nothing was changed/)).toBeVisible();
+  await expect(wizard(page)).toHaveCount(0);
+  expect(await savedConfig(request)).toBe(original);
+});
+
+test("a source submitted while the config cannot be read changes nothing", async ({
+  page,
+  request,
+}) => {
+  let reads = (r: Route) => r.fallback();
+  await openSourcesWhileReading(page, (r) => reads(r));
+  await page.getByRole("button", { name: "Add source" }).click();
+  await fillInPhotos(page);
+  reads = (r) => r.fulfill({ status: 500, body: "disk trouble" });
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText(/could not be read, so nothing was changed/)).toBeVisible();
+  expect(await savedConfig(request)).toBe(original);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {
