@@ -731,7 +731,7 @@ what grants access, and what has been measured:
 [`wizard_file_pickers.md`](wizard_file_pickers.md) §"What the picker
 buys us in macOS permissions".
 
-1. **Build and launch through `datalib/tauri/run.sh`**, which starts
+1. **Build and launch through `./run-app.sh`** at the repo root, which starts
    the `.app` with `open`. Launched that way the app answers for its
    own permissions. Run the binary from a terminal instead and macOS
    applies the terminal's permissions — if the terminal has Full Disk
@@ -747,7 +747,7 @@ buys us in macOS permissions".
    tccutil reset All com.imbue.datalib
    ```
 
-   The `run.sh` build is signed differently from a release, which may
+   The `run-app.sh` build is signed differently from a release, which may
    already keep it apart from the installed app's grants; that has not
    been confirmed, so reset rather than rely on it.
 3. **Watch it fail first.** Type the protected path into the wizard
