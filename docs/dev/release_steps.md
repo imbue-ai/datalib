@@ -155,7 +155,7 @@ anything up its chain failed, not only the jobs it names.
 
 ## The reader wheels
 
-`imbue-datalib-reader` puts [the reader module](doltlite.md#calling-the-library-directly)
+`imbue-datalib-reader` puts [a small reader module](doltlite.md#calling-the-library-directly)
 and `libdoltlite` on PyPI, so that `uv add imbue-datalib-reader` works on Linux and
 an Apple-silicon Mac.
 It has its own workflow,
@@ -193,8 +193,10 @@ It runs on a PR that touches the module, these scripts, the workflow or the
 doltlite pin, and by hand with `gh workflow run reader-wheels.yml`. On a tag, the
 script stops unless the tag is the version in `datalib/backend/Cargo.toml`.
 `//datalib/reader:reader_wheel_test` runs on every `bazel test //...`: the wheel's
-layout and `RECORD`, the same bytes from the same inputs, the module on the doc's
-page word for word, and that a wheel uses its own library whatever is on the `PATH`.
+layout and `RECORD`, the same bytes from the same inputs, and a read through the
+unpacked package. `//datalib/reader:host_wheel` is such a wheel around the host's
+library, which `python_reader_test`, `python_package_test` and
+`step_protocol_example_test` unpack and read through.
 
 To run the two scripts on a mac, for the mac wheel, and then `linux` for the
 wheels of its own architecture, whose arm64 images run natively:

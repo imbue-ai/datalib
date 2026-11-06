@@ -1,41 +1,15 @@
-# datalib_reader.py
-"""Read a doltlite store from any Python, uv's included, by calling libdoltlite:
-the one beside this file when it came from the imbue-datalib-reader wheel, else
-the one a datalib release installs, else the one in dolthub's `doltlite` wheel.
-It never imports that package: importing it is what replaces sqlite3 and, on
-macOS, restarts the interpreter."""
+"""Read a doltlite store from any Python, uv's included, by calling the libdoltlite
+the imbue-datalib-reader wheel carries beside this file."""
 
 import ctypes as c
-import importlib.util
 import os
-import shutil
 import sys
 from pathlib import Path
 from urllib.parse import quote
 
 _name = "libdoltlite.dylib" if sys.platform == "darwin" else "libdoltlite.so"
-
-
-def _find_library():
-    beside = Path(__file__).parent / _name
-    if beside.is_file():
-        return beside
-    shell = shutil.which("datalib-doltlite")
-    if shell:
-        shipped = Path(shell).resolve().parent / "lib" / _name
-        if shipped.is_file():
-            return shipped
-    wheel = importlib.util.find_spec("doltlite")  # finds it without running it
-    if wheel and wheel.origin:
-        return Path(wheel.origin).parent / "_lib" / _name
-    raise ImportError(
-        f"no {_name}: put a datalib release's datalib-doltlite on the PATH, "
-        "or pip install the doltlite version `datalib-doltlite --version` prints"
-    )
-
-
 _lib = c.CDLL(
-    str(_find_library()),
+    str(Path(__file__).parent / _name),
     mode=os.RTLD_NOW | os.RTLD_LOCAL | getattr(os, "RTLD_DEEPBIND", 0),
 )
 

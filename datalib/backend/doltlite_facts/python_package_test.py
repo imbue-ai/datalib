@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 CLI = Path(os.environ["DOLTLITE_BIN"]).resolve()
@@ -161,26 +160,16 @@ class StartingPython(unittest.TestCase):
             self.assertNotEqual(done.returncode, 0, "it read the store")
             self.assertIn("file is not a database", done.stderr)
 
-    def test_the_direct_reader_works_beside_a_shared_library_sqlite3(self) -> None:
+    def test_the_reader_works_beside_a_shared_library_sqlite3(self) -> None:
         """This host Python loads SQLite as a shared library, so the two engines
         could collide here as they cannot under python_reader_test's. The reader
-        must read and the sqlite3 module stay stock, whichever loaded first and
-        whichever library it found: the wheel's, or the one a release ships."""
-        doc = Path(os.environ["DOLTLITE_DOC"]).read_text()
-        reader = next(
-            b
-            for b in re.findall(r"```python\n(.*?)```", doc, flags=re.DOTALL)
-            if b.startswith("# datalib_reader.py")
-        )
+        must read and the sqlite3 module stay stock, whichever loaded first."""
         with tempfile.TemporaryDirectory() as tmp:
             store = str(Path(tmp) / "entities.doltlite_db")
             cli(store, "CREATE TABLE t(id TEXT PRIMARY KEY);")
-            (Path(tmp) / "datalib_reader.py").write_text(reader)
-            tree = Path(tmp) / "datalib"
-            (tree / "lib").mkdir(parents=True)
-            shutil.copy(CLI, tree / "datalib-doltlite")
-            shipped = Path(os.environ["DOLTLITE_SHIPPED_LIBRARY"]).resolve()
-            shutil.copy(shipped, tree / "lib" / shipped.name)
+            site = Path(tmp) / "site"
+            with zipfile.ZipFile(os.environ["DOLTLITE_READER_WHEEL"]) as wheel:
+                wheel.extractall(site)
             use_both = (
                 "print(datalib_reader._lib._name)\n"
                 f"with datalib_reader.Store({store!r}) as s:\n"
@@ -198,16 +187,12 @@ class StartingPython(unittest.TestCase):
             ):
                 script = Path(tmp) / name
                 script.write_text(imports + use_both)
-                for path, library in (
-                    (os.environ["PATH"], WHEEL_ROOT / "doltlite" / "_lib"),
-                    (str(tree), tree / "lib"),
-                ):
-                    done = self.run_python(str(script), PATH=path)
-                    self.assertEqual(done.returncode, 0, f"{name}: {done.stderr}")
-                    self.assertEqual(
-                        Path(done.stdout.split("\n")[0]).parent.resolve(),
-                        library.resolve(),
-                    )
+                done = self.run_python(str(script), PYTHONPATH=str(site))
+                self.assertEqual(done.returncode, 0, f"{name}: {done.stderr}")
+                self.assertEqual(
+                    Path(done.stdout.split("\n")[0]).parent.resolve(),
+                    (site / "datalib_reader").resolve(),
+                )
 
     def test_python_c_fails_on_macos_only(self) -> None:
         done = self.run_python("-c", "import doltlite")

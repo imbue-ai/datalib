@@ -43,36 +43,31 @@ sh_test(
     size = "small",
     srcs = ["python_package_test.py"],
     data = [
-        "//docs/dev:doltlite.md",
+        "//datalib/reader:host_wheel",
         "//third-party/doltlite:doltlite",
-        "//third-party/doltlite:shipped_library",
         requirement("doltlite"),
     ],
     env = {
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
-        "DOLTLITE_DOC": "$(rootpath //docs/dev:doltlite.md)",
-        "DOLTLITE_SHIPPED_LIBRARY": "$(rootpath //third-party/doltlite:shipped_library)",
+        "DOLTLITE_READER_WHEEL": "$(rootpath //datalib/reader:host_wheel)",
         "DOLTLITE_WHEEL_FILES": "$(rootpaths %s)" % requirement("doltlite"),
     },
 )
 
-# The reader docs/dev/doltlite.md tells a Python program to save, as written,
-# with the library a release ships and with the wheel's. A py_test because it
-# is the interpreter rules_python brings, the one the package cannot take
-# over, that the reader has to work under.
+# imbue-datalib-reader, from a wheel around the library a release ships. A
+# py_test because it is the interpreter rules_python brings, the one the
+# `doltlite` package cannot take over, that the reader has to work under.
 py_test(
     name = "python_reader_test",
     size = "small",
     srcs = ["python_reader_test.py"],
     args = [
         "$(rootpath //third-party/doltlite:doltlite)",
-        "$(rootpath //docs/dev:doltlite.md)",
-        "$(rootpath //third-party/doltlite:shipped_library)",
+        "$(rootpath //datalib/reader:host_wheel)",
     ],
     data = [
-        "//docs/dev:doltlite.md",
+        "//datalib/reader:host_wheel",
         "//third-party/doltlite:doltlite",
-        "//third-party/doltlite:shipped_library",
     ],
     main = "python_reader_test.py",
     deps = [requirement("doltlite")],

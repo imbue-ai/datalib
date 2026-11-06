@@ -171,8 +171,8 @@ cc_library(
 )
 
 # `libdoltlite` — the same amalgamation as a shared library, for a program
-# outside the Rust build to call: docs/dev/doltlite.md § "Reading a store
-# from Python". Compiled again rather than linked from `:sqlite3`, because
+# outside the Rust build to call: docs/dev/doltlite.md § "Calling the library
+# directly". Compiled again rather than linked from `:sqlite3`, because
 # a shared library takes from an archive only what it references, and
 # here that is nothing.
 #

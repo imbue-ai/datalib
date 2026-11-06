@@ -64,8 +64,7 @@ many can keep the store open instead, under any Python, uv's included.
 `uv add imbue-datalib-reader` installs the library, `libdoltlite`, with a short
 module that calls it.
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
-has how to use it, and how to do without installing anything. It also says when
-to `import doltlite` instead, which makes the standard `sqlite3` module run on doltlite:
+has how to use it. It also says when to `import doltlite` instead, which makes the standard `sqlite3` module run on doltlite:
 only for code that needs that module or SQLAlchemy, and not under the builds
 `uv python install` fetches.
 

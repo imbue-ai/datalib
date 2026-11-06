@@ -8,8 +8,6 @@ import base64
 import email.parser
 import hashlib
 import os
-import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,8 +24,6 @@ DOLTLITE_APACHE = Path(sys.argv[6]).resolve()
 LIBRARY = Path(sys.argv[7]).resolve()
 COPTS = Path(sys.argv[8]).resolve()
 CLI = Path(sys.argv[9]).resolve()
-DOC = Path(sys.argv[10]).resolve()
-STEP_DOC = Path(sys.argv[11]).resolve()
 
 VERSION = "1.2.3"
 
@@ -54,17 +50,6 @@ def make_wheel(out_dir: Path, target: str = "manylinux", arch: str = "x86_64") -
         text=True,
     )
     return Path(done.stdout.strip())
-
-
-class TheDoc(unittest.TestCase):
-    def test_carries_the_module_word_for_word(self) -> None:
-        """doltlite.md hands the module out too, for a program that installs nothing."""
-        blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
-        found = [b for b in blocks if b.startswith("# datalib_reader.py")]
-        self.assertEqual(found, [MODULE.read_text()])
-
-    def test_the_step_example_names_the_module(self) -> None:
-        self.assertIn("from datalib_reader import Store", STEP_DOC.read_text())
 
 
 class TheFlags(unittest.TestCase):
@@ -187,14 +172,14 @@ class Installed(unittest.TestCase):
             capture_output=True,
         )
 
-    def read(self, path: Path) -> subprocess.CompletedProcess[str]:
+    def read(self) -> subprocess.CompletedProcess[str]:
         code = (
             "import datalib_reader as r\n"
             "print(r._lib._name)\n"
             f"print(r.Store({str(self.store)!r}).query('SELECT id FROM t'))\n"
         )
         env = {
-            "PATH": str(path),
+            "PATH": str(self.dir),
             "PYTHONPATH": str(self.site),
             "TMPDIR": str(self.dir),
         }
@@ -207,24 +192,12 @@ class Installed(unittest.TestCase):
         )
 
     def test_reads_with_the_library_it_carries(self) -> None:
-        done = self.read(self.dir)
+        done = self.read()
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(
             done.stdout.splitlines(),
             [str(self.site / "datalib_reader" / LIBRARY.name), "[('a',)]"],
         )
-
-    def test_its_own_library_wins_over_a_release_install(self) -> None:
-        """A program pinned to a wheel gets that wheel's library whatever is on
-        the PATH. The library beside this shell cannot load, so a lookup that
-        reached it would fail."""
-        tree = self.dir / "datalib"
-        (tree / "lib").mkdir(parents=True)
-        shutil.copy(CLI, tree / "datalib-doltlite")
-        (tree / "lib" / LIBRARY.name).write_text("not a library")
-        done = self.read(tree)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn(str(self.site), done.stdout.splitlines()[0])
 
 
 if __name__ == "__main__":

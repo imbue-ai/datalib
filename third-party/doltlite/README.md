@@ -83,7 +83,7 @@ A version lives in **four** places and they must all move together:
 | 1 | `MODULE.bazel` → `http_archive(name = "doltlite_amalgamation")` — the library |
 | 2 | `MODULE.bazel` → `http_archive(name = "doltlite_autoconf")` — the CLI's `shell.c` |
 | 3 | `BUILD.bazel` → `DOLTLITE_VERSION` |
-| 4 | `pyproject.toml` → `doltlite==…`, the PyPI wheel the Python docs recommend; then regenerate `requirements.txt` (AGENTS.md §"Python deps") |
+| 4 | `pyproject.toml` → `doltlite==…`, dolthub's PyPI wheel, behind `import doltlite` in the Python docs; then regenerate `requirements.txt` (AGENTS.md §"Python deps") |
 
 and two files ride along: `LICENSE.md` and `APACHE_LICENSE`, upstream's
 notices at the pinned version, which every release ships under

@@ -5,15 +5,14 @@ DATALIB_DAG_FAILED_INPUTS hold; nothing ran it, so it could drift from
 the runner unnoticed.
 
 Two producer steps feed it, each a real doltlite store whose version is
-its commit, as a download's is. The example opens that commit with the
-reader in docs/dev/doltlite.md and logs the commit's message, the version
+its commit, as a download's is. The example opens that commit with
+imbue-datalib-reader and logs the commit's message, the version
 the producer was told to write. Three syncs: the first names every input
 as changed, the second only the producer that moved, and the third, where
 one producer failed, makes the example warn that it is reading a partial
 input.
 """
 
-import importlib.util
 import json
 import re
 import sqlite3
@@ -22,11 +21,12 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import zipfile
 from pathlib import Path
 
 DAG = Path(sys.argv[1]).resolve()
 DOC = Path(sys.argv[2]).resolve()
-DOLTLITE_DOC = Path(sys.argv[3]).resolve()
+READER_WHEEL = Path(sys.argv[3]).resolve()
 CLI = Path(sys.argv[4]).resolve()
 
 PRODUCER = textwrap.dedent(
@@ -64,12 +64,6 @@ def block_from_doc(doc: Path, first_line: str) -> str:
     return found[0]
 
 
-def wheel_dir() -> Path:
-    spec = importlib.util.find_spec("doltlite")
-    assert spec is not None and spec.origin is not None, "the doltlite wheel is a dep"
-    return Path(spec.origin).resolve().parent.parent
-
-
 class StepProtocolExample(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.TemporaryDirectory()
@@ -80,13 +74,13 @@ class StepProtocolExample(unittest.TestCase):
         self.control.mkdir()
         (base / "producer.py").write_text(PRODUCER)
         (base / "example.py").write_text(block_from_doc(DOC, "#!/usr/bin/env python3"))
-        (base / "datalib_reader.py").write_text(
-            block_from_doc(DOLTLITE_DOC, "# datalib_reader.py")
-        )
+        site = base / "site"
+        with zipfile.ZipFile(READER_WHEEL) as wheel:
+            wheel.extractall(site)
         py = sys.executable
         producer = f"{py} {base / 'producer.py'} {self.control} {CLI}"
-        # A step's environment is an allowlist, so the wheel goes on the command.
-        example = f"/usr/bin/env PYTHONPATH={wheel_dir()} {py} {base / 'example.py'}"
+        # A step's environment is an allowlist, so the package goes on the command.
+        example = f"/usr/bin/env PYTHONPATH={site} {py} {base / 'example.py'}"
         self.config = self.root / "config.toml"
         self.config.write_text(
             textwrap.dedent(

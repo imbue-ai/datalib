@@ -1,5 +1,4 @@
-"""The reader in docs/dev/doltlite.md § "Calling the library directly", run as
-it is written, with the pinned PyPI wheel and the library a release ships,
+"""imbue-datalib-reader, unpacked from a wheel around the library a release ships,
 against stores the pinned CLI wrote.
 
 A py_test, so it runs under rules_python's interpreter: python-build-standalone,
@@ -10,26 +9,17 @@ import hashlib
 import importlib
 import importlib.util
 import os
-import re
-import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 
 CLI = Path(sys.argv[1]).resolve()
-DOC = Path(sys.argv[2]).resolve()
-SHIPPED_LIBRARY = Path(sys.argv[3]).resolve()
-
-
-def reader_from_doc() -> str:
-    blocks = re.findall(r"```python\n(.*?)```", DOC.read_text(), flags=re.DOTALL)
-    found = [b for b in blocks if b.startswith("# datalib_reader.py")]
-    assert len(found) == 1, f"expected one reader in {DOC}, found {len(found)}"
-    return found[0]
+WHEEL = Path(sys.argv[2]).resolve()
 
 
 def wheel_dir() -> Path:
@@ -39,7 +29,8 @@ def wheel_dir() -> Path:
 
 
 READER_DIR = tempfile.TemporaryDirectory()
-(Path(READER_DIR.name) / "datalib_reader.py").write_text(reader_from_doc())
+with zipfile.ZipFile(WHEEL) as wheel_file:
+    wheel_file.extractall(READER_DIR.name)
 sys.path.insert(0, READER_DIR.name)
 reader = importlib.import_module("datalib_reader")
 
@@ -183,6 +174,11 @@ class TheReader(WithAStore):
             thread.join()
         self.assertEqual(answers, [2] * 400)
 
+    def test_its_library_is_the_build_the_shell_is(self) -> None:
+        versions = "SELECT sqlite_version() || '|' || dolt_version();"
+        with reader.Store(self.store) as store:
+            self.assertEqual(store.query(versions), [(cli(self.store, versions),)])
+
     def test_opens_a_plain_sqlite_file(self) -> None:
         plain = self.dir / "blobs.sqlite"
         with sqlite3.connect(plain) as db:
@@ -214,84 +210,6 @@ class TheReader(WithAStore):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stdout.split("\n")[:2], ["[(2,)]", "[]"])
         self.assertEqual(os.listdir(shims), [])
-
-
-class FindingTheLibrary(WithAStore):
-    """What the reader loads, in a Python with no install and no wheel unless
-    the test gives it one, as a release lays them out: `install.sh` unpacks the
-    tree and links `datalib-doltlite` from another directory."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.tree = self.dir / "datalib"
-        (self.tree / "lib").mkdir(parents=True)
-        shutil.copy(CLI, self.tree / "datalib-doltlite")
-        self.shipped = self.tree / "lib" / SHIPPED_LIBRARY.name
-        shutil.copy(SHIPPED_LIBRARY, self.shipped)
-        self.on_path = self.dir / "bin"
-        self.on_path.mkdir()
-        (self.on_path / "datalib-doltlite").symlink_to(self.tree / "datalib-doltlite")
-        self.empty = self.dir / "empty"
-        self.empty.mkdir()
-
-    def load(self, path: Path, with_wheel: bool) -> subprocess.CompletedProcess[str]:
-        code = (
-            "import datalib_reader as r\n"
-            "print(r._lib._name)\n"
-            f"print(r.Store({str(self.store)!r}).query('SELECT count(*) FROM t'))\n"
-            f"print(r.Store({str(self.store)!r}).query("
-            "'SELECT sqlite_version(), dolt_version()'))\n"
-        )
-        python_path = [READER_DIR.name]
-        if with_wheel:
-            python_path.append(str(wheel_dir()))
-        return run_python(
-            self.dir,
-            "-c",
-            code,
-            PATH=str(path),
-            PYTHONPATH=os.pathsep.join(python_path),
-        )
-
-    def assert_loaded(self, done: subprocess.CompletedProcess[str], lib: Path) -> None:
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(
-            Path(done.stdout.split("\n")[0]).resolve(), lib.resolve(), done.stdout
-        )
-        self.assertEqual(done.stdout.split("\n")[1], "[(2,)]")
-
-    def test_a_release_install_needs_no_wheel(self) -> None:
-        self.assert_loaded(self.load(self.on_path, False), self.shipped)
-
-    def test_a_release_install_wins_over_a_wheel(self) -> None:
-        self.assert_loaded(self.load(self.on_path, True), self.shipped)
-
-    def test_without_an_install_it_takes_the_wheel(self) -> None:
-        wheel = wheel_dir() / "doltlite" / "_lib" / SHIPPED_LIBRARY.name
-        self.assert_loaded(self.load(self.empty, True), wheel)
-
-    def test_a_shell_with_no_library_beside_it_takes_the_wheel(self) -> None:
-        """A musl tarball, or the desktop app."""
-        self.shipped.unlink()
-        wheel = wheel_dir() / "doltlite" / "_lib" / SHIPPED_LIBRARY.name
-        self.assert_loaded(self.load(self.on_path, True), wheel)
-
-    def test_with_neither_it_says_what_to_do(self) -> None:
-        done = self.load(self.empty, False)
-        self.assertNotEqual(done.returncode, 0)
-        self.assertIn("pip install the doltlite version", done.stderr)
-
-    def test_the_shipped_library_is_the_build_the_shell_is(self) -> None:
-        done = self.load(self.on_path, False)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        versions = cli(
-            self.dir / "versions.doltlite_db",
-            "SELECT sqlite_version() || '|' || dolt_version();",
-        )
-        sqlite_version, dolt_version = versions.split("|")
-        self.assertEqual(
-            done.stdout.split("\n")[2], repr([(sqlite_version, dolt_version)])
-        )
 
 
 if __name__ == "__main__":

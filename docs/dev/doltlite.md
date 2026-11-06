@@ -121,7 +121,8 @@ Two variants worth knowing:
 A program that runs many small queries should not start the shell for
 each one. There are two ways to keep a store open from Python:
 
-- **Call the library directly.** Reach for this one. It works under
+- **`imbue-datalib-reader`, which calls the library directly.** Reach for this
+  one. It works under
   every Python we have tried, the ones `uv python install` fetches
   included, and it restarts nothing, changes no environment variable and
   leaves no temp file.
@@ -133,8 +134,9 @@ each one. There are two ways to keep a store open from Python:
 ### Calling the library directly
 
 The engine is also a library, `libdoltlite`, with SQLite's C API, so
-`ctypes` can call it and no module has to be replaced. **Install the package
-that carries both**:
+`ctypes` can call it and no module has to be replaced. The
+**`imbue-datalib-reader`** package carries the library and a short module that
+calls it:
 
 ```sh
 uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
@@ -144,185 +146,8 @@ Wheels exist for Apple-silicon Macs on macOS 11 or later (`macosx_11_0`), and
 for Linux on x86_64 and aarch64: `manylinux_2_17` for any glibc from glibc 2.17
 on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right one. Each
 version carries the library that release's binaries were built from. There is
-no source distribution.
-
-**To install nothing, save the module below as `datalib_reader.py`**. The import
-is the same, and it finds a library in this order:
-
-1. A release install's, at `lib/libdoltlite.so` (`.dylib` on a mac) beside
-   `datalib-doltlite` in the unpacked tree, and in the docker image. It is
-   built from the source the binaries are built from, so it always matches
-   your stores and there is nothing to install. The musl tarballs and the
-   desktop app do not carry it.
-2. dolthub's **`doltlite`** package from PyPI, which carries a copy, for
-   the desktop app and for a checkout, which has the library only under
-   `bazel-bin`:
-
-   ```sh
-   pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
-   ```
-
-   Install the version your shell prints: a release that changes the
-   storage format refuses our stores. That package has wheels for macOS on
-   arm64 and for glibc Linux on x86_64 and aarch64.
-
-On an Intel mac there is neither, so use the shell:
+no source distribution, so anywhere else (an Intel Mac, say) use the shell:
 `datalib-doltlite -readonly -json`.
-
-```python
-# datalib_reader.py
-"""Read a doltlite store from any Python, uv's included, by calling libdoltlite:
-the one beside this file when it came from the imbue-datalib-reader wheel, else
-the one a datalib release installs, else the one in dolthub's `doltlite` wheel.
-It never imports that package: importing it is what replaces sqlite3 and, on
-macOS, restarts the interpreter."""
-
-import ctypes as c
-import importlib.util
-import os
-import shutil
-import sys
-from pathlib import Path
-from urllib.parse import quote
-
-_name = "libdoltlite.dylib" if sys.platform == "darwin" else "libdoltlite.so"
-
-
-def _find_library():
-    beside = Path(__file__).parent / _name
-    if beside.is_file():
-        return beside
-    shell = shutil.which("datalib-doltlite")
-    if shell:
-        shipped = Path(shell).resolve().parent / "lib" / _name
-        if shipped.is_file():
-            return shipped
-    wheel = importlib.util.find_spec("doltlite")  # finds it without running it
-    if wheel and wheel.origin:
-        return Path(wheel.origin).parent / "_lib" / _name
-    raise ImportError(
-        f"no {_name}: put a datalib release's datalib-doltlite on the PATH, "
-        "or pip install the doltlite version `datalib-doltlite --version` prints"
-    )
-
-
-_lib = c.CDLL(
-    str(_find_library()),
-    mode=os.RTLD_NOW | os.RTLD_LOCAL | getattr(os, "RTLD_DEEPBIND", 0),
-)
-
-_ptr, _int, _bytes = c.c_void_p, c.c_int, c.c_char_p
-for _fn, _res, _args in [
-    ("sqlite3_open_v2", _int, [_bytes, c.POINTER(_ptr), _int, _bytes]),
-    ("sqlite3_busy_timeout", _int, [_ptr, _int]),
-    ("sqlite3_close_v2", _int, [_ptr]),
-    ("sqlite3_errmsg", _bytes, [_ptr]),
-    ("sqlite3_prepare_v2", _int, [_ptr, _bytes, _int, c.POINTER(_ptr), _ptr]),
-    ("sqlite3_bind_null", _int, [_ptr, _int]),
-    ("sqlite3_bind_int64", _int, [_ptr, _int, c.c_int64]),
-    ("sqlite3_bind_double", _int, [_ptr, _int, c.c_double]),
-    ("sqlite3_bind_text", _int, [_ptr, _int, _bytes, _int, _ptr]),
-    ("sqlite3_bind_blob", _int, [_ptr, _int, _bytes, _int, _ptr]),
-    ("sqlite3_step", _int, [_ptr]),
-    ("sqlite3_finalize", _int, [_ptr]),
-    ("sqlite3_column_count", _int, [_ptr]),
-    ("sqlite3_column_type", _int, [_ptr, _int]),
-    ("sqlite3_column_int64", c.c_int64, [_ptr, _int]),
-    ("sqlite3_column_double", c.c_double, [_ptr, _int]),
-    ("sqlite3_column_text", _ptr, [_ptr, _int]),
-    ("sqlite3_column_blob", _ptr, [_ptr, _int]),
-    ("sqlite3_column_bytes", _int, [_ptr, _int]),
-]:
-    getattr(_lib, _fn).restype, getattr(_lib, _fn).argtypes = _res, _args
-
-_OPEN_READONLY, _OPEN_URI = 0x1, 0x40
-_ROW, _DONE = 100, 101
-_INTEGER, _FLOAT, _TEXT, _BLOB = 1, 2, 3, 4
-_COPY_THE_VALUE = _ptr(-1)  # SQLITE_TRANSIENT
-
-
-class Store:
-    """One read-only connection: `main`, or the one commit it is given. Give
-    each thread its own."""
-
-    def __init__(self, path, commit=None):
-        name = quote(str(path)) + (f"/{commit}" if commit else "")
-        self._db = _ptr()
-        rc = _lib.sqlite3_open_v2(
-            f"file:{name}?mode=ro".encode(),
-            c.byref(self._db),
-            _OPEN_READONLY | _OPEN_URI,
-            None,
-        )
-        if rc != 0:
-            message = self._error()
-            self.close()
-            raise OSError(f"{path}: {message}")
-        _lib.sqlite3_busy_timeout(self._db, 5000)  # what sqlite3.connect defaults to
-
-    def query(self, sql, *params):
-        stmt = _ptr()
-        if _lib.sqlite3_prepare_v2(self._db, sql.encode(), -1, c.byref(stmt), None):
-            raise OSError(self._error())
-        try:
-            for i, value in enumerate(params, 1):
-                self._bind(stmt, i, value)
-            rows = []
-            while (rc := _lib.sqlite3_step(stmt)) == _ROW:
-                columns = range(_lib.sqlite3_column_count(stmt))
-                rows.append(tuple(_column(stmt, i) for i in columns))
-            if rc != _DONE:
-                raise OSError(self._error())
-            return rows
-        finally:
-            _lib.sqlite3_finalize(stmt)
-
-    def close(self):
-        _lib.sqlite3_close_v2(self._db)
-        self._db = _ptr()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
-
-    def _error(self):
-        return _lib.sqlite3_errmsg(self._db).decode()
-
-    def _bind(self, stmt, i, value):
-        if value is None:
-            rc = _lib.sqlite3_bind_null(stmt, i)
-        elif isinstance(value, int):
-            rc = _lib.sqlite3_bind_int64(stmt, i, value)
-        elif isinstance(value, float):
-            rc = _lib.sqlite3_bind_double(stmt, i, value)
-        elif isinstance(value, str):
-            text = value.encode()
-            rc = _lib.sqlite3_bind_text(stmt, i, text, len(text), _COPY_THE_VALUE)
-        elif isinstance(value, bytes):
-            rc = _lib.sqlite3_bind_blob(stmt, i, value, len(value), _COPY_THE_VALUE)
-        else:
-            raise TypeError(f"cannot bind {type(value).__name__}")
-        if rc != 0:
-            raise OSError(self._error())
-
-
-def _column(stmt, i):
-    kind = _lib.sqlite3_column_type(stmt, i)
-    if kind == _INTEGER:
-        return _lib.sqlite3_column_int64(stmt, i)
-    if kind == _FLOAT:
-        return _lib.sqlite3_column_double(stmt, i)
-    if kind == _TEXT:
-        pointer = _lib.sqlite3_column_text(stmt, i)
-        return c.string_at(pointer, _lib.sqlite3_column_bytes(stmt, i)).decode()
-    if kind == _BLOB:
-        pointer = _lib.sqlite3_column_blob(stmt, i)
-        size = _lib.sqlite3_column_bytes(stmt, i)
-        return c.string_at(pointer, size) if size else b""
-    return None
-```
 
 ```python
 from datalib_reader import Store
@@ -347,29 +172,23 @@ What to know about it:
   was imported first. So `sqlite3` still cannot read a store, and a child
   process inherits nothing. The library opens plain SQLite files too,
   such as a source's `blobs.sqlite`.
-- **Installed from the wheel, it uses the library in the wheel**, whatever
-  is on the `PATH`, so a pinned version means the same engine everywhere.
-- **Saved by hand, it looks for the release's library first**, through
-  `datalib-doltlite` on the `PATH`, following the link `install.sh` made.
-  A step finds it even when the `PATH` you start from does not hold it,
-  since the runner puts its own directory on a step's `PATH`.
 - **A program that stays up across an upgrade keeps the old library.**
   If that upgrade changed the storage format, the store is refused until
   the program restarts.
-- **dolthub's wheel leans on a private layout**, its `_lib/` directory.
-  The module cannot ask that package for the path: importing anything under
-  `doltlite` runs the bootstrap described below. Our own wheel has no such
-  dependency.
 
-`//datalib/backend/doltlite_facts:python_reader_test` runs this code as
-it is written here, with both libraries, under the Python build uv
-fetches (python-build-standalone, which `rules_python` brings too), on
-CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
+**From another language**, call the library a release install carries, at
+`lib/libdoltlite.so` (`.dylib` on a mac) beside `datalib-doltlite` in the unpacked
+tree, and in the docker image. The musl tarballs and the desktop app do not carry
+it. [`datalib_reader.py`](/datalib/reader/datalib_reader.py) shows which calls a
+reader needs.
+
+`//datalib/backend/doltlite_facts:python_reader_test` runs the package under the
+Python build uv fetches (python-build-standalone, which `rules_python` brings
+too), on CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
 host's `python3`, which loads SQLite as a shared library.
-`//datalib/reader:reader_wheel_test` holds this text to the file the wheel
-is built from, and `scripts/release/check_reader_wheels.sh` installs the
-wheels on glibc 2.17, a current Debian, Alpine and a Mac, with `pip` and with
-`uv` ([`release_steps.md`](release_steps.md) §"The reader wheels").
+`scripts/release/check_reader_wheels.sh` installs the wheels themselves on glibc
+2.17, a current Debian, Alpine and a Mac, with `pip` and with `uv`
+([`release_steps.md`](release_steps.md) §"The reader wheels").
 
 Measured on a mac against real stores: a lookup by primary key on an open
 connection took about 0.01 ms. The same lookup cost about 15 ms when each
@@ -1289,8 +1108,8 @@ cause (network timeout, panic, OOM, etc.).
   pools"). The CLI takes no such lock, so a writable CLI session is
   exactly the second writer that rule exists to keep out.
 - **For routine reads from app code.** Open the file via `sqlx` like
-  everything else in the backend, or from Python through the library in
-  the `doltlite` wheel ([Reading a store from Python](#reading-a-store-from-python));
+  everything else in the backend, or from Python through
+  `imbue-datalib-reader` ([Reading a store from Python](#reading-a-store-from-python));
   the CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /
