@@ -76,6 +76,7 @@ rust_test(
     name = "protected_test",
     size = "small",
     srcs = ["src/protected.rs"],
+    compile_data = ["tauri.conf.json"],
     crate_root = "src/protected.rs",
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
