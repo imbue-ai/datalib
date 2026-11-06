@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  alignedAnswer,
+  alignedSpan,
   bandOf,
   axisTicks,
   columnsOf,
@@ -18,9 +20,9 @@ import {
   nearest,
   newestMs,
   niceTicks,
-  rangeBounds,
   refusal,
   toMs,
+  unalignedSpan,
   unitText,
   type Answered,
   type Listed,
@@ -189,15 +191,10 @@ describe("line labels", () => {
 });
 
 describe("ranges", () => {
-  it("end at the newest point picked, and All has no bounds", () => {
+  it("end at the newest point picked", () => {
     const day = listed({ time_kind: "day", last_t: 10 });
     const instant = listed({ time_kind: "instant", last_t: 5 * 86_400_000 });
     expect(newestMs([day, instant])).toBe(10 * 86_400_000);
-    expect(rangeBounds("30d", 100 * 86_400_000)).toEqual({
-      fromMs: 70 * 86_400_000,
-      toMs: 100 * 86_400_000,
-    });
-    expect(rangeBounds("all", 1)).toBeNull();
   });
 });
 
@@ -290,10 +287,78 @@ describe("scales", () => {
 });
 
 describe("the card's state", () => {
-  it("round-trips the picks and the range, and is empty when pristine", () => {
-    expect(encodeState([], "90d")).toBe("");
-    const s = encodeState(["a", "b"], "1y");
-    expect(decodeState(s)).toEqual({ ids: ["a", "b"], range: "1y" });
-    expect(decodeState("range=bogus")).toEqual({ ids: [], range: "90d" });
+  it("round-trips the picks, the range and alignment", () => {
+    expect(encodeState({ ids: [], range: "all", aligned: false })).toBe("range=all");
+    const s = encodeState({ ids: ["a", "b"], range: "1y", aligned: true });
+    expect(decodeState(s)).toEqual({ ids: ["a", "b"], range: "1y", aligned: true });
+  });
+
+  it("opens a new card on all of it", () => {
+    expect(decodeState("")).toEqual({ ids: [], range: "all", aligned: false });
+  });
+
+  /** A layout saved before alignment existed has no `align` and opens on clock time. */
+  it("reads a state string from before alignment as not aligned", () => {
+    expect(decodeState("ids=a&range=30d")).toEqual({ ids: ["a"], range: "30d", aligned: false });
+  });
+
+  /** Until all became the default, a state left the window out when it
+   *  was 90 days; such a layout must still open on 90 days. */
+  it("reads a saved state with no window as the 90 days it meant", () => {
+    expect(decodeState("ids=a")).toEqual({ ids: ["a"], range: "90d", aligned: false });
+  });
+});
+
+describe("aligned starts", () => {
+  const MIN = 60_000;
+  const tuesday = Date.parse("2369-04-14T07:00:00Z");
+  const saturday = Date.parse("2369-04-18T09:30:00Z");
+  const run = (id: string, start: number, minutes: number) =>
+    listed({
+      time_series_id: id,
+      time_kind: "instant",
+      first_t: start,
+      last_t: start + minutes * MIN,
+    });
+
+  it("span from 0 to the end of the longest run", () => {
+    expect(alignedSpan([run("a", tuesday, 30), run("b", saturday, 42)])).toEqual({
+      fromMs: 0,
+      toMs: 42 * MIN,
+    });
+    expect(alignedSpan([listed({ first_t: null, last_t: null })])).toBeNull();
+  });
+
+  it("ask each run for its own stretch of the clock", () => {
+    const span = { fromMs: 5 * MIN, toMs: 10 * MIN };
+    expect(unalignedSpan(run("b", saturday, 42), span)).toEqual({
+      fromMs: saturday + 5 * MIN,
+      toMs: saturday + 10 * MIN,
+    });
+  });
+
+  /** Two runs days apart must land on one axis at the same minute, not four days apart. */
+  it("put two runs on different days at the same time since their start", () => {
+    const answer = (start: number): Answered => ({
+      ...run(String(start), start, 30),
+      kind: "raw",
+      points: [
+        { t: start, value: 90, text: null },
+        { t: start + 10 * MIN, value: 150, text: null },
+      ],
+    });
+    const xs = (a: Answered) => lineOf(alignedAnswer(a)).map((p) => p.x);
+    expect(xs(answer(tuesday))).toEqual([0, 10 * MIN]);
+    expect(xs(answer(saturday))).toEqual([0, 10 * MIN]);
+  });
+
+  it("move buckets and day series too", () => {
+    const days: Answered = {
+      ...listed({ first_t: 20_000, last_t: 20_010 }),
+      kind: "buckets",
+      width: 1,
+      buckets: [{ t: 20_002, min: 1, max: 3, mean: 2, count: 2 }],
+    };
+    expect(lineOf(alignedAnswer(days)).map((p) => p.x)).toEqual([2 * 86_400_000]);
   });
 });

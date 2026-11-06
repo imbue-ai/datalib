@@ -5,6 +5,7 @@
 // it has already read (docs/dev/time_series.md).
 
 import { UTC, timeView, wallClock } from "@/config/timeView";
+import { DEFAULT_WINDOW, UNSAID_WINDOW } from "./timeWindow";
 
 export const TIME_SERIES_APPLET = "/applet/unified_time_series_index";
 
@@ -57,31 +58,54 @@ export function fromMs(kind: TimeKind, ms: number): number {
   return kind === "day" ? Math.floor(ms / DAY_MS) : Math.round(ms);
 }
 
-export type RangeKey = "30d" | "90d" | "1y" | "all";
-
-export const RANGES: { key: RangeKey; label: string; days: number | null }[] = [
-  { key: "30d", label: "30 d", days: 30 },
-  { key: "90d", label: "90 d", days: 90 },
-  { key: "1y", label: "1 y", days: 365 },
-  { key: "all", label: "All", days: null },
-];
-
-/// The span a range shows, ending at the newest point of what is picked;
-/// null for all of it.
-export function rangeBounds(
-  key: RangeKey,
-  newestMs: number,
-): { fromMs: number; toMs: number } | null {
-  const days = RANGES.find((r) => r.key === key)?.days ?? null;
-  if (days === null) return null;
-  return { fromMs: newestMs - days * DAY_MS, toMs: newestMs };
-}
-
 /// The newest point any of `picked` holds, in milliseconds; null when
 /// none holds one.
 export function newestMs(picked: Listed[]): number | null {
   const all = picked.flatMap((p) => (p.last_t === null ? [] : [toMs(p.time_kind, p.last_t)]));
   return all.length ? Math.max(...all) : null;
+}
+
+/// With its start aligned, a time series is drawn against the time since
+/// its own first point, so two runs on different days start together at
+/// 0. Every time on such a chart is a distance from 0 in milliseconds.
+
+/// The span an aligned chart covers: from 0 to the end of the longest
+/// time series picked; null when none holds a point.
+export function alignedSpan(picked: Listed[]): { fromMs: number; toMs: number } | null {
+  const lengths = picked.flatMap((p) =>
+    p.first_t === null || p.last_t === null
+      ? []
+      : [toMs(p.time_kind, p.last_t) - toMs(p.time_kind, p.first_t)],
+  );
+  return lengths.length ? { fromMs: 0, toMs: Math.max(...lengths) } : null;
+}
+
+/// The span, in `p`'s own time, that an aligned `span` covers of it.
+export function unalignedSpan(
+  p: Listed,
+  span: { fromMs: number; toMs: number },
+): { fromMs: number; toMs: number } {
+  const start = toMs(p.time_kind, p.first_t ?? 0);
+  return { fromMs: start + span.fromMs, toMs: start + span.toMs };
+}
+
+/// `a` with every point moved back by its first point's time, so its
+/// line starts at 0.
+export function alignedAnswer(a: Answered): Answered {
+  const d = a.first_t ?? 0;
+  const moved = {
+    ...a,
+    first_t: a.first_t === null ? null : 0,
+    last_t: a.last_t === null ? null : a.last_t - d,
+  };
+  return a.kind === "raw"
+    ? { ...moved, kind: "raw", points: a.points.map((p) => ({ ...p, t: p.t - d })) }
+    : {
+        ...moved,
+        kind: "buckets",
+        width: a.width,
+        buckets: a.buckets.map((b) => ({ ...b, t: b.t - d })),
+      };
 }
 
 /// How an axis shows a value: `label` is the unit it is shown in, and a
@@ -382,19 +406,26 @@ export function nearest(line: XY[], x: number, within = Infinity): XY | null {
   return best && Math.abs(best.x - x) <= within ? best : null;
 }
 
-/// The card's state string: the picked ids in order, and the range.
-export function encodeState(ids: string[], range: RangeKey): string {
+/// `range` is the time window as `storedText` writes it (timeWindow.ts);
+/// the card reads one it cannot parse as the default.
+export type CardState = { ids: string[]; range: string; aligned: boolean };
+
+/// The card's state string: the picked ids in order, the time window,
+/// always, and whether starts are aligned.
+export function encodeState({ ids, range, aligned }: CardState): string {
   const q = new URLSearchParams();
   if (ids.length) q.set("ids", ids.join(","));
-  if (range !== "90d") q.set("range", range);
+  q.set("range", range);
+  if (aligned) q.set("align", "start");
   return q.toString();
 }
 
-export function decodeState(state: string): { ids: string[]; range: RangeKey } {
+export function decodeState(state: string): CardState {
   const q = new URLSearchParams(state);
   const range = q.get("range");
   return {
     ids: (q.get("ids") ?? "").split(",").filter(Boolean),
-    range: RANGES.some((r) => r.key === range) ? (range as RangeKey) : "90d",
+    range: range || (state ? UNSAID_WINDOW : DEFAULT_WINDOW),
+    aligned: q.get("align") === "start",
   };
 }

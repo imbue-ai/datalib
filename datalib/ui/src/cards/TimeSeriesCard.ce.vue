@@ -6,23 +6,31 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { subscribeLive } from "@/live";
 import {
-  RANGES,
+  alignedSpan,
   decodeState,
   emptyListNote,
   encodeState,
   grouped,
   newestMs,
-  rangeBounds,
   refusal,
   toMs,
   unitText,
   type Answered,
   type Listed,
-  type RangeKey,
 } from "./timeSeries";
-import { fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
+import { fetchAlignedPoints, fetchPoints, fetchTimeSeries } from "./timeSeriesApi";
 import { seriesColor } from "./plot/plot";
 import TimeSeriesChart from "./TimeSeriesChart.vue";
+import TimeWindowPicker from "./TimeWindowPicker.ce.vue";
+import {
+  DEFAULT_WINDOW,
+  alignedWindowSpan,
+  parseWindow,
+  storedText,
+  windowSpan,
+  type TimeWindow,
+} from "./timeWindow";
+import { UTC } from "@/config/timeView";
 import EntityChip from "./EntityChip.ce.vue";
 import { uriFromEntity } from "./chipLinks";
 import type { CardCtx } from "./types";
@@ -43,13 +51,28 @@ every point. Hover the chart to read each line's value at that time.</p>
 show it alone, and again to show them all. Drag across the chart to zoom
 in, which reads that stretch again in finer detail; double-click the
 chart to go back.</p>
+<p>The box at the top right is the time window. Focus it for a list of
+windows, or type one and press Enter: a duration such as <code>15m</code>,
+<code>6h</code>, <code>7d</code> or <code>1y</code> (the stretch ending at the newest
+point picked), <code>all</code>, or two dates such as <code>2369-04-14 07:00 to
+2369-04-14 09:00</code>, read in the clock's time zone. A bare date is its
+whole day.</p>
+<p><b>Align starts</b> draws each line against the time since its own
+first point, so two runs on different days start together at 0 and the
+axis reads time since start. A duration is then the first that much of
+each line; two dates do not apply, and each line is drawn whole.</p>
 `);
 
 const restored = decodeState(props.ctx.initialState);
 const listed = ref<Listed[] | null>([]);
 const all = computed(() => listed.value ?? []);
 const ids = ref<string[]>(restored.ids);
-const range = ref<RangeKey>(restored.range);
+/// A state string is stored in UTC (`storedText`), so it reads the same
+/// whatever the clock's zone; one this build cannot read is the default.
+const shownWindow = ref<TimeWindow>(
+  parseWindow(restored.range, UTC) ?? parseWindow(DEFAULT_WINDOW, UTC)!,
+);
+const aligned = ref(restored.aligned);
 const filter = ref("");
 const answered = ref<Map<string, Answered>>(new Map());
 const error = ref<string | null>(null);
@@ -67,10 +90,41 @@ const picked = computed(() =>
   }),
 );
 const groups = computed(() => grouped(all.value, filter.value));
+
+/// The documents whose time series are unfolded in the list, by uuid. A
+/// pick unfolds its document and taking it off folds nothing; only the
+/// person folds a document.
+const unfolded = ref(new Set<string>());
+watch(
+  [picked],
+  () => {
+    const add = picked.value.flatMap((p) =>
+      p.about_uuid && !unfolded.value.has(p.about_uuid) ? [p.about_uuid] : [],
+    );
+    if (add.length) unfolded.value = new Set([...unfolded.value, ...add]);
+  },
+  { immediate: true },
+);
+/// A filter unfolds every document it matches, without touching what the
+/// person unfolded.
+const isUnfolded = (uuid: string) => filter.value.trim() !== "" || unfolded.value.has(uuid);
+
+/// The `toggle` event fires for our own changes to `open` too; only one
+/// that disagrees with `isUnfolded` was the person's click.
+function onFold(uuid: string, e: Event) {
+  const open = (e.target as HTMLDetailsElement).open;
+  if (open === isUnfolded(uuid)) return;
+  const next = new Set(unfolded.value);
+  if (open) next.add(uuid);
+  else next.delete(uuid);
+  unfolded.value = next;
+}
 const colorOf = (id: string) => seriesColor(Math.max(0, ids.value.indexOf(id)));
 
 function persist() {
-  props.ctx.host.setState(encodeState(ids.value, range.value));
+  props.ctx.host.setState(
+    encodeState({ ids: ids.value, range: storedText(shownWindow.value), aligned: aligned.value }),
+  );
 }
 
 function toggle(s: Listed) {
@@ -88,8 +142,20 @@ function toggle(s: Listed) {
   persist();
 }
 
-function pickRange(key: RangeKey) {
-  range.value = key;
+function pickWindow(w: TimeWindow) {
+  shownWindow.value = w;
+  persist();
+}
+
+/// Why the window box's window is not what the chart shows, or null.
+const windowNote = computed(() =>
+  aligned.value && shownWindow.value.kind === "between"
+    ? "Two dates do not apply while starts are aligned; each line is drawn whole."
+    : null,
+);
+
+function toggleAligned() {
+  aligned.value = !aligned.value;
   persist();
 }
 
@@ -110,12 +176,18 @@ async function loadList() {
   }
 }
 
-/// What the chart spans, in milliseconds: the range ending at the newest
-/// point picked, else everything the picked time series hold.
+/// What the chart spans, in milliseconds: with starts aligned, from 0 to
+/// the window's length or the end of the longest line; else the window,
+/// a duration ending at the newest point picked, or everything the
+/// picked time series hold.
 const span = computed<{ fromMs: number; toMs: number } | null>(() => {
+  if (aligned.value) {
+    const whole = alignedSpan(picked.value);
+    return whole && alignedWindowSpan(shownWindow.value, whole.toMs);
+  }
   const newest = newestMs(picked.value);
   if (newest === null) return null;
-  const bounded = rangeBounds(range.value, newest);
+  const bounded = windowSpan(shownWindow.value, newest);
   if (bounded) return bounded;
   const firsts = picked.value.flatMap((p) =>
     p.first_t === null ? [] : [toMs(p.time_kind, p.first_t)],
@@ -132,7 +204,8 @@ async function loadPoints() {
     return;
   }
   try {
-    const got = await fetchPoints(picked.value, s, Math.max(50, Math.round(chartWidth.value)));
+    const ask = aligned.value ? fetchAlignedPoints : fetchPoints;
+    const got = await ask(picked.value, s, Math.max(50, Math.round(chartWidth.value)));
     if (mine !== pointsAsked) return;
     answered.value = got.answered;
     error.value = got.unreadable.length
@@ -153,7 +226,7 @@ function schedulePoints() {
   if (pointsTimer) clearTimeout(pointsTimer);
   pointsTimer = setTimeout(() => void loadPoints(), 120);
 }
-watch([ids, range, () => Math.round(chartWidth.value / 50), all], schedulePoints);
+watch([ids, shownWindow, aligned, () => Math.round(chartWidth.value / 50), all], schedulePoints);
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -227,7 +300,8 @@ onBeforeUnmount(() => {
             v-for="a in g.abouts"
             :key="a.uuid"
             class="ts-about"
-            :open="filter.trim() !== '' || a.items.some((s) => ids.includes(s.time_series_id))"
+            :open="isUnfolded(a.uuid)"
+            @toggle="onFold(a.uuid, $event)"
           >
             <summary class="ts-about-name">{{ a.name }} · {{ a.items.length }}</summary>
             <label
@@ -263,25 +337,27 @@ onBeforeUnmount(() => {
             ? "Drag across the chart to zoom; double-click to go back."
             : "Tick a time series to draw it."
         }}</span>
-        <div role="group" aria-label="Range" class="ts-ranges">
+        <div class="ts-controls">
           <button
-            v-for="r in RANGES"
-            :key="r.key"
             type="button"
             class="ts-range"
-            :aria-pressed="range === r.key"
-            @click="pickRange(r.key)"
+            :aria-pressed="aligned"
+            title="Draw each line from its own start, so they all begin at 0"
+            @click="toggleAligned"
           >
-            {{ r.label }}
+            Align starts
           </button>
+          <TimeWindowPicker :window="shownWindow" @pick="pickWindow" />
         </div>
       </div>
+      <div v-if="windowNote" class="ts-notice">{{ windowNote }}</div>
       <div v-if="notice" class="ts-notice">{{ notice }}</div>
       <div v-if="error" class="ts-error">{{ error }}</div>
       <TimeSeriesChart
         :picked="picked"
         :answered="answered"
         :span="span"
+        :aligned="aligned"
         :color-of="colorOf"
         :remove="(id) => toggle(byId.get(id)!)"
         @resize="(w) => (chartWidth = w)"
@@ -406,9 +482,14 @@ onBeforeUnmount(() => {
 .ts-hint {
   flex: 1 1 auto;
 }
-.ts-ranges {
+/* Align starts and the window box stay together on one line, at the
+   right; the hint wraps above them when the card is narrow. */
+.ts-controls {
   display: flex;
-  gap: 0.25rem;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  margin-left: auto;
 }
 .ts-range {
   font: inherit;
