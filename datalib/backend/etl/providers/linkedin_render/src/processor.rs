@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
 use datalib_etl_render::inputs::{Buckets, Input, RawRange};
-use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
+use datalib_etl_render::not_read::{self, tables_not_read, tables_not_read_row};
+use datalib_etl_render::processor::{
+    plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
+};
 use std::path::Path;
 
 /// Render wave: always present (renders whatever is in the raw store).
@@ -92,6 +95,14 @@ impl SourceRender for LinkedinRender {
         let posts = crate::posts::render_posts(&source, ctx.progress, &mut on_doc)
             .context("linkedin posts render")?;
 
+        let not_read: Vec<_> = tables_not_read_row(
+            ctx.name,
+            &tables_the_render_skips(&source)?,
+            crate::render::RENDER_VERSION,
+        )
+        .into_iter()
+        .collect();
+        ctx.report_entity_problems(&ReadScope::Whole(vec![not_read::SCOPE]), &not_read)?;
         // Each feed names the buckets it looked at, with nothing, and then
         // the ones it rendered, with what they read — in that order, so a
         // bucket that no feed rendered ends declared with nothing and its
@@ -112,4 +123,33 @@ impl SourceRender for LinkedinRender {
         }
         Ok("rendered".into())
     }
+}
+
+/// The stored tables no feed here reads, with their rows.
+fn tables_the_render_skips(source: &Source<'_>) -> Result<Vec<(String, i64)>> {
+    let db_path = datalib_etl_linkedin::ingest::db_path_for(source.raw_dir);
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let Some(db) =
+                datalib_etl_linkedin::ingest::RawDb::open_reader(&db_path, source.range.pin)
+                    .await?
+            else {
+                return Ok(Vec::new());
+            };
+            let mut read = datalib_etl_linkedin::ingest::schema_raw::message_tables();
+            read.extend([
+                "email_addresses",
+                "profile",
+                "connections",
+                "shares",
+                "comments",
+            ]);
+            let found = tables_not_read(db.pool(), &read).await;
+            db.close().await;
+            found
+        })
+    })
 }

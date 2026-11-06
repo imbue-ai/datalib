@@ -57,7 +57,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
 /// v18: whether an email is unread comes from its read mark, and every
 ///     thread declares the marks it reads.
-pub const RENDER_VERSION: u32 = 18;
+/// v19: an email attached to an email is listed among the attachments.
+pub const RENDER_VERSION: u32 = 19;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the

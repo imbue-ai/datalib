@@ -49,7 +49,8 @@ use datalib_schema::providers::Provider;
 ///     and one the store lacks is a `blob_missing` problem.
 /// v14: the owner's address is marked as the account's own on their
 ///     posts, so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: the tables no feed reads are counted on record.
+pub const RENDER_VERSION: u32 = 15;
 
 fn profile() -> RenderProfile {
     RenderProfile {

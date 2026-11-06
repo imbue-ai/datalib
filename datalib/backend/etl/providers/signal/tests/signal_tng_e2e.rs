@@ -554,6 +554,53 @@ fn write_frames_at(
 /// to say so. An attachment the backup holds no bytes for had no edge
 /// and no row, though the summary's doc said it was counted.
 #[tokio::test(flavor = "multi_thread")]
+async fn what_no_page_shows_is_one_row_with_counts() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let crew = [
+        recipient_self(1, "Jean-Luc Picard"),
+        recipient_contact(2, "Will Riker", 17015550101),
+        chat_frame(100, 2),
+    ];
+    let mut frames = crew.to_vec();
+    frames.push(chat_item(100, 2, 12442118460000, "Engage", false));
+    write_frames(&snapshots, "signal-backup-2364-04-09-12-00-00", &frames)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    assert_eq!(problems(&store).await?, Vec::<(String, String)>::new());
+
+    let mut reacted = chat_item(100, 2, 12442118470000, "Make it so", false);
+    if let Some(backup::frame::Item::ChatItem(item)) = &mut reacted.item {
+        if let Some(backup::chat_item::Item::StandardMessage(m)) = &mut item.item {
+            m.reactions = vec![backup::Reaction::default(), backup::Reaction::default()];
+        }
+    }
+    let mut sticker = chat_item(100, 2, 12442118480000, "", false);
+    if let Some(backup::frame::Item::ChatItem(item)) = &mut sticker.item {
+        item.item = Some(backup::chat_item::Item::StickerMessage(
+            backup::StickerMessage::default(),
+        ));
+    }
+    frames.push(reacted);
+    frames.push(sticker);
+    write_frames(&snapshots, "signal-backup-2364-04-10-12-00-00", &frames)?;
+    fetch_once(&snapshots, &store, &cache).await?;
+    let rows = problems(&store).await?;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].0.starts_with("skipped:not_shown:"), "{rows:?}");
+    assert_eq!(rows[0].1, "warning");
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let said: String = sqlx::query_scalar("SELECT sample FROM problems")
+        .fetch_one(db.pool())
+        .await?;
+    db.close().await;
+    assert!(said.ends_with("reactions: 2, stickers: 1"), "{said}");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn what_a_backup_does_not_hold_is_a_problem() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let snapshots = tmp.path().join("snapshots");

@@ -15,6 +15,7 @@ pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
+pub mod not_read;
 pub mod pages;
 pub mod photo;
 pub mod processor;

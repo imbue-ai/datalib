@@ -193,8 +193,19 @@ FACEBOOK_GROUP_LEFT_SINCE = (
     "|0b754b28-2000-83b2-9916-69a95bb3c612"
     "|title|noted|a group post whose group the membership file does not name"
 )
-PDFS_WITH_NO_TEXT = (
-    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
+# Tables each export holds that no feed reads, one row a source.
+FACEBOOK_TABLES_NOT_READ = (
+    "0062f189-273d-5e65-99f6-8209086dad23|warning|render|entity|unrendered_tables:all|||"
+    "deliberate_loss|Stored and not searchable, 3 rows in table(s): "
+    "ads_information_story_views_in_past_7_days, "
+    "logged_information_search_your_search_history, "
+    "your_facebook_activity_posts_your_videos"
+)
+LINKEDIN_TABLES_NOT_READ = (
+    "01d8f641-ba65-5430-9cd4-67c6aae0387d|warning|render|entity|unrendered_tables:all|||"
+    "deliberate_loss|Stored and not searchable, 3 rows in table(s): skills"
+)
+PDFS_WITH_NO_TEXT = (    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
     "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
     "2 PDFs are not searchable, with no text we can read (no OCR yet, or fonts "
     "that do not decode). One is holodeck/scanned_blueprint.pdf"
@@ -312,8 +323,10 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "linkedin": [LINKEDIN_TABLES_NOT_READ],
     "facebook": sorted(
         [
+            FACEBOOK_TABLES_NOT_READ,
             FACEBOOK_VIDEO_NOT_IN_EXPORT,
             FACEBOOK_CALL_DURATION_UNREAD,
             FACEBOOK_SENDER_WHO_LEFT,

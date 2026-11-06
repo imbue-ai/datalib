@@ -142,6 +142,13 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         .unwrap()
         .expect("committed");
     let listing = store::load(&db, RawRange::cold()).await.unwrap();
+    // The Sheet renders nothing, and that is on record, as one row.
+    let row = listing.not_docs_row("drive", 1).unwrap();
+    assert_eq!(row.scope_key, "unrendered_files:all");
+    assert_eq!(
+        row.sample,
+        "Not Google Docs, so not searchable: 1 spreadsheet"
+    );
     assert_eq!(
         listing.docs.keys().collect::<Vec<_>>(),
         vec![DOC],
