@@ -78,14 +78,21 @@ class TheFlags(unittest.TestCase):
 
 
 class TheWheel(unittest.TestCase):
-    def setUp(self) -> None:
+    """One wheel for every test here: each takes seconds on a busy machine."""
+
+    dist_info = f"imbue_datalib_reader-{VERSION}.dist-info"
+    dir: Path
+    wheel: Path
+    zip: zipfile.ZipFile
+
+    @classmethod
+    def setUpClass(cls) -> None:
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = Path(tmp.name)
-        self.wheel = make_wheel(self.dir)
-        self.zip = zipfile.ZipFile(self.wheel)
-        self.addCleanup(self.zip.close)
-        self.dist_info = f"imbue_datalib_reader-{VERSION}.dist-info"
+        cls.addClassCleanup(tmp.cleanup)
+        cls.dir = Path(tmp.name)
+        cls.wheel = make_wheel(cls.dir)
+        cls.zip = zipfile.ZipFile(cls.wheel)
+        cls.addClassCleanup(cls.zip.close)
 
     def test_is_named_for_both_spellings_of_the_glibc_floor(self) -> None:
         self.assertEqual(

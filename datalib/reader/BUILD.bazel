@@ -15,9 +15,11 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# medium: it zips a 4 MB library and starts Python and the shell many times, 19s
+# of a small test's 60s on a loaded mac.
 py_test(
     name = "reader_wheel_test",
-    size = "small",
+    size = "medium",
     srcs = ["reader_wheel_test.py"],
     args = [
         "$(rootpath //:scripts/release/make_reader_wheel.py)",
