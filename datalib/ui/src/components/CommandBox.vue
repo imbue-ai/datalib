@@ -20,18 +20,17 @@ const panelOpen = ref(false);
 
 /// A search asked for with no card on screen to run it, until one shows.
 let waiting: string | null = null;
-/// What the cards last gave the box, or what it last asked of one.
-let shown = "";
 function run(q: string) {
   const card = activeSearch.value;
   if (card) card.run(q);
   else {
     waiting = q;
-    shown = draft.value;
     showCard(SEARCH_CARD);
   }
 }
 
+/// What the cards last gave the box.
+let shown = "";
 watch(
   [activeSearch, () => activeSearch.value?.query.value],
   ([card], [before]) => {
