@@ -2471,10 +2471,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.qmd-summary {
-  opacity: 0.75;
-  cursor: help;
-}
 
 .grid-column {
   display: flex;
