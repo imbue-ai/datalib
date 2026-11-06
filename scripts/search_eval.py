@@ -9,10 +9,12 @@ each answer took, and prints the scores; `compare` says which queries moved
 between two runs; `show` prints what a query found, for judging the rest of
 the list by eye. `--modes app` instead sends each query the way the app does,
 every request at once, and times what a person waits for: run it on its own,
-since each answer leaves the others cached.
+since each answer leaves the others cached. `first-pages` times the eval set's
+`orderings`, searches that sort many rows no index helps with, and checks the
+rows really come in that order.
 
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
-"queries": [{"q", "style"}]}]}. A row counts as the target when it is the
+"queries": [{"q", "style"}]}], "orderings": [{"q", "sort"}]}. A row counts as the target when it is the
 target or another row of the same document (same `markdown_uuid`), since a
 search answers with the message it landed on. An optional "tz" (an IANA
 zone) is the zone the applet runs in, so a bare date in a query
@@ -361,6 +363,146 @@ def run(args: argparse.Namespace) -> None:
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
+
+
+# The field of a row each sortable column shows, and how to read it.
+def as_stamp(value: Any) -> datetime.datetime:
+    stamp = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=datetime.timezone.utc)
+
+
+SORT_FIELDS: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    "touched_at": ("touched_at", as_stamp),
+    "created_at": ("created_at", as_stamp),
+    "modified_at": ("modified_at", as_stamp),
+    "byte_size": ("byte_size", int),
+    "item_count": ("item_count", int),
+    "author_ref": ("author", lambda v: str(v).lower()),
+    "subject_ref": ("conversation_name", lambda v: str(v).lower()),
+    "kind": ("kind", lambda v: str(v).lower()),
+}
+
+
+def out_of_order(rows: list[dict[str, Any]], sort: str) -> str | None:
+    """What breaks the order `sort`'s first column promises across `rows`, or
+    None: a value on the wrong side of the one before, or a value after a blank,
+    since a row with nothing to sort by comes last whichever way it runs. A
+    column a row cannot show is not checked."""
+    column, _, direction = sort.split(",")[0].partition(":")
+    if column not in SORT_FIELDS:
+        return None
+    field, read = SORT_FIELDS[column]
+    previous: Any = None
+    blank_at: int | None = None
+    for i, row in enumerate(rows):
+        value = row.get(field)
+        if value in (None, ""):
+            blank_at = i if blank_at is None else blank_at
+            continue
+        if blank_at is not None:
+            return f"row {i} has a value after the blank at row {blank_at}"
+        shown = read(value)
+        if previous is not None and (
+            shown > previous if direction == "desc" else shown < previous
+        ):
+            return f"row {i} is on the wrong side of row {i - 1}"
+        previous = shown
+    return None
+
+
+def ordered_page(
+    get: Callable[[str], Any], q: str, sort: str, offset: int = 0
+) -> tuple[dict[str, Any], int]:
+    params = {"q": q, "sort": sort, "limit": str(APP_PAGE), "offset": str(offset)}
+    started = time.perf_counter()
+    answer = get("/search?" + urllib.parse.urlencode(params))
+    return answer, ms_since(started)
+
+
+def first_pages(args: argparse.Namespace) -> None:
+    """Each ordering's first page as a person waits for it, the search not yet
+    asked since the applet started; the next page, which should only slice what
+    that listed; and the first page again. Keeps counts and times, never rows."""
+    evals = json.loads(Path(args.evals).read_text())
+    orderings = evals.get("orderings")
+    if not orderings:
+        raise SystemExit(f"{args.evals} has no `orderings`")
+    root = Path(args.root).expanduser()
+    made = provenance(args, evals.get("tz"))
+    server = connect(args, root, evals.get("tz"))
+    results: list[dict[str, Any]] = []
+    try:
+        # Kept apart: the first request of all pays for opening the index.
+        _, opening_ms = ordered_page(server.get, "is:document", "touched_at:desc")
+        for o in orderings:
+            q, sort = o["q"], o["sort"]
+            first, first_ms = ordered_page(server.get, q, sort)
+            problems = [*first.get("refused", []), *first.get("errors", [])]
+            rows = first.get("rows", [])
+            entry: dict[str, Any] = {
+                "q": q,
+                "sort": sort,
+                "total": first.get("total", 0),
+                "first_ms": first_ms,
+            }
+            if first.get("next_offset") is not None:
+                following, entry["next_ms"] = ordered_page(
+                    server.get, q, sort, first["next_offset"]
+                )
+                more = following.get("rows", [])
+                held = {r["uuid"] for r in rows}
+                if any(r["uuid"] in held for r in more):
+                    problems.append("the next page repeats a row")
+                rows = [*rows, *more]
+            _, entry["again_ms"] = ordered_page(server.get, q, sort)
+            wrong = out_of_order(rows, sort)
+            if wrong:
+                problems.append(wrong)
+            entry["problems"] = problems
+            results.append(entry)
+            print(
+                f"{q or '(everything)'} by {sort}: {entry['total']} rows, "
+                f"first page {first_ms} ms",
+                file=sys.stderr,
+            )
+    finally:
+        server.close()
+    record = {
+        "root": str(root),
+        "evals": str(args.evals),
+        "via": args.http or "applet",
+        "budget_ms": args.budget_ms,
+        "opening_ms": opening_ms,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "provenance": {**made, "load": [*made["load"], round(os.getloadavg()[0], 1)]},
+        "first_pages": results,
+    }
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(record, indent=1, ensure_ascii=False) + "\n"
+        )
+    print(first_pages_report(record))
+    slow = [r for r in results if r["first_ms"] > args.budget_ms]
+    if slow or any(r["problems"] for r in results):
+        raise SystemExit(1)
+
+
+def first_pages_report(record: dict[str, Any]) -> str:
+    budget = record["budget_ms"]
+    lines = [
+        f"{len(record['first_pages'])} ordered searches via {record['via']}; "
+        f"the first request of all, opening the index, took {record['opening_ms']} ms",
+        "",
+        "| search | sort | rows | first page ms | next page ms | again ms | problems |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in record["first_pages"]:
+        over = " **over**" if r["first_ms"] > budget else ""
+        lines.append(
+            f"| `{r['q']}` | `{r['sort']}` | {r['total']} | {r['first_ms']}{over} | "
+            f"{r.get('next_ms', '-')} | {r['again_ms']} | {'; '.join(r['problems'])} |"
+        )
+    return "\n".join(lines)
 
 
 def provenance(args: argparse.Namespace, tz: str | None) -> dict[str, Any]:
@@ -758,6 +900,25 @@ def main() -> None:
         "--http", help="a running datalib-http's base URL, to ask through its gateway"
     )
     r.set_defaults(func=run)
+    f = sub.add_parser(
+        "first-pages", help="time the eval set's ordered searches and check their order"
+    )
+    f.add_argument("--root", required=True, help="the data root to search")
+    f.add_argument("--evals", required=True, help="the eval set (JSON)")
+    f.add_argument("--out", help="where to write the results (JSON)")
+    f.add_argument(
+        "--budget-ms",
+        type=int,
+        default=BUDGET_MS,
+        help="the most a first page may take; over it, the command exits 1",
+    )
+    f.add_argument(
+        "--applet", default=DEFAULT_APPLET, help="the datalib-applet binary to start"
+    )
+    f.add_argument(
+        "--http", help="a running datalib-http's base URL, to ask through its gateway"
+    )
+    f.set_defaults(func=first_pages)
     c = sub.add_parser("compare", help="what moved between two runs")
     c.add_argument("before")
     c.add_argument("after")

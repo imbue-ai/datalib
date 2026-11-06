@@ -611,6 +611,17 @@ seconds apart, the gap a person leaves. On a server just started, the
 query `run` warms up with is the first search after a launch, and the
 report keeps its time apart.
 
+`first-pages` asks a different question: how long a person waits for the first
+page of a search that sorts many rows with no index to help, by size, author or
+title, say. It asks each of the eval set's `orderings` from a freshly started
+applet, times its first page, its next page and the first page again, checks
+the rows come in that order with blanks last and no row repeated, and exits 1
+when one is wrong or takes over a second. It uses no search by meaning, so it
+takes a minute, not half an hour, and needs no models. Build with `-c opt` first:
+a plain build's SQLite sorts far slower than a release's.
+Times on a busy machine move several times over between runs, so compare
+repeated runs, and read a wrong order as a failure and a slow page as a question.
+
 Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
 to its target's source. A run records how many rows the library held,
