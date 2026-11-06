@@ -144,6 +144,8 @@ py_test(
         "scripts/release/publish_release.py",
     ],
     data = [
+        ".github/workflows/cargo-update.yml",
+        ".github/workflows/test.yml",
         "scripts/install.sh",
         "//docs/user:docker.md",
     ],
