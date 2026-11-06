@@ -4,7 +4,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 # Surface the Dockerfile + entrypoint as data targets so consistency
 # tests (e.g. //tools:version_pins_test) can read them at test time.
 # The image itself is built by `scripts/build_docker.sh` (locally) or
-# the docker-publish job in `.github/workflows/release.yml` (CI), not
+# the docker-image job in `.github/workflows/release.yml` (CI), not
 # by Bazel.
 exports_files([
     "Dockerfile",

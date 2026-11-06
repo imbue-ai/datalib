@@ -113,7 +113,7 @@ missing asset can never be added.
 | a `macos-app-*` job | tagged | previous release |
 
 The Docker image does not wait for the release. It carries its own runtime, and
-`docker-publish` checks the tagged image against the walkthrough. So
+`docker-check` runs the tagged image through the walkthrough. So
 `ghcr.io/…:latest` can be a version ahead of `releases/latest` until the release
 is published. An image needs both gnu legs, so losing either tags nothing.
 
@@ -125,7 +125,7 @@ a matrix job that failed runs only its failed legs.
 
 | what failed | what runs again |
 |---|---|
-| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `publish-release` |
+| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `docker-check`, `publish-release` |
 | a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
 | a `macos-app-*` job | the rest of that chain, `publish-release` |
 | `publish-release` | it alone, which removes its own draft and starts again |
@@ -172,12 +172,14 @@ to wait for.
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
-| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
-| `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
+| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `GHCR_PUSH_TOKEN`, from the `release-images` environment |
+| `docker-publish` | `docker buildx imagetools`, nothing built | `GHCR_PUSH_TOKEN`, from the `release-images` environment |
+| `docker-check` | the image's walkthrough | `contents: read` |
 
 A build job hands what it made to the next through an artifact.
 `scripts/lint_repo.py` check 21 holds each grant to its job, refuses a
-build command in a job that holds one, and requires every
+build command in a job that holds one or the push token, refuses
+`packages: write` in every workflow, and requires every
 `actions/checkout` to say `persist-credentials: false` so the token is
 not left in `.git/config`. `cargo-update.yml`'s `pull-request` job is
 the one checkout that keeps it, because it pushes.

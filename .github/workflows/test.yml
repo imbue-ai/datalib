@@ -39,9 +39,9 @@ on:
     inputs:
       devcontainer_tag:
         description: >
-          Tag of ghcr.io/imbue-ai/datalib_devcontainer to run in, e.g. a
-          `sha-<commit>` that `devcontainer.yml` just built, to try an
-          image before it becomes `latest`.
+          Tag of ghcr.io/imbue-ai/datalib_devcontainer to run in, e.g. an
+          earlier release's `X.Y.Z`, to tell whether a failure came with
+          the image.
         type: string
         default: latest
       remote_execution:
@@ -243,7 +243,7 @@ jobs:
     # `:latest` is moved by `devcontainer.yml` only after the new image
     # has analysed the tree from its baked output base without fetching
     # anything, so a broken image cannot become the one every PR pulls.
-    # A dispatch can name a `sha-<commit>` tag to try one first.
+    # A dispatch can name another tag to run in.
     container:
       image: ghcr.io/imbue-ai/datalib_devcontainer:${{ inputs.devcontainer_tag || 'latest' }}
       credentials:

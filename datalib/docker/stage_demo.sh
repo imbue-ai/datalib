@@ -5,7 +5,7 @@
 # directory per source, plus the config itself. The Dockerfile COPYs
 # that directory to /opt/datalib/demo-sources and runs the pipeline over
 # it. Called by scripts/build_docker.sh and by release.yml's
-# docker-publish job, so the list of fixtures lives here and nowhere
+# docker-image job, so the list of fixtures lives here and nowhere
 # else.
 #
 # Usage: datalib/docker/stage_demo.sh <build-context-dir>

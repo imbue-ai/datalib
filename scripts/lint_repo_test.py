@@ -8,6 +8,7 @@ from lint_repo import (
     checkout_token_settings,
     floating_images,
     floating_npx,
+    image_push_problems,
     release_grant_problems,
     release_key_problems,
     unliteral_opens,
@@ -102,14 +103,6 @@ jobs:
           path: ${{ runner.temp }}/macos-app-compiled
       - run: python3 -I scripts/release/unpack_compiled_app.py x datalib/tauri
       - run: ./datalib/tauri/build-signed-app.sh sign
-  docker-image:
-    permissions:
-      contents: read
-      packages: write
-  docker-publish:
-    permissions:
-      contents: read
-      packages: write
 """
 
     def test_the_table_passes(self) -> None:
@@ -236,6 +229,61 @@ jobs:
                 problems = release_grant_problems(text)
                 self.assertEqual(len(problems), 1, problems)
                 self.assertIn("a release reads no cache", problems[0])
+
+    def test_only_a_tags_run_can_move_an_image_tag(self) -> None:
+        """A branch's workflow can ask for any grant, so no workflow may hold packages: write."""
+        good = (
+            "jobs:\n  docker-publish:\n"
+            "    environment: release-images  # the push token\n"
+            "    steps:\n      - run: x\n"
+            "        password: ${{ secrets.GHCR_PUSH_TOKEN }}\n"
+        )
+        self.assertEqual(image_push_problems(good), [])
+        for name, text, wanted in [
+            (
+                "a job's grant",
+                "jobs:\n  x:\n    permissions:\n      packages: write\n",
+                "job x grants packages: write",
+            ),
+            (
+                "the default",
+                "permissions:\n  packages: write\njobs:\n  x:\n    runs-on: y\n",
+                "the default grants packages: write",
+            ),
+            (
+                "write-all",
+                "jobs:\n  x:\n    permissions: write-all\n",
+                "job x grants packages: write",
+            ),
+            (
+                "the token outside the environment",
+                good.replace("    environment: release-images  # the push token\n", ""),
+                "job docker-publish names GHCR_PUSH_TOKEN outside release-images",
+            ),
+            (
+                "another environment",
+                good.replace("release-images", "main-ci"),
+                "job docker-publish names GHCR_PUSH_TOKEN outside release-images",
+            ),
+            (
+                "the walkthrough beside the token",
+                good + "      - run: datalib/docker/doc_test.sh\n",
+                (
+                    "job docker-publish holds GHCR_PUSH_TOKEN and runs what was built: "
+                    "- run: datalib/docker/doc_test.sh"
+                ),
+            ),
+            (
+                "a build beside the token",
+                good + "      - run: bazel build //x\n",
+                (
+                    "job docker-publish holds GHCR_PUSH_TOKEN and runs what was built: "
+                    "- run: bazel build //x"
+                ),
+            ),
+        ]:
+            with self.subTest(name):
+                self.assertEqual(image_push_problems(text), [wanted])
 
     def test_the_release_orgs_key_stays_in_the_environment_main_alone_may_use(
         self,

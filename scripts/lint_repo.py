@@ -44,7 +44,9 @@ instead from `bazel run //:precommit` and as a plain step in
      `actions/checkout` says what it does with the token, each write
      grant in release.yml sits on the one job allowed it, none of which
      runs a build, and what a build made reaches those jobs only outside
-     the checkout, unpacked by the script that checks it.
+     the checkout, unpacked by the script that checks it. No workflow can
+     write a package, and the token that can is only in an environment
+     that `v*` tags alone may use.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -394,9 +396,13 @@ _CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
 _RELEASE_WRITE_GRANTS = {
     "publish-release": {"contents"},
     "macos-app-sign": {"id-token"},
-    "docker-image": {"packages"},
-    "docker-publish": {"packages"},
 }
+_IMAGE_PUSH_TOKEN = "GHCR_PUSH_TOKEN"
+_IMAGE_PUSH_ENVIRONMENTS = {
+    "environment: release-images",
+    "environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-images' || '' }}",
+}
+_RUNS_THE_IMAGE = "doc_test.sh"
 _CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
 _PERSIST = re.compile(r"^\s*persist-credentials:\s*(true|false)\b")
 _JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
@@ -576,6 +582,35 @@ def release_key_problems(text: str) -> list[str]:
     ]
 
 
+def image_push_problems(text: str) -> list[str]:
+    """An image tag moves only from a tag's run, and what we built never runs beside the token.
+
+    A branch's workflow can ask for any grant, so `packages: write` anywhere
+    would let it move `:latest`.
+    """
+    grants, bodies = workflow_write_grants(text)
+    problems = [
+        f"{f'job {job}' if job else 'the default'} grants packages: write"
+        for job, granted in grants.items()
+        if {"packages", "write-all"} & granted
+    ]
+    for job, lines in bodies.items():
+        if not any(_IMAGE_PUSH_TOKEN in line for line in lines):
+            continue
+        if not any(
+            line.split("#")[0].strip() in _IMAGE_PUSH_ENVIRONMENTS for line in lines
+        ):
+            problems.append(
+                f"job {job} names {_IMAGE_PUSH_TOKEN} outside release-images"
+            )
+        problems += [
+            f"job {job} holds {_IMAGE_PUSH_TOKEN} and runs what was built: {line.strip()}"
+            for line in lines
+            if _BUILD_COMMAND.search(line) or _RUNS_THE_IMAGE in line
+        ]
+    return problems
+
+
 def floating_images(text: str) -> list[str]:
     """Third-party images a workflow names by a tag someone else can move."""
     return [
@@ -605,6 +640,9 @@ def _check_workflow_tokens(root: Path) -> int:
                 )
         problems += [
             f"{rel}: {p}" for p in release_key_problems((root / rel).read_text())
+        ]
+        problems += [
+            f"{rel}: {p}" for p in image_push_problems((root / rel).read_text())
         ]
     release = ".github/workflows/release.yml"
     problems += [

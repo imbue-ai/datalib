@@ -601,9 +601,7 @@ jobs:
     needs: [runtime, build]
     if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runs-on }}
-    permissions:
-      contents: read
-      packages: write  # push this architecture's image to ghcr.io
+    environment: release-images  # the push token; only `v*` tags may use it
     strategy:
       matrix:
         include:
@@ -677,8 +675,8 @@ jobs:
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.GHCR_PUSH_USER }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
 
       # We previously had a separate `--load` amd64 build that ran a latchkey
       # services-register / auth-set / auth-list roundtrip against the
@@ -757,9 +755,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Give the two architectures' images one tag, and check the result. Builds
-  # nothing. An architecture that failed leaves the version and `:latest`
-  # untouched.
+  # Give the two architectures' images one tag. Builds and runs nothing, so
+  # nothing we compiled shares a job with this credential on the runner itself.
+  # An architecture that failed leaves the version and `:latest` untouched.
   #
   # The `if` has to be spelled out: a job with none is skipped when anything
   # up its chain failed, not only what it names, so a failed mac `build` leg
@@ -770,16 +768,8 @@ jobs:
     needs: docker-image
     if: ${{ !cancelled() && needs.docker-image.result == 'success' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write  # tag the image on ghcr.io
+    environment: release-images  # the push token; only `v*` tags may use it
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: ./.github/actions/free-runner-disk
-
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: docker-digest-*
@@ -790,8 +780,8 @@ jobs:
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.GHCR_PUSH_USER }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
 
       - name: Tag the multi-arch image
         env:
@@ -824,6 +814,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Runs what was just built, so it holds no credential: the image is public.
+  # Its failure holds the release back and does not un-push the tag.
+  docker-check:
+    name: docker-check (the walkthrough)
+    needs: docker-publish
+    if: ${{ !cancelled() && needs.docker-publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-digest
+          path: ${{ runner.temp }}/image-digest
+
       # Run the user-facing Docker walkthrough (docs/user/docker.md)
       # against the image just pushed: pull it back, serve the baked
       # demo, ingest a mounted mbox, query both. The pull is the cost
@@ -854,7 +863,7 @@ jobs:
       - runtime
       - build
       - macos-app-verify
-      - docker-publish
+      - docker-check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

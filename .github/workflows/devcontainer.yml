@@ -6,18 +6,17 @@
 #
 # Runs on every `v*` tag — the same cadence the image always had, but
 # on its own, not as a job at the end of `release.yml` that a failing
-# prod-image check could skip — and on demand. Not on pushes or pull
-# requests: a build is ~8 min and ~2.5 GB, and the image carries a
-# pre-fetched output base that degrades gracefully when stale (bazel
-# fetches only what the lockfiles added since), so a release's worth of
-# drift costs seconds. Every build is tagged `:sha-<commit>`, a tag
-# build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
-# a tag, or when a dispatch on `main` asks, and only after the image has
-# proved it can analyse the tree. Never from another branch: every run
-# on `main` runs in `:latest` holding the release org's write key. To
-# try a Dockerfile change before a release, dispatch this workflow on
-# the branch, then `test.yml` with the `sha-` tag it prints. Old `sha-`
-# versions are pruned after each push.
+# prod-image check could skip. Not on pushes or pull requests: a build is
+# ~8 min and ~2.5 GB, and the image carries a pre-fetched output base
+# that degrades gracefully when stale (bazel fetches only what the
+# lockfiles added since), so a release's worth of drift costs seconds.
+#
+# A tag's run pushes `:sha-<commit>`, `:X.Y.Z` and `:latest`, the tag
+# `test.yml` pulls, once the image has proved it can analyse the tree.
+# Every run on `main` runs in `:latest` holding the release org's write
+# key, so only a tag can reach the push token (docs/dev/security_posture.md).
+# A dispatch, on any branch, builds and smoke-tests a Dockerfile change and
+# pushes nothing. Old `sha-` versions are pruned after each push.
 #
 # Read docs/dev/ci.md before changing this file.
 name: devcontainer
@@ -27,15 +26,9 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      publish_latest:
-        description: Also move the `latest` tag to this build (from `main` only).
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: devcontainer-${{ github.ref }}
@@ -45,16 +38,8 @@ jobs:
   build:
     name: build and push (ghcr.io)
     runs-on: ubuntu-latest
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-images' || '' }}
     steps:
-      - name: Refuse to move latest from a branch other than main
-        env:
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
-        run: |
-          if [[ "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" != refs/heads/main ]]; then
-              echo "::error::publish_latest moves the image every main run uses; dispatch it on main, not ${GITHUB_REF}"
-              exit 1
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -80,13 +65,6 @@ jobs:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
-
-      - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build the image
         env:
@@ -125,24 +103,27 @@ jobs:
           docker run --rm -v "${PWD}:/src" -w /src -e HOME=/tmp/not-root "${IMAGE}:sha-${GITHUB_SHA::12}" \
               bash .devcontainer/smoke_test.sh
 
+      # After the smoke test, so nothing the image ran saw a login on disk.
+      - name: Log in to GHCR
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ vars.GHCR_PUSH_USER }}
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
+
       # Pushed as a second export from the layers the build just cached,
       # compressed with zstd rather than the gzip `docker push` would use:
       # the runner spends the pull decompressing, and zstd decompresses
       # several times faster. `--load` above is still the gzip form,
       # because the smoke test needs the image in the local daemon.
       - name: Push
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           BUILDKIT_PROGRESS: plain
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
-          tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
-          fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* || ( "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" == refs/heads/main ) ]]; then
-              tags+=("${IMAGE}:latest")
-          fi
+          tags=("${IMAGE}:sha-${GITHUB_SHA::12}" "${IMAGE}:${GITHUB_REF#refs/tags/v}" "${IMAGE}:latest")
           names=$(IFS=,; echo "${tags[*]}")
           docker buildx build \
               --file .devcontainer/Dockerfile \
@@ -155,14 +136,15 @@ jobs:
               --output "type=image,\"name=${names}\",push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
               .
           printf 'pushed %s\n' "${tags[@]}"
-          [[ " ${tags[*]} " == *" ${IMAGE}:latest "* ]] && echo "moved :latest to sha-${GITHUB_SHA::12}" || true
 
       # GHCR keeps every pushed version. Keep the newest few `sha-` builds
       # (enough to roll `latest` back by hand) and drop the rest; the
       # `latest`-tagged version is never among the deleted.
       - name: Prune old image versions
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
         with:
+          token: ${{ secrets.GHCR_PUSH_TOKEN }}
           package-name: ${{ github.event.repository.name }}_devcontainer
           package-type: container
           min-versions-to-keep: 6

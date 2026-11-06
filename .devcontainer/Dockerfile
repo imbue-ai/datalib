@@ -14,8 +14,7 @@
 # app falls back to `npx -y latchkey@<pin>` for auth, and qmd's own dev
 # loop is `bun`.
 #
-# Published by `.github/workflows/devcontainer.yml` — on every `v*`
-# tag, and on demand — as
+# Published by `.github/workflows/devcontainer.yml` on every `v*` tag as
 # `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>`, `:X.Y.Z` and
 # `:latest`. It does not wait on any other release job.
 #

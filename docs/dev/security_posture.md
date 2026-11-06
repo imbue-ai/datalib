@@ -167,6 +167,7 @@ tag ruleset says nothing about this: no tag moves.
 |---|---|---|
 | `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
 | `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
+| The image push token is a secret of `release-images`, which only `v*` tags may use, and no workflow may ask for `packages: write` (check 21, and settings below) | A workflow on a branch moving an image tag: it can name the environment but is refused it. The walkthrough runs in a job without the token | Whoever holds the token, and what runs in a tag's run. A writer's own token, unless the package settings below hold |
 | Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
 | One job creates, uploads, reads back and publishes (`release_steps.md` §"Draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
 | The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing under a new tag name | A release on a tag that already exists, and marking an older release latest, which GitHub allows even on an immutable one |
@@ -187,14 +188,18 @@ tag ruleset says nothing about this: no tag moves.
 - **Deleting old releases would not help, and would break things.** Their tags
   remain, so a writer could publish a new release on one, and an installed build
   fetches its Node runtime from its own release on first use. Keep them.
-- **A moved image tag.** A workflow on any branch can ask for `packages: write`,
-  so it can probably move `ghcr.io/imbue-ai/datalib:latest` and
-  `datalib_devcontainer:latest`, which `main`'s CI runs in holding the write key.
-  The "refuse to move latest" step in `devcontainer.yml` is in a file that branch
-  can edit. Neither has been tried, and the packages' Actions access settings
-  cannot be read through the API. The real fix is a push credential in an
-  environment only `v*` tags may use, as `main-ci` is for `main`, with the
-  repository's own access to the package removed.
+- **The image push token is wider than what it replaced.** GitHub's docs name
+  only a classic personal access token for pushing to ghcr.io. It reaches every
+  package its account can write and outlives the job, so that account should
+  hold nothing else. `docker-image` holds it while `RUN` steps execute in
+  BuildKit's containers, and `devcontainer.yml` holds it in the job that ran its
+  smoke test, though it logs in only afterwards.
+- **Package settings cannot be read through the API, or checked by a test.** So
+  whether a moved tag is really refused rests on someone having looked. GitHub's
+  docs say a linked package inherits its repository's permissions and that the
+  repository's workflows get access automatically. They do not spell out that a
+  writer's own token can push, or that a Read role stops a workflow, though their
+  role table implies both. Nobody has tried moving a tag, before or after this.
 - **`install.sh` is read from `main`, so it is as trusted as a merge,** and
   merging takes a green CI and no review. A PR's run uses that PR's own workflow
   files, so a writer can edit a required check to pass. Binding the checks to
@@ -226,6 +231,9 @@ Each line is a command that shows it.
 | `main` takes changes only through a PR | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[].type'` includes `pull_request` |
 | `main`'s required checks can come only from GitHub Actions | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[] \| select(.type=="required_status_checks") \| .parameters.required_status_checks[].integration_id'` says `15368` for each |
 | A workflow that names no permissions gets a read-only token | `gh api repos/imbue-ai/datalib/actions/permissions/workflow --jq .default_workflow_permissions` says `read`. `can_approve_pull_request_reviews` stays `true` because `cargo-update.yml` opens its PR with the workflow's token, and the one setting covers both |
+| `release-images` may deploy only from `v*` tags | `gh api repos/imbue-ai/datalib/environments/release-images/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `v*`, `tag`, and nothing else |
+| The image push token is only in `release-images` | `gh secret list --repo imbue-ai/datalib` does not name `GHCR_PUSH_TOKEN`; `gh secret list --env release-images --repo imbue-ai/datalib` does |
+| On both packages, "Inherit access from repository" is off, the repository's Actions role is Read, and only the push account can write | No command shows this. Look at each package's settings page: `datalib` and `datalib_devcontainer` |
 | Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
 | Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
 | `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |

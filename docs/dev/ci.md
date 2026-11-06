@@ -64,23 +64,21 @@ what `main` changed, even though the PR did not. A `workflow_dispatch`
 run builds the bare branch head; compare like with like before calling
 a cache key unstable (#484's comments are the worked example).
 `test.yml` also takes two dispatch inputs: `devcontainer_tag`, to run
-against an image that is not yet `latest`, and `remote_execution`, to
+against an image other than `latest`, and `remote_execution`, to
 run the test job on BuildBuddy's executors (`--config=remote`).
 
 **`devcontainer.yml`** builds and publishes that image
-(`.devcontainer/Dockerfile`, `FROM ubuntu:26.04`): on every `v*` tag,
-and on demand — not on pushes or PRs, since a build is ~8 min and
-~2.5 GB and a release's worth of drift costs seconds. To try a
-Dockerfile change early, dispatch it on the branch and then `test.yml`
-with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
-a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
-dispatch on `main` with `publish_latest` set — a dispatch on any other
-branch that sets it fails at once, because every `main` run of
-`test.yml` runs in `latest` holding the release org's write key — and
-only after
+(`.devcontainer/Dockerfile`, `FROM ubuntu:26.04`) on every `v*` tag —
+not on pushes or PRs, since a build is ~8 min and ~2.5 GB and a
+release's worth of drift costs seconds. A tag's run pushes
+`sha-<commit>`, `:X.Y.Z` and `latest`, only after
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
-downloads. The newest six `sha-` versions are kept and older ones
+downloads. Only a tag can push, because every `main` run of `test.yml`
+runs in `latest` holding the release org's write key
+(`security_posture.md`). To try a Dockerfile change early, dispatch the
+workflow on the branch: it builds and runs that smoke test, and pushes
+nothing. The newest six `sha-` versions are kept and older ones
 pruned. It is a workflow of its own so that nothing in a release can
 keep it from publishing (#500).
 
