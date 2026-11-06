@@ -9,6 +9,8 @@ exports_files([
     "requirements.txt",
     # Run by //tools:install_test.
     "scripts/install.sh",
+    "scripts/release/pin_release.py",
+    "scripts/release/publish_release.py",
     # Run by //tools:stage_runtime_test, //tools:stage_tarball_test and
     # //tools:check_binaries_test: release.yml's steps, as scripts.
     "scripts/latchkey-wrapper.sh",
@@ -108,6 +110,45 @@ py_test(
     ],
     imports = ["scripts"],
     main = "scripts/lint_repo_test.py",
+)
+
+# release.yml's steps that are Python, and the one the release procedure runs.
+py_test(
+    name = "unpack_compiled_app_test",
+    size = "small",
+    srcs = [
+        "scripts/release/unpack_compiled_app.py",
+        "scripts/release/unpack_compiled_app_test.py",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/unpack_compiled_app_test.py",
+)
+
+py_test(
+    name = "publish_release_test",
+    size = "small",
+    srcs = [
+        "scripts/release/publish_release.py",
+        "scripts/release/publish_release_test.py",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/publish_release_test.py",
+)
+
+py_test(
+    name = "pin_release_test",
+    size = "small",
+    srcs = [
+        "scripts/release/pin_release.py",
+        "scripts/release/pin_release_test.py",
+        "scripts/release/publish_release.py",
+    ],
+    data = [
+        "scripts/install.sh",
+        "//docs/user:docker.md",
+    ],
+    imports = ["scripts/release"],
+    main = "scripts/release/pin_release_test.py",
 )
 
 sh_binary(

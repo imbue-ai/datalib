@@ -16,9 +16,9 @@ Generate a token, start the demo, open it — on macOS, in one go:
 
 ```sh
 export DATALIB_TOKEN=$(openssl rand -hex 16)
-docker run -d --rm --pull=always --name datalib-demo \
+docker run -d --rm --name datalib-demo \
   -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
-  ghcr.io/imbue-ai/datalib datalib-http /opt/datalib/demo &&
+  ghcr.io/imbue-ai/datalib@sha256:009ef90dab994a66c2dc5da716117ab0f3af5baec39738948a20fcbc236ee67e datalib-http /opt/datalib/demo &&
   sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
 ```
 
@@ -41,10 +41,10 @@ Four details are worth carrying into anything you write yourself:
   data; without it Docker publishes on every interface. And a bare
   `-p 8731` is different again — it picks a random host port, so the
   URL above would point at nothing.
-- **`--pull=always`.** Without it, `docker run` uses whatever
-  `ghcr.io/imbue-ai/datalib` you already have and never checks for a
-  newer one, so a second try weeks later silently runs an old release
-  against this page's newer instructions.
+- **`@sha256:…`, not `:latest`.** A digest names one exact build, the
+  one this page was checked against. A tag such as `:latest` or a version
+  is only a label, which someone with access to the registry could point
+  at something else. This page moves to the new digest after each release.
 
 Everything below is that same command unpacked, plus how to point
 datalib at data of your own. Every shell block in sections 1 and 2 is
@@ -58,7 +58,7 @@ page:
 
 <!-- doc-test: setup -->
 ```sh
-IMG=ghcr.io/imbue-ai/datalib:latest
+IMG=ghcr.io/imbue-ai/datalib@sha256:009ef90dab994a66c2dc5da716117ab0f3af5baec39738948a20fcbc236ee67e
 PORT=8731                        # host port the web UI will be on
 TOKEN="$(openssl rand -hex 16)"  # the API token; the URL below carries it
 DATA_ROOT="$HOME/datalib-docker" # where your own data will go (step 2)
