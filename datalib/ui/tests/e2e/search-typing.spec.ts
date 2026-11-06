@@ -37,28 +37,45 @@ async function opened(page: Page) {
 
 test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
-test("keys typed at speed are one search", async ({ page }) => {
+test("typing asks nothing, and Enter asks for the search once", async ({ page }) => {
   await opened(page);
   const { sent } = record(page);
   await field(page).pressSequentially("warp core", { delay: 60 });
+  expect(sent, "nothing went out while typing").toEqual([]);
+  await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core");
-  expect(sent.length, "the search went out").toBeGreaterThan(0);
-  expect(new Set(sent.map((s) => s.q))).toEqual(new Set(["warp core"]));
+  expect(sent.filter((s) => s.q === "warp core").length).toBe(1);
 });
 
-/// The space before the next word, left long enough to settle, asked
-/// for the whole search again: every tab, the page and the source chips.
-test("a space before the next word asks nothing new", async ({ page }) => {
+/// A half-typed key once ran as a search and replaced the results while
+/// its suggestions were still open.
+test("a half-typed key is not searched for", async ({ page }) => {
+  await opened(page);
+  const shown = await shownQuery(page).getAttribute("data-shown-query");
+  await field(page).pressSequentially("from:", { delay: 60 });
+  await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
+  await expect(shownQuery(page)).toHaveAttribute("data-shown-query", shown ?? "");
+});
+
+test("Enter on what is already shown asks nothing new", async ({ page }) => {
   await opened(page);
   await field(page).pressSequentially("warp core", { delay: 60 });
+  await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core");
   const { sent } = record(page);
-  await field(page).pressSequentially(" b", { delay: 800 });
+  await field(page).click();
+  await field(page).press("End");
+  await page.keyboard.insertText(" ");
+  await field(page).press("Enter");
+  // The search with words after it is the one that shows nothing moved.
+  await field(page).click();
+  await page.keyboard.insertText("b");
+  await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core b");
   expect(new Set(sent.map((s) => s.q))).toEqual(new Set(["warp core b"]));
 });
 
-test("a search typed past is given up, every request of it", async ({ page }) => {
+test("a search replaced is given up, every request of it", async ({ page }) => {
   await opened(page);
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -69,12 +86,15 @@ test("a search typed past is given up, every request of it", async ({ page }) =>
   const { sent, failed } = record(page);
 
   await field(page).pressSequentially("warp", { delay: 60 });
+  await field(page).press("Enter");
   const first = () => sent.filter((s) => s.q === "warp").map((s) => s.request);
-  // The page, the four tabs' counts and the source chips.
   await expect
     .poll(() => first().length, { message: "the first search never went out" })
-    .toBeGreaterThanOrEqual(6);
+    .toBeGreaterThanOrEqual(1);
+  await field(page).click();
+  await field(page).press("End");
   await field(page).pressSequentially(" core", { delay: 60 });
+  await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core");
 
   await expect

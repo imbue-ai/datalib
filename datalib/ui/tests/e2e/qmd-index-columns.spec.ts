@@ -4,7 +4,7 @@ import {
   EVERY_ROW,
   SEARCH_ROWS,
   type GridApi,
-  typeInto,
+  runSearch,
 } from "./grid-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
@@ -198,7 +198,7 @@ test.describe("a search with no index", () => {
     // Every row: this test's free text is anything in the search bar.
     await page.goto(EVERY_ROW);
     await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
-    await typeInto(page.getByTestId("search-input"), "enterprise");
+    await runSearch(page, "enterprise");
     // The rewritten answer goes through the browser's request
     // interception, which WebKit has taken close to five seconds to
     // deliver on a loaded runner; the rows above get ten.

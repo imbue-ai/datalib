@@ -164,7 +164,7 @@ test("a contact picked with @ finds everything that reached its handles", async 
   await page.goto(GRID);
   const field = page.getByTestId("search-input");
   await typeInto(field, "@jean");
-  const offered = shownCards(page).locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
+  const offered = page.locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
   await expect(offered).toBeVisible();
   await expect(offered).toContainText("Jean-Luc");
   await field.press("Tab");

@@ -1,9 +1,9 @@
 // The Search card: one query, shown as a list with a preview or as a
-// table, whichever was picked last, with source chips that write the query the person could
+// table, whichever was picked last, run from the toolbar's box, whose panel writes the query the person could
 // have typed.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, shownCards, stubStream, typeInto } from "./grid-helpers";
+import { GRID, shownCards, stubStream, runSearch } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
 const input = (page: Page) => page.getByTestId("search-input");
@@ -13,8 +13,10 @@ const results = (page: Page) =>
   shownCards(page).getByRole("list", { name: "Results" }).locator(".sc-result");
 const listShows = (page: Page) => shownCards(page).locator(".sc-main");
 const tableShows = (page: Page) => shownCards(page).locator(".grid-wrap");
+const panel = (page: Page) => page.getByTestId("search-panel");
+const openPanel = (page: Page) => page.getByTestId("search-advanced").click();
 const chips = (page: Page) =>
-  shownCards(page).getByRole("group", { name: "Sources" }).getByRole("button");
+  panel(page).getByRole("group", { name: "Sources" }).getByRole("button");
 const sortPick = (page: Page) => shownCards(page).getByTestId("search-sort");
 const pickedResult = (page: Page) => shownCards(page).locator(".sc-result.is-picked");
 
@@ -57,7 +59,7 @@ test("the list and the table are two views of one query", async ({ page }) => {
   // The table asks nothing until it is shown.
   await expect(shownCards(page).locator(".grid-box .slickgrid-container")).toHaveCount(0);
 
-  await typeInto(input(page), "is:document -kind:nothing");
+  await runSearch(page, "is:document -kind:nothing");
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "is:document -kind:nothing");
 
   await viewTab(page, "Table").click();
@@ -101,24 +103,61 @@ test("gridView is the grid over a table it is given, and says so when given none
   await expect(shownCards(page)).toContainText("gridView needs the url of the table to show");
 });
 
-test("a source chip writes the source filter, and a typed one lights the chip", async ({
+test("a source chip in the panel writes the filter, and goes once one source is picked", async ({
   page,
 }) => {
   await page.goto(GRID);
-  await expect(chips(page).first()).toContainText("All");
-  await expect(chips(page).first()).toHaveAttribute("aria-pressed", "true");
-  await chips(page).nth(1).click();
+  await expect(panel(page)).toHaveCount(0);
+  await openPanel(page);
+  await expect(chips(page).first()).toBeVisible();
+  await chips(page).first().click();
   await expect(input(page)).toHaveAttribute("data-query", /^is:document source:\S+$/);
-  await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
   const narrowed = (await input(page).getAttribute("data-query")) ?? "";
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", narrowed);
+  // Narrowed to one source, there is no other to offer.
+  await expect(chips(page)).toHaveCount(0);
 
-  await chips(page).first().click();
-  await expect(input(page)).toHaveAttribute("data-query", "is:document");
-  await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "false");
+  // The panel stays open while it is used, and offers them again.
+  await runSearch(page, "is:document");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "is:document");
+  await expect(chips(page).first()).toBeVisible();
+});
 
-  await typeInto(input(page), narrowed);
-  await expect(chips(page).nth(1)).toHaveAttribute("aria-pressed", "true");
+test("the panel writes the query a person could have typed", async ({ page }) => {
+  await page.goto(GRID);
+  await runSearch(page, "warp core");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await openPanel(page);
+
+  const meaning = page.getByTestId("search-semantic");
+  await expect(meaning, "semantic search is on by default").toBeChecked();
+  await meaning.click();
+  await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:off");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:off");
+  await expect(page.getByTestId("search-cutoff")).toHaveCount(0);
+
+  await meaning.click();
+  await expect(input(page)).toHaveAttribute("data-query", "warp core");
+  await page.getByTestId("search-cutoff").fill("0.4");
+  await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:0.4");
+  await expect(page.getByTestId("search-cutoff")).toHaveValue("0.4");
+
+  const perDocument = page.getByTestId("search-per-document");
+  await perDocument.click();
+  await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:0.4 is:document");
+  await perDocument.click();
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:0.4");
+
+  // A filter is started, not run: its values are offered.
+  const shown = await tableShows(page).getAttribute("data-shown-query");
+  await panel(page).locator('[data-key="from"]').click();
+  await expect(input(page)).toHaveAttribute("data-query", /from:$/);
+  await expect(page.locator(".cm-tooltip-autocomplete")).toBeVisible();
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", shown ?? "");
+
+  // A click outside puts it away.
+  await page.locator(".ct-main").click({ position: { x: 5, y: 5 } });
+  await expect(panel(page)).toHaveCount(0);
 });
 
 test("the sort control orders either view, and agrees with the table's headers", async ({
@@ -206,7 +245,7 @@ test("a search says above its results what it could not reach, in either view", 
   await expect(notices).toHaveCount(0);
 
   asked.length = 0;
-  await typeInto(input(page), "warp core");
+  await runSearch(page, "warp core");
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core");
   await expect(notices).toHaveText([
     "Part of this search could not answer",
@@ -220,7 +259,7 @@ test("a search says above its results what it could not reach, in either view", 
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core");
   await expect(notices).toHaveCount(2);
 
-  await typeInto(input(page), "tea semantic:off");
+  await runSearch(page, "tea semantic:off");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off");
   await expect(notices).toHaveCount(0);
 

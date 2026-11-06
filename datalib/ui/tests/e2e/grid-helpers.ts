@@ -282,7 +282,7 @@ export async function searchAndSettle(
   opts: { grid?: Locator; timeout?: number } = {},
 ) {
   const grid = opts.grid ?? page.locator(".grid-wrap");
-  await typeInto(page.getByTestId("search-input"), q);
+  await runSearch(page, q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
@@ -764,7 +764,11 @@ export async function typeInto(field: Locator, text: string) {
   await field.press("ControlOrMeta+a");
   if (text === "") await field.press("Backspace");
   else await field.page().keyboard.insertText(text);
-  // The toolbar's box runs what it holds on Enter; a grid's own box asks as
-  // it is typed in.
-  if ((await field.getAttribute("data-testid")) === "search-input") await field.press("Enter");
+}
+
+/// Runs `text` from the toolbar's search box, which asks only on Enter.
+export async function runSearch(page: Page, text: string) {
+  const field = page.getByTestId("search-input");
+  await typeInto(field, text);
+  await field.press("Enter");
 }

@@ -1437,7 +1437,6 @@ onMounted(() => {
       root: (e) => {
         if (e.kind !== "index_changed") return;
         refreshRows();
-        void loadSources();
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -2221,6 +2220,9 @@ function chipAt(e: SlickEventData): HTMLElement | null {
 }
 
 function onClick(e: SlickEventData, args: OnClickEventArgs) {
+  // The keyboard follows the click, so Enter opens the row just picked. The
+  // grid takes it only for a click on the bare cell, not on a chip inside one.
+  args.grid.focus();
   // A chip is a link; a click on it selects the row and nothing more —
   // the mail client its href would open is not what a click here asks.
   if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
@@ -2471,7 +2473,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-
 .grid-column {
   display: flex;
   flex-direction: column;

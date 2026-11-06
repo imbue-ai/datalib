@@ -42,8 +42,10 @@ watch(
   { immediate: true },
 );
 
+/// The caret leaves with the search, so Enter on a picked row opens it.
 function submit() {
   run(draft.value.trim());
+  input.value?.blur();
 }
 
 function submitNew() {
@@ -83,10 +85,13 @@ function onKey(ev: KeyboardEvent) {
     input.value?.selectAll();
   }
 }
+/// A click elsewhere takes the panel away, and the caret, so Enter on a row
+/// just picked opens it. A grid does not take the caret itself when the click
+/// lands on a chip in a cell.
 function onPointerDown(ev: PointerEvent) {
-  if (panelOpen.value && box.value && !ev.composedPath().includes(box.value)) {
-    panelOpen.value = false;
-  }
+  if (box.value && ev.composedPath().includes(box.value)) return;
+  panelOpen.value = false;
+  input.value?.blur();
 }
 onMounted(() => {
   window.addEventListener("keydown", onKey);

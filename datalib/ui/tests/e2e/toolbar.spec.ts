@@ -73,7 +73,8 @@ test.describe("toolbar", () => {
       "aria-selected",
       "true",
     );
-    await expect(card.page().getByTestId("search-input")).toHaveAttribute(
+    // A source's documents keep a box of their own, a filter on one list.
+    await expect(card.getByTestId("grid-search-input")).toHaveAttribute(
       "data-query",
       new RegExp(`source:${group}`),
     );
@@ -155,17 +156,39 @@ test.describe("toolbar", () => {
     });
   });
 
-  test("the search box opens a search card on what was typed", async ({ page }) => {
+  test("the search box runs in the Search card, and in a card of its own on request", async ({
+    page,
+  }) => {
     await page.goto("/");
     await expect(tabLabels(page)).toHaveText(PINNED);
     await typeInto(searchBox(page), "warp");
     await searchBox(page).press("Enter");
-    const card = cardOf(page, 'searchView({"q":"warp"})');
-    await expect(card).toBeVisible();
-    await expect(shownTabName(page)).toHaveText("Search: warp");
+    const grid = cardOf(page, "searchView()").locator(".grid-wrap");
+    await expect(grid).toHaveAttribute("data-shown-query", "warp");
+    await expect(tabLabels(page), "no tab piles up for a search").toHaveText(PINNED);
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
+
+    // It is the box of the card on screen, and what is typed waits for Enter.
+    await typeInto(searchBox(page), "warp core");
+    await expect(grid).toHaveAttribute("data-shown-query", "warp");
+    // The first closes any suggestions; the next puts back what is shown.
+    await searchBox(page).press("Escape");
+    await searchBox(page).press("Escape");
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
+
+    await typeInto(searchBox(page), "tea");
+    await searchBox(page).press("ControlOrMeta+Enter");
+    const own = cardOf(page, 'searchView({"q":"tea"})');
+    await expect(own).toBeVisible();
+    await expect(shownTabName(page)).toHaveText("Search: tea");
     await expect(tabLabels(page)).toHaveCount(4);
-    // The box empties, ready for the next search.
+    await expect(searchBox(page)).toHaveAttribute("data-query", "tea");
+
+    // Off the search cards, nothing is searched yet, so it holds nothing.
+    await tabLabels(page).first().click();
     await expect(searchBox(page)).toHaveAttribute("data-query", "");
+    await tabLabels(page).nth(1).click();
+    await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
   });
 
   test("Ctrl+K puts the caret in the search box", async ({ page }) => {
