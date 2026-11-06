@@ -350,6 +350,12 @@ These all put something from a protected library outside its folder:
 
 ### What has not been shown
 
+- What **Allow** grants. macOS's dialog names only the app asking, and a person
+  has clicked it for an agent's `docker` command, so a routine yes may also open
+  a protected library to that app until it quits. Whether the yes covers every
+  group container or only the one asked for has not been tested. Until it is, the
+  guard is only as good as a choice made from a dialog that does not say what is
+  at stake.
 - All of this on a signed release. The measurements used dev builds, and the
   `ps` one an ad-hoc signature rather than a Developer ID.
 - macOS's guard on `system/applet-secret` and `system/api-token` themselves.
