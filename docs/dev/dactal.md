@@ -8,7 +8,7 @@ in any card, e.g. in an empty card's header type:
 
 ```
 dactalView()                                      # load recent rows, list the datasets
-dactalView({ load: "provider:slack", q: "rows/channel" })
+dactalView({ load: "source:slack", q: "rows/conversation_name" })
 ```
 
 `opts.load` is a Datalib search that seeds the working set; `opts.q` is the
