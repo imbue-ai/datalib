@@ -1,8 +1,9 @@
 # Searching your mirror
 
 One query language answers everywhere you can search datalib: the
-search box at the top of the app (Enter runs it, ⌘Enter opens it in a new
-card, and its arrow opens Advanced search, whose every setting writes the same
+search box at the top of the app (Enter runs it in the search tab you are on,
+or a new tab from anywhere else; ⌘Enter always opens a new tab; and its arrow
+opens Advanced search, whose every setting writes the same
 words into the box), `datalib-applet search <data_root> '<query>'`
 from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_document_index/search?q=…` on a running

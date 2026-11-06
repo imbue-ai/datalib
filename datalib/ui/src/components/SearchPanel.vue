@@ -20,6 +20,10 @@ const props = defineProps<{
   query: string;
   /** What was last run, whose results the source counts describe. */
   settled: string;
+  /** Whether Enter changes the search on screen, or opens a new one. */
+  onSearchCard: boolean;
+  /** How this machine spells the key that always opens a new tab. */
+  newTabKey: string;
 }>();
 const emit = defineEmits<{
   /** Run this query. */
@@ -167,6 +171,13 @@ watch([() => props.settled, offersSources], loadSources, { immediate: true });
         </button>
       </div>
     </div>
+
+    <p class="panel-hint" data-testid="search-new-tab-hint">
+      <template v-if="onSearchCard">
+        Enter searches in this tab. <kbd>{{ newTabKey }}</kbd> opens a new one.
+      </template>
+      <template v-else>Enter opens the search in a new tab.</template>
+    </p>
   </section>
 </template>
 
@@ -247,6 +258,16 @@ watch([() => props.settled, offersSources], loadSources, { immediate: true });
 .chip img {
   width: var(--datalib-icon-size);
   height: var(--datalib-icon-size);
+}
+.panel-hint {
+  margin: 2px 0 0;
+  color: var(--datalib-muted);
+}
+.panel-hint kbd {
+  font: inherit;
+  padding: 0 4px;
+  border: 1px solid var(--datalib-border);
+  border-radius: 4px;
 }
 .chip-key {
   font-family: var(--datalib-font-mono, ui-monospace, monospace);

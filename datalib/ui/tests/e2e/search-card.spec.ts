@@ -11,6 +11,7 @@ import {
   runSearch,
   shownCards,
   stubStream,
+  SEARCH_SETTLE,
 } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
@@ -134,14 +135,18 @@ test("a source chip in the panel writes the filter, and goes once one source is 
 test("the panel writes the query a person could have typed", async ({ page }) => {
   await page.goto(GRID);
   await runSearch(page, "warp core");
-  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core", {
+    timeout: SEARCH_SETTLE,
+  });
   await openPanel(page);
 
   const meaning = page.getByTestId("search-semantic");
   await expect(meaning, "semantic search is on by default").toBeChecked();
   await meaning.click();
   await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:off");
-  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:off");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:off", {
+    timeout: SEARCH_SETTLE,
+  });
   await expect(page.getByTestId("search-cutoff")).toHaveCount(0);
 
   await meaning.click();
@@ -154,7 +159,9 @@ test("the panel writes the query a person could have typed", async ({ page }) =>
   await perDocument.click();
   await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:0.4 is:document");
   await perDocument.click();
-  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:0.4");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:0.4", {
+    timeout: SEARCH_SETTLE,
+  });
 
   // A filter is started, not run: its values are offered.
   const shown = await tableShows(page).getAttribute("data-shown-query");
@@ -254,7 +261,9 @@ test("a search says above its results what it could not reach, in either view", 
 
   asked.length = 0;
   await runSearch(page, "warp core");
-  await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core", {
+    timeout: SEARCH_SETTLE,
+  });
   await expect(notices).toHaveText([
     "Part of this search could not answer",
     "1,511 candidates lack semantic embedding vectors",
@@ -264,11 +273,15 @@ test("a search says above its results what it could not reach, in either view", 
   expect(asked.some((u) => u.searchParams.has("tab"))).toBe(false);
 
   await viewTab(page, "Table").click();
-  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core", {
+    timeout: SEARCH_SETTLE,
+  });
   await expect(notices).toHaveCount(2);
 
   await runSearch(page, "tea semantic:off");
-  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off");
+  await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off", {
+    timeout: SEARCH_SETTLE,
+  });
   await expect(notices).toHaveCount(0);
 
   await page.unrouteAll({ behavior: "ignoreErrors" });
