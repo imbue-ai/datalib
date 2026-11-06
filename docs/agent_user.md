@@ -500,7 +500,7 @@ Pick the surface that fits the question:
   (from qmd's keyword index, a document holding the words as typed first) and
   the documents nearest the text by cosine over qmd's vectors, one row a
   document. `semantic:off` in the query leaves out the vectors, and
-  `semantic:0.4` asks for that similarity where the default is 0.25: a word or
+  `semantic:0.4` asks for that similarity where the default is 0.3: a word or
   a field that matches counts however far off its meaning is. All are ranked
   within the rows the other terms leave, so `from:`, `after:` or `source:`
   narrow what is ranked rather than what is kept. `query_echo.without_vectors`

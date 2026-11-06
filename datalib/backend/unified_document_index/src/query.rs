@@ -83,7 +83,10 @@ pub enum Semantic {
 }
 
 impl Semantic {
-    pub const DEFAULT: Self = Semantic::AtLeast(250);
+    /// Measured on a real library: as much is found at 0.30 as at anything
+    /// lower, with far shorter lists, and 0.35 starts to lose searches in other
+    /// words or another language (`docs/dev/testing.md`, the search eval).
+    pub const DEFAULT: Self = Semantic::AtLeast(300);
 
     /// The similarity a document needs, or `None` when meaning is not asked.
     pub fn cutoff(self) -> Option<f64> {
