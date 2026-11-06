@@ -9,7 +9,7 @@ import { SEARCH } from "@/api";
 import "@/cards/chip.css";
 import { withToken } from "@/grid/query";
 import SearchField from "@/search/SearchField.vue";
-import { activeSearch } from "@/search/searchCards";
+import { activeSearch, draftAfter } from "@/search/searchCards";
 import { searchFor, showCard, SEARCH_CARD } from "@/surface";
 import SearchPanel from "./SearchPanel.vue";
 
@@ -31,7 +31,7 @@ function run(q: string) {
 watch(
   [activeSearch, () => activeSearch.value?.query.value],
   ([card]) => {
-    draft.value = card?.query.value ?? "";
+    draft.value = draftAfter(draft.value, input.value?.hasFocus() ?? false, card?.query.value);
   },
   { immediate: true },
 );
