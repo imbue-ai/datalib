@@ -1,7 +1,6 @@
 # Fastmail's calendars over CalDAV, signed in through latchkey's
-# `fastmail-dav` service with a read-only app password
-# (`latchkey auth set fastmail-dav -u "you@example.com:<app password>"`).
-# An empty `fastmail` table mirrors every calendar the account can see.
+# `fastmail-dav` service with a read-only app password. An empty `fastmail`
+# table mirrors every calendar the account can see.
 [[groups]]
 id = "calendar"
 name = "Fastmail Calendar"

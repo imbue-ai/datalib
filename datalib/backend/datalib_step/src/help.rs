@@ -57,8 +57,9 @@ const SETUP: &[SetupStep] = &[
     },
     SetupStep {
         say: "Sign it in. A web source signs in through latchkey, which ships beside these \
-              binaries; its page has the command (`latchkey auth browser slack` for Slack). \
-              A source that reads files needs only their path in its params.",
+              binaries; its page has the command (`latchkey auth browser slack` for Slack), \
+              and what to do instead when a latchkey gateway holds the credentials. A source \
+              that reads files needs only their path in its params.",
         commands: &[],
     },
     SetupStep {
@@ -221,6 +222,11 @@ pub fn examples_page(word: &str) -> Result<String, String> {
 
 fn examples_intro(t: SourceType) -> Vec<String> {
     let methods: Vec<&str> = ingest_methods(t).iter().map(|m| m.path).collect();
+    let sign_in = if t.uses_latchkey_account() {
+        format!(" `datalib-step help {t}` says how to sign it in.")
+    } else {
+        String::new()
+    };
     let time_series = if t.renders_time_series() {
         " `render_time_series` does the same for its numbers over time, for the charts \
          and the time-series index."
@@ -297,7 +303,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              once, each at its line; `datalib-step probe {t}` asks the service which \
              account the credentials reach, if the method reaches one; and \
              `datalib-dag <config> --sync <id>/ingest --by <you>` syncs the source and \
-             everything that reads it."
+             everything that reads it.{sign_in}"
         ),
     ]
 }
@@ -407,9 +413,13 @@ fn source_page(t: SourceType, git_ref: &str) -> String {
             section.trim_end(),
             GETTING_YOUR_DATA,
             git_ref,
-            false,
+            datalib_agent_docs::Reader::SourcePage(t.as_str()),
         ));
         out.push_str("\n\n");
+    }
+    if t.uses_latchkey_account() {
+        out.push_str(&wrap(&behind_a_gateway(t), 0, 0));
+        out.push('\n');
     }
     out.push_str(&wrap(
         "Ingest methods: the `ingest` step's params hold one of these tables, \
@@ -452,6 +462,18 @@ fn source_page(t: SourceType, git_ref: &str) -> String {
     ));
     out.truncate(out.trim_end().len());
     out
+}
+
+// Printed whatever this process's environment says, so a page reads the
+// same wherever it is printed and written beside the binaries.
+fn behind_a_gateway(t: SourceType) -> String {
+    format!(
+        "The `latchkey auth` commands above sign in on the machine you run them on. If \
+         `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway holds the \
+         credentials instead, and those commands may be refused or sign in somewhere else: \
+         sign in, or ask for access, wherever that gateway is managed. Either way, \
+         `datalib-step probe {t}` says whether the sign-in works."
+    )
 }
 
 fn method_page(t: SourceType, method: &'static str) -> String {
@@ -729,6 +751,59 @@ mod tests {
         for heading in ["## Email", "## Fastmail\n", "## Gmail"] {
             assert!(page.contains(heading), "{heading} missing:\n{page}");
         }
+    }
+
+    /// `help email` said Gmail and Fastmail were at `datalib-step help
+    /// email`, the page being read, when their sections are on it.
+    #[test]
+    fn a_source_page_never_sends_the_reader_to_itself() {
+        for &t in SourceType::VARIANTS {
+            let page = page(&[t.as_str().into()], &commands(), "abc123").unwrap();
+            let itself = format!("(`datalib-step help {t}`)");
+            assert!(!page.contains(&itself), "{t}:\n{page}");
+        }
+        let email = page_of(&["email"]);
+        assert!(email.contains("Fastmail (§ \"Fastmail\")"), "{email}");
+    }
+
+    /// Whether `latchkey auth` works here depends on whether a gateway holds
+    /// the credentials, which a page cannot know and a person can check.
+    #[test]
+    fn a_page_with_a_sign_in_says_what_to_do_behind_a_gateway() {
+        for &t in SourceType::VARIANTS {
+            let page = page(&[t.as_str().into()], &commands(), "abc123").unwrap();
+            assert_eq!(
+                page.contains("LATCHKEY_GATEWAY"),
+                t.uses_latchkey_account(),
+                "{t}:\n{page}"
+            );
+        }
+    }
+
+    /// A stanza's comment ends up in a person's config, away from anything
+    /// that could say when a sign-in command does not apply, so the command
+    /// stays on the source's page.
+    #[test]
+    fn no_stanza_comment_names_a_sign_in_command() {
+        for &t in SourceType::VARIANTS {
+            let page = examples_page(t.as_str()).unwrap();
+            for command in ["latchkey auth browser", "latchkey auth set"] {
+                assert!(!page.contains(command), "{t}:\n{page}");
+            }
+        }
+    }
+
+    /// `datalib-dag init` writes the starter with no server to fill in a
+    /// placeholder, and it told the reader to go to `<origin>/agent/config.md`.
+    #[test]
+    fn the_starter_config_names_a_page_that_exists() {
+        let starter = datalib_dag::starter::STARTER_CONFIG;
+        assert!(!starter.contains("<origin>"), "{starter}");
+        let (_, rest) = starter
+            .split_once("`datalib-step help ")
+            .expect("the starter points at a help page");
+        let (topic, _) = rest.split_once('`').unwrap();
+        assert!(datalib_agent_docs::doc(topic).is_some(), "{topic}");
     }
 
     /// `help calendar` opened on "## Calendar (CalDAV)", so it read as if

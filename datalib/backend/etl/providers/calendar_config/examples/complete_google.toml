@@ -1,6 +1,5 @@
-# Google Calendar through Google's API, signed in through latchkey
-# (`latchkey auth browser google-calendar`), with every option set, and
-# searchable.
+# Google Calendar through Google's API, signed in through latchkey, with
+# every option set, and searchable.
 [[groups]]
 id = "calendar"
 name = "Google Calendar"

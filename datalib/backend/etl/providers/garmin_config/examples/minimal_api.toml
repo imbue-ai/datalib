@@ -1,7 +1,7 @@
 # Garmin Connect over the API the Connect phone app uses, signed in through
-# latchkey's Garmin plugin (`latchkey auth browser garmin`; the Add a source
-# dialog installs the plugin). An empty `api` table mirrors every per-day
-# metric, weigh-ins and activities from a year back.
+# latchkey's Garmin plugin (the Add a source dialog installs it). An empty
+# `api` table mirrors every per-day metric, weigh-ins and activities from a
+# year back.
 [[groups]]
 id = "garmin"
 name = "Garmin Connect"

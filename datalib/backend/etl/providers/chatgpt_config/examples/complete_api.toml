@@ -1,6 +1,5 @@
 # ChatGPT conversations over chatgpt.com's web API, signed in through
-# latchkey (`latchkey auth browser chatgpt`), with every option set, and
-# searchable.
+# latchkey, with every option set, and searchable.
 [[groups]]
 id = "chatgpt"
 name = "ChatGPT"

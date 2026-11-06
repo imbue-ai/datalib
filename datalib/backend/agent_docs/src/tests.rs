@@ -57,7 +57,7 @@ fn a_link_to_an_embedded_doc_prints_as_the_command_that_prints_it() {
               [Gmail](getting_your_data.md#gmail), [the code](../../datalib/backend/etl/README.md), \
               [the web](https://e.org/x), ![a picture](/data/x/ingest/blob/ab) and `[code](x.md)`.";
     assert_eq!(
-        print_links(md, "docs/user/searching.md", REF, true),
+        print_links(md, "docs/user/searching.md", REF, Reader::WholeDoc),
         "See the guide (`datalib-step help agent`), windows (`datalib-step help config-model`, \
          § \"Time windows: `since` and `until`\"), Gmail (`datalib-step help email`), \
          [the code](https://raw.githubusercontent.com/imbue-ai/datalib/abc123/datalib/backend/etl/README.md), \
@@ -69,13 +69,29 @@ fn a_link_to_an_embedded_doc_prints_as_the_command_that_prints_it() {
 fn an_anchor_in_the_doc_being_printed_names_its_heading() {
     let md = "Read [the windows](#time-windows-since-and-until) first.";
     assert_eq!(
-        print_links(md, "docs/dev/config_model.md", REF, true),
+        print_links(md, "docs/dev/config_model.md", REF, Reader::WholeDoc),
         "Read the windows (§ \"Time windows: `since` and `until`\") first."
     );
     assert_eq!(
-        print_links(md, "docs/dev/config_model.md", REF, false),
+        print_links(
+            md,
+            "docs/dev/config_model.md",
+            REF,
+            Reader::SourcePage("slack")
+        ),
         "Read the windows (`datalib-step help config-model`, § \"Time windows: `since` and \
          `until`\") first."
+    );
+}
+
+/// A source's page holds every section of its type, so a link to one of
+/// them must not print as the command for the page already being read.
+#[test]
+fn a_section_on_the_page_being_read_is_named_not_commanded() {
+    let md = "[Gmail](#gmail) and [Slack](#slack).";
+    assert_eq!(
+        print_links(md, GETTING_YOUR_DATA, REF, Reader::SourcePage("email")),
+        "Gmail (§ \"Gmail\") and Slack (`datalib-step help slack`)."
     );
 }
 
@@ -83,7 +99,7 @@ fn an_anchor_in_the_doc_being_printed_names_its_heading() {
 fn a_link_inside_a_code_block_is_left_alone() {
     let md = "```sh\necho '[a](b.md)'\n```\n[c](../agent_user.md)\n";
     assert_eq!(
-        print_links(md, "docs/user/x.md", REF, true),
+        print_links(md, "docs/user/x.md", REF, Reader::WholeDoc),
         "```sh\necho '[a](b.md)'\n```\nc (`datalib-step help agent`)\n"
     );
 }

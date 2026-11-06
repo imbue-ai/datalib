@@ -28,7 +28,7 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified document index ──�
 # them and the order it lists them in. The runner follows `inputs`,
 # not the file. Anything above the first [[…]] header is a top-level
 # key (data_root, binary_dir), not part of an entry. See
-# <origin>/agent/config.md.
+# `datalib-step help config-model`.
 
 [[groups]]
 id = "unified_document_index"

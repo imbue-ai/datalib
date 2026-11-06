@@ -1,5 +1,5 @@
-# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
-# browser fastmail`), with every option set, and searchable.
+# Fastmail mail over JMAP, signed in through latchkey, with every option set,
+# and searchable.
 [[groups]]
 id = "email"
 name = "Fastmail"
