@@ -83,6 +83,9 @@ pub enum Semantic {
 }
 
 impl Semantic {
+    /// Set for recall: a straggler at the bottom of a list costs little, and
+    /// a missed document costs the search. One real library found as much at
+    /// 0.30, with far shorter lists, but another may not.
     pub const DEFAULT: Self = Semantic::AtLeast(250);
 
     /// The similarity a document needs, or `None` when meaning is not asked.
