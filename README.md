@@ -265,6 +265,9 @@ A mirror you can't leave is just another silo, so the exits are plain:
   datalib-doltlite -readonly slack/ingest/entities.doltlite_db .dump | sqlite3 slack.sqlite
   ```
 
+  From Python, `uv add imbue-datalib-reader` reads a store directly
+  ([Reading the raw stores](docs/user/raw_stores.md)).
+
   Or browse a store in a GUI: a build of DB Browser for SQLite patched to
   open doltlite files is at
   <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).

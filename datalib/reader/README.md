@@ -6,7 +6,7 @@ kept inside it, which Python's own `sqlite3` module cannot open. This package
 carries the doltlite library and a small module that calls it.
 
 ```sh
-uv add imbue-datalib-reader     # or: pip install imbue-datalib-reader
+uv add imbue-datalib-reader==<version>     # or pip install; the version `datalib-dag --version` prints
 ```
 
 ```python
@@ -15,10 +15,15 @@ from datalib_reader import Store
 path = "my-library/gmail/ingest/entities.doltlite_db"
 
 with Store(path) as store:  # the latest sealed state
-    rows = store.query("SELECT subject FROM emails WHERE id = ?", email_id)
+    rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
+    commit = store.query("SELECT dolt_hashof('main')")[0][0]  # keep this to come back to
 
-with Store(path, commit) as store:  # one commit, however far the store moves on
-    changed = store.query("SELECT to_id FROM dolt_diff_emails(?, ?)", cursor, commit)
+with Store(path, commit) as store:  # that commit, however far the store moves on
+    count = store.query("SELECT count(*) FROM emails")
+
+with Store(path) as store:  # after a later sync: what changed since that commit
+    latest = store.query("SELECT dolt_hashof('main')")[0][0]
+    changed = store.query("SELECT diff_type, to_id FROM dolt_diff_emails(?, ?)", commit, latest)
 ```
 
 `query` returns a list of tuples.

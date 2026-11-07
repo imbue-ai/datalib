@@ -411,8 +411,8 @@ things, in this order:
 
 1. **A connection in your own process.** A query on an open connection
    takes about 0.01 ms. From Python, under any interpreter, uv's included,
-   `uv add imbue-datalib-reader`
-   ([Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)).
+   `uv add imbue-datalib-reader==<version>`, the version `datalib-dag --version`
+   prints ([Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)).
    It calls `libdoltlite`, which a release also installs beside
    `datalib-doltlite` under `lib/`. The library has SQLite's C API, so any
    language that can call C can do the same. It is built from the same
