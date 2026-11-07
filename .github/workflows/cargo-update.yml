@@ -49,7 +49,7 @@ jobs:
       run:
         shell: bash
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b
+      image: ghcr.io/imbue-ai/datalib_devcontainer@sha256:51ff33d6529c2145d5c53b41257c45150a5385cb4b890b7ba9e22f738a055be1
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
