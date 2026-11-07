@@ -230,6 +230,30 @@ What that means for datalib today:
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
 
+Spotlight indexes an ordinary library, as it does the rest of your home
+folder, and not one in the protected folder. To keep your libraries out of
+its results, add `~/Datalib` to the Search Privacy list in Spotlight's page
+of System Settings.
+
+#### When macOS asks to "access data from other apps"
+
+This dialog is what guards a protected folder, and it tells you very little.
+macOS writes it, not Datalib, so Datalib cannot make it clearer. It names the
+app asking, which is the app an agent or a command runs inside, such as Claude
+or Terminal. It does not name the folder, the file or the command.
+
+So the same dialog can come from something routine: an AI agent running `docker`
+inside Claude has brought it up. Whether saying **Allow** there also lets that
+app into your protected libraries is not yet known, so assume it may.
+
+- **If you did not expect it, say no** and see what breaks.
+- **If you said Allow, quit that app when you are done.** The permission is meant
+  to last until the app quits, and everything running inside the app shares it,
+  including every agent.
+- **Run what keeps asking from a different app.** Docker commands you run in
+  Terminal make Terminal the one asking, not the app your agent runs in. An
+  agent running inside that Terminal still shares its permission.
+
 #### Which apps have you let in? (macOS)
 
 A protected folder is only as closed as the permissions you've handed
