@@ -238,8 +238,6 @@ anyone can install it by name, so it is worth the same care as a tarball.
 Still open: who owns the project on PyPI. An owner's account can add a publisher
 or a maintainer, and nothing in this repository can see that. A person's own
 lockfile pins a wheel's hash; a bare `pip install` follows whatever is latest.
-None of this has run yet: a PR run has built and checked the wheels, and the first
-upload will be the next tag's.
 
 ## The settings this rests on
 

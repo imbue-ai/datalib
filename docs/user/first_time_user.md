@@ -755,6 +755,9 @@ in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
 transaction it leaves open stalls that sync. 
 
+From Python, `uv add imbue-datalib-reader` reads a store in place, with no
+export: see [Reading the raw stores](raw_stores.md).
+
 If you prefer a GUI, you have two options:
 
 1. The Dolt team makes [the Dolt Workbench](https://github.com/dolthub/dolt-workbench),

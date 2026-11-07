@@ -212,12 +212,13 @@ BAZEL=bazelisk scripts/release/check_reader_wheels.sh macos /tmp/wheels
 With `linux`, `READER_ARCH=x86_64` gives the other architecture, which runs under
 an emulator and takes far longer to compile. The mac check needs `uv`.
 
-**Setting it up on PyPI, once.** Nothing here can do this. On pypi.org, under an
-account the team shares, add a *pending publisher* for `imbue-datalib-reader`:
-owner `imbue-ai`, repository `datalib`, workflow `reader-wheels.yml`, environment
-`pypi`. Then restrict that GitHub environment to `v*` tags, which
+**How PyPI is set up.** This is done, and nothing here can change it. On pypi.org,
+under an account the team shares, `imbue-datalib-reader` names one *trusted
+publisher*, the only place PyPI takes an upload from: owner `imbue-ai`, repository
+`datalib`, workflow `reader-wheels.yml`, environment `pypi`. If that workflow or
+environment is renamed, change the publisher to match, or the next tag's upload is
+refused. That GitHub environment is restricted to `v*` tags, which
 [`security_posture.md`](security_posture.md) §"The settings this rests on" checks.
-A pending publisher does not reserve the name; the first upload does.
 
 ## Who holds what
 
@@ -401,8 +402,8 @@ matches.
 ## What stays release-only
 
 - The upload to PyPI, in `reader-wheels.yml`. PRs build and check the same
-  wheels, but only a tag's run can publish, so the first tag after setting it
-  up is what first tries it.
+  wheels, but only a tag's run can publish, so a problem with the upload itself
+  first shows on a tag.
 - The `runtime` legs on the real runners, with their own bash and
   their own filesystem — the tests make the same calls, not the same
   machine.
