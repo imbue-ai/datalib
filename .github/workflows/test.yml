@@ -701,8 +701,10 @@ jobs:
   # the musl toolchain — on every PR instead of at the next release. The
   # static-ness assertion mirrors
   # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the x86_64
-  # runner only; the aarch64-musl leg differs by arch, not by build
-  # logic, and stays tag-time-only.)
+  # runner only and the aarch64-musl leg stays tag-time-only, though
+  # arch alone can break it: blake3's NEON kernel links only there, and
+  # once clashed with doltlite's own copy of blake3. Cross-build it
+  # from a mac with `--config=musl-aarch64` after touching either.)
   musl-dist:
     name: bazel build :dist (musl static)
     # Only `main` may use this environment, and only it holds the release
