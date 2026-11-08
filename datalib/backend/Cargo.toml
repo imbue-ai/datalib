@@ -35,7 +35,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
-blake3 = { version = "1", default-features = false, features = ["mmap", "pure", "rayon", "std"] }
+blake3 = { version = "1", default-features = false, features = ["mmap", "rayon", "std"] }
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"

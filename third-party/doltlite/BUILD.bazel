@@ -99,6 +99,12 @@ DOLTLITE_LIBRARY_COPTS = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
     # object". The amalgamation the crate used to compile itself was
     # built -fPIC by the `cc` crate; this keeps ours the same.
     "-fPIC",
+    # doltlite embeds blake3's portable C with global symbols. On
+    # aarch64 the blake3 crate exports this one from Rust too, for its
+    # NEON kernel to call, and a static (musl) link refuses the second
+    # definition. doltlite builds none of blake3's SIMD kernels, so no
+    # other name is shared.
+    "-Dblake3_compress_in_place_portable=doltlite_blake3_compress_in_place_portable",
 ]
 
 DOLTLITE_LINKOPTS = select({
