@@ -1,0 +1,51 @@
+# The Mail app on this Mac, with every option set, and searchable. No
+# sign-in. Mail's own index says what each account holds, so a message
+# deleted in Mail leaves the mirror on the next sync.
+[[groups]]
+id = "email"
+name = "Apple Mail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only messages in these mailboxes, named as Mail shows them, with
+# a nested one as its full path. Several add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the mailboxes keep; default true
+
+# `account` picks one of Mail's accounts; the rest name the account row
+# its mail is filed under.
+[steps.params.apple_mail]
+path = "~/Library/Mail"                          # Mail's folder (the default), or a copy of it
+account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # the account's folder under ~/Library/Mail/V10; needed only when Mail has more than one
+account_id = "picard_mail"                       # the account's id; default made from Mail's
+display_name = "Picard's mail"                   # the account's name; default its account_id
+email_address = "picard@example.com"             # the account's address; unset by default
+is_personal = true                               # a personal (not work) account; default true
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email/ingest"]
+
+[steps.params]
+only_render_labels = ["Inbox"]  # render only threads with a message in these mailboxes; default [] is all
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "email"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["email/render_markdown"]
+
+[[steps]]
+group = "email"
+function = "embed"
+command = "datalib-step"
+inputs = ["email/keyword_index"]

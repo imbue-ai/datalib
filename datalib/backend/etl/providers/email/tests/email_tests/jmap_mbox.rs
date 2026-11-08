@@ -30,7 +30,10 @@ use datalib_etl_render::inputs::RawRange;
 /// The part behind each part address `md` links, as the server answers
 /// it from the `.eml`s in the blob store at `cas`. Panics on an address
 /// the server would answer "not found".
-async fn parts_linked(md: &str, cas: &std::path::Path) -> Vec<datalib_blob_store::Stored> {
+pub(crate) async fn parts_linked(
+    md: &str,
+    cas: &std::path::Path,
+) -> Vec<datalib_blob_store::Stored> {
     let mut out = Vec::new();
     for (i, _) in md.match_indices("/part/") {
         let eml = &md[i.saturating_sub(64)..i];
@@ -54,7 +57,7 @@ fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
 }
 
 /// Renders `store` with `size`, returning each document and each page's end.
-fn render_paged(
+pub(crate) fn render_paged(
     store: &EmailStore,
     root: &std::path::Path,
     only_labels: &[String],
