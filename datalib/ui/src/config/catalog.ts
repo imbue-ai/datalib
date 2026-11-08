@@ -1094,9 +1094,75 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "email",
+    variantKey: "apple_mail",
+    label: "Apple Mail",
+    blurb: "Copy one account of the Mail app on this Mac, from its own files.",
+    keywords: ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"],
+    kind: "local",
+    icon: "apple_mail",
+    defaultName: "apple-mail",
+    nameHint: "Mail on this Mac",
+    wizard: true,
+    intro:
+      "Copies the mail the Mail app keeps on this Mac, with its mailboxes and read state. " +
+      "A message Mail has not downloaded yet is copied once Mail has it.",
+    sections: [
+      { heading: "Mail folder", fields: ["apple_mail.path"] },
+      {
+        heading: "Which mail?",
+        answers: [
+          { label: "Every mailbox" },
+          { label: "Only the mailboxes I choose", fields: ["only_extract_labels"] },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "path",
+        // Choosing the folder is what grants the app access to it on macOS
+        // (docs/dev/wizard_file_pickers.md), as for ~/Library/Messages.
+        picks: "dir",
+        pickTitle: "Choose your Mail folder",
+        startIn: "~/Library/Mail",
+        required: true,
+        target: "apple_mail.path",
+        label: "Mail folder",
+        guarded: "Let Datalib read your Mail folder",
+        help: "The folder the Mail app keeps its mail in, ~/Library/Mail. A copy of it works too.",
+      },
+      {
+        kind: "string_list",
+        target: "only_extract_labels",
+        label: "Mailboxes",
+        help:
+          "Named as Mail shows them. A mailbox inside another is named in full " +
+          "([Gmail]/Sent Mail), and choosing a parent does not include its children.",
+      },
+      {
+        kind: "text",
+        target: "apple_mail.account",
+        label: "Mail account",
+        help:
+          "apple_mail.account: Mail's id for the account, the name of its folder under " +
+          "~/Library/Mail/V10. Needed only when Mail holds mail for more than one account; a " +
+          "sync without it lists them.",
+      },
+      {
+        kind: "string_list",
+        phase: "render",
+        target: "only_render_labels",
+        label: "Render only these mailboxes",
+        help:
+          "A narrower filter applied at render. Empty renders everything copied. Changing it " +
+          "re-renders; it never copies again.",
+      },
+    ],
+  },
   // The catch-all `email` entry, and deliberately last: it has no
-  // `variantKey`, so it is what an email step matches when neither of
-  // the two above does — an mbox source, or a JMAP server that is not
+  // `variantKey`, so it is what an email step matches when none of
+  // the three above does — an mbox source, or a JMAP server that is not
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
   {

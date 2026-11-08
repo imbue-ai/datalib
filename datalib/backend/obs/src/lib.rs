@@ -87,6 +87,7 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     let directives = args.log_level.clone().unwrap_or_else(default_filter);
     let filter = EnvFilter::try_new(&directives)
         .with_context(|| format!("parse log-level filter {directives:?}"))?;
+    let filter_hint = filter.max_level_hint();
 
     let use_json = match args.log_format {
         LogFormat::Json => true,
@@ -171,6 +172,8 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
             .context("install tracing subscriber")?;
     }
 
+    log::set_max_level(log_crate_max_level(&directives, &filter_hint));
+
     // Publish the shared MultiProgress so call sites in other crates
     // can grab it via `datalib_obs::shared_multi()` without
     // threading the `TracingGuard` through their call chain. Second
@@ -179,4 +182,63 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     datalib_status_line::set_shared_multi(multi.clone());
 
     Ok(TracingGuard { provider, multi })
+}
+
+/// The level the `log` crate's macros stop at before calling anything.
+/// `try_init` sets it to the filter's most verbose level, `trace` for
+/// our own crates, so html5ever's per-token `trace!` reached the filter
+/// only to be refused there, a fifth of an email render. No crate of
+/// ours logs through `log`, so the libraries' directives decide it.
+fn log_crate_max_level(
+    directives: &str,
+    whole_filter_hint: &Option<tracing::level_filters::LevelFilter>,
+) -> log::LevelFilter {
+    use tracing::level_filters::LevelFilter;
+    let hint = match datalib_log_filter::library_directives(directives) {
+        Some(theirs) if theirs.is_empty() => Some(LevelFilter::OFF),
+        Some(theirs) => EnvFilter::try_new(&theirs)
+            .ok()
+            .and_then(|f| f.max_level_hint()),
+        None => *whole_filter_hint,
+    };
+    match hint.unwrap_or(LevelFilter::TRACE).into_level() {
+        None => log::LevelFilter::Off,
+        Some(tracing::Level::ERROR) => log::LevelFilter::Error,
+        Some(tracing::Level::WARN) => log::LevelFilter::Warn,
+        Some(tracing::Level::INFO) => log::LevelFilter::Info,
+        Some(tracing::Level::DEBUG) => log::LevelFilter::Debug,
+        Some(tracing::Level::TRACE) => log::LevelFilter::Trace,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_filter, init, log_crate_max_level, ObsArgs};
+    use tracing_subscriber::EnvFilter;
+
+    fn level_for(directives: &str) -> log::LevelFilter {
+        let hint = EnvFilter::try_new(directives).unwrap().max_level_hint();
+        log_crate_max_level(directives, &hint)
+    }
+
+    #[test]
+    fn log_crate_level_follows_the_libraries_not_our_crates() {
+        assert_eq!(level_for(&default_filter()), log::LevelFilter::Info);
+        assert_eq!(level_for("warn,datalib=trace"), log::LevelFilter::Warn);
+        assert_eq!(level_for("datalib=trace"), log::LevelFilter::Off);
+        assert_eq!(level_for("info,html5ever=trace"), log::LevelFilter::Trace);
+        assert_eq!(level_for("info,[render]=debug"), log::LevelFilter::Debug);
+    }
+
+    /// Guards the email render's cost: after `init` with the default
+    /// filter, html5ever's per-token `log::trace!` must stop at the `log`
+    /// crate's own gate, before the bridge and the filter are asked.
+    #[test]
+    fn a_capped_library_trace_never_reaches_the_filter() {
+        let _guard = init(&ObsArgs::default(), "obs-test").unwrap();
+        assert!(log::max_level() <= log::LevelFilter::Info);
+        assert!(!log::log_enabled!(target: "html5ever::tokenizer", log::Level::Trace));
+        assert!(!log::log_enabled!(target: "markup5ever", log::Level::Debug));
+        assert!(tracing::enabled!(target: "datalib_step", tracing::Level::TRACE));
+    }
 }

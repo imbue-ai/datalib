@@ -13,7 +13,8 @@ config and picks the code that runs — and where the data comes from.
 *Where* is one table on the source's ingest step, named under the type:
 `api` is the product's own API, `export` an unpacked export, `backup` a
 phone backup, `fswalk` a folder to scan. A type that is not one product
-spells its sources out — email's are `jmap`, `gmail` and `mbox`. A table
+spells its sources out — email's are `jmap`, `gmail`, `mbox` and
+`apple_mail`. A table
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
@@ -35,6 +36,29 @@ holds the credentials instead, and those commands may be refused or sign
 in somewhere else: sign in, or ask for access, wherever that gateway is
 managed. Either way, `datalib-step probe <type>` says whether the
 sign-in works.
+
+## Apple Mail
+
+`type = "email"` with an `apple_mail` table — one account of the Mail
+app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
+every message Mail has downloaded, with its mailboxes (a Gmail account's
+labels among them), whether it was read, flagged or answered, and its
+attachments. No sign-in, and nothing is fetched from the mail server: a
+message or attachment Mail has not downloaded yet is copied by the sync
+after Mail has it, and until then the source shows a warning counting
+them.
+
+macOS protects Mail's folder. In the app, choose it with the picker in
+the "Apple Mail" form — that is what grants Datalib access (Cmd-Shift-G
+in the dialog reaches `~/Library/Mail`). A terminal running
+`datalib-dag` needs Full Disk Access instead (System Settings → Privacy
+& Security).
+
+When Mail holds mail for more than one account, `apple_mail.account`
+names the one to copy, by the name of its folder under
+`~/Library/Mail/V10`; a sync without it lists them. Add a source per
+account to copy several. Mail keeps no Gmail ids, so a Gmail account
+copied through Mail and through [Gmail](#gmail) is two separate copies.
 
 ## Apple Messages
 
@@ -324,9 +348,10 @@ connection** lists them to pick from.
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
-messages and their attachments. [Gmail](#gmail) and
-[Fastmail](#fastmail) have sections of their own; this one is the
+messages and their attachments. [Gmail](#gmail), [Fastmail](#fastmail)
+and [Apple Mail](#apple-mail) have sections of their own; this one is the
 other two routes into the same source.
+
 
 **A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
 `.mbox` file; see [Google Takeout](#google-takeout) for requesting one.

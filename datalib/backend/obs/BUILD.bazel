@@ -18,6 +18,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:indicatif",
+        "@datalib_crates//:log",
         "@datalib_crates//:opentelemetry",
         "@datalib_crates//:opentelemetry-otlp",
         "@datalib_crates//:opentelemetry_sdk",

@@ -187,7 +187,13 @@ step gets the resulting filter as `RUST_LOG`. Third-party crates
 follow it down to `info` and no further, and the noisy ones stay at
 `warn` (`datalib_log_filter`); the server's own `http.*` targets count
 as datalib's. A `RUST_LOG` set where a process was
-started wins over all of that. The store keeps every level it is
+started wins over all of that. A library that logs through the `log` crate
+rather than `tracing` (html5ever does, on every token it parses) is
+stopped at that crate's own level gate, which a step sets to the most
+verbose level any directive allows a library
+(`datalib_obs::init`), so a line the filter would refuse costs one
+comparison rather than a trip through it; none of our crates uses
+`log`, which is what makes that safe. The store keeps every level it is
 handed — `debug` is where a doltlite commit or a batch of rows goes —
 and the log card opens at `min_level:info`, so the lower levels are
 there when asked for and not otherwise. Little emits `trace` today:

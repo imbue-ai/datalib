@@ -3,7 +3,7 @@
 //! the Manage rows and the search grid both. The wizard's descriptors —
 //! fields, pickers, probes — stay in the browser
 //! (`ui/src/config/catalog.ts`); this is only the part a row needs. A
-//! type with variants (`email` is Gmail or Fastmail by the method table
+//! type with variants (`email` is Gmail, Fastmail or Apple Mail by the method table
 //! on its ingest step) is narrowed by which table the params carry.
 
 use crate::Identity;
@@ -38,6 +38,12 @@ const CATALOG: &[Entry] = &[
     e("notion", None, "Notion", Some("notion")),
     e("email", Some("gmail"), "Gmail", Some("gmail")),
     e("email", Some("jmap"), "Fastmail", Some("fastmail")),
+    e(
+        "email",
+        Some("apple_mail"),
+        "Apple Mail",
+        Some("apple_mail"),
+    ),
     e("email", None, "Email (mbox or JMAP)", Some("email")),
     e(
         "calendar",
@@ -183,6 +189,10 @@ mod tests {
     fn a_variant_is_picked_by_the_method_table_the_params_carry() {
         assert_eq!(source_type("email", &json!({"gmail": {}})).label, "Gmail");
         assert_eq!(source_type("email", &json!({"jmap": {}})).label, "Fastmail");
+        assert_eq!(
+            source_type("email", &json!({"apple_mail": {}})).label,
+            "Apple Mail"
+        );
         assert_eq!(
             source_type("email", &json!({"mbox": {}})).label,
             "Email (mbox or JMAP)"
