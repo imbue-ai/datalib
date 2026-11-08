@@ -103,6 +103,10 @@
     {
       "path": "mbox",
       "reach": "local"
+    },
+    {
+      "path": "apple_mail",
+      "reach": "local"
     }
   ],
   "facebook": [

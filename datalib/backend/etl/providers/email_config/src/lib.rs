@@ -42,6 +42,16 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
         method: "mbox",
         toml: include_str!("../examples/complete_mbox.toml"),
     },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "apple_mail",
+        toml: include_str!("../examples/minimal_apple_mail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "apple_mail",
+        toml: include_str!("../examples/complete_apple_mail.toml"),
+    },
 ];
 
 /// The full config for a `type: email` source: the shared `common:` envelope
@@ -73,6 +83,10 @@ pub struct EmailConfig {
     /// signs in as.
     #[serde(default)]
     pub mbox: Option<MboxSync>,
+    /// One account of the Mail app on this Mac, read from its folder. A
+    /// mode of its own: excludes `jmap`, `gmail` and `mbox`.
+    #[serde(default)]
+    pub apple_mail: Option<AppleMailSync>,
     /// Retired here: `outlink_format` belongs on the render step's
     /// params now. Still read, so a config that sets it on the ingest step
     /// is refused with that fix rather than ignored.
@@ -170,6 +184,12 @@ impl EmailConfig {
             .validate()
             .map_err(anyhow::Error::msg)?;
         let live = self.live_mode()?;
+        if self.apple_mail.is_some() && (live.is_some() || self.mbox.is_some()) {
+            anyhow::bail!(
+                "email source sets `apple_mail` beside another download mode — pick one. \
+                 To mirror the same account two ways, declare two sources."
+            );
+        }
         match (&live, &self.mbox) {
             (Some(EmailLiveMode::Jmap(_)), Some(_)) => anyhow::bail!(
                 "email source sets `jmap` and `mbox` — pick one. Only a Gmail account can \
@@ -324,6 +344,46 @@ impl MboxSync {
     }
 }
 
+/// The Apple Mail download path: Mail's folder and which of its accounts
+/// to mirror, plus the account row to file it under.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppleMailSync {
+    /// Mail's folder. Defaults to `~/Library/Mail`; a copy of it, or the
+    /// `V10` folder inside it, works too.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Which of Mail's accounts to mirror, by Mail's id for it: the name of
+    /// its folder under `~/Library/Mail/V10`. Needed only when Mail holds
+    /// mail for more than one account; a sync that needs it lists them.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// Id of the account the mail is filed under. Defaults to
+    /// `apple_mail_` and the start of Mail's id for it.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// The account's display name. Defaults to `account_id`.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// The account's email address. Unset by default.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// Whether this is a personal (rather than work) account. Defaults to
+    /// true.
+    #[serde(default)]
+    pub is_personal: Option<bool>,
+}
+
+impl AppleMailSync {
+    pub fn path(&self) -> PathBuf {
+        expand_tilde(
+            self.path
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new("~/Library/Mail")),
+        )
+    }
+}
+
 /// How to build the "open this email in webmail" outlink. The provider that
 /// owns the account picks the most robust scheme our download identifiers
 /// allow (Gmail → `rfc822msgid:` search; Fastmail → `app.fastmail.com` path).
@@ -469,6 +529,7 @@ impl datalib_source_common::IngestMethods for EmailConfig {
         datalib_source_common::IngestMethod::origin("jmap"),
         datalib_source_common::IngestMethod::origin("gmail"),
         datalib_source_common::IngestMethod::local("mbox"),
+        datalib_source_common::IngestMethod::local("apple_mail"),
     ];
 }
 
@@ -598,6 +659,27 @@ mod tests {
 
     /// A JMAP server's ids are its own, so a Takeout beside it would
     /// double every message rather than seed it.
+    #[test]
+    fn apple_mail_is_a_mode_of_its_own() {
+        let alone: EmailConfig = serde_json::from_value(serde_json::json!({
+            "apple_mail": {},
+        }))
+        .unwrap();
+        alone.validate().unwrap();
+        assert!(alone.apple_mail.unwrap().path().ends_with("Library/Mail"));
+        for other in [
+            serde_json::json!({"mbox": {"path": "/mail.mbox"}}),
+            serde_json::json!({"gmail": {}}),
+            serde_json::json!({"jmap": {"hostname": "api.fastmail.com"}}),
+        ] {
+            let mut both = other.as_object().unwrap().clone();
+            both.insert("apple_mail".into(), serde_json::json!({}));
+            let c: EmailConfig = serde_json::from_value(serde_json::Value::Object(both)).unwrap();
+            let err = c.validate().unwrap_err().to_string();
+            assert!(err.contains("apple_mail"), "{err}");
+        }
+    }
+
     #[test]
     fn rejects_jmap_beside_an_mbox() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({

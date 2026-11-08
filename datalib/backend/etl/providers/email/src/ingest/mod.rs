@@ -3,6 +3,7 @@
 //! (`listed`), then the `.eml` of every email that has none.
 
 pub mod api;
+pub mod apple_mail;
 pub mod db;
 pub mod envelope;
 pub mod gmail_api;

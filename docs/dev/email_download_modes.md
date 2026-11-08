@@ -1,6 +1,6 @@
 # The `email` source's download modes
 
-`type: email` has three download modes, all writing one raw schema. The
+`type: email` has four download modes, all writing one raw schema. The
 code is `datalib/backend/etl/providers/email/` (download; paths below are
 relative to it), `email_render/` and `email_config/`.
 
@@ -9,6 +9,7 @@ relative to it), `email_render/` and `email_config/`.
 | JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
 | Gmail API | `[steps.params.gmail]` | a Gmail / Google Workspace account |
 | mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
+| Apple Mail | `[steps.params.apple_mail]` | one account of the Mail app on a Mac (§6) |
 | Gmail API from a Takeout | both tables, in one step | a Gmail account with a Takeout of it to start from (§3, "Starting from a Takeout") |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
@@ -19,9 +20,9 @@ the surrounding ingestion architecture.
 Which Fastmail credential reaches what — and the read-only API token
 the JMAP mode can use — is in [`fastmail.md`](fastmail.md).
 
-Two of the three have a wizard form: **Gmail** and **Fastmail** are
-separate entries in `datalib/ui/src/config/catalog.ts`, each writing the
-table that selects its mode; the Gmail form also asks whether to start
+Three of the four have a wizard form: **Gmail**, **Fastmail** and
+**Apple Mail** are separate entries in `datalib/ui/src/config/catalog.ts`,
+each writing the table that selects its mode; the Gmail form also asks whether to start
 from a Takeout, and writes `mbox.path` beside `gmail` when it does. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want
 different words on screen — and `variantKey` is what tells two entries
@@ -29,7 +30,7 @@ of one step type apart. The mbox mode, and a JMAP server other than
 Fastmail, have no form: the catch-all "Email (mbox or JMAP)"
 entry sends you to the config editor.
 
-Both forms fill their label pickers from `datalib-step probe email`
+The Gmail and Fastmail forms fill their label pickers from `datalib-step probe email`
 (`src/probe.rs`), which reads the
 account's real labels — one `users.labels.list` or one `Mailbox/get` —
 and returns them spelled exactly the way `only_extract_labels` matches.
@@ -525,16 +526,108 @@ localhost, does SASL upstream and keeps latchkey in the data path.
 Until something like that exists, datalib does not extract secrets from
 latchkey, and a non-HTTP provider needs a different plan.
 
-## 6. Testing
+## 6. The Apple Mail mode
+
+`[steps.params.apple_mail]` copies one account of the Mail app on a Mac
+out of `~/Library/Mail` (`src/ingest/apple_mail/`). Nothing is fetched:
+Mail has already downloaded the mail, and this mode reads what Mail
+keeps. The facts below were measured on macOS 26, whose folder is `V10`.
+
+### What is in Mail's folder
+
+- **`V10/MailData/Envelope Index`** is SQLite in WAL mode, held open by
+  Mail. The download reads a `VACUUM INTO` snapshot of it (the SQLite
+  mirror engine's `snapshot`) so Mail can keep writing. It reads four
+  tables: `messages` (one row per message: `mailbox`, `read`,
+  `flagged`, `deleted`, `flags`, `conversation_id`, and `date_received`
+  in Unix seconds), `mailboxes` (`url` is
+  `imap://<account>/<percent-encoded path>`, or `local://…` for On My
+  Mac), `labels` (the other mailboxes a message is in, which for a Gmail
+  account are its labels) and `message_global_data.message_id_header`.
+- **`V10/<account>/<path>.mbox/<store>/Data/[<n>/…]/Messages/<ROWID>.emlx`**
+  is one file per `messages` row, named by its `ROWID`. An `.emlx` is a
+  line holding the message's length in bytes, the RFC 5322 message,
+  then a property list of Mail's flags. The download ignores the
+  property list: the index says the same, and is current.
+- **`<ROWID>.partial.emlx`** is a message whose attachments Mail keeps
+  beside the file. Each such part has its headers, an
+  `X-Apple-Content-Length` header and an empty body; its decoded bytes
+  are the one file in `Data/[…]/Attachments/<ROWID>/<part>/`, with
+  `<part>` numbered the way IMAP numbers a message's parts (`1`, `1.3`,
+  `2`). The download puts each part back in its transfer encoding, so
+  the stored `.eml` is whole (`emlx::rebuild`). On one Gmail account, 70%
+  of the files were partial, yet only 1,788 of them had a part left out:
+  every one of the 1,928 files Mail kept went back in, and 1,677 parts of
+  847 emails had no file, nine in ten of them calendar invitations Mail
+  never downloads. Partial is not the same as missing.
+- **A Gmail account's files are all under `[Gmail]/All Mail`**; its other
+  labels are rows of `labels`, not folders of files.
+
+### Identity
+
+- An email's id is its `Message-ID`, read from the index; a message with
+  none gets its content hash. Mail keeps no Gmail id (no `X-GM-MSGID`,
+  and no thread id), so a Gmail account copied through Mail and through
+  the Gmail API are two sets of rows: give each its own source.
+- Two index rows with one `Message-ID` are one email, in every mailbox
+  either row is in.
+- A thread is keyed by the `Message-ID` of its first message by date,
+  not by Mail's `conversation_id`, which a rebuilt index renumbers.
+- A mailbox is named by its path, with IMAP's `INBOX` shown as Mail
+  shows it, `Inbox`. Its id is the name-keyed `mailbox_id`, and its role
+  comes from its last path component (`Sent Mail` is `sent`, `All Mail`
+  is `all`).
+- Read is `messages.read` and `$flagged` is `messages.flagged`;
+  `$answered`, `$draft` and `$forwarded` are bits 2, 6 and 8 of
+  `messages.flags`. On one store, `read`, `flagged` and `answered` agreed
+  row for row with the `server_messages` table's columns.
+
+### Which account
+
+A source copies one account. When one account in the index holds mail,
+that is the one; when more do, `apple_mail.account` names one by its
+folder under `V10`, and a sync without it fails with a list of them and
+their message counts.
+
+### What a sync reads
+
+Each sync reads the snapshot whole: it says which messages the account
+has and where each is filed. The message files go through
+`file_changes_scan` under the scope `email/apple_mail`, and an email is
+read again only when one of its files changed or its filing (mailboxes,
+keywords, read, thread) is not what the store holds. A sync of an
+account where nothing moved reads no message file and commits nothing.
+
+- A message the index has and no file holds yet (Mail has not
+  downloaded it) is counted in one `phase:apple_mail_files` problem. A
+  stored copy of it stays.
+- A part Mail left out and holds no file for is left empty, and counted
+  in `phase:apple_mail_attachments`.
+- A message the index no longer has, or marks `deleted`, leaves the
+  store, unless a file failed to read in that sync. As in the mbox mode,
+  narrowing `only_extract_labels` deletes nothing.
+
+### macOS permissions
+
+`~/Library/Mail` is guarded the way `~/Library/Messages` is: without
+access, a plain `ls` gets `Operation not permitted`. A terminal running
+`datalib-dag` needs Full Disk Access. The wizard's folder picker is
+there to grant it from the app, as it does for `~/Library/Messages`;
+that it does so for `~/Library/Mail` has not been measured yet.
+
+## 7. Testing
 
 Unit tests cover the pure parts (label vocabulary, envelope synthesis,
-history parsing, base64url, the quota throttle). Hermetic tests in
+history parsing, base64url, the quota throttle, the `.emlx` reader and
+the partial rebuild, the Apple Mail plan). Hermetic tests in
 `tests/email_tests/` replay synthesized Gmail conversations through
 HTTP playback: `gmail_label_union`,
 `gmail_widened_labels_backfill`, `gmail_failed_fetch_is_owed`,
 `gmail_history_replay` and `gmail_interrupt` (a download cut off at each
 request in turn and run again must leave the store an uninterrupted run
-leaves).
+leaves). `apple_mail` syncs a made-up Mail folder three times: once
+whole, once with nothing moved (nothing written), and once after a
+message is read and another deleted in the index.
 Incremental correctness against the real service needs the **live
 test** — the `live` module of `tests/email_tests/`, which the
 `email_tests` target skips with `--skip live::`:
