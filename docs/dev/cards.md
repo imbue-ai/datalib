@@ -528,7 +528,11 @@ besides components:
   always does, so a search that should stay open beside another gets a tab of
   its own. The box shows its card's query, but never over text someone typed
   that they are still in the box with, or that a card arriving would replace:
-  the box is up before any card has mounted (`draftAfterMove`). A click
+  the box is up before any card has mounted (`draftAfterMove`). A card the
+  toolbar asks for then waits for the card view and its layout, and is shown
+  once they are there (`registerSurface` in `surface.ts`, `askedBeforeReady`
+  in `ContainersView.vue`), so an early Enter shows the pinned Search tab
+  rather than opening a second one. A click
   elsewhere followed by another tab shows that tab's query, and Escape puts
   back the card's. A source's own documents (`oneSource`) and a grid over any other
   table keep a box beside them, which asks as it is typed in. Either box is
