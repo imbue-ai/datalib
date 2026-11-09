@@ -72,8 +72,11 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document, as markdown |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
+
+How a document names people, times and attachments, for an app that
+shows one: [showing a rendered document](rendered_documents.md).
 | `GET /problems?q=` | what a step could not fully do to a record |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
 | `GET /embedding_map` | the documents' embeddings laid out on a plane; `/embedding_map/matches` the ones a search finds |

@@ -151,6 +151,7 @@ fn to_item(
         author_kind: author_kind(recipients, item),
         author_display: author_display(recipients, item),
         date_ms: Some(item.date_sent),
+        date_offset_secs: None,
         text,
         kind: if attachments.is_empty() {
             ItemKind::Text

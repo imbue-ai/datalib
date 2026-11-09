@@ -48,6 +48,7 @@ fn message(uuid: &str, author: &str, handle: Handle, at: i64, text: &str) -> Nor
         author_kind: AuthorKind::Named,
         author_display: author.into(),
         date_ms: Some(at),
+        date_offset_secs: None,
         text: Some(text.into()),
         kind: ItemKind::Text,
         attachments: Vec::new(),

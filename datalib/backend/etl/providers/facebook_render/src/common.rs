@@ -179,6 +179,7 @@ pub fn chat_item(
         author_kind,
         author_display,
         date_ms,
+        date_offset_secs: None,
         text,
         kind: if attachments.is_empty() {
             ItemKind::Text

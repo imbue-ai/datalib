@@ -218,6 +218,7 @@ fn build_chats(
                     },
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
+                    date_offset_secs: None,
                     text: nonempty(content).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),

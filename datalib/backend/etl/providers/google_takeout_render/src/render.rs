@@ -51,7 +51,8 @@ use datalib_schema::providers::Provider;
 /// v11: Chat marks the account's address as its own, so search reads it
 ///     as `me`; a Voice text someone else sent, and a voicemail, is to the
 ///     account (`to:me`).
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a Chat message's stamps keep the zone its date was written in.
+pub const RENDER_VERSION: u32 = 12;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -589,6 +590,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 author_kind,
                 author_display,
                 date_ms,
+                date_offset_secs: None,
                 text: body,
                 kind: if attachments.is_empty() {
                     ItemKind::Text
@@ -630,6 +632,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 author_kind,
                 author_display,
                 date_ms,
+                date_offset_secs: None,
                 text: Some(caption),
                 // Attachment so the audio blob renders an inline player.
                 kind: ItemKind::Attachment,
@@ -669,6 +672,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 author_kind,
                 author_display,
                 date_ms,
+                date_offset_secs: None,
                 text: None,
                 kind: ItemKind::System,
                 attachments: Vec::new(),

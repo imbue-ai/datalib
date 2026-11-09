@@ -44,8 +44,20 @@ describe("what a datetime names", () => {
       ms: Date.parse("2026-04-15T10:05:00Z"),
       offsetMin: -240,
     });
-    expect(parseStamp("2026-04-15T10:05:00.000Z")).toMatchObject({ offsetMin: 0 });
+    expect(parseStamp("2026-04-15T10:05:00.000+00:00")).toMatchObject({ offsetMin: 0 });
     expect(parseStamp("2026-04-15")).toEqual({ kind: "day", year: 2026, month: 4, day: 15 });
+  });
+
+  /** A render writes `Z` where the source names no clock (RFC 9557);
+   *  read as UTC's clock, "as written" showed every such message in UTC. */
+  it("reads Z, and RFC 3339's -00:00, as an instant with no clock of its own", () => {
+    for (const unknown of ["2026-04-15T10:05:00Z", "2026-04-15T10:05:00-00:00"]) {
+      expect(parseStamp(unknown)).toEqual({
+        kind: "instant",
+        ms: Date.parse("2026-04-15T10:05:00+00:00"),
+        offsetMin: null,
+      });
+    }
   });
 
   it("refuses what a render does not write", () => {
@@ -131,6 +143,15 @@ describe("the view a date is read in", () => {
     expect(dateCopyText(stamp("2026-04-15T18:35:00+05:30"), view)).toBe(
       "Wed, Apr 15, 2026, 18:35 GMT+5:30",
     );
+  });
+
+  it("reads a stamp with no clock on this computer's as written, and any zone picked", () => {
+    const unknown = stamp("2026-04-15T10:05:00Z");
+    expect(dateText(unknown, { ...DEFAULT_VIEW, zone: WRITTEN })).toBe(
+      dateText(unknown, { ...DEFAULT_VIEW, zone: LOCAL }),
+    );
+    expect(dateText(unknown, VIENNA)).toBe("Wed, Apr 15, 2026, 12:05");
+    expect(dateText(unknown, inZone("UTC"))).toBe("Wed, Apr 15, 2026, 10:05");
   });
 
   it("writes ISO days and a 12-hour clock when asked", () => {

@@ -161,6 +161,7 @@ fn header_and_title() -> Vec<Document> {
         author: &author,
         handle: None,
         date_ms: Some(12_602_794_200_000),
+        offset_secs: None,
         source_url: None,
     }
     .render();
@@ -217,6 +218,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         author_kind: AuthorKind::Named,
         author_display: author,
         date_ms: Some(12_602_794_200_000),
+        date_offset_secs: None,
         text,
         kind: ItemKind::Text,
         attachments: vec![],
