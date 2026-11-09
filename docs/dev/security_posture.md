@@ -323,6 +323,15 @@ outside the folder. Name the path instead: `mktemp "$TMPDIR/x.XXXXXX"`. A
 visible Chromium keeps its `SingletonSocket` in macOS's temp dir at any `TMPDIR`
 length (measured up to 94 bytes), which holds no library content.
 
+**One Allow opens every app's data.** macOS's dialog names only the app asking,
+not the folder. A freshly opened Terminal asked for Docker's group container and
+was allowed. It then listed Datalib's protected container with no second dialog
+(macOS 26.7.2). People click Allow for routine reasons (an agent's `docker`
+command has brought the dialog up inside Claude), and each time the app asking,
+and everything running inside it, can read a protected library until it quits.
+An Apple-owned container was refused with no dialog at all. So the guard is only
+as good as every Allow a person has given that app since it started.
+
 ### What is still open
 
 These all put something from a protected library outside its folder:
@@ -348,12 +357,6 @@ These all put something from a protected library outside its folder:
 
 ### What has not been shown
 
-- What **Allow** grants. macOS's dialog names only the app asking, and a person
-  has clicked it for an agent's `docker` command, so a routine yes may also open
-  a protected library to that app until it quits. Whether the yes covers every
-  group container or only the one asked for has not been tested. Until it is, the
-  guard is only as good as a choice made from a dialog that does not say what is
-  at stake.
 - All of this on a signed release. The measurements used dev builds, and the
   `ps` one an ad-hoc signature rather than a Developer ID.
 - macOS's guard on `system/applet-secret` and `system/api-token` themselves.
