@@ -650,6 +650,54 @@ sized by anything other than `chunk.len()`. A helper that takes a slice
 and trusts its callers to chunk it counts as unsized, because nothing
 checks that they do.
 
+## Indexes: the planner has no statistics, so test the plan
+
+No store here runs `ANALYZE`, so SQLite's planner knows nothing about
+how many rows match a value. When a lookup could use either of two
+one-column indexes, it rates them the same, and which one it takes
+depends on the order they were created in, not on which is selective.
+Every test passes either way, because a fixture of a few rows is fast
+under any plan. A real store is not:
+
+- **#1165.** `email_keywords` and `email_mailboxes` had no index on
+  `email_id`, the column every lookup uses, so each email written
+  scanned both tables: a full sync quadratic in the mailbox's size.
+- **#1679.** A migration rung asked, for each email,
+  `EXISTS (… k.email_id = e.id AND k.keyword = '$seen')`. The planner
+  answered it from the *keyword* index and walked every `$seen` row once
+  per email: over an hour, unfinished, on 276k emails. Written as a set,
+  `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
+  the same statement takes a few seconds.
+
+So:
+
+- **Match a set as a set.** A statement over every row of one table that
+  asks whether each row is in another (has a keyword, has a label) is
+  `x IN (SELECT … WHERE …)`, which SQLite builds once. An `EXISTS` or
+  scalar subquery that names the outer row runs once per row, and its
+  plan is the planner's guess.
+- **A lookup that has to run per row** goes by the primary key, or by an
+  index whose columns cover every equality in the `WHERE`, so there is
+  only one good choice to make.
+- **Pin the index with `INDEXED BY` when two indexes really could fit.**
+  SQLite then uses exactly that index, and it errors if the index has
+  been renamed or dropped instead of quietly picking another: it fails
+  loudly. On the store in #1679, the old statement with `INDEXED BY
+  email_keywords_by_email` took 6.6 s instead of hours. It does not
+  check that the index fits the `WHERE`: one that does not is walked
+  whole, without an error, so the plan test below still applies.
+- **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
+  whatever rows a store held when it ran, so two libraries can plan one
+  statement two ways, and a plan can change as the rows do. Which index
+  a statement needs is known when it is written; say so in the SQL.
+- **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
+  statement over the table's real DDL and assert what it must not do.
+  Two templates in `providers/email/src/ingest/schema_raw.rs`:
+  `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
+  table, and `the_read_mark_rungs_never_search_a_table_per_email`
+  refuses a table searched under a `CORRELATED` subquery. Keep the
+  statements in a constant the code runs and the test reads.
+
 ## Blob CAS and per-provider edge tables
 
 A source that keeps attachment bytes has two files in its raw directory:
