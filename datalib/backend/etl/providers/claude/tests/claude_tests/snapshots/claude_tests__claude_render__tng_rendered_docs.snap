@@ -5,7 +5,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8305-8a74-7d4a860e0d82 ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1156,7 +1156,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-83ab-b990-357eea87eda5 ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1339,7 +1339,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-84d9-a07c-75bb3c93c654 ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1478,7 +1478,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-856b-944c-412bf8dca640 ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -1793,7 +1793,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8731-b6c5-2d66a2c4265c ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -2460,7 +2460,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-882d-b21e-5e54f3f20dbb ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
@@ -2775,7 +2775,7 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8b06-828d-f59d39f6190d ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "bcrusher@enterprise.starfleet.test",
@@ -2914,16 +2914,16 @@ expression: docs_bundle(&docs)
 === 00000000-0000-8da1-84c9-7ed998e5bd85 ===
 {
   "edges": [],
-  "render_version": 12,
+  "render_version": 13,
   "rows": [
     {
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "Jean-Luc Picard",
       "author_handle": null,
-      "byte_size": 565,
+      "byte_size": 574,
       "channel": null,
       "contact": null,
-      "content_hash": "ce016c5821ab5285a9077c916998e357329f7e093ae17eb4390092e1ad61ed54",
+      "content_hash": "007124436f5cf281de4a36e9b64c6ff1b70a93355dcd65cf4eeb57ea0b3f6616",
       "conversation_name": "Bridge Operations",
       "conversation_uuid": "00000000-0000-8da1-84c9-7ed998e5bd85",
       "created_at": "2364-03-01T09:00:00+00:00",
@@ -3096,10 +3096,10 @@ expression: docs_bundle(&docs)
       "account": "jlpicard@enterprise.starfleet.test",
       "author": "escalation-ladder.txt",
       "author_handle": null,
-      "byte_size": 126,
+      "byte_size": 135,
       "channel": null,
       "contact": null,
-      "content_hash": "a430d4c242cf017ced2734f624e485c530c256fdab89ece2330ae92326792cb6",
+      "content_hash": "c031793a0ef09178c9ee4c00a6942acfad2bf0809d9f8624b7176fa790e7e078",
       "conversation_name": "Bridge Operations",
       "conversation_uuid": "00000000-0000-8da1-84c9-7ed998e5bd85",
       "created_at": "2364-03-02T11:30:00+00:00",

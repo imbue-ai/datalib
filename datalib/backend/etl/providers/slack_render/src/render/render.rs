@@ -68,7 +68,9 @@ use datalib_schema::providers::Provider;
 ///     so every thread renders once.
 /// v18: a document says when its messages hold cards, link previews or
 ///     forwards that are not shown.
-pub const RENDER_VERSION: u32 = 18;
+/// v19: a ``` block with code on its fence lines is closed, so it no
+///     longer turns the messages after it into code.
+pub const RENDER_VERSION: u32 = 19;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -527,7 +529,8 @@ fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Rep
 }
 
 fn thread_title(root_text: &str, labels: Labels<'_>) -> String {
-    let resolved = resolve_mentions(root_text, labels);
+    // A ``` ends the line it is on, as the body draws it.
+    let resolved = resolve_mentions(root_text, labels).replace("```", "\n");
     let first = resolved
         .lines()
         .map(str::trim)
@@ -776,5 +779,27 @@ mod reaction_tests {
         root.raw_json["reply_count"] = json!("three");
         assert_eq!(replies_of(&root, 1, &mut problems), None);
         assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use datalib_etl_render::inputs::Inputs;
+
+    use super::*;
+
+    /// A root opening with a ``` block was titled "```Kitchen".
+    #[test]
+    fn a_title_leaves_out_a_code_fence() {
+        let inputs = Inputs::default();
+        let none = BTreeMap::new();
+        let labels = Labels {
+            users: inputs.lookup("users", &none),
+            channels: inputs.lookup("channels", &none),
+            team_id: "T01",
+        };
+        assert_eq!(thread_title("```Kitchen\nx = 1```", labels), "Kitchen");
     }
 }

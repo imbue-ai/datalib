@@ -18,6 +18,8 @@
 //!   constructs (Slack's mrkdwn): [`escape_md_syntax`];
 //! - markdown another tool built from plain text without escaping it:
 //!   [`escape_html_outside_code`];
+//! - markdown someone else wrote, whose HTML must not reach the page (an
+//!   assistant's reply, a prompt): [`markdown_html_as_typed`];
 //! - a link destination: [`md_link_dest`];
 //! - inside a code span: [`md_code_span`].
 //!
@@ -207,6 +209,179 @@ pub fn escape_html_outside_code(md: &str) -> String {
         escape_html_outside_code_spans(rest, &mut out);
     }
     out
+}
+
+/// Markdown someone else wrote, with every HTML tag in it shown as
+/// typed. A tag that reached the page could hide or restyle everything
+/// after it, or pass for a message of ours. Code is written out as our
+/// own `<pre><code>` and `<code>`, the elements markdown would have
+/// made, with every character inside escaped. So wherever this reads
+/// code differently from markdown-it, the page can only look slightly
+/// off; no tag from `md` can open.
+pub fn markdown_html_as_typed(md: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut fence: Option<(String, usize, String, Vec<&str>)> = None;
+    for line in md.split('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = &line[indent..];
+        let fence_line = indent <= 3 && !trimmed.starts_with('\t');
+        if let Some((mark, opened_at, lang, body)) = &mut fence {
+            if fence_line && closes_fence(trimmed, mark) {
+                out.push(pre_block(lang, body));
+                fence = None;
+            } else {
+                let strip = line.len() - line.trim_start_matches(' ').len();
+                body.push(&line[strip.min(*opened_at)..]);
+            }
+            continue;
+        }
+        if let Some(mark) = opens_fence(trimmed).filter(|_| fence_line) {
+            let lang = trimmed[mark.len()..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || "+-_.#".contains(*c))
+                .collect();
+            fence = Some((mark, indent, lang, Vec::new()));
+            continue;
+        }
+        let rest = line.trim_start_matches(['>', ' ', '\t']);
+        let mut escaped = line[..line.len() - rest.len()].to_string();
+        for (part, is_code) in code_span_parts(rest) {
+            if is_code {
+                escaped.push_str(&code_element(part));
+            } else {
+                escaped.push_str(&escape_tag_chars(part));
+            }
+        }
+        out.push(escaped);
+    }
+    if let Some((_, _, lang, body)) = &fence {
+        out.push(pre_block(lang, body));
+    }
+    out.join("\n")
+}
+
+/// A fenced block as markdown-it writes one, on a single line so that
+/// the HTML block it is ends where it starts.
+fn pre_block(lang: &str, body: &[&str]) -> String {
+    let class = if lang.is_empty() {
+        String::new()
+    } else {
+        format!(" class=\"language-{lang}\"")
+    };
+    let code = escape_text(&body.iter().map(|l| format!("{l}\n")).collect::<String>());
+    format!("<pre><code{class}>{code}</code></pre>")
+}
+
+/// A code span as `<code>`. Markdown still reads what sits between two
+/// tags on a line, so each mark it would act on is a character
+/// reference: nothing inside can start emphasis, a link or another span.
+fn code_element(span: &str) -> String {
+    let run = backtick_run(span);
+    let inner = &span[run..span.len() - run];
+    let inner = match inner.strip_prefix(' ').and_then(|i| i.strip_suffix(' ')) {
+        Some(stripped) if !inner.trim().is_empty() => stripped,
+        _ => inner,
+    };
+    let mut out = String::from("<code>");
+    for c in inner.chars() {
+        if "\\`*_[]<>&~!:|".contains(c) {
+            out.push_str(&format!("&#{};", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out.push_str("</code>");
+    out
+}
+
+fn escape_tag_chars(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// `md` with any block it leaves open closed at its end: a fence, or an
+/// HTML block that only a closing tag or marker ends (`<pre`, `<!--`,
+/// `<?`, `<!X`, `<![CDATA[`). Markdown from upstream is pasted into a
+/// page of many messages, and a block one message leaves open would
+/// swallow every message after it.
+pub fn close_open_blocks(md: &str) -> String {
+    let mut open: Option<String> = None;
+    for line in md.split('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = &line[indent..];
+        open = match open {
+            Some(fence) if fence_opener(&fence).is_some() => {
+                (!closes_fence(trimmed, &fence)).then_some(fence)
+            }
+            Some(end) => (!ends_html_block(line, &end)).then_some(end),
+            None if indent > 3 => None,
+            None => opens_fence(trimmed).or_else(|| {
+                let end = html_block_end(trimmed)?;
+                (!ends_html_block(trimmed, &end)).then_some(end)
+            }),
+        };
+    }
+    match open {
+        Some(close) => format!("{md}\n{close}"),
+        None => md.to_string(),
+    }
+}
+
+/// [`fence_opener`], less a backtick run with a backtick after it on its
+/// line, which markdown reads as a code span.
+fn opens_fence(line: &str) -> Option<String> {
+    let fence = fence_opener(line)?;
+    (!(fence.starts_with('`') && line[fence.len()..].contains('`'))).then_some(fence)
+}
+
+/// What ends the HTML block `line` opens, for the kinds that a blank
+/// line does not end.
+fn html_block_end(line: &str) -> Option<String> {
+    if let Some(rest) = line.strip_prefix('<') {
+        let lower = rest.to_ascii_lowercase();
+        for tag in ["pre", "script", "style", "textarea"] {
+            let after = lower.strip_prefix(tag);
+            if after.is_some_and(|a| a.is_empty() || a.starts_with([' ', '\t', '>'])) {
+                return Some(format!("</{tag}>"));
+            }
+        }
+    }
+    let end = if line.starts_with("<!--") {
+        "-->"
+    } else if line.starts_with("<?") {
+        "?>"
+    } else if line.starts_with("<![CDATA[") {
+        "]]>"
+    } else if line
+        .strip_prefix("<!")
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()))
+    {
+        ">"
+    } else {
+        return None;
+    };
+    Some(end.to_string())
+}
+
+/// Whether `line` holds what ends an HTML block. Any of the four
+/// closing tags ends a `<pre>`-kind block, whichever opened it.
+fn ends_html_block(line: &str, end: &str) -> bool {
+    if end.starts_with("</") {
+        let lower = line.to_ascii_lowercase();
+        return ["</pre>", "</script>", "</style>", "</textarea>"]
+            .iter()
+            .any(|t| lower.contains(t));
+    }
+    let after_opener = match end {
+        "-->" => line.strip_prefix("<!--").unwrap_or(line),
+        "?>" => line.strip_prefix("<?").unwrap_or(line),
+        _ => line,
+    };
+    after_opener.contains(end)
 }
 
 /// The backticks or tildes opening a fenced block, if `line` opens one.
@@ -583,5 +758,90 @@ mod tests {
         }
         failures.truncate(10);
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+    /// A message that leaves a block open no longer takes the messages
+    /// after it into that block.
+    #[test]
+    fn a_block_left_open_is_closed_at_the_end() {
+        assert_eq!(
+            close_open_blocks("```rust\nfn main() {"),
+            "```rust\nfn main() {\n```"
+        );
+        assert_eq!(
+            close_open_blocks("a\n````\n```\nb"),
+            "a\n````\n```\nb\n````"
+        );
+        assert_eq!(close_open_blocks("<PRE>x\ny"), "<PRE>x\ny\n</pre>");
+        assert_eq!(close_open_blocks("<!-- note\nmore"), "<!-- note\nmore\n-->");
+        assert_eq!(close_open_blocks("<![CDATA[x"), "<![CDATA[x\n]]>");
+        assert_eq!(close_open_blocks("<!DOCTYPE"), "<!DOCTYPE\n>");
+    }
+
+    #[test]
+    fn a_closed_block_is_left_alone() {
+        for md in [
+            "```\ncode\n```\nafter",
+            "~~~\n```\n~~~",
+            "<pre>x</pre>",
+            "<!-- one line -->",
+            "<!--\n-->",
+            "<script>\n</style>",
+            "<?php ?>",
+            "<!DOCTYPE html>",
+            "    ```",
+            "> ```",
+            "<prefix>",
+            "`` ``` ``",
+            "```x = 1```",
+        ] {
+            assert_eq!(close_open_blocks(md), md, "{md:?}");
+        }
+    }
+    /// A tag an assistant or a prompt wrote stays text: unclosed, it hid
+    /// or restyled every message after it on the page.
+    #[test]
+    fn markdown_written_upstream_opens_no_tag() {
+        assert_eq!(
+            markdown_html_as_typed("<div style=\"display:none\">\n**hi** & bye"),
+            "&lt;div style=\"display:none\"&gt;\n**hi** &amp; bye"
+        );
+        assert_eq!(
+            markdown_html_as_typed("> <b>x</b>"),
+            "> &lt;b&gt;x&lt;/b&gt;"
+        );
+        assert_eq!(
+            markdown_html_as_typed("use `Vec<u8>` and `*a*`"),
+            "use <code>Vec&#60;u8&#62;</code> and <code>&#42;a&#42;</code>"
+        );
+        assert_eq!(
+            markdown_html_as_typed("```rust\nlet a = b < c;\n\n</pre><div>\n```\nafter"),
+            "<pre><code class=\"language-rust\">let a = b &lt; c;&#10;&#10;&lt;/pre&gt;&lt;div&gt;&#10;</code></pre>\nafter"
+        );
+        assert_eq!(
+            markdown_html_as_typed("```\n<div>"),
+            "<pre><code>&lt;div&gt;&#10;</code></pre>",
+            "a fence left open is closed"
+        );
+    }
+
+    /// Where this reads code differently from markdown, a tag still
+    /// cannot open: each case once let one through a line-by-line guess.
+    #[test]
+    fn a_misread_of_code_still_opens_no_tag() {
+        for md in [
+            "a `b\nc` <div style=\"display:none\"> `d`",
+            "\\`<div>`",
+            "    ```\n<div>",
+            "```x``` <div>",
+            "[a]: /u 'title\n```\n'\n<div>",
+        ] {
+            let out = markdown_html_as_typed(md);
+            let ours = out
+                .replace("<code>", "")
+                .replace("</code>", "")
+                .replace("<pre>", "")
+                .replace("</pre>", "");
+            assert!(!ours.contains('<'), "{md:?} → {out:?}");
+        }
     }
 }

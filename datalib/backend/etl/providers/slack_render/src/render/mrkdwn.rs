@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
+use datalib_etl_render::html::{
+    code_span_parts, escape_md_inline, escape_md_syntax, md_code_block, md_link_dest,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
@@ -149,7 +151,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
         format!("{NAME_OPEN}{}{NAME_CLOSE}", names.len() - 1)
     };
 
-    let mut out = escape_typed_markdown(text);
+    let mut out = escape_typed_markdown(&fence_code_blocks(text));
 
     // A mention is a chip link in text, and `@Name` in code, which shows
     // what it holds literally.
@@ -238,6 +240,40 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
                 .unwrap_or_default()
         })
         .into_owned()
+}
+
+/// Slack's ``` block as a CommonMark fence. Slack lets the code start
+/// on the opening line and end on the closing one, and puts the block
+/// mid-line; markdown wants each fence on a line of its own, and reads
+/// what follows an opening fence as the code's language.
+fn fence_code_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut after_block = false;
+    for (part, is_code) in code_parts_whole_constructs(text) {
+        let block = is_code
+            .then(|| part.strip_prefix("```")?.strip_suffix("```"))
+            .flatten()
+            .filter(|code| !code.starts_with('`') && !code.ends_with('`'));
+        let Some(code) = block else {
+            if after_block && !part.starts_with('\n') {
+                out.push('\n');
+                out.push_str(part.trim_start_matches([' ', '\t']));
+            } else {
+                out.push_str(&part);
+            }
+            after_block = false;
+            continue;
+        };
+        let code = code.strip_prefix('\n').unwrap_or(code);
+        let code = code.strip_suffix('\n').unwrap_or(code);
+        out.truncate(out.trim_end_matches([' ', '\t']).len());
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&md_code_block("", code));
+        after_block = true;
+    }
+    out
 }
 
 /// Brackets a held name's index: private-use characters, which Slack
@@ -632,6 +668,28 @@ mod tests {
             to_commonmark("hi! there", lbl),
             "hi! there",
             "a lone `!` is left alone"
+        );
+    }
+
+    /// Slack's ``` block may hold code on its own opening and closing
+    /// lines. Passed through, markdown read `Kitchen` as the fence's
+    /// language and never closed it, so the rest of the thread showed as
+    /// code.
+    #[test]
+    fn a_code_block_on_the_fence_lines_is_closed() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("```Kitchen\nPassword: a1```\nafter", lbl),
+            "```\nKitchen\nPassword: a1\n```\nafter"
+        );
+        assert_eq!(
+            to_commonmark("see ```x = 1``` then *this*", lbl),
+            "see\n```\nx = 1\n```\nthen **this**"
+        );
+        assert_eq!(
+            to_commonmark("```a ```` b```", lbl),
+            "`````\na ```` b\n`````",
+            "a fence is longer than any backtick run inside it"
         );
     }
 
