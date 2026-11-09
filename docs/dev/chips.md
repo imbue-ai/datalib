@@ -10,9 +10,12 @@ the same in each: the same tooltip, right-click menu and double-click,
 and the same text when copied.
 
 Start here to add a new kind of chip or a new place that draws them.
-What makes a *person* who they are — handles, each source's record,
-the contacts app — is [`contacts.md`](contacts.md); this page is the
-machinery every kind shares.
+What a document promises any viewer — the link a person is written as,
+the `<time>` a date is, the attachment addresses — is
+[showing a rendered document in your app](../user/rendered_documents.md),
+the contract an app builder reads; this page is how datalib's own
+viewer keeps it. What makes a *person* who they are — handles, each
+source's record, the contacts app — is [`contacts.md`](contacts.md).
 
 ## Words
 
@@ -45,19 +48,13 @@ link carries only what the producer knew when it wrote it:
 - **title** — the hover any other viewer shows. Datalib replaces it
   with a live tooltip.
 
-The URIs, a standard scheme where one exists so that a pasted link
-still works in another app, and `datalib:` otherwise:
-
-| entity | URI | written by |
-|---|---|---|
-| a person by email | `mailto:riker@enterprise.org` | `Handle::to_uri` |
-| a person by phone | `tel:+12025550101` | `Handle::to_uri` |
-| a Slack user | `slack://user?team=T01&id=U02` (Slack's own deep link) | `Handle::to_uri` |
-| a LinkedIn member | `https://www.linkedin.com/in/<slug>` (their profile) | `Handle::to_uri` |
-| a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id, `datalib:handle/facebook/name/Will%20Riker` or `datalib:handle/github/data-soong`. A GitHub profile's address is not used: `github.com/<x>` is as often an organization or one of GitHub's own pages | `Handle::to_uri` |
-| one of your contacts, by its id | `datalib:contact/<id>` (`contactFromUri` in `chipLinks.js`) | `datalib_contacts::contact_uri` |
-| a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
-| a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
+The URI for each kind of handle, and the trust rule a viewer keeps, are
+in [the document contract](../user/rendered_documents.md#a-person). The
+backend writes a handle's URI with `Handle::to_uri`; one of your
+contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
+read by `contactFromUri` in `chipLinks.js`); a group is
+`datalib:group/<id>` and a step `datalib:step/<group>/<function>`
+(`datalib_columns::Entity::uri`).
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:
@@ -141,14 +138,13 @@ no page styles.
 
 ## Trust
 
-A chip may appear anywhere in a body, including in a link a stranger
-wrote in an email. That is safe for one reason: **a chip shows what
-its href resolves to, never the link text.** A body that writes
-`[Picard](mailto:phisher@romulan.net)` gets a chip for the phisher,
-under the name the sources know them by, with "Shown here as
-“Picard”" in its tooltip. A link to `datalib:group/slack` shows that
-group's real name. Forging a link can only point at a real entity
-under its real name, which is what any link already does.
+**A chip shows what its href resolves to, never the link text**;
+[the contract](../user/rendered_documents.md#trust-the-href-never-the-text)
+says why. So a body's `[Picard](mailto:phisher@romulan.net)` is a chip
+for the phisher, under the name the sources know them by, with "Shown
+here as “Picard”" in its tooltip, and a link to `datalib:group/slack`
+shows that group's real name. Forging a link can only point at a real
+entity under its real name, which is what any link already does.
 
 ## Resolving
 
@@ -328,12 +324,17 @@ the rules are pure functions over the parsed stamp and the **time view**.
 app, chips and every other stamp (`ui/src/config/timeView.ts`, kept per
 browser). A click or a right-click on it picks the zone — this
 computer's, **as written** (each stamp in the offset its source wrote it
-in), UTC, the last few named zones, or any zone found by place or offset —
+in: an email in its `Date:`'s), UTC, the last few named zones, or any zone found by place or offset —
 and how a date is written: `Wed, Apr 15, 2026` or `2026-04-15`, on a 24-
 or 12-hour clock. The clock shows the time now in that zone, outlined
 when it is not this computer's. Under "as written", a stamp with no
 offset of its own reads as this computer does; a day is the same day in
-every zone. Anything that formats a stamp goes through `timeView.ts`, and
+every zone, and so is a stamp in `Z` (or RFC 3339's older `-00:00`),
+which since RFC 9557 names no clock and which a render writes for a
+time whose source names none
+([the contract](../user/rendered_documents.md#a-time) says which).
+Picking any other zone reads every stamp in that zone, whatever its
+offset (`parseStamp` in `dates.ts`, `parseInstant` in `timeView.ts`). Anything that formats a stamp goes through `timeView.ts`, and
 anything that draws one into the page itself (a grid, a document, the
 search field) draws it again when the view changes.
 

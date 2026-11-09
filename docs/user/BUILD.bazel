@@ -11,5 +11,6 @@ exports_files([
     "first_time_user.md",
     "getting_your_data.md",
     "raw_stores.md",
+    "rendered_documents.md",
     "searching.md",
 ])

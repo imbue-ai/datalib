@@ -36,6 +36,10 @@ const FAN_INS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+fn qmd_aggregator() -> String {
+    format!("{UNIFIED_DOCUMENT_INDEX_DIR}/qmd_aggregator")
+}
+
 const INDEX_GROUPS: &[&str] = &[UNIFIED_DOCUMENT_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
 
 #[derive(Deserialize)]
@@ -99,6 +103,9 @@ pub struct Appended {
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
+    /// The config has search, and the stanza has no `keyword_index`, so
+    /// free text will not find this source until one is added.
+    pub left_out_of_search: bool,
 }
 
 /// The minimal stanza for `t` by `method` (needed only when `t` has more
@@ -162,6 +169,18 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             "the config already has a group {group:?}; pass --id to give this one another"
         ));
     }
+
+    let config_has_search = have
+        .steps
+        .iter()
+        .any(|s| s.step_id().as_deref() == Some(qmd_aggregator().as_str()));
+    let has = |function: &str| {
+        adding
+            .steps
+            .iter()
+            .any(|s| s.function.as_deref() == Some(function))
+    };
+    let left_out_of_search = config_has_search && has("render_markdown") && !has("keyword_index");
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut wired = Vec::new();
@@ -258,6 +277,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         wired,
         unread,
         added_time_series_index,
+        left_out_of_search,
     })
 }
 
@@ -381,6 +401,15 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
             "  nothing reads {step}: the config has no {index}, so it is not indexed there"
         );
     }
+    if appended.left_out_of_search {
+        status_line!(
+            "  free-text search will not find it yet: the minimal stanza has no \
+             `{group}/keyword_index` step (words) or `{group}/embed` (meaning). Copy them \
+             from the complete stanza (`datalib-step examples {t} --method {method}`), and \
+             add them to the inputs of `{}`.",
+            qmd_aggregator()
+        );
+    }
     status_line!(
         "Next: set its params (`datalib-step help {t} {method}`), sign it in if it needs \
          it (`datalib-step help {t}`), then `datalib-dag --check {shown}` and \
@@ -457,6 +486,10 @@ mod tests {
             inputs_of(&appended.text, "unified_document_index/grid_index"),
             ["slack/render_markdown"]
         );
+        assert!(
+            appended.left_out_of_search,
+            "the starter has search and the minimal stanza no keyword_index"
+        );
         assert_eq!(
             appended.wired,
             [(
@@ -525,6 +558,7 @@ inputs = [
         // No qmd_aggregator here, and the minimal stanza has no search
         // steps for one to read.
         assert!(appended.unread.is_empty());
+        assert!(!appended.left_out_of_search, "a config without search");
     }
 
     #[test]

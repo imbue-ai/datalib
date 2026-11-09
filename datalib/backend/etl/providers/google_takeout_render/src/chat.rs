@@ -502,7 +502,9 @@ fn message_items(
     if let Some(u) = edited {
         let ms = own_stamp_ms(Some(u), "updated_date", parse_date_ms, &mut problems);
         parts.push(
-            match ms.and_then(datalib_time::IsoOffsetTimestamp::from_unix_millis) {
+            match ms.and_then(|ms| {
+                datalib_time::IsoOffsetTimestamp::from_unix_millis_at(ms, parse_date_offset_secs(u))
+            }) {
                 Some(t) => format!("*Edited {}*", stamp_html(&t)),
                 None => "*Edited*".to_string(),
             },
@@ -542,6 +544,10 @@ fn message_items(
         },
         author_display: name.unwrap_or("Unknown").to_string(),
         date_ms,
+        date_offset_secs: m
+            .get("created_date")
+            .and_then(Value::as_str)
+            .and_then(parse_date_offset_secs),
         text: body,
         kind: ItemKind::Text,
         attachments: files,
@@ -669,6 +675,7 @@ fn versions(
         out.push(NormalizedChatItem {
             message_uuid: id.uuid,
             date_ms,
+            date_offset_secs: stamp.and_then(parse_date_offset_secs),
             text: (!parts.is_empty()).then(|| parts.join("\n\n")),
             kind: if files.is_empty() {
                 ItemKind::Text
@@ -973,6 +980,14 @@ pub fn space_of_dir(dir: &str) -> String {
 /// Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`, read
 /// the way the ingest reads it, so a zone it knows is one the render
 /// knows.
+/// The offset a chat date was written in (`CET` is `+01:00`), in
+/// seconds east of UTC.
+pub fn parse_date_offset_secs(s: &str) -> Option<i32> {
+    datalib_time::written_offset_secs(
+        &datalib_etl_google_takeout::ingest::time::parse_chat_long_form(s)?,
+    )
+}
+
 pub fn parse_date_ms(s: &str) -> Option<i64> {
     let rfc3339 = datalib_etl_google_takeout::ingest::time::parse_chat_long_form(s)?;
     datalib_time::parse_strict(&rfc3339)

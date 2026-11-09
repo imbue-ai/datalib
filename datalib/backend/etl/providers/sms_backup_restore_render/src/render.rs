@@ -387,6 +387,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
                 author_kind: AuthorKind::Named,
                 author_display: display.to_string(),
                 date_ms,
+                date_offset_secs: None,
                 text: None,
                 kind: ItemKind::System,
                 attachments: Vec::new(),
@@ -460,6 +461,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
                 },
                 author_display,
                 date_ms,
+                date_offset_secs: None,
                 text,
                 kind: if attachments.is_empty() {
                     ItemKind::Text

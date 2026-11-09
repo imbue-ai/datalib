@@ -30,6 +30,13 @@ impl NamedZone {
         utc.with_timezone(&fixed(offset))
     }
 
+    /// The offset from UTC here at the instant `ms` (Unix milliseconds),
+    /// in seconds east; `None` for an instant chrono cannot represent.
+    pub fn offset_secs_at_millis(&self, ms: i64) -> Option<i32> {
+        let utc = DateTime::<Utc>::from_timestamp_millis(ms)?;
+        Some(self.at(&utc).offset().local_minus_utc())
+    }
+
     /// The instants a wall-clock time here can mean: one, two in the hour
     /// the clocks go back (earlier first), none in the hour they skip.
     pub fn from_local(&self, local: &NaiveDateTime) -> LocalResult<DateTime<FixedOffset>> {

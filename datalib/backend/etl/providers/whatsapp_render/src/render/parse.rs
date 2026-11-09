@@ -597,6 +597,7 @@ fn build_item(
         // null `created_at` — not 1970. See
         // `docs/dev/data_architecture_parse_and_render.md` §6.
         date_ms: timestamp,
+        date_offset_secs: None,
         text: text_data,
         kind,
         attachments,

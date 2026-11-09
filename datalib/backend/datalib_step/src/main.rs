@@ -92,6 +92,10 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step examples slack",
     },
     Example {
+        what: "the stanzas for one of a source's ways in, to read before adding it",
+        command: "datalib-step examples email --method gmail",
+    },
+    Example {
         what: "add a source's least config to a config, wired into the index steps that read it",
         command: "datalib-step examples slack --append ~/datalib/config.toml",
     },
@@ -212,7 +216,8 @@ enum Cmd {
     /// One source's config stanzas: for each of its ingest methods, the
     /// least a config needs and one that sets every option, with how to
     /// add one to a config, rename its group and wire it into the index.
-    /// With `--append`, adds the least one to a config instead.
+    /// `--method` prints one method's; `--append` adds the least one to a
+    /// config instead.
     Examples {
         /// Source type (`slack`, `email`, …).
         source_type: String,
@@ -223,9 +228,10 @@ enum Cmd {
         /// as `<file>.<UTC time>.bak`, one per append.
         #[arg(long, value_name = "CONFIG")]
         append: Option<PathBuf>,
-        /// With --append: which ingest method's stanza, for a source with
-        /// more than one (`gmail`, `jmap` or `mbox` for email).
-        #[arg(long, requires = "append")]
+        /// Which ingest method's stanzas, for a source with more than one
+        /// (`gmail`, `jmap` or `mbox` for email): without --append, print
+        /// only that method's; with it, append that method's minimal one.
+        #[arg(long)]
         method: Option<String>,
         /// With --append: the group's id, in place of the type's name. It
         /// is the folder under the data root its data goes in.
@@ -370,9 +376,14 @@ async fn main() {
             method.as_deref(),
             id.as_deref(),
         )),
-        Some(Cmd::Examples { source_type, .. }) => {
-            std::process::exit(print_page(help::examples_page(source_type)))
-        }
+        Some(Cmd::Examples {
+            source_type,
+            method,
+            ..
+        }) => std::process::exit(print_page(help::examples_page(
+            source_type,
+            method.as_deref(),
+        ))),
         _ => {}
     }
     // A probe run by hand says on stderr only what went wrong; the

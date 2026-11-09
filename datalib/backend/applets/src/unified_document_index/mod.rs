@@ -40,6 +40,7 @@ use datalib_unified_document_index::group::Within;
 use datalib_unified_document_index::qmd::index_state::{
     resolve_markdown_states, DocReport, IndexStamp, SummaryCache,
 };
+use datalib_unified_document_index::qmd::vectors::Freshness;
 use datalib_unified_document_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdIndexReader, QmdIndexSummary,
 };
@@ -795,10 +796,11 @@ async fn without_vectors(
     if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
         return Ok(Some(counted.clone()));
     }
+    let moving = index_moving(&stamp, std::time::SystemTime::now());
     let with_vectors = match coverage
         .with_vectors
         .as_ref()
-        .filter(|(at, _)| *at == stamp)
+        .filter(|(at, _)| moving || *at == stamp)
     {
         Some((_, read)) => read.clone(),
         None => {
@@ -1331,6 +1333,16 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
         return Err(SearchFailure::NoIndex);
     };
     let reader = &open.reader;
+    let fresh = if index_moving(
+        &IndexStamp::of(&datalib_unified_document_index::qmd::qmd_index_path(
+            &s.root,
+        )),
+        std::time::SystemTime::now(),
+    ) {
+        Freshness::AsHeld
+    } else {
+        Freshness::Current
+    };
     let started = std::time::Instant::now();
     let embedder = s.embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
@@ -1352,6 +1364,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
             scope.names(),
             among,
             QMD_DEPTH,
+            fresh,
         )
         .await;
     let mut hits = hits.map_err(qmd)?;
@@ -1362,6 +1375,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
         among = among.map(|a| a.len()),
+        as_held = fresh == Freshness::AsHeld,
         found,
         hits = hits.len(),
         cutoff,
@@ -1445,6 +1459,21 @@ fn narrows_documents(parsed: &ParsedQuery) -> bool {
 /// How many hits qmd ranks for one free-text search: every page of it is
 /// cut from these.
 const QMD_DEPTH: usize = 1_000;
+
+/// How long the qmd index must sit still before a search reads what
+/// changed in it. A sync's embed step commits every few seconds, and on a
+/// large library reading the documents again at each commit took a search
+/// past its deadline; until then a search answers from what it last read,
+/// and the warm loop reads the rest once the sync is done.
+const INDEX_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether the index changed within [`INDEX_SETTLE`] of `now`. A change
+/// stamped after `now` is a clock that moved back, and counts as recent.
+fn index_moving(stamp: &IndexStamp, now: std::time::SystemTime) -> bool {
+    stamp
+        .last_change()
+        .is_some_and(|at| now.duration_since(at).map_or(true, |d| d < INDEX_SETTLE))
+}
 
 /// qmd's hits as one entry per document, best first, each landed on a
 /// message only when a page shows it, of the documents holding a row the
@@ -2017,6 +2046,37 @@ fn strip_frontmatter(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A search reads what changed in the qmd index only once the index has
+    /// sat still for `INDEX_SETTLE`: during a sync it answers from what it
+    /// holds rather than re-reading the index at every embed commit.
+    #[test]
+    fn an_index_written_within_the_settle_time_is_moving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("index.sqlite");
+        assert!(
+            !index_moving(&IndexStamp::of(&index), std::time::SystemTime::now()),
+            "no index is not moving"
+        );
+        std::fs::write(&index, b"").unwrap();
+        let stamp = IndexStamp::of(&index);
+        let at = stamp.last_change().unwrap();
+        let second = std::time::Duration::from_secs(1);
+        assert!(index_moving(&stamp, at));
+        assert!(index_moving(&stamp, at + INDEX_SETTLE - second));
+        assert!(!index_moving(&stamp, at + INDEX_SETTLE));
+        assert!(index_moving(&stamp, at - second), "a clock that moved back");
+
+        let mut wal = index.clone().into_os_string();
+        wal.push("-wal");
+        std::fs::write(&wal, b"").unwrap();
+        let later = std::fs::File::options().write(true).open(&wal).unwrap();
+        later.set_modified(at + INDEX_SETTLE * 2).unwrap();
+        assert!(
+            index_moving(&IndexStamp::of(&index), at + INDEX_SETTLE * 2 + second),
+            "a commit lands in the write-ahead log, not the index file"
+        );
+    }
 
     /// What `source:` hands qmd: every positive id; nothing for a
     /// negated one or for `datalib`, which has no collection.
