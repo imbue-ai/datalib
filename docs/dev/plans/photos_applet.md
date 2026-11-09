@@ -327,8 +327,10 @@ third of your photos' times assume Europe/Berlin" is on the Manage row,
 not hidden.
 
 Measured since (`lightroom/INGEST.md` §"How Lightroom keeps a capture
-time"): rule 1's offset is stale on a photo whose time was edited, and an
-offset `captureTime` already carries can be a save or import time.
+time"): on a photo whose time was edited, rule 1 gives the offset from
+before the edit, which is right only if the edit fixed the clock rather
+than moved the time into another zone; and an offset `captureTime`
+already carries can be a save or import time.
 
 A source with `skip_xmp = true` has no XMP, so rules 1 and 2 and every
 title are gone. Render reports that once per source.

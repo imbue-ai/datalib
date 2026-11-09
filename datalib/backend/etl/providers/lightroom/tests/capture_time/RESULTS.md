@@ -43,8 +43,10 @@ with `read_catalog.py` after each round of the README.
 - **The clock time moves and the recorded offset stays.** `originalCaptureTime`
   keeps the pre-edit time; `xmp:ModifyDate` keeps the old one too.
   - E01, +1 h on 14:00 +02:00: now 15:00 +02:00. The moment moved an hour.
-  - E03, set to 14:00 on 05:00 −07:00: now **14:00 −07:00**, 21:00 UTC. The
-    offset no longer belongs to the time.
+  - E03, set to 14:00 on 05:00 −07:00: now **14:00 −07:00**, 21:00 UTC.
+    The case meant the same moment in Berlin time (12:00 UTC), so here the
+    kept offset is wrong; had the edit fixed a wrong San Francisco clock,
+    it would be right.
   - E02/E04 (no offset): the new clock time, still no offset.
 - **A video's edit adds an `exif:DateTimeOriginal` with no offset** (E05:
   `14:00:00.000`) and leaves `xmp:CreateDate=…12:00:00Z` as it was.

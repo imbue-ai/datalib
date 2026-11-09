@@ -407,8 +407,9 @@ One real catalog of about 220,000 photos, read for counts only:
   probably an older version's too. 675 have none.
 - **About 4,700 have an edited capture time**, two-thirds of them DNGs
   (the test had none). 4,004 shifts are whole hours under a day; 360 are
-  hours plus seconds to about 20 minutes, a time-zone fix with a clock
-  fine-tune on top; 313 move more than a day, a wrong date put right.
+  hours plus seconds to about 20 minutes; 313 move more than a day. Which
+  were zone changes and which clock fixes, the catalog does not say; its
+  owner used whole hours for zones and minutes for drift.
 
 ### Edit Capture Time
 
@@ -419,30 +420,43 @@ date, `originalCaptureTime` is the import's fallback (the file's
 modified date in UTC), not a time the file ever held.
 
 - **A shift moves the whole time**: 14:00 +02:00 shifted by +1 hour is
-  15:00 +02:00, an hour later in fact, not the same moment in another
-  zone. Shifting a camera left on home time to match local clocks makes
-  it line up in Lightroom and puts it hours off for anything that reads
-  the offset.
+  15:00 +02:00, a moment an hour later.
 - **"Adjust to a specified date and time" keeps the old offset**: 05:00
-  −07:00 set to 14:00 becomes 14:00 −07:00. The offset no longer belongs
-  to the time. The one trace in the Metadata panel is Date Time, the
-  modify date, still showing 05:00 beside a Capture Time of 14:00: the
-  file had no modify date, so Lightroom copied the capture time into
-  `xmp:ModifyDate` at import, and Save Metadata to Files wrote it into
-  the file.
+  −07:00 set to 14:00 becomes 14:00 −07:00. The one trace in the
+  Metadata panel is Date Time, the modify date, still showing 05:00
+  beside a Capture Time of 14:00: the file had no modify date, so
+  Lightroom copied the capture time into `xmp:ModifyDate` at import, and
+  Save Metadata to Files wrote it into the file.
 - **A video's edit adds `exif:DateTimeOriginal` with the new clock time
   and no offset**, and leaves `xmp:CreateDate`, with its `Z`, as it was.
 
-What an edit was for can mostly be read back. The camera's moment is
-`originalCaptureTime` with the old offset. A shift by whole hours re-
-expresses that moment in another zone; a leftover of minutes and seconds
-corrects the camera's clock. So **Lightroom's edited clock time with the
-old offset plus the shift's whole hours** is the time Lightroom shows,
-in the zone it was taken in, at the camera's moment moved only by the
-fine-tune. That holds while the clock was right to the hour and drifted
-by less than half an hour; a shift of more than a day put a wrong date
-right, and the old offset says nothing about it. It needs an old offset,
-and a time-zone shift that lands on a real offset (−12:00 to +14:00).
+**Whether the kept offset is still right depends on what the edit was
+for**, and the catalog does not record that:
+
+- **an edit that fixed the camera's clock** (wrong time or drift, right
+  zone) leaves an offset that still belongs: clock and offset together
+  name the corrected moment;
+- **an edit that moved the time into another zone** (a camera left on
+  home time, shifted to match local clocks, or a time typed in as it
+  read where the photo was taken) leaves an offset that belongs to the
+  old zone: the photo lines up in Lightroom, and anything that reads the
+  offset puts it off by the shift.
+
+Lightroom treats both alike, and since it never shows the offset, both
+look right there.
+
+Someone who knows how they used Edit Capture Time can read the edit back.
+The camera's moment is `originalCaptureTime` with the old offset. If
+whole hours of a shift were always a change of zone, and any leftover of
+minutes and seconds a fix to the clock, then **Lightroom's edited clock
+time with the old offset plus the shift's whole hours** is the time
+Lightroom shows, in the zone it was taken in, at the camera's moment
+moved only by the fine-tune. That is an assumption about one person's
+habits, true of one real catalog's owner and not of everyone: a shift of
+an hour can just as well fix a clock left off daylight saving. It also
+needs an old offset, a clock right to the hour, and a zone shift that
+lands on a real offset (−12:00 to +14:00); a shift of more than a day put
+a wrong date right, and says nothing about the zone.
 
 ### Save Metadata to Files
 
@@ -461,13 +475,12 @@ when it carries an offset; otherwise its clock time, with the offset
 from `exif:DateTimeOriginal`, else `xmp:CreateDate`, else
 `capture_time_zone`, else UTC. That is right for an unedited photo whose
 camera recorded an offset, and for an unedited video whose camera wrote
-true UTC, where `captureTime` and the `Z` are both UTC. It is wrong for:
+true UTC, where `captureTime` and the `Z` are both UTC. For a photo or
+video whose time was edited, it uses the offset from before the edit (a
+shifted video's new `DateTimeOriginal` has none, so it takes the `Z`
+from `CreateDate`), which is right only when the edit fixed the clock
+rather than the zone. It is wrong for:
 
-- **a video whose time was shifted**: its new `DateTimeOriginal` has no
-  offset, so the `Z` from `CreateDate` is put on what is now a local
-  clock time;
-- **a photo whose time was edited**, whose kept offset belonged to the
-  old time;
 - **an offset copied from a modify date or an import time**, which it
   reports as from `DateTimeOriginal` though it is a save or import time;
 - **a time with no seconds, or a bare date**, which it cannot parse, so
