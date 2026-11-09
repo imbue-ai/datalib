@@ -10,6 +10,8 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use tracing_indicatif::writer::IndicatifWriter;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::time::FormatTime;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -148,6 +150,7 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
                 tracing_subscriber::fmt::layer()
                     .json()
                     .with_span_list(false)
+                    .with_timer(LocalClock)
                     .with_writer(writer)
                     .with_file(true)
                     .with_line_number(true)
@@ -161,6 +164,7 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
         registry
             .with(
                 tracing_subscriber::fmt::layer()
+                    .with_timer(LocalClock)
                     .with_writer(writer)
                     .with_file(true)
                     .with_line_number(true)
@@ -182,6 +186,17 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     datalib_status_line::set_shared_multi(multi.clone());
 
     Ok(TracingGuard { provider, multi })
+}
+
+/// Stamps a line with the local clock and its offset: the runner files a
+/// step's line under the offset its stamp carries, and tracing-subscriber's
+/// own timer writes UTC.
+struct LocalClock;
+
+impl FormatTime for LocalClock {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        w.write_str(&datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros())
+    }
 }
 
 /// The level the `log` crate's macros stop at before calling anything.
