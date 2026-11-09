@@ -243,8 +243,10 @@ app asking, which is the app an agent or a command runs inside, such as Claude
 or Terminal. It does not name the folder, the file or the command.
 
 So the same dialog can come from something routine: an AI agent running `docker`
-inside Claude has brought it up. Whether saying **Allow** there also lets that
-app into your protected libraries is not yet known, so assume it may.
+inside Claude has brought it up. And saying **Allow** to it lets that app into
+your protected libraries too: one Allow, given when Terminal asked for Docker's
+data, let Terminal list Datalib's protected folder with no second dialog. The
+dialog gives no sign that it does this.
 
 - **If you did not expect it, say no** and see what breaks.
 - **If you said Allow, quit that app when you are done.** The permission is meant
