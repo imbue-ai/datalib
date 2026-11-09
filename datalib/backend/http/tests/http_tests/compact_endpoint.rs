@@ -232,3 +232,151 @@ async fn free_disk_space_dropping_old_versions_compacts() {
     );
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
+
+/// Like [`FAKE_STEP`], and a collection answers with its store's size;
+/// the render's waits for `go` under the root, so the test sees the pass
+/// with one step done and the next still running.
+const FAKE_STEP_REPORTING: &str = r#"#!/bin/sh
+case " $* " in
+  *" --collect "*) mode=collect ;;
+  *" --migrate "*) mode=migrate ;;
+  *) mode=sync ;;
+esac
+echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
+if [ "$mode" = collect ]; then
+  if [ "$DATALIB_DAG_STEP" = enterprise/render_markdown ]; then
+    while [ ! -e "$DATALIB_DAG_DATA_ROOT/go" ]; do sleep 0.05; done
+  fi
+  echo '{"event":"outcome","outputs":[],"store_bytes":{"before":3000,"after":1000}}'
+fi
+"#;
+
+async fn config(state: &AppState) -> serde_json::Value {
+    let req = Request::builder()
+        .uri("/api/config")
+        .header("x-datalib-token", TOKEN)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router(state.clone()).oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// The `free_space` rows as (step, state, bytes freed).
+fn rows(free_space: &serde_json::Value) -> Vec<(String, String, Option<u64>)> {
+    free_space["steps"]
+        .as_array()
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|s| {
+                    let freed = s["store_bytes"]
+                        .as_object()
+                        .map(|b| b["before"].as_u64().unwrap() - b["after"].as_u64().unwrap());
+                    (
+                        s["step"].as_str().unwrap().to_string(),
+                        s["state"].as_str().unwrap().to_string(),
+                        freed,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn until_free_space(
+    state: &AppState,
+    what: &str,
+    done: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let free_space = config(state).await["free_space"].clone();
+        if done(&free_space) {
+            return free_space;
+        }
+        assert!(Instant::now() < deadline, "never {what}: {free_space}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Guards the free-space pass the app could not see move: `/api/config`
+/// says how each step it asks stands while it runs, with what each store
+/// gave back, and that it is over once it is.
+#[tokio::test]
+async fn free_disk_space_reports_each_step_as_it_goes() {
+    use std::os::unix::fs::PermissionsExt;
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.toml"), CONFIG).unwrap();
+    let bin = td.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("datalib-step"), FAKE_STEP_REPORTING).unwrap();
+    std::fs::set_permissions(
+        bin.join("datalib-step"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let state = boot(&root, &bin).await;
+    assert_eq!(
+        config(&state).await["free_space"],
+        serde_json::Value::Null,
+        "nothing asked yet"
+    );
+
+    let asking = {
+        let state = state.clone();
+        tokio::spawn(
+            async move { post(&state, "/api/free_disk_space", serde_json::json!({})).await },
+        )
+    };
+    let midway = until_free_space(&state, "reached the render", |f| {
+        rows(f).get(1).is_some_and(|r| r.1 == "running")
+    })
+    .await;
+    assert_eq!(midway["kind"], "collect");
+    assert_eq!(midway["running"], true);
+    assert_eq!(
+        rows(&midway),
+        [
+            (
+                "enterprise/ingest".to_string(),
+                "done".to_string(),
+                Some(2000)
+            ),
+            (
+                "enterprise/render_markdown".to_string(),
+                "running".to_string(),
+                None
+            ),
+        ]
+    );
+
+    std::fs::write(root.join("go"), "").unwrap();
+    let over = until_free_space(&state, "ended", |f| f["running"] == false).await;
+    assert_eq!(over["error"], serde_json::Value::Null);
+    assert_eq!(
+        rows(&over),
+        [
+            (
+                "enterprise/ingest".to_string(),
+                "done".to_string(),
+                Some(2000)
+            ),
+            (
+                "enterprise/render_markdown".to_string(),
+                "done".to_string(),
+                Some(2000)
+            ),
+        ]
+    );
+    let (status, body) = asking.await.unwrap();
+    assert!(
+        status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
+        "{status}: {body}"
+    );
+    assert!(state.sync.shutdown(Duration::from_secs(10)).await);
+}

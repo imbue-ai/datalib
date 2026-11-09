@@ -295,7 +295,10 @@ runs: a pill where the sync indicator sits says how each source is
 going, and every Sync on the Sources card is disabled
 (`ManageResponse::sync_paused`); a request opened another way waits for
 the pass. After it, the pill stays red for a source the pass could not
-update until it is dismissed.
+update until it is dismissed. The pass is held in the server's memory
+(`/api/config`'s `upgrade`) and announced as `pass_changed` on
+`/api/sync/stream`; freeing disk space is drawn by the same pill
+(§"Resets and purges").
 Before any of that, the http server brings the document index from
 before its rename forward (`http/src/config_upgrade.rs`): it moves
 `<root>/unified_index/` to `<root>/unified_document_index/` and the
@@ -715,6 +718,16 @@ does not wait for the sync to end. What it decides is in
   named it as a root, so a reset does not refill a download, and a purged
   group's config change is not waited on; a request left with nothing is
   stopped.
+- **It says how far it has got.** A compaction or a collection writes
+  every step it asks into the record's `wipe_steps` table, waiting, then
+  each as it runs and ends: done with the store's size before and after
+  (its outcome's `store_bytes`), or failed with why. Each write is
+  announced, which the server turns into `pass_changed`, and
+  `/api/config`'s `free_space` is the newest one since the server
+  started. The toolbar draws it with the migrate pass's pill: amber with
+  "Freeing space · 7 of 20 · 5.2 GB freed" while it runs, then green
+  with what it freed (red with a source it could not shrink) until
+  dismissed. Its run is a `shrink`, its reason who asked.
 - **Then it does it, in the loop.** A reset invokes each step with
   `--reset store` and records it emptied in the loop's own record, then
   opens a request for what reads it (`wipe::after_reset`). A purge waits
@@ -747,8 +760,10 @@ The loop's memory is its **record**, in `system/supervisor.sqlite`
 (`supervisor/store.rs`): `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
 or `stopped` — and `failed_step`), `turned_off` (`step`,
-`turned_off_by`) and `wipes` (`kind`, `targets`, `opened_by`, and once
-closed the `error` that stopped it, if any). It is plain SQLite in
+`turned_off_by`), `wipes` (`kind`, `targets`, `opened_by`, and once
+closed the `error` that stopped it, if any) and `wipe_steps` (a
+compaction's or collection's steps in order, each `state`, `error` and
+`before_bytes`/`after_bytes`). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the

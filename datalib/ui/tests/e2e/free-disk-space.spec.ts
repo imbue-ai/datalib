@@ -35,6 +35,16 @@ test("freeing disk collects, and folds history only when asked", async ({ page, 
   expect([202, 204]).toContain(answer.status());
   expect(answer.request().postDataJSON()).toEqual({ drop_old_versions_on_derived_data: false });
 
+  // The toolbar's pill says how it went, source by source, until dismissed.
+  const pill = page.getByTestId("free-space-pill").getByRole("button");
+  await expect(pill).toHaveText(/Freed \d/, { timeout: 20_000 });
+  await pill.click();
+  const rows = page.getByTestId("free-space-pill").locator(".pass-list li");
+  await expect(rows.first()).toBeVisible();
+  await expect(rows.filter({ hasNotText: "Done" })).toHaveCount(0);
+  await page.getByTestId("free-space-pill").getByRole("button", { name: "Dismiss" }).click();
+  await expect(page.getByTestId("free-space-pill")).toHaveCount(0);
+
   // Dropping old versions holds the first box ticked: it collects too.
   dialog = await openDialog(page);
   await dialog.getByTestId("free-drop-old").check();

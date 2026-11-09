@@ -245,16 +245,18 @@ impl Runner {
         Ok(out)
     }
 
-    /// `step` invoked once with `how`'s flag, and the version it reports.
+    /// `step` invoked once with `how`'s flag: the version it reports, and
+    /// its store's size before and after when it had one.
     pub(crate) async fn shrink_one(
         &self,
         graph: &Graph,
         step: &StepId,
         how: Shrink,
-    ) -> std::result::Result<Option<String>, String> {
+    ) -> std::result::Result<(Option<String>, Option<crate::step::StoreBytes>), String> {
         let (i, outcome) = self.invoke_once(graph, step, &[how.flag()]).await?;
-        reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
-            .map_err(|e| format!("{e:#}"))
+        let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
+            .map_err(|e| format!("{e:#}"))?;
+        Ok((version, outcome.store_bytes))
     }
 
     /// One invocation of `step` with `verb` appended to its argv, outside
@@ -897,6 +899,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -1059,6 +1062,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -1101,6 +1105,7 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, version)],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         )
@@ -1134,6 +1139,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }
@@ -1188,6 +1194,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1336,6 +1343,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1418,6 +1426,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1475,6 +1484,7 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, "final")],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         );
@@ -1563,6 +1573,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
@@ -1647,6 +1658,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1811,6 +1823,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2057,6 +2070,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2165,6 +2179,7 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         )
@@ -2195,6 +2210,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2257,6 +2273,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -2306,6 +2323,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2390,6 +2408,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2447,6 +2466,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "stable")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
@@ -2536,6 +2556,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "early-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2565,6 +2586,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "late-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2661,6 +2683,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "v-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }
@@ -3584,6 +3607,7 @@ mod tests {
                             .collect(),
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
