@@ -88,34 +88,40 @@ pub fn accounts(rows: &IndexRows) -> Vec<Account> {
     out
 }
 
-/// The account a source mirrors: the one `wanted` names, matched without
-/// regard to case, or, with none named, the one account holding messages.
-pub fn choose_account<'a>(accounts: &'a [Account], wanted: Option<&str>) -> Result<&'a Account> {
-    let listing = || {
-        accounts
-            .iter()
-            .map(|a| format!("{} ({} messages)", a.uuid, a.messages))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+/// The accounts a source copies: the one `wanted` names, matched without
+/// regard to case, or, with none named, every account holding messages.
+pub fn choose_accounts<'a>(
+    accounts: &'a [Account],
+    wanted: Option<&str>,
+) -> Result<Vec<&'a Account>> {
     if let Some(wanted) = wanted {
         return match accounts
             .iter()
             .find(|a| a.uuid.eq_ignore_ascii_case(wanted))
         {
-            Some(a) => Ok(a),
-            None => bail!("Apple Mail has no account `{wanted}`; it has {}", listing()),
+            Some(a) => Ok(vec![a]),
+            None => bail!(
+                "Apple Mail has no account `{wanted}`; it has {}",
+                accounts
+                    .iter()
+                    .map(|a| format!("{} ({} messages)", a.uuid, a.messages))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         };
     }
     let with_mail: Vec<&Account> = accounts.iter().filter(|a| a.messages > 0).collect();
-    match with_mail.as_slice() {
-        [one] => Ok(one),
-        [] => bail!("Apple Mail's index holds no messages"),
-        _ => bail!(
-            "Apple Mail holds more than one account; name one in `apple_mail.account`: {}",
-            listing()
-        ),
+    if with_mail.is_empty() {
+        bail!("Apple Mail's index holds no messages");
     }
+    Ok(with_mail)
+}
+
+/// An email's id in the store: the account's, then the message's key (its
+/// `Message-ID`, or its content hash). The store keys emails across every
+/// account, and one message sent to two of them is a copy in each.
+pub fn email_id(store_account_id: &str, key: &str) -> String {
+    format!("{store_account_id}:{key}")
 }
 
 /// What a mailbox is to the person, from its last path component.
@@ -157,8 +163,8 @@ pub struct PlannedMailbox {
 /// One email the store should hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedEmail {
-    /// The `Message-ID` without its angle brackets; `None` for a message
-    /// with none, whose id is its content hash and known only once read.
+    /// [`email_id`] of the `Message-ID`; `None` for a message with none,
+    /// whose id is made from its content hash once it is read.
     pub email_id: Option<String>,
     /// The index's rows for it: more than one when one message is in the
     /// index twice. The first is the one whose file is read.
@@ -249,8 +255,9 @@ pub fn plan(
         let email_id = m
             .message_id
             .as_deref()
-            .map(|id| strip_angle(id.trim()).to_string())
-            .filter(|id| !id.is_empty());
+            .map(|id| strip_angle(id.trim()))
+            .filter(|id| !id.is_empty())
+            .map(|id| email_id(store_account_id, id));
         match email_id {
             Some(id) => {
                 let entry = by_id.entry(id.clone()).or_insert_with(|| PlannedEmail {
@@ -412,19 +419,48 @@ mod tests {
     }
 
     #[test]
-    fn accounts_are_counted_and_one_with_mail_is_chosen() {
+    fn every_account_with_mail_is_copied_unless_one_is_named() {
         let accounts = accounts(&rows());
         assert_eq!(accounts[0].uuid, ACCOUNT);
         assert_eq!(accounts[0].messages, 5);
         assert_eq!(accounts[1].messages, 1);
-        let err = choose_account(&accounts, None).unwrap_err().to_string();
-        assert!(err.contains("more than one account"), "{err}");
+        let uuids = |chosen: Vec<&Account>| -> Vec<String> {
+            chosen.into_iter().map(|a| a.uuid.clone()).collect()
+        };
+        assert_eq!(
+            uuids(choose_accounts(&accounts, None).unwrap()),
+            [ACCOUNT, "2C7E0D11-0000-4000-8000-0000000000AA"]
+        );
         let lower = ACCOUNT.to_ascii_lowercase();
         assert_eq!(
-            choose_account(&accounts, Some(&lower)).unwrap().uuid,
-            ACCOUNT
+            uuids(choose_accounts(&accounts, Some(&lower)).unwrap()),
+            [ACCOUNT]
         );
-        assert!(choose_account(&accounts, Some("nope")).is_err());
+        let err = choose_accounts(&accounts, Some("nope"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no account `nope`"), "{err}");
+    }
+
+    /// The same message in two accounts is two emails, one in each.
+    #[test]
+    fn a_message_in_two_accounts_is_an_email_in_each() {
+        let mut rows = rows();
+        rows.messages
+            .push(message(17, 4, "first@enterprise.example", 7, 100));
+        let ids = |account: &str, store: &str| -> Vec<String> {
+            plan(&rows, account, store, &[], true)
+                .emails
+                .into_iter()
+                .filter_map(|e| e.email_id)
+                .filter(|id| id.ends_with(":first@enterprise.example"))
+                .collect()
+        };
+        assert_eq!(ids(ACCOUNT, "acct"), ["acct:first@enterprise.example"]);
+        assert_eq!(
+            ids("2C7E0D11-0000-4000-8000-0000000000AA", "local"),
+            ["local:first@enterprise.example"]
+        );
     }
 
     #[test]
@@ -453,7 +489,7 @@ mod tests {
         let dup = plan
             .emails
             .iter()
-            .find(|e| e.email_id.as_deref() == Some("dup@enterprise.example"))
+            .find(|e| e.email_id.as_deref() == Some("acct:dup@enterprise.example"))
             .unwrap();
         assert_eq!(dup.rowids, [13, 14]);
         assert_eq!(dup.mailbox_ids.len(), 2);
@@ -461,11 +497,11 @@ mod tests {
         assert!(plan
             .emails
             .iter()
-            .all(|e| e.email_id.as_deref() != Some("gone@enterprise.example")));
+            .all(|e| e.email_id.as_deref() != Some("acct:gone@enterprise.example")));
         assert!(plan
             .emails
             .iter()
-            .all(|e| e.email_id.as_deref() != Some("outbox@enterprise.example")));
+            .all(|e| e.email_id.as_deref() != Some("acct:outbox@enterprise.example")));
     }
 
     #[test]
@@ -481,15 +517,18 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(
-            thread("reply@enterprise.example"),
-            "first@enterprise.example"
+            thread("acct:reply@enterprise.example"),
+            "acct:first@enterprise.example"
         );
         assert_eq!(
-            thread("first@enterprise.example"),
-            "first@enterprise.example"
+            thread("acct:first@enterprise.example"),
+            "acct:first@enterprise.example"
         );
-        assert_eq!(thread("lone@enterprise.example"), "lone@enterprise.example");
-        assert_eq!(plan.in_account["first@enterprise.example"], 2);
+        assert_eq!(
+            thread("acct:lone@enterprise.example"),
+            "acct:lone@enterprise.example"
+        );
+        assert_eq!(plan.in_account["acct:first@enterprise.example"], 2);
     }
 
     #[test]
@@ -499,11 +538,14 @@ mod tests {
             |p: Plan| -> Vec<String> { p.emails.into_iter().filter_map(|e| e.email_id).collect() };
         assert_eq!(
             ids(plan(&rows(), ACCOUNT, "acct", &filter, true)),
-            ["first@enterprise.example", "reply@enterprise.example"]
+            [
+                "acct:first@enterprise.example",
+                "acct:reply@enterprise.example"
+            ]
         );
         assert_eq!(
             ids(plan(&rows(), ACCOUNT, "acct", &filter, false)),
-            ["reply@enterprise.example"]
+            ["acct:reply@enterprise.example"]
         );
     }
 }
