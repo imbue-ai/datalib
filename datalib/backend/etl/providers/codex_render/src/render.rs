@@ -18,6 +18,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::markdown_html_as_typed;
 use datalib_etl_render::inputs::{Bucket, Inputs, RawRange};
 use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
@@ -39,7 +40,8 @@ use crate::ids;
 ///     them.
 /// v4: an answer's author is its model's chip (`ai_model:` handle).
 /// v5: a tool's result is the harness's, not authored by the tool's name.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: an HTML tag in a prompt, a reply or a harness message shows as typed.
+pub const RENDER_VERSION: u32 = 6;
 
 /// Who the harness's own rows are by: its notes, a tool's result. A tool's
 /// name is not a person, and `from:` must not find it as one.
@@ -349,6 +351,7 @@ fn response_item(
             if aside {
                 text = clamp(&text, max_bytes);
             }
+            let text = markdown_html_as_typed(&text);
             Some(NormalizedChatItem {
                 author_kind,
                 author_handle: (label == "LLM Response").then_some(model_handle).flatten(),
@@ -367,7 +370,10 @@ fn response_item(
             if thought.trim().is_empty() {
                 return None;
             }
-            let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
+            let quoted = format!(
+                "> {}",
+                markdown_html_as_typed(thought.trim_end()).replace('\n', "\n> ")
+            );
             Some(NormalizedChatItem {
                 author_handle: model_handle,
                 ..item(

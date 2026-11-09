@@ -184,16 +184,43 @@ fn without_block_marks(line: &str) -> &str {
 /// `&amp;lt;` stays the text `&lt;`. Backslash escapes wait for
 /// [`without_emphasis`], so an escaped `*` is not read as emphasis.
 fn unescaped(line: &str) -> String {
-    line.replace("&lt;", "<")
+    let named = line
+        .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&#10;", " ")
-        .replace("&#13;", " ")
-        .replace("&#32;", " ")
-        .replace("&#9;", " ")
-        .replace("&amp;", "&")
+        .replace("&nbsp;", " ");
+    numeric_references_decoded(&named).replace("&amp;", "&")
+}
+
+/// `&#42;` and `&#x2A;` as the characters they name; whitespace is a
+/// space. A reference to no character stays as written.
+fn numeric_references_decoded(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find("&#") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let decoded = after.find(';').and_then(|end| {
+            let digits = &after[..end];
+            let code = match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                None => digits.parse().ok(),
+            };
+            Some((char::from_u32(code?)?, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(if c.is_whitespace() { ' ' } else { c });
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str("&#");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `![alt](target)` says nothing in a cell — mostly a logo — and goes whole.
@@ -575,6 +602,16 @@ mod tests {
         assert_eq!(
             text("<summary>Tool use: a&#10;&#10;b</summary>\n&#32;   code &amp;#10;"),
             "Tool use: a b code &#10;"
+        );
+    }
+
+    /// Code an assistant wrote is drawn with its punctuation as numeric
+    /// references, and reads as the characters.
+    #[test]
+    fn a_numeric_reference_is_its_character() {
+        assert_eq!(
+            text("run <code>a&#42;b&#x7C;c</code> &#99999999; &#x;"),
+            "run a*b|c &#99999999; &#x;"
         );
     }
 
