@@ -48,7 +48,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v21: so is a person's photo.
 /// v22: the account's own messages are "Me", a chip of the `me:self`
 /// handle, whatever stand-in the source used ("User", "Human").
-pub const LAYOUT_VERSION: u32 = 22;
+/// v23: a `Markdown` body that leaves a fence or an HTML block open is
+/// closed at its end, so the messages after it are not swallowed.
+pub const LAYOUT_VERSION: u32 = 23;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -86,7 +88,7 @@ use crate::types::{
 };
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
+    close_open_blocks, escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -641,7 +643,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
 
     let body = |text: &str| match profile.text_format {
         TextFormat::Plain => escape_md_block(text),
-        TextFormat::Markdown => text.to_string(),
+        TextFormat::Markdown => close_open_blocks(text),
     };
     let labelled = |text: String| {
         if item.labels.is_empty() {
@@ -2288,6 +2290,36 @@ mod tests {
             rows[0].source_url.as_deref(),
             Some("https://example.com/post/42")
         );
+    }
+
+    /// A message whose code block never closes, typed or cut short,
+    /// turned every message after it into that code.
+    #[test]
+    fn a_block_one_message_leaves_open_stays_in_that_message() {
+        let profile = RenderProfile {
+            provider: Provider::Test,
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            stamp_precision: RecordStampPrecision::Seconds,
+            render_version: 1,
+            text_format: TextFormat::Markdown,
+        };
+        let mut chat = mk_chat();
+        let mut next = chat.buckets[0].items[0].clone();
+        next.message_uuid = "55555555-5555-5555-5555-555555555555".to_string();
+        chat.buckets[0].items[0].text = Some("```rust\nfn main() {".to_string());
+        chat.buckets[0].items.push(next);
+
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
+        let (first, second) = md
+            .split_once("id=\"m-55555555")
+            .expect("the second message's wrapper");
+        let fences = first.lines().filter(|l| l.starts_with("```")).count();
+        assert_eq!(fences % 2, 0, "every fence before it is closed: {md}");
+        assert!(second.contains("Make it so."), "{md}");
     }
 
     /// A chat with no title of its own is headed by its name alone, not

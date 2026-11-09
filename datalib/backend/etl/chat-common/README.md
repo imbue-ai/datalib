@@ -300,6 +300,13 @@ text is `text` as given either way. Front-matter values go through
 document whose every plain field holds HTML and markdown through the
 app's own markdown-it and sanitizer, and checks each reads as typed.
 
+A `Markdown` body is pasted into a page of many messages, so a block it
+leaves open would run on through every message after it: an assistant's
+reply cut off inside a code block, a prompt that opens ```` ``` ```` or
+`<pre>` and never closes it. `close_open_blocks` closes any fence, or
+any HTML block that only a closing tag or marker ends, at the end of
+the body.
+
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
 through DOMPurify: scripts, event handlers, `javascript:` URLs and form
 controls are dropped, and only the tags and attributes the renderers

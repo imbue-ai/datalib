@@ -209,6 +209,87 @@ pub fn escape_html_outside_code(md: &str) -> String {
     out
 }
 
+/// `md` with any block it leaves open closed at its end: a fence, or an
+/// HTML block that only a closing tag or marker ends (`<pre`, `<!--`,
+/// `<?`, `<!X`, `<![CDATA[`). Markdown from upstream is pasted into a
+/// page of many messages, and a block one message leaves open would
+/// swallow every message after it.
+pub fn close_open_blocks(md: &str) -> String {
+    let mut open: Option<String> = None;
+    for line in md.split('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = &line[indent..];
+        open = match open {
+            Some(fence) if fence_opener(&fence).is_some() => {
+                (!closes_fence(trimmed, &fence)).then_some(fence)
+            }
+            Some(end) => (!ends_html_block(line, &end)).then_some(end),
+            None if indent > 3 => None,
+            None => opens_fence(trimmed).or_else(|| {
+                let end = html_block_end(trimmed)?;
+                (!ends_html_block(trimmed, &end)).then_some(end)
+            }),
+        };
+    }
+    match open {
+        Some(close) => format!("{md}\n{close}"),
+        None => md.to_string(),
+    }
+}
+
+/// [`fence_opener`], less a backtick run with a backtick after it on its
+/// line, which markdown reads as a code span.
+fn opens_fence(line: &str) -> Option<String> {
+    let fence = fence_opener(line)?;
+    (!(fence.starts_with('`') && line[fence.len()..].contains('`'))).then_some(fence)
+}
+
+/// What ends the HTML block `line` opens, for the kinds that a blank
+/// line does not end.
+fn html_block_end(line: &str) -> Option<String> {
+    if let Some(rest) = line.strip_prefix('<') {
+        let lower = rest.to_ascii_lowercase();
+        for tag in ["pre", "script", "style", "textarea"] {
+            let after = lower.strip_prefix(tag);
+            if after.is_some_and(|a| a.is_empty() || a.starts_with([' ', '\t', '>'])) {
+                return Some(format!("</{tag}>"));
+            }
+        }
+    }
+    let end = if line.starts_with("<!--") {
+        "-->"
+    } else if line.starts_with("<?") {
+        "?>"
+    } else if line.starts_with("<![CDATA[") {
+        "]]>"
+    } else if line
+        .strip_prefix("<!")
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()))
+    {
+        ">"
+    } else {
+        return None;
+    };
+    Some(end.to_string())
+}
+
+/// Whether `line` holds what ends an HTML block. Any of the four
+/// closing tags ends a `<pre>`-kind block, whichever opened it.
+fn ends_html_block(line: &str, end: &str) -> bool {
+    if end.starts_with("</") {
+        let lower = line.to_ascii_lowercase();
+        return ["</pre>", "</script>", "</style>", "</textarea>"]
+            .iter()
+            .any(|t| lower.contains(t));
+    }
+    let after_opener = match end {
+        "-->" => line.strip_prefix("<!--").unwrap_or(line),
+        "?>" => line.strip_prefix("<?").unwrap_or(line),
+        _ => line,
+    };
+    after_opener.contains(end)
+}
+
 /// The backticks or tildes opening a fenced block, if `line` opens one.
 fn fence_opener(line: &str) -> Option<String> {
     let mark = line.chars().next().filter(|c| matches!(c, '`' | '~'))?;
@@ -583,5 +664,43 @@ mod tests {
         }
         failures.truncate(10);
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+    /// A message that leaves a block open no longer takes the messages
+    /// after it into that block.
+    #[test]
+    fn a_block_left_open_is_closed_at_the_end() {
+        assert_eq!(
+            close_open_blocks("```rust\nfn main() {"),
+            "```rust\nfn main() {\n```"
+        );
+        assert_eq!(
+            close_open_blocks("a\n````\n```\nb"),
+            "a\n````\n```\nb\n````"
+        );
+        assert_eq!(close_open_blocks("<PRE>x\ny"), "<PRE>x\ny\n</pre>");
+        assert_eq!(close_open_blocks("<!-- note\nmore"), "<!-- note\nmore\n-->");
+        assert_eq!(close_open_blocks("<![CDATA[x"), "<![CDATA[x\n]]>");
+        assert_eq!(close_open_blocks("<!DOCTYPE"), "<!DOCTYPE\n>");
+    }
+
+    #[test]
+    fn a_closed_block_is_left_alone() {
+        for md in [
+            "```\ncode\n```\nafter",
+            "~~~\n```\n~~~",
+            "<pre>x</pre>",
+            "<!-- one line -->",
+            "<!--\n-->",
+            "<script>\n</style>",
+            "<?php ?>",
+            "<!DOCTYPE html>",
+            "    ```",
+            "> ```",
+            "<prefix>",
+            "`` ``` ``",
+            "```x = 1```",
+        ] {
+            assert_eq!(close_open_blocks(md), md, "{md:?}");
+        }
     }
 }

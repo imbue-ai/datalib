@@ -48,7 +48,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/68/00000000-0000-8087-98c3-35796eae6f68.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#ten-forward"
     },
@@ -108,7 +108,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/ab/00000000-0000-80d6-b5a5-2617d0679dab.md",
       "modified_at": "2369-05-28T15:21:44+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
@@ -132,7 +132,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/d4/00000000-0000-8119-8c96-61dfdcca24d4.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -144,7 +144,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/68/00000000-0000-811d-904c-516d04a43f68.md",
       "modified_at": "2369-05-28T15:20:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -240,7 +240,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/e6/00000000-0000-81d7-a9c9-0ee77752a4e6.md",
       "modified_at": "2369-05-28T15:15:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#engineering"
     },
@@ -312,7 +312,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/39/00000000-0000-8209-b9a9-5e8e8a2f0239.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -612,7 +612,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/5c/00000000-0000-84d6-b1f0-0b22f0528e5c.md",
       "modified_at": "2369-05-28T15:25:00+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -720,7 +720,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/1c/00000000-0000-8630-8d5e-f4aae259bc1c.md",
       "modified_at": "2369-05-28T15:21:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -960,7 +960,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/4b/00000000-0000-8827-877d-5fdc4dc4394b.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1152,7 +1152,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/96/00000000-0000-89a0-9bd6-7e928c9b2396.md",
       "modified_at": "2369-05-28T15:21:42+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "@Lt. Cmdr. Data"
     },
@@ -1332,7 +1332,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/85/00000000-0000-8ac1-a181-7b8e737cbd85.md",
       "modified_at": "2369-05-28T15:21:41+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "@William T. Riker"
     },
@@ -1368,7 +1368,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/ff/00000000-0000-8b0f-9140-61eaa37493ff.md",
       "modified_at": "2369-05-28T15:18:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1512,7 +1512,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/fa/00000000-0000-8bff-b36c-0096661fd9fa.md",
       "modified_at": "2369-05-28T15:13:20+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "#bridge"
     },
@@ -1524,7 +1524,7 @@ expression: snapshot
       "md_path": "slack-diff/render_markdown/6d/00000000-0000-8c02-a5c8-c13c049e1e6d.md",
       "modified_at": "2369-05-28T15:26:40+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack-diff",
       "title": "#bridge"
     },
@@ -1812,7 +1812,7 @@ expression: snapshot
       "md_path": "slack/render_markdown/60/00000000-0000-8d9c-9316-43944fcd9e60.md",
       "modified_at": "2369-05-28T15:21:43+00:00",
       "provider": "slack",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "source_id": "slack",
       "title": "@William T. Riker, Worf"
     },
