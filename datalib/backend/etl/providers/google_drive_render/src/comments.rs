@@ -214,6 +214,10 @@ pub fn sections(t: &Thread) -> Vec<Section> {
                 author: &m.author,
                 handle: m.handle.as_ref(),
                 date_ms: m.created.as_deref().and_then(datalib_time::record_stamp_ms),
+                offset_secs: m
+                    .created
+                    .as_deref()
+                    .and_then(datalib_time::written_offset_secs),
                 source_url: None,
             }
             .render(),

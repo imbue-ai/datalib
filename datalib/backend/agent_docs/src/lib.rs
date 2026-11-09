@@ -115,6 +115,13 @@ pub const DOCS: &[Doc] = &[
         text: include_str!("../../../../docs/user/building_on_datalib.md"),
     },
     Doc {
+        topic: "documents",
+        path: "docs/user/rendered_documents.md",
+        kind: Kind::Guide,
+        about: "showing a rendered document in your app: people, times, attachments",
+        text: include_str!("../../../../docs/user/rendered_documents.md"),
+    },
+    Doc {
         topic: "search",
         path: "docs/user/searching.md",
         kind: Kind::Guide,
@@ -191,6 +198,13 @@ pub const DOCS: &[Doc] = &[
         about: "how handles, source contacts and the contacts app fit together, every route \
                 and table",
         text: include_str!("../../../../docs/dev/contacts.md"),
+    },
+    Doc {
+        topic: "chips",
+        path: "docs/dev/chips.md",
+        kind: Kind::Reference,
+        about: "how datalib's viewer draws a person, a group, a step or a date, and its clicks",
+        text: include_str!("../../../../docs/dev/chips.md"),
     },
     Doc {
         topic: "writing-applets",

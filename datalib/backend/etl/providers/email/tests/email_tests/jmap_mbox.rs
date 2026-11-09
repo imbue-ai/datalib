@@ -506,3 +506,53 @@ async fn star_trek_mbox_renders_through_render_all() {
         "raw cid: reference leaked into bridge thread md:\n{bridge_md}"
     );
 }
+
+/// The message header was built from the email's instant alone, so an
+/// email sent at 09:00 in Paris read as 08:00 UTC under "as written",
+/// and its row's `created_at` lost the `+01:00` its `Date:` carried.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_email_keeps_the_offset_its_date_was_written_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mbox_path = dir.path().join("one.mbox");
+    std::fs::write(
+        &mbox_path,
+        "From picard@enterprise.starfleet Mon Jan 05 09:00:00 +0100 2026\n\
+         Message-Id: <paris-001@enterprise.starfleet>\n\
+         From: Jean-Luc Picard <picard@enterprise.starfleet>\n\
+         To: Beverly Crusher <crusher@enterprise.starfleet>\n\
+         Subject: Labarre\n\
+         Date: Mon, 5 Jan 2026 09:00:00 +0100\n\
+         Content-Type: text/plain; charset=utf-8\n\
+         \n\
+         The vineyard is as I left it.\n",
+    )
+    .unwrap();
+    let (_tmp, db_path) = fetch_into_tmp(mbox_path).await;
+    let store = open(
+        &db_path_for(&db_path),
+        "star-trek-mbox",
+        RawRange::cold(),
+        false,
+    )
+    .expect("open")
+    .expect("a committed store");
+    let out = tempfile::tempdir().unwrap();
+    let (docs, _) = render_paged(&store, out.path(), &[], PageSize::DEFAULT);
+    store.close();
+
+    let [doc] = docs.as_slice() else {
+        panic!("expected one document, got {}", docs.len());
+    };
+    let md = std::fs::read_to_string(&doc.md_path).unwrap();
+    assert!(
+        md.contains("class=\"msg-ts\" datetime=\"2026-01-05T09:00:00+01:00\""),
+        "the header lost the email's offset:\n{md}"
+    );
+    let stamps: Vec<_> = doc
+        .rows
+        .iter()
+        .filter(|r| r.uuid != doc.markdown_uuid)
+        .filter_map(|r| r.created_at.as_deref())
+        .collect();
+    assert_eq!(stamps, ["2026-01-05T09:00:00+01:00"]);
+}

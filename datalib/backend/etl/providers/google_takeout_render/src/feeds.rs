@@ -85,6 +85,7 @@ pub fn item(
         author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms,
+        date_offset_secs: None,
         text: None,
         kind: ItemKind::Text,
         attachments: Vec::new(),

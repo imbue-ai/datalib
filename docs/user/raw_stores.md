@@ -72,7 +72,7 @@ with Store("gmail/ingest/entities.doltlite_db") as store:
     rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
 ```
 
-`query` returns a list of tuples, and a write fails. It has wheels for
+`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. It has wheels for
 Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
 has the rest, and says when to `import doltlite` instead, which makes the
@@ -260,7 +260,7 @@ fresh is the mirror?".
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
 | `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. Rows written before `partial` existed say `ok` for a run that ended early |
-| `summary` | what it did, JSON (counts, and why it stopped early if it did) |
+| `summary` | what it did, JSON (counts, and why it stopped early if it did). `cursors` lists each sync position the run moved, before and after; where more than five of one kind moved (a first Slack run checks every closed DM), they are one entry in `cursors_by_kind` instead: the kind, how many moved, how many are new, and three examples |
 
 ### `sync_scope_state`
 
@@ -320,6 +320,23 @@ mirror adds the leading zero. `listed_messages.id` and
 only on a message the Gmail API has answered for, so it is NULL for
 Fastmail, for an mbox, and for a message a Takeout seeded until the
 next sync asks Gmail for its labels.
+
+**From the mirror's spelling to the API's, and back.** The Gmail API and
+Gmail's URLs write an id without leading zeros; the mirror pads it to
+16 digits. In SQL:
+
+```sql
+-- the API's spelling of each message's id and thread id
+SELECT id, ltrim(id, '0') AS api_id, ltrim(thread_id, '0') AS api_thread_id
+  FROM emails;
+-- a message by the id the API gave, bound to the ?
+SELECT * FROM emails WHERE id = substr('0000000000000000' || lower(?), -16);
+```
+
+To open a message in Gmail, link to
+`https://mail.google.com/mail/u/0/#search/rfc822msgid:` followed by its
+`message_id`, percent-encoded: the link the app's own ↗ uses. `u/0` is
+the first Google account the browser is signed in to.
 
 **Getting the message.** Join `email_blobs` on the email, then
 `cas_objects` in `blobs.sqlite` on its `blake3`. The row's
@@ -547,6 +564,19 @@ user, channel or message JSON from `users.list`,
 | a message's `ts` in a conversation | `messages.ts`; the row's `id` is `<team id>#<channel id>#<ts>` |
 | a thread (its root's `ts`) | `messages.thread_root_uuid`, equal to the root's `messages.id` |
 | a file id `F…` | `slack_attachments.file_id` |
+
+**A message's permalink**, as Slack's `chat.getPermalink` builds it: on
+the workspace's own host, and for a reply, with the thread it is in.
+
+```sql
+SELECT m.id,
+       rtrim(w.team_url, '/') || '/archives/' || m.channel_id
+         || '/p' || replace(m.ts, '.', '')
+         || CASE WHEN m.thread_ts IS NOT NULL AND m.thread_ts != m.ts
+                 THEN '?thread_ts=' || m.thread_ts || '&cid=' || m.channel_id
+                 ELSE '' END AS permalink
+  FROM messages m JOIN workspaces w ON w.id = m.team_id;
+```
 
 `workspaces.self_user_id` is the account the mirror signs in as, which
 is how to tell "me" from everyone else. A direct message is a

@@ -44,6 +44,7 @@ pub fn item(
         author_kind: AuthorKind::Named,
         author_display,
         date_ms,
+        date_offset_secs: None,
         text: (!text.trim().is_empty()).then_some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),

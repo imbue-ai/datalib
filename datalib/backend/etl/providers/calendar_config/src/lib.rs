@@ -251,6 +251,8 @@ pub struct CalendarSelection {
     /// changed occurrences of a series that fall inside it. A windowed
     /// calendar is listed whole every run rather than resumed, and an
     /// event the window no longer reaches is dropped.
+    /// Leave it out to sync often: an unwindowed calendar is resumed,
+    /// and `render_occurrences` already lists the days around now.
     #[serde(default)]
     pub since: Option<String>,
     /// The last day to mirror, included, in the same forms (`+21d`).
@@ -286,6 +288,8 @@ pub struct CaldavSync {
     /// events with some part inside it are mirrored. A windowed calendar
     /// is listed whole every run rather than resumed, and an event the
     /// window no longer reaches is dropped.
+    /// Leave it out to sync often: an unwindowed calendar is resumed,
+    /// and `render_occurrences` already lists the days around now.
     #[serde(default)]
     pub since: Option<String>,
     /// The last day to mirror, included, in the same forms (`+21d`).

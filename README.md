@@ -1,5 +1,7 @@
 # datalib — Project Data Liberation ✊
 
+<img src="docs/assets/mission.svg" width="480" alt="Organize the world's (struck out) your own information and make it universally accessible and useful to you, your way.">
+
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
 > [!NOTE]

@@ -40,9 +40,21 @@ and the app starts it within a moment, with no restart.
 
 `datalib-dag init` writes the first two. `datalib-step examples <type>
 --append` adds the time-series index when a source that has time series
-is the first. The other two are yours to add:
+is the first.
+
+In the app, **Add data source** lists the contacts app and the photos
+applet under "Apps that read every source", each with a button that
+turns it on or off; the Lightroom form offers the photos applet too,
+and editing a Lightroom source you already have is enough to turn it
+on. Turning one off takes its entry out of the config; anything it
+stored stays on disk. From the command line, add the entry yourself:
 
 ```toml fragment
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
+
 [[applets]]
 id = "photos"
 command = "datalib-applet photos"
@@ -72,8 +84,11 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document, as markdown |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
+
+How a document names people, times and attachments, for an app that
+shows one: [showing a rendered document](rendered_documents.md).
 | `GET /problems?q=` | what a step could not fully do to a record |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
 | `GET /embedding_map` | the documents' embeddings laid out on a plane; `/embedding_map/matches` the ones a search finds |

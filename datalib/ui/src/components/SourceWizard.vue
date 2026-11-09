@@ -62,6 +62,7 @@ import {
   type SourceSteps,
 } from "@/config/sourceSteps";
 import { FailureError } from "@/apiError";
+import { appletToml, builtinApplet, filterApps, type BuiltinApplet } from "@/config/builtinApplets";
 import {
   type AccountNaming,
   type ConnectAttempt,
@@ -137,6 +138,9 @@ const props = defineProps<{
   /// Adds a package to the library's config, once its build is here.
   /// Absent: the picker offers no link box.
   addPackage?: (source: string, lookup: PackageLookup) => Promise<void>;
+  /// The id of every `[[applets]]` entry in the config, so an app's tile
+  /// and a source's offer of one say whether it is on.
+  appletIds?: Set<string>;
 }>();
 
 const emit = defineEmits<{
@@ -168,11 +172,16 @@ const emit = defineEmits<{
       /// `none` leaves the markdown out of free-text search; the grid
       /// index is not a choice.
       qmdIndexing: QmdIndexing;
+      /// The built-in applet the source offers (`CatalogEntry.applet`),
+      /// and whether it is to be on. Null when the entry offers none.
+      applet: { id: string; on: boolean } | null;
     },
   ): void;
+  /// An app from the picker's Apps group turned on or off.
+  (e: "app", payload: { id: string; on: boolean }): void;
 }>();
 
-type Stage = "pick" | "configure";
+type Stage = "pick" | "configure" | "app";
 
 const mode = computed<"create" | "edit">(() => (props.editing ? "edit" : "create"));
 const isEdit = computed(() => mode.value === "edit");
@@ -226,6 +235,18 @@ const qmdIndexing = computed<QmdIndexing>(() => {
   if (!renders.value || !providerRenders.value || !keywordWanted.value) return "none";
   return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
+
+/// The built-in applet this source's form offers, and whether the config
+/// has it. A new source offers it on; an edit starts from the config, so
+/// saving an edit that touched nothing writes nothing.
+const offeredApplet = computed<BuiltinApplet | null>(() =>
+  chosen.value?.applet ? (builtinApplet(chosen.value.applet) ?? null) : null,
+);
+const appletIsOn = (id: string) => props.appletIds?.has(id) ?? false;
+const appletWanted = ref(true);
+function seedApplet(entry: CatalogEntry) {
+  appletWanted.value = !entry.applet || !isEdit.value || appletIsOn(entry.applet);
+}
 
 /// Whether this source's type may be embedded at all (`embedAllowed`).
 const embeds = computed(() => embedAllowed(chosen.value?.type));
@@ -374,6 +395,15 @@ const groups = computed(() => {
     .filter((g) => g.entries.length > 0);
 });
 
+/// The picker's Apps group: built-in applets that are not a source but
+/// read every source's data, each turned on or off by itself.
+const apps = computed(() => filterApps(query.value));
+const chosenApp = ref<BuiltinApplet | null>(null);
+function chooseApp(app: BuiltinApplet) {
+  chosenApp.value = app;
+  stage.value = "app";
+}
+
 // Flat list in display order, for keyboard navigation.
 const flat = computed(() => groups.value.flatMap((g) => g.entries));
 const cursor = ref(0);
@@ -399,6 +429,7 @@ const byteUnits = ref<Record<string, ByteUnit>>({});
 
 function seed(entry: CatalogEntry, steps?: SourceSteps) {
   values.value = seedFieldValues(entry, steps);
+  seedApplet(entry);
   seedAnswers(entry);
   byteUnits.value = {};
   for (const f of entry.fields ?? []) {
@@ -1509,6 +1540,7 @@ function submit() {
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
     qmdIndexing: qmdIndexing.value,
+    applet: offeredApplet.value ? { id: offeredApplet.value.id, on: appletWanted.value } : null,
   });
 }
 </script>
@@ -1527,7 +1559,7 @@ function submit() {
     >
       <header class="wiz-head dialog-head" :class="{ 'wiz-chosen': stage === 'configure' }">
         <button
-          v-if="mode === 'create' && stage === 'configure'"
+          v-if="mode === 'create' && stage !== 'pick'"
           class="btn ghost wiz-back"
           @click="stage = 'pick'"
         >
@@ -1539,13 +1571,21 @@ function submit() {
           alt=""
           class="wiz-icon"
         />
+        <img
+          v-if="stage === 'app' && chosenApp && iconUrl(chosenApp.icon)"
+          :src="iconUrl(chosenApp.icon)!"
+          alt=""
+          class="wiz-icon"
+        />
         <h2>
           {{
             isEdit
               ? `Edit ${name || id}`
               : stage === "configure" && chosen
                 ? `Add ${chosen.label}`
-                : "Add a data source"
+                : stage === "app" && chosenApp
+                  ? chosenApp.label
+                  : "Add a data source"
           }}
         </h2>
         <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
@@ -1565,7 +1605,9 @@ function submit() {
           autofocus
           @keydown="onPickKeydown"
         />
-        <p v-if="flat.length === 0" class="wiz-empty">No source type matches “{{ query }}”.</p>
+        <p v-if="flat.length === 0 && apps.length === 0" class="wiz-empty">
+          No source type matches “{{ query }}”.
+        </p>
         <div v-for="g in groups" :key="g.kind" class="wiz-group">
           <h3>{{ g.label }}</h3>
           <div class="wiz-tiles">
@@ -1591,6 +1633,26 @@ function submit() {
             </button>
           </div>
         </div>
+        <div v-if="apps.length" class="wiz-group">
+          <h3>Apps that read every source</h3>
+          <div class="wiz-tiles">
+            <button
+              v-for="a in apps"
+              :key="a.id"
+              class="wiz-tile"
+              :title="a.blurb"
+              @click="chooseApp(a)"
+            >
+              <img v-if="iconUrl(a.icon)" :src="iconUrl(a.icon)!" alt="" class="wiz-icon" />
+              <span v-else class="wiz-icon wiz-icon-fallback" aria-hidden="true">◇</span>
+              <span class="wiz-tile-text">
+                <b>{{ a.label }}</b>
+                <small>{{ a.blurb }}</small>
+              </span>
+              <span v-if="appletIsOn(a.id)" class="wiz-soon">on</span>
+            </button>
+          </div>
+        </div>
         <div v-if="props.addPackage" class="wiz-pkg">
           <PackageReview
             :commit="props.addPackage"
@@ -1598,6 +1660,22 @@ function submit() {
             @done="afterPackage"
           />
         </div>
+      </div>
+
+      <!-- An app: what it gives, and one switch. -->
+      <div v-else-if="stage === 'app' && chosenApp" class="wiz-body dialog-body wiz-form">
+        <p class="wiz-intro">{{ chosenApp.about }}</p>
+        <p class="wiz-help">
+          <template v-if="appletIsOn(chosenApp.id)">
+            It is on. Turning it off takes it out of the config; anything it stored stays on disk
+            and is there again when you turn it back on.
+          </template>
+          <template v-else>It is off. It takes effect a moment after you turn it on.</template>
+        </p>
+        <details class="wiz-review">
+          <summary>The config entry</summary>
+          <pre>{{ appletToml(chosenApp) }}</pre>
+        </details>
       </div>
 
       <!-- Stage 2: configure. Name, the sign-in, the source's sections,
@@ -2418,6 +2496,22 @@ function submit() {
               </div>
             </section>
 
+            <section v-if="!zone.advanced && offeredApplet" class="wiz-field wiz-row wiz-section">
+              <span class="wiz-label wiz-section-head">{{ offeredApplet.label }}</span>
+              <div class="wiz-controls">
+                <label class="wiz-choice">
+                  <input v-model="appletWanted" type="checkbox" class="wiz-bool" />
+                  <span>
+                    Turn on the {{ offeredApplet.label }}
+                    <small class="wiz-help">
+                      {{ offeredApplet.blurb }} It shows every such source, not only this one, so
+                      turning it off here turns it off for all of them.
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </section>
+
             <template v-if="zone.advanced">
               <section v-if="providerRenders" class="wiz-field wiz-row wiz-section">
                 <span class="wiz-label wiz-section-head">Rendering</span>
@@ -2521,6 +2615,13 @@ function submit() {
           @click="submit"
         >
           {{ isEdit ? "Save changes" : "Add source" }}
+        </button>
+        <button
+          v-if="stage === 'app' && chosenApp"
+          class="btn primary"
+          @click="emit('app', { id: chosenApp.id, on: !appletIsOn(chosenApp.id) })"
+        >
+          {{ appletIsOn(chosenApp.id) ? "Turn off" : "Turn on" }}
         </button>
       </footer>
     </div>

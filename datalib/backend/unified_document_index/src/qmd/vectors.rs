@@ -199,11 +199,11 @@ fn add_chunk(
 /// another connection committed; and the chunks' vectors by content hash,
 /// read as a search first asks for them. A key is `<content hash>_<seq>`
 /// and a model's vector for a content never changes, so a held vector
-/// stays right until a vector is removed or added in its place; either
-/// moves the stamp, and every vector held is dropped. A content's
-/// messages are read as a filtered search first asks for them, and never
-/// change. Belongs to one
-/// connection, since `data_version` counts only for the connection asked.
+/// stays right while vectors are only added: the contents the new keys
+/// name are read again, and the rest are kept. A vector removed drops
+/// every one held. A content's messages are read as a filtered search
+/// first asks for them, and never change. Belongs to one connection,
+/// since `data_version` counts only for the connection asked.
 #[derive(Default)]
 pub struct VectorCache {
     held: tokio::sync::Mutex<HeldVectors>,
@@ -232,6 +232,45 @@ struct HeldVectors {
     sections: HashMap<String, Vec<(i64, String)>>,
 }
 
+/// How current [`nearest_documents`] must be. `AsHeld` ranks against
+/// the documents and vectors an earlier search read, reading only
+/// contents it has never read, and is what a search asks for while a
+/// sync is writing the index: the embed step commits every few seconds,
+/// and reading the documents again at each commit took a search past its
+/// deadline on a large library. With nothing held it reads as `Current`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Freshness {
+    Current,
+    AsHeld,
+}
+
+/// What a move of `vectors_vec_rowids`' `(count, largest rowid, model)`
+/// means for the vectors held. Its rowids are `AUTOINCREMENT`, so they are
+/// never reused: when the count grew by as much as the largest rowid,
+/// every row after the old largest is new and none was removed.
+#[derive(Debug, PartialEq, Eq)]
+enum StampMove {
+    Same,
+    Added { after: i64 },
+    Reset,
+}
+
+fn stamp_move(held: Option<&(i64, i64, String)>, now: &(i64, i64, String)) -> StampMove {
+    let Some(held) = held else {
+        return StampMove::Reset;
+    };
+    if held == now {
+        return StampMove::Same;
+    }
+    let (count, last, model) = now;
+    let (held_count, held_last, held_model) = held;
+    if model == held_model && last > held_last && count - held_count == last - held_last {
+        StampMove::Added { after: *held_last }
+    } else {
+        StampMove::Reset
+    }
+}
+
 /// What a search's structured terms keep of one document: what its
 /// chunks may rank it by.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +297,7 @@ pub async fn nearest_documents(
     collections: Option<&[String]>,
     among: Option<&HashMap<String, Kept>>,
     limit: usize,
+    fresh: Freshness,
 ) -> Result<Vec<QmdHit>> {
     let create: Option<String> = sqlx::query_scalar(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vectors_vec'",
@@ -282,33 +322,50 @@ pub async fn nearest_documents(
     }
 
     let mut held = cache.held.lock().await;
-    let version: i64 = sqlx::query_scalar("PRAGMA data_version")
-        .fetch_one(pool)
-        .await?;
-    let committed = held.version != Some(version);
-    if committed {
-        held.documents =
-            sqlx::query_as("SELECT collection, path, hash FROM documents WHERE active = 1")
-                .fetch_all(pool)
-                .await?;
-        held.version = Some(version);
-    }
-    if committed
-        || held
-            .stamp
-            .as_ref()
-            .is_none_or(|(_, _, model)| model != query.model)
-    {
-        let (count, last): (i64, i64) =
-            sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM vectors_vec_rowids")
-                .fetch_one(pool)
-                .await?;
-        let stamp = Some((count, last, query.model.to_string()));
-        if held.stamp != stamp {
-            held.by_hash.clear();
-            held.sections.clear();
+    let holds_model = held
+        .stamp
+        .as_ref()
+        .is_some_and(|(_, _, model)| model == query.model);
+    if !(fresh == Freshness::AsHeld && held.version.is_some() && holds_model) {
+        let version: i64 = sqlx::query_scalar("PRAGMA data_version")
+            .fetch_one(pool)
+            .await?;
+        let committed = held.version != Some(version);
+        if committed {
+            held.documents =
+                sqlx::query_as("SELECT collection, path, hash FROM documents WHERE active = 1")
+                    .fetch_all(pool)
+                    .await?;
+            held.version = Some(version);
         }
-        held.stamp = stamp;
+        if committed || !holds_model {
+            let (count, last): (i64, i64) =
+                sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(rowid), 0) FROM vectors_vec_rowids")
+                    .fetch_one(pool)
+                    .await?;
+            let stamp = (count, last, query.model.to_string());
+            match stamp_move(held.stamp.as_ref(), &stamp) {
+                StampMove::Same => {}
+                StampMove::Added { after } => {
+                    let added: Vec<String> =
+                        sqlx::query_scalar("SELECT id FROM vectors_vec_rowids WHERE rowid > ?")
+                            .bind(after)
+                            .fetch_all(pool)
+                            .await?;
+                    for id in &added {
+                        let (hash, _) = split_hash_seq(id).with_context(|| {
+                            format!("a `vectors_vec` key not shaped `<hash>_<seq>`: {id:?}")
+                        })?;
+                        held.by_hash.remove(hash);
+                    }
+                }
+                StampMove::Reset => {
+                    held.by_hash.clear();
+                    held.sections.clear();
+                }
+            }
+            held.stamp = Some(stamp);
+        }
     }
     // path, hash, and the messages its chunks are limited to (all when `None`).
     let documents: Vec<(String, String, Option<&HashSet<String>>)> = held
@@ -665,6 +722,37 @@ fn unit(v: &mut [f32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Vectors only added keep every vector held but the contents the new
+    /// keys name; anything else (a removal, a rebuilt table, another
+    /// model) drops them all, since a held vector may have gone.
+    #[test]
+    fn only_an_append_keeps_the_vectors_held() {
+        let at = |count, last, model: &str| (count, last, model.to_string());
+        let held = at(10, 12, "m");
+        assert_eq!(stamp_move(Some(&held), &at(10, 12, "m")), StampMove::Same);
+        assert_eq!(
+            stamp_move(Some(&held), &at(13, 15, "m")),
+            StampMove::Added { after: 12 }
+        );
+        assert_eq!(
+            stamp_move(Some(&held), &at(12, 15, "m")),
+            StampMove::Reset,
+            "three added, one removed"
+        );
+        assert_eq!(
+            stamp_move(Some(&held), &at(9, 12, "m")),
+            StampMove::Reset,
+            "one removed"
+        );
+        assert_eq!(
+            stamp_move(Some(&held), &at(3, 3, "m")),
+            StampMove::Reset,
+            "the table was rebuilt"
+        );
+        assert_eq!(stamp_move(Some(&held), &at(10, 12, "n")), StampMove::Reset);
+        assert_eq!(stamp_move(None, &held), StampMove::Reset);
+    }
 
     /// A filtered Meaning search ranks a document only by the chunks over
     /// the messages its filters keep: `from:worf` is not answered by a

@@ -59,6 +59,8 @@ const {
   editing,
   closeWizard,
   onWizardSubmit,
+  onWizardApp,
+  appletIds,
   asking,
   packagesOpen,
   addPackageEntry,
@@ -288,10 +290,12 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         v-if="wizardOpen"
         :key="wizardKey"
         :taken-ids="takenIds"
+        :applet-ids="appletIds"
         :editing="editing"
         :add-package="addPackageEntry"
         @close="closeWizard"
         @submit="onWizardSubmit"
+        @app="onWizardApp"
       />
       <PackagesDialog
         v-if="packagesOpen"

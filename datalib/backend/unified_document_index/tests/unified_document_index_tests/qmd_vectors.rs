@@ -118,7 +118,7 @@ async fn matching_documents_follows_the_structured_terms() {
 /// keyword step made inactive stops being found.
 #[tokio::test]
 async fn a_held_index_rereads_the_documents_after_another_connection_commits() {
-    use datalib_unified_document_index::qmd::vectors::QueryVector;
+    use datalib_unified_document_index::qmd::vectors::{Freshness, QueryVector};
     use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex};
     use sqlx::{ConnectOptions, Connection};
 
@@ -146,7 +146,7 @@ async fn a_held_index_rereads_the_documents_after_another_connection_commits() {
             vector,
         };
         open.reader
-            .nearest_documents(&open.vectors, &query, None, None, 5)
+            .nearest_documents(&open.vectors, &query, None, None, 5, Freshness::Current)
             .await
             .unwrap()
             .into_iter()
@@ -188,7 +188,7 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
         parse_section_uuid, snippet_match_line, Place,
     };
     use datalib_unified_document_index::qmd::vectors::{
-        chunk_lines, chunk_snippet, Kept, QueryVector,
+        chunk_lines, chunk_snippet, Freshness, Kept, QueryVector,
     };
     use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex, QmdHit};
     use sqlx::{ConnectOptions, Connection};
@@ -231,7 +231,14 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
             };
             let hits: Vec<QmdHit> = open
                 .reader
-                .nearest_documents(&open.vectors, &query, None, Some(&among), 5)
+                .nearest_documents(
+                    &open.vectors,
+                    &query,
+                    None,
+                    Some(&among),
+                    5,
+                    Freshness::Current,
+                )
                 .await
                 .unwrap();
             hits
@@ -290,5 +297,113 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
     assert!(
         checked > 0,
         "no fixture document has a message its nearest chunk misses"
+    );
+}
+
+/// While a sync writes the index, a search may rank against the vectors it
+/// already holds (`AsHeld`), and the next `Current` search reads what was
+/// added. Here document A gains copies of B's chunks, as an embed step
+/// adds rows: held, A still ranks below B for B's own vector; current, it
+/// ties B, so the added chunks were read even though every other vector
+/// held was kept.
+#[tokio::test]
+async fn added_vectors_wait_for_a_current_search() {
+    use datalib_unified_document_index::qmd::vectors::{Freshness, QueryVector};
+    use datalib_unified_document_index::qmd::{qmd_index_path, HeldIndex};
+    use sqlx::{ConnectOptions, Connection};
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path();
+    materialize_root_with_grid(root);
+    let vectors = read_document_vectors(root).await.unwrap().unwrap();
+    let mut writer = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(qmd_index_path(root))
+        .connect()
+        .await
+        .unwrap();
+    let hash_of = |path: String| {
+        sqlx::query_scalar::<_, String>("SELECT hash FROM documents WHERE active = 1 AND path = ?")
+            .bind(path)
+    };
+    let b = vectors.paths[0].clone();
+    let b_hash = hash_of(b.clone()).fetch_one(&mut writer).await.unwrap();
+    let mut a = None;
+    for path in &vectors.paths[1..] {
+        let hash = hash_of(path.clone()).fetch_one(&mut writer).await.unwrap();
+        if hash != b_hash {
+            a = Some((path.clone(), hash));
+            break;
+        }
+    }
+    let (a, a_hash) = a.expect("two documents with different contents");
+    let model: String = sqlx::query_scalar("SELECT model FROM content_vectors WHERE hash = ?")
+        .bind(&b_hash)
+        .fetch_one(&mut writer)
+        .await
+        .unwrap();
+    let query_vector = vectors.vectors[..vectors.dim].to_vec();
+
+    let held = HeldIndex::default();
+    let score = |fresh: Freshness, path: String| {
+        let held = &held;
+        let model = &model;
+        let query_vector = &query_vector;
+        async move {
+            let open = held.open(root).await.unwrap().unwrap();
+            let query = QueryVector {
+                model,
+                vector: query_vector,
+            };
+            open.reader
+                .nearest_documents(&open.vectors, &query, None, None, 100_000, fresh)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|h| h.path == path)
+                .map(|h| h.score)
+                .unwrap_or(f64::NEG_INFINITY)
+        }
+    };
+    let b_score = score(Freshness::Current, b.clone()).await;
+    let a_before = score(Freshness::Current, a.clone()).await;
+    assert!(
+        a_before < b_score - 1e-4,
+        "A starts below B: {a_before} vs {b_score}"
+    );
+
+    let copied = sqlx::query(
+        "INSERT INTO content_vectors (hash, seq, pos, model, total_chunks, embedded_at) \
+         SELECT ?1, 1000 + cv.seq, cv.pos, cv.model, cv.total_chunks, cv.embedded_at \
+           FROM content_vectors cv WHERE cv.hash = ?2",
+    )
+    .bind(&a_hash)
+    .bind(&b_hash)
+    .execute(&mut writer)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert!(copied > 0, "B has chunks to copy");
+    sqlx::query(
+        "INSERT INTO vectors_vec_rowids (id, chunk_id, chunk_offset) \
+         SELECT ?1 || '_' || (1000 + cv.seq), r.chunk_id, r.chunk_offset \
+           FROM content_vectors cv JOIN vectors_vec_rowids r ON r.id = cv.hash || '_' || cv.seq \
+          WHERE cv.hash = ?2",
+    )
+    .bind(&a_hash)
+    .bind(&b_hash)
+    .execute(&mut writer)
+    .await
+    .unwrap();
+    writer.close().await.unwrap();
+
+    assert_eq!(
+        score(Freshness::AsHeld, a.clone()).await,
+        a_before,
+        "a held search does not read the added chunks"
+    );
+    let a_after = score(Freshness::Current, a.clone()).await;
+    assert!(
+        (a_after - b_score).abs() < 1e-6,
+        "a current search reads them: A {a_after}, B {b_score}"
     );
 }
