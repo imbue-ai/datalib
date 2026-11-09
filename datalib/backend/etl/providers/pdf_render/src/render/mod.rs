@@ -13,7 +13,7 @@ use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
+use datalib_etl_render::html::{escape_md_inline, markdown_html_as_typed};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -371,11 +371,13 @@ fn pages_markdown(
         // Per-page section wrapper. The `data-section-uuid` must be
         // byte-equal to the page grid row's `uuid` or row→preview
         // navigation silently fails (see `etl::section` docs).
+        // The blank line ends the wrapper's HTML block, so the page's
+        // first paragraph is read as markdown.
         body.push_str(&msg_div_open(&page_uuid(p.number), grid_rows::PROVIDER));
-        body.push('\n');
+        body.push_str("\n\n");
         // pdf-inspector writes the page as markdown but leaves the
         // words in it as the PDF had them.
-        body.push_str(&escape_html_outside_code(&p.text));
+        body.push_str(&markdown_html_as_typed(&p.text));
         body.push('\n');
         body.push_str(MSG_DIV_CLOSE);
         body.push_str("\n\n");
@@ -394,7 +396,10 @@ mod tests {
     fn a_document_in_markup_renders_escaped() {
         let pages = [convert::Page {
             number: 1,
-            text: "<script>x</script> & co\n\n`<kbd>`".to_string(),
+            text: "<script>x</script> & co\n\n`<kbd>`\n\n\
+                   a `b\nc` <div style=\"display:none\"> `d`\n\n\
+                   ```x`\n<div style=\"display:none\">"
+                .to_string(),
             non_textual: false,
         }];
         let (md, rows) = pages_markdown("<script>x</script> & co", &pages, |n| format!("p{n}"));
@@ -403,10 +408,17 @@ mod tests {
             "{md}"
         );
         assert!(
-            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\n`<kbd>`\n"),
+            md.contains(
+                "class=\"msg msg--pdf\">\n\n\
+                 &lt;script&gt;x&lt;/script&gt; &amp; co\n\n<code>&#60;kbd&#62;</code>\n"
+            ),
             "{md}"
         );
         assert!(!md.contains("<script>"), "{md}");
+        // A code span split across lines and a fence with a backtick in
+        // its info string once fooled a line-by-line guess at code into
+        // leaving the tag live.
+        assert!(!md.contains("<div style"), "{md}");
         assert_eq!(
             rows,
             [(1, pages[0].text.clone())],

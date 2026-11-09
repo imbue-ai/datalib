@@ -202,15 +202,22 @@ The rule: **a string that is plain text upstream is escaped at the
 point it becomes markup**, by the helper for where it lands —
 `datalib_etl_render::html` lists them (between tags, in an attribute,
 on one markdown line, a multi-line body, a link target, a code span or
-block). A string the source itself authored as markup goes in as it
-is: a Notion page's markdown, a GitHub PR's description, an email's
-HTML part after htmd. Markdown a person or a model wrote in a
-conversation — a prompt, an assistant's reply, a project's
-instructions in Claude, ChatGPT, Codex or Claude Code — keeps its
-markdown but not its HTML: `markdown_html_as_typed` shows every tag
-as typed, since one left open would hide or restyle the messages after
-it. Escaping never drops a character, and `plain_text` (the Contents
-cell) reads the escapes back. A renderer's
+block). Markdown someone else wrote keeps its markdown but not its
+HTML: `markdown_html_as_typed` shows every tag as typed, since one left
+open would hide or restyle everything after it on the page, or pass for
+the page's own markup. That covers a prompt, an assistant's reply or a
+project's instructions in Claude, ChatGPT, Codex or Claude Code; a
+GitHub or GitLab description, review or comment; a Todoist task,
+description or comment; an email's HTML part and Google Takeout's
+Gemini answers and My Maps descriptions after htmd, which passes some
+text through as raw HTML; and a PDF's words, which pdf-inspector leaves
+unescaped. It writes code as our own `<pre><code>` and `<code>`, and
+keeps the two constructs of markdown's own that use `<`: a backslash
+escape and a link destination in `<…>`. A Notion page's markdown is
+the one source markup that goes in as Notion wrote it, since Notion
+already escapes a `<` that a person typed. Escaping never drops a
+character, and `plain_text` (the Contents cell) reads the escapes
+back. A renderer's
 test of this feeds a field `<script>x</script> & co` and checks it
 renders escaped.
 

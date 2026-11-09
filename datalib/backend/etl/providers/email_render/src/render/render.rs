@@ -21,10 +21,13 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{
+    escape_md_block, escape_md_inline, escape_text, markdown_html_as_typed,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
+use datalib_schema::plain_text::plain_text;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
@@ -58,7 +61,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v18: whether an email is unread comes from its read mark, and every
 ///     thread declares the marks it reads.
 /// v19: an email attached to an email is listed among the attachments.
-pub const RENDER_VERSION: u32 = 19;
+/// v20: a tag in an HTML body or a quote.s attribution shows as typed.
+pub const RENDER_VERSION: u32 = 20;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -800,11 +804,13 @@ fn split_quoted(body: &str) -> (String, Option<String>) {
         return (body.to_string(), None);
     }
     let quoted_body = lines[cut..].join("\n");
-    let summary = lines[cut].trim().trim_start_matches('>').trim();
+    // The attribution line is markdown; `<summary>` is raw HTML, where
+    // markdown is not read, so it goes in as the text it shows.
+    let summary = plain_text(lines[cut].trim().trim_start_matches('>'), usize::MAX);
     let summary = if summary.is_empty() || summary.len() > 120 {
         "Quoted text".to_string()
     } else {
-        summary.to_string()
+        escape_text(&summary)
     };
     let details = format!("<details><summary>{summary}</summary>\n\n{quoted_body}\n\n</details>");
     (fresh, Some(details))
@@ -974,13 +980,18 @@ fn email_body_markdown(
     Some(plain_body_markdown(&parsed.text_body))
 }
 
-/// An HTML body as markdown.
+/// An HTML body as markdown, with no tag of the sender's in it. htmd
+/// keeps some of the text it converts as raw HTML (a `<pre>` without a
+/// `<code>`, a code span holding a blank line, a link's destination or
+/// title), and a tag that reached the page could hide or fake what
+/// follows it.
 pub(crate) fn html_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
+    let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
         .build()
         .convert(html)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    markdown_html_as_typed(&md)
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:
@@ -1170,6 +1181,51 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
         assert!(q.contains("<details>"));
         assert!(q.contains("On Tue, Apr 14, Data wrote:"));
         assert!(q.contains("The warp core is at 99.7%."));
+    }
+
+    /// The attribution line becomes the fold's `<summary>`, raw HTML: a
+    /// tag in it hid everything after it on the page. It shows as the
+    /// text it reads as, less the tag.
+    #[test]
+    fn a_tag_in_the_attribution_line_shows_as_typed() {
+        let body = "ok\n\nOn Tue, \\*Q\\* <div style=\"display:none\"> wrote:\n> a\n> b";
+        let (_, quoted) = split_quoted(body);
+        let quoted = quoted.expect("quoted folded");
+        assert!(
+            quoted.starts_with("<details><summary>On Tue, *Q* wrote:</summary>"),
+            "{quoted}"
+        );
+        let typed = plain_body_markdown("ok\n\nOn Tue, Data <data@e.invalid> wrote:\n> a\n> b");
+        let (_, quoted) = split_quoted(&typed);
+        assert!(quoted
+            .expect("quoted folded")
+            .starts_with("<details><summary>On Tue, Data &lt;data@e.invalid&gt; wrote:</summary>"),);
+    }
+
+    /// Each of these came through htmd as a live tag: text in a `<pre>`
+    /// with no `<code>`, a code span holding a blank line, text that
+    /// opens a CDATA block, and a link's or an image's attributes.
+    #[test]
+    fn an_html_body_opens_no_tag_of_the_senders() {
+        let hide = "&lt;div style=&quot;display:none&quot;&gt;";
+        for html in [
+            format!("<pre>{hide}\n\nx</pre>"),
+            format!("<p><code>{hide}\n\nx</code></p>"),
+            format!("<p>&lt;![CDATA[ {hide}</p>"),
+            "<p><span>&lt;</span>div style=\"display:none\"<span>&gt;</span></p>".to_string(),
+            format!("<p><a href=\"a&quot;&gt;{hide}\">t</a></p>"),
+            format!("<p><a href=\"https://e.invalid/\" title=\"{hide}\">t</a></p>"),
+            format!("<p><img src=\"a&quot;&gt;{hide}\" alt=\"{hide}\" title=\"{hide}\"></p>"),
+        ] {
+            let md = html_markdown(&html);
+            assert!(!md.contains('<'), "{html} → {md}");
+        }
+        assert_eq!(
+            html_markdown(
+                "<p>a &lt;b&gt; <code>&lt;c&gt;</code> <a href=\"https://e.invalid/a b\">d</a></p>"
+            ),
+            "a &lt;b&gt; <code>&#60;c&#62;</code> [d](https://e.invalid/a%20b)"
+        );
     }
 
     #[test]

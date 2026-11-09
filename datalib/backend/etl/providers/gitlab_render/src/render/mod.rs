@@ -25,7 +25,8 @@ pub use parse::parse_api_dir;
 ///     handle.
 /// v8: a change request the signed-in user took part in marks their
 ///     handle as the account's own, so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: HTML in a description or a comment shows as typed.
+pub const RENDER_VERSION: u32 = 9;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Gitlab,

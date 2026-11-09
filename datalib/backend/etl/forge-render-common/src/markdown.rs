@@ -1,14 +1,17 @@
 //! A change request's one document: front matter, title, description,
 //! then its reviews, its general conversation and its inline threads.
 //! The description and the comments are markdown their authors wrote and
-//! go in as written; everything else here is plain text and is escaped.
+//! keep their markdown, with any HTML in them shown as typed: anyone can
+//! comment on a public repository, and a tag that reached the page could
+//! hide or fake what follows it. Everything else here is plain text and
+//! is escaped.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::{escape_md_inline, md_code_span};
+use datalib_etl_render::html::{escape_md_inline, markdown_html_as_typed, md_code_span};
 use datalib_etl_render::message::{chip_link, source_link, stamp_text_html};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
@@ -71,8 +74,9 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
     if cr.body.trim().is_empty() {
         out.push_str("*(no description)*\n\n");
     } else {
-        out.push_str(&cr.body);
-        if !cr.body.ends_with('\n') {
+        let body = markdown_html_as_typed(&cr.body);
+        out.push_str(&body);
+        if !body.ends_with('\n') {
             out.push('\n');
         }
         out.push('\n');
@@ -175,7 +179,8 @@ fn quote_body(body: &str) -> String {
     if body.is_empty() {
         return "> *(empty)*".into();
     }
-    body.lines()
+    markdown_html_as_typed(body)
+        .lines()
         .map(|l| {
             if l.is_empty() {
                 ">".to_string()
@@ -309,5 +314,30 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("> *looks good*"), "a comment: {body}");
+    }
+
+    /// A tag in a description or a comment could hide everything after
+    /// it on the page, or close the comment's quote and pass for the
+    /// page's own markup; it shows as typed, and markdown still renders.
+    #[test]
+    fn html_in_a_description_or_a_comment_shows_as_typed() {
+        let (mut cr, mut comment) = sample();
+        cr.body = "**Engage** <div style=\"display:none\">\n\n```\n<b>x</b>\n```".into();
+        comment.body = "ok\n</blockquote><div style=\"display:none\">\n\nhidden".into();
+        let md = render(&profile(), &cr, &[&comment]);
+        assert!(!md.contains("<div"), "{md}");
+        assert!(!md.contains("</blockquote>"), "{md}");
+        assert!(
+            md.contains("**Engage** &lt;div style=\"display:none\"&gt;"),
+            "{md}"
+        );
+        assert!(
+            md.contains("<pre><code>&lt;b&gt;x&lt;/b&gt;&#10;</code></pre>"),
+            "{md}"
+        );
+        assert!(
+            md.contains("> &lt;/blockquote&gt;&lt;div style=\"display:none\"&gt;\n>\n> hidden"),
+            "{md}"
+        );
     }
 }

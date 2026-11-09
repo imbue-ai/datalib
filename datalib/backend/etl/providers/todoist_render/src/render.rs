@@ -13,7 +13,7 @@ use datalib_etl::layout::render_markdown_root;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{
-    escape_html_outside_code, escape_md_inline, escape_text, md_link_dest,
+    escape_md_inline, escape_text, markdown_html_as_typed, md_link_dest,
 };
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
@@ -31,7 +31,9 @@ use crate::store::{flag, str_of, uid_of, Store};
 
 /// v1: one document per project, completed tasks folded under each
 ///     section.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a tag in a task, a description or a comment shows as typed, wherever
+///     it sits next to code.
+pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "Todoist";
 const KIND_PROJECT: &str = "Todoist Project";
@@ -452,7 +454,7 @@ fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
             s.push_str("*Archived.*\n\n");
         }
         if let Some(d) = str_of(p, "description") {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(&markdown_html_as_typed(d));
             s.push_str("\n\n");
         }
     }
@@ -504,7 +506,7 @@ impl Out<'_, '_, '_> {
         s.push_str("\n\n");
         s.push_str(&format!(
             "{level} {check} {}\n\n",
-            escape_html_outside_code(&content.replace(['\r', '\n'], " "))
+            markdown_html_as_typed(&content.replace(['\r', '\n'], " "))
         ));
         let meta = self.meta(t);
         if !meta.is_empty() {
@@ -512,7 +514,7 @@ impl Out<'_, '_, '_> {
             s.push_str("\n\n");
         }
         if let Some(d) = description {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(&markdown_html_as_typed(d));
             s.push_str("\n\n");
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -657,7 +659,7 @@ impl Out<'_, '_, '_> {
         );
         s.push_str("\n\n");
         if !content.is_empty() {
-            s.push_str(&escape_html_outside_code(content));
+            s.push_str(&markdown_html_as_typed(content));
             s.push_str("\n\n");
         }
         let attachment = n.get("file_attachment").filter(|a| a.is_object());

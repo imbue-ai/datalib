@@ -16,10 +16,10 @@
 //! - a multi-line plain-text body: [`escape_md_block`];
 //! - text in another markup that must not open markdown's own
 //!   constructs (Slack's mrkdwn): [`escape_md_syntax`];
-//! - markdown another tool built from plain text without escaping it:
-//!   [`escape_html_outside_code`];
-//! - markdown someone else wrote, whose HTML must not reach the page (an
-//!   assistant's reply, a prompt): [`markdown_html_as_typed`];
+//! - markdown someone else wrote, or another tool built from text
+//!   without escaping it, whose HTML must not reach the page (an
+//!   assistant's reply, a PR comment, an HTML email through htmd, a
+//!   PDF's words): [`markdown_html_as_typed`];
 //! - a link destination: [`md_link_dest`];
 //! - inside a code span: [`md_code_span`].
 //!
@@ -180,37 +180,6 @@ pub fn md_code_block(lang: &str, body: &str) -> String {
     format!("{fence}{lang}\n{body}\n{fence}")
 }
 
-/// Markdown that a converter built from plain text without escaping the
-/// text — a PDF's words through pdf-inspector: `<`, `>` and `&` escaped
-/// wherever markdown would read them as HTML, and left alone inside code,
-/// which markdown shows literally. A line's leading `>` stays a quote.
-pub fn escape_html_outside_code(md: &str) -> String {
-    let mut out = String::with_capacity(md.len() + 16);
-    let mut open_fence: Option<String> = None;
-    for (i, line) in md.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let trimmed = line.trim_start();
-        if let Some(fence) = &open_fence {
-            if closes_fence(trimmed, fence) {
-                open_fence = None;
-            }
-            out.push_str(line);
-            continue;
-        }
-        if let Some(fence) = fence_opener(trimmed) {
-            open_fence = Some(fence);
-            out.push_str(line);
-            continue;
-        }
-        let rest = line.trim_start_matches(['>', ' ', '\t']);
-        out.push_str(&line[..line.len() - rest.len()]);
-        escape_html_outside_code_spans(rest, &mut out);
-    }
-    out
-}
-
 /// Markdown someone else wrote, with every HTML tag in it shown as
 /// typed. A tag that reached the page could hide or restyle everything
 /// after it, or pass for a message of ours. Code is written out as our
@@ -248,13 +217,7 @@ pub fn markdown_html_as_typed(md: &str) -> String {
         }
         let rest = line.trim_start_matches(['>', ' ', '\t']);
         let mut escaped = line[..line.len() - rest.len()].to_string();
-        for (part, is_code) in code_span_parts(rest) {
-            if is_code {
-                escaped.push_str(&code_element(part));
-            } else {
-                escaped.push_str(&escape_tag_chars(part));
-            }
-        }
+        push_inline_as_typed(rest, &mut escaped);
         out.push(escaped);
     }
     if let Some((_, _, lang, body)) = &fence {
@@ -297,10 +260,93 @@ fn code_element(span: &str) -> String {
     out
 }
 
-fn escape_tag_chars(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+/// One line of markdown outside a fence, with `<`, `>` and `&` escaped
+/// and its code spans written as [`code_element`]. Two of markdown's own
+/// constructs use `<` and keep working: a backslash escape (`\<` is
+/// written `&lt;`, and an escaped backtick opens no code span) and a
+/// link destination in `<…>`, which becomes the bare form with its
+/// spaces and parentheses escaped. An HTML converter writes both.
+fn push_inline_as_typed(text: &str, out: &mut String) {
+    let mut at = 0;
+    while let Some(c) = text[at..].chars().next() {
+        let rest = &text[at..];
+        if c == '\\' {
+            match rest[1..].chars().next() {
+                Some(e @ ('<' | '>' | '&')) => {
+                    push_html_escaped(out, e);
+                    at += 2;
+                }
+                Some(e) if e.is_ascii_punctuation() => {
+                    out.push('\\');
+                    out.push(e);
+                    at += 2;
+                }
+                _ => {
+                    out.push('\\');
+                    at += 1;
+                }
+            }
+            continue;
+        }
+        if c == '`' {
+            let run = backtick_run(rest);
+            match closing_backtick_run(&rest[run..], run) {
+                Some(close) => {
+                    let end = run + close + run;
+                    out.push_str(&code_element(&rest[..end]));
+                    at += end;
+                }
+                None => {
+                    out.push_str(&rest[..run]);
+                    at += run;
+                }
+            }
+            continue;
+        }
+        if let Some((dest, len)) = rest.strip_prefix("](<").and_then(pointy_link_dest) {
+            out.push_str("](");
+            out.push_str(&dest);
+            at += 3 + len;
+            continue;
+        }
+        push_html_escaped(out, c);
+        at += c.len_utf8();
+    }
+}
+
+/// The destination at the start of `s`, which follows a link's `](<`,
+/// rewritten without its angle brackets, and how many bytes of `s` it
+/// took. `None` unless markdown would read it as one: no `<` or line
+/// break inside, and a `)` or a title after the `>`.
+fn pointy_link_dest(s: &str) -> Option<(String, usize)> {
+    let mut dest = String::new();
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '>' => {
+                let followed = s[i + 1..].starts_with([')', ' ', '\t']);
+                return (followed && !dest.is_empty()).then_some((dest, i + 1));
+            }
+            '<' | '\n' | '\r' => return None,
+            '\\' => match chars.next() {
+                Some((_, '<')) => dest.push_str("%3C"),
+                Some((_, '>')) => dest.push_str("%3E"),
+                Some((_, e)) => {
+                    dest.push('\\');
+                    dest.push(e);
+                }
+                None => return None,
+            },
+            ' ' => dest.push_str("%20"),
+            '\t' => dest.push_str("%09"),
+            '(' | ')' => {
+                dest.push('\\');
+                dest.push(c);
+            }
+            _ => dest.push(c),
+        }
+    }
+    None
 }
 
 /// `md` with any block it leaves open closed at its end: a fence, or an
@@ -333,7 +379,7 @@ pub fn close_open_blocks(md: &str) -> String {
 
 /// [`fence_opener`], less a backtick run with a backtick after it on its
 /// line, which markdown reads as a code span.
-fn opens_fence(line: &str) -> Option<String> {
+pub(crate) fn opens_fence(line: &str) -> Option<String> {
     let fence = fence_opener(line)?;
     (!(fence.starts_with('`') && line[fence.len()..].contains('`'))).then_some(fence)
 }
@@ -391,20 +437,10 @@ fn fence_opener(line: &str) -> Option<String> {
     (run.len() >= 3).then_some(run)
 }
 
-fn closes_fence(line: &str, fence: &str) -> bool {
+pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
     let mark = fence.chars().next().expect("a fence has a mark");
     let run = line.chars().take_while(|&c| c == mark).count();
     run >= fence.len() && line[run..].trim().is_empty()
-}
-
-fn escape_html_outside_code_spans(line: &str, out: &mut String) {
-    for (part, is_code) in code_span_parts(line) {
-        if is_code {
-            out.push_str(part);
-        } else {
-            out.push_str(&escape_text(part));
-        }
-    }
 }
 
 /// `text` cut into its code spans (`true`, backticks included) and the
@@ -630,27 +666,6 @@ mod tests {
     }
 
     #[test]
-    fn converted_text_is_escaped_everywhere_but_in_code() {
-        let md = "# A <b> & B\n\
-                  > quoted <i>\n\
-                  run `a < b && c` then <x>\n\
-                  ```\n\
-                  <div> & </div>\n\
-                  ```\n\
-                  after <y>";
-        assert_eq!(
-            escape_html_outside_code(md),
-            "# A &lt;b&gt; &amp; B\n\
-             > quoted &lt;i&gt;\n\
-             run `a < b && c` then &lt;x&gt;\n\
-             ```\n\
-             <div> & </div>\n\
-             ```\n\
-             after &lt;y&gt;"
-        );
-    }
-
-    #[test]
     fn a_link_destination_cannot_be_closed_early() {
         assert_eq!(
             md_link_dest("https://e.invalid/a?b=1&c=2"),
@@ -824,6 +839,25 @@ mod tests {
         );
     }
 
+    /// What an HTML converter writes keeps working: htmd escapes a typed
+    /// `<` as `\<`, a typed backtick as `` \` ``, and puts a link with
+    /// a space in it in `<…>`.
+    #[test]
+    fn markdown_a_converter_wrote_keeps_its_escapes_and_links() {
+        assert_eq!(
+            markdown_html_as_typed("a \\<div> \\& \\`x\\` \\\\"),
+            "a &lt;div&gt; &amp; \\`x\\` \\\\"
+        );
+        assert_eq!(
+            markdown_html_as_typed("[u](<https://e.invalid/a b(1)> \"t\") [v](<x\\>y>)"),
+            "[u](https://e.invalid/a%20b\\(1\\) \"t\") [v](x%3Ey)"
+        );
+        assert_eq!(
+            markdown_html_as_typed("[u](<a\"><div>>)"),
+            "[u](&lt;a\"&gt;&lt;div&gt;&gt;)"
+        );
+    }
+
     /// Where this reads code differently from markdown, a tag still
     /// cannot open: each case once let one through a line-by-line guess.
     #[test]
@@ -834,6 +868,9 @@ mod tests {
             "    ```\n<div>",
             "```x``` <div>",
             "[a]: /u 'title\n```\n'\n<div>",
+            "[a](<b><div style=\"display:none\">)",
+            "[a](<b c\\>) <div>",
+            "\\\\<div>",
         ] {
             let out = markdown_html_as_typed(md);
             let ours = out

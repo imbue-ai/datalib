@@ -38,7 +38,7 @@ Each task and comment is a section with its own
 
 Task text, descriptions and comments are Todoist markdown, so their
 links and emphasis stay; HTML in them is escaped
-(`escape_html_outside_code`), since Todoist shows it as text. A
+(`markdown_html_as_typed`), since Todoist shows it as text. A
 project's and a section's names are plain text and escaped as such.
 
 ### Which row says what about a task

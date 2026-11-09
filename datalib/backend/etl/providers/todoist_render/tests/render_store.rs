@@ -50,7 +50,14 @@ fn account() -> Vec<(Kind, Vec<Value>)> {
     coils["description"] = json!("Check the **dilithium** matrix first.");
     coils["due"] = json!({"date": "2026-10-03", "string": "Oct 3", "is_recurring": false});
     let mut tea = task("6TaskTea", INBOX, None, None, "Tea, Earl Grey, hot", 1);
-    tea["description"] = json!("<script>x</script> & co");
+    // Each later paragraph once fooled a line-by-line guess at code into
+    // leaving a tag live: an indented fence, a fence with a backtick in
+    // its info string, and a code span split across lines.
+    tea["description"] = json!(
+        "<script>x</script> & co\n\n    ```\n<div style=\"display:none\">\n\n\
+         ```x`\n<div style=\"display:none\">\n\n\
+         a `b\nc` <div style=\"display:none\"> `d`"
+    );
     let mut farpoint = task(
         "6TaskFarpoint",
         AWAY,
@@ -238,6 +245,7 @@ async fn each_project_renders_its_sections_tasks_and_comments() {
         "{md}"
     );
     assert!(!md.contains("<script>"), "{md}");
+    assert!(!md.contains("<div style"), "{md}");
     assert!(
         md.contains("Pass the Starfleet physical"),
         "a completed-only task renders: {md}"

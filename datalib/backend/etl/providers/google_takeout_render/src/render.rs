@@ -51,7 +51,8 @@ use datalib_schema::providers::Provider;
 /// v11: Chat marks the account's address as its own, so search reads it
 ///     as `me`; a Voice text someone else sent, and a voicemail, is to the
 ///     account (`to:me`).
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a tag in a Gemini answer or a My Maps description shows as typed.
+pub const RENDER_VERSION: u32 = 12;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
