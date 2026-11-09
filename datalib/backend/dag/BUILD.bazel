@@ -112,11 +112,13 @@ rust_test(
     crate_root = "tests/dag_tests/main.rs",
     data = [
         ":datalib_dag_bin",
+        "//datalib/backend/obs:log_probe",
         "//datalib/backend/parent_watch:parent_watch_probe",
     ],
     edition = "2021",
     env = {
         "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+        "LOG_PROBE": "$(rootpath //datalib/backend/obs:log_probe)",
         "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
     },
     deps = [

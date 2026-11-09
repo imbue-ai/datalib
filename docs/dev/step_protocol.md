@@ -573,9 +573,12 @@ A structured tracing-JSON line (with a `level` field, as
 tracing-subscriber's JSON format writes) is unwrapped rather than
 quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
 `level`, `target` and thread (`threadName`, else `threadId`) become
-columns — the line's own timestamp wins over the runner's arrival time
-— and everything else it carried (`filename`, `line_number`, the
-remaining `fields`) rides along as `fields`. The Manage screen shows
+columns — the line's own timestamp wins over the runner's arrival time,
+offset included, so write it in the local offset
+(`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
+runner's lines in the real one — and everything else it carried
+(`filename`, `line_number`, the remaining `fields`) rides along as
+`fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
 Every level is kept, `debug` and `trace` included: the runner stores a
