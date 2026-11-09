@@ -11,6 +11,7 @@ import {
   type PackageLookup,
   type PackageView,
 } from "@/api";
+import { builtinApplet, setApplet } from "@/config/builtinApplets";
 import {
   addPackage,
   addSourceApplets,
@@ -295,6 +296,11 @@ export function useSourcesCard(ctx: CardCtx) {
   /// id — the cost is that the group's measured folder then counts the
   /// custom tree too. An applet id lives in another namespace and may
   /// coincide.
+  /// Every `[[applets]]` entry's id, for the wizard's apps and offers.
+  const appletIds = computed(
+    () => new Set(sources.value.filter((s) => s.kind === "applet").map((s) => s.id)),
+  );
+
   const takenIds = computed(
     () =>
       new Set([
@@ -758,6 +764,7 @@ export function useSourcesCard(ctx: CardCtx) {
     stepsBody: string;
     renderId: string | null;
     qmdIndexing: QmdIndexing;
+    applet: { id: string; on: boolean } | null;
   }) {
     const text = await configToEdit();
     if (text === null) return;
@@ -809,6 +816,10 @@ export function useSourcesCard(ctx: CardCtx) {
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);
+    if (payload.applet) {
+      const offered = builtinApplet(payload.applet.id);
+      if (offered) next = setApplet(next, offered, payload.applet.on);
+    }
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -816,6 +827,16 @@ export function useSourcesCard(ctx: CardCtx) {
     const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
     if (!ok) return;
     closeWizard();
+  }
+
+  /// An app from the picker turned on or off: its one `[[applets]]`
+  /// entry, added or taken out.
+  async function onWizardApp(payload: { id: string; on: boolean }) {
+    const app = builtinApplet(payload.id);
+    const text = await configToEdit();
+    if (!app || text === null) return;
+    const what = `${payload.on ? "Turned on" : "Turned off"} the ${app.label}.`;
+    if (await writeConfig(setApplet(text, app, payload.on), what)) closeWizard();
   }
 
   // ── Packages (docs/dev/packages.md). The build is fetched before the
@@ -1149,9 +1170,11 @@ export function useSourcesCard(ctx: CardCtx) {
     wizardOpen,
     wizardKey,
     takenIds,
+    appletIds,
     editing,
     closeWizard,
     onWizardSubmit,
+    onWizardApp,
     asking,
     packagesOpen,
     addPackageEntry,
