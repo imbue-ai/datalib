@@ -19,7 +19,9 @@ datalib-applet search ~/datalib 'warp core -from:riker is:document'
 ## Words, and how they are matched
 
 A query is free text and `key:value` terms, in any order; everything
-must match. Free text looks for words in your documents:
+must match. There is no `OR`: typed between two words it is searched
+as the word "or", so `sam OR samuel` asks for documents holding both
+names. Search for each separately. Free text looks for words in your documents:
 
 - **By their fields:** every word as the start of a value a row is filed
   under: a name, an address, an id, a title, a label.
