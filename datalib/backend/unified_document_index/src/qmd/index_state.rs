@@ -273,9 +273,18 @@ impl QmdIndexReader {
         collections: Option<&[String]>,
         among: Option<&std::collections::HashMap<String, crate::qmd::vectors::Kept>>,
         limit: usize,
+        fresh: crate::qmd::vectors::Freshness,
     ) -> anyhow::Result<Vec<QmdHit>> {
-        crate::qmd::vectors::nearest_documents(&self.pool, cache, query, collections, among, limit)
-            .await
+        crate::qmd::vectors::nearest_documents(
+            &self.pool,
+            cache,
+            query,
+            collections,
+            among,
+            limit,
+            fresh,
+        )
+        .await
     }
 
     /// The documents with at least one vector, by document id. An index no
@@ -341,6 +350,12 @@ impl IndexStamp {
         let mut wal = index.as_os_str().to_owned();
         wal.push("-wal");
         Self([stamp(index), stamp(Path::new(&wal))])
+    }
+
+    /// When the index or its write-ahead log last changed; `None` when
+    /// neither file is there.
+    pub fn last_change(&self) -> Option<std::time::SystemTime> {
+        self.0.iter().flatten().map(|(_, at)| *at).max()
     }
 }
 
