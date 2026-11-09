@@ -650,6 +650,43 @@ sized by anything other than `chunk.len()`. A helper that takes a slice
 and trusts its callers to chunk it counts as unsized, because nothing
 checks that they do.
 
+## Indexes: the planner has no statistics, so test the plan
+
+No store here runs `ANALYZE`, so SQLite's planner knows nothing about
+how many rows match a value. When a lookup could use either of two
+one-column indexes, it rates them the same, and which one it takes
+depends on the order they were created in, not on which is selective.
+Every test passes either way, because a fixture of a few rows is fast
+under any plan. A real store is not:
+
+- **#1165.** `email_keywords` and `email_mailboxes` had no index on
+  `email_id`, the column every lookup uses, so each email written
+  scanned both tables: a full sync quadratic in the mailbox's size.
+- **#1679.** A migration rung asked, for each email,
+  `EXISTS (… k.email_id = e.id AND k.keyword = '$seen')`. The planner
+  answered it from the *keyword* index and walked every `$seen` row once
+  per email: over an hour, unfinished, on 276k emails. Written as a set,
+  `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
+  the same statement takes a few seconds.
+
+So:
+
+- **Match a set as a set.** A statement over every row of one table that
+  asks whether each row is in another (has a keyword, has a label) is
+  `x IN (SELECT … WHERE …)`, which SQLite builds once. An `EXISTS` or
+  scalar subquery that names the outer row runs once per row, and its
+  plan is the planner's guess.
+- **A lookup that has to run per row** goes by the primary key, or by an
+  index whose columns cover every equality in the `WHERE`, so there is
+  only one good choice to make.
+- **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
+  statement over the table's real DDL and assert what it must not do.
+  Two templates in `providers/email/src/ingest/schema_raw.rs`:
+  `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
+  table, and `the_read_mark_rungs_never_search_a_table_per_email`
+  refuses a table searched under a `CORRELATED` subquery. Keep the
+  statements in a constant the code runs and the test reads.
+
 ## Blob CAS and per-provider edge tables
 
 A source that keeps attachment bytes has two files in its raw directory:

@@ -782,7 +782,10 @@ is the recipe in code.
 ### Query plans and indexes
 
 - **Plain tables plan as in SQLite**: on a read-only connection, inside
-  a read transaction and on a detached open alike.
+  a read transaction and on a detached open alike. No store runs
+  `ANALYZE`, so between two one-column indexes the planner may take the
+  unselective one; how we write and test for that is in
+  [`etl/README.md`](../../datalib/backend/etl/README.md#indexes-the-planner-has-no-statistics-so-test-the-plan).
 - **`dolt_at_<table>` seeks only a primary-key equality** (text keys
   included, 0.50.12 and later). It never uses a secondary index, a
   primary-key range on a text key, or an `ORDER BY`: those scan the
