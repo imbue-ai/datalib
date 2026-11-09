@@ -179,7 +179,10 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         .collect();
     if T::RANGE.is_some() {
         keys.push(key("before", KeyValues::Stamp));
-        keys.push(key("after", KeyValues::Stamp));
+        keys.push(SearchKeySpec {
+            aliases: &["since"],
+            ..key("after", KeyValues::Stamp)
+        });
     }
     if !T::FLAGS.is_empty() {
         let words = T::FLAGS.iter().map(|(word, _)| *word).collect();
@@ -627,6 +630,7 @@ mod tests {
         for k in &keys {
             let value = match &k.values {
                 KeyValues::Words { words } => words[0],
+                KeyValues::Stamp => "2026-11-01",
                 _ => "x",
             };
             let q = format!("{}:{value}", k.key);

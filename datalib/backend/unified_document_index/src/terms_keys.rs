@@ -90,9 +90,11 @@ pub const TERMS_KEYS: &[TermsKey] = &[
     ),
     person("mention", &[], Kinds::These(&[Kind::Mention])),
     person("with", &["involves"], Kinds::AnyPerson),
+    // `in:` is Gmail's spelling (`in:sent`, `in:inbox`); a mailbox is
+    // a label here.
     TermsKey {
         key: "label",
-        aliases: &[],
+        aliases: &["in"],
         kinds: Kinds::These(&[Kind::Label]),
         person: false,
         cells: Cells::AsTerm,
@@ -227,6 +229,7 @@ mod tests {
             assert_eq!(key(typed).map(|k| k.key), Some("from"), "{typed}");
         }
         assert_eq!(key("involves").map(|k| k.key), Some("with"));
+        assert_eq!(key("in").map(|k| k.key), Some("label"), "Gmail's `in:sent`");
         assert_eq!(key("channel"), None);
     }
 

@@ -35,7 +35,8 @@ on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
 holds the credentials instead, and those commands may be refused or sign
 in somewhere else: sign in, or ask for access, wherever that gateway is
 managed. Either way, `datalib-step probe <type>` says whether the
-sign-in works.
+sign-in works; for a type reached more than one way, name the way with
+`--method` (`datalib-step probe calendar --method google`).
 
 ## Apple Mail
 
@@ -149,6 +150,14 @@ that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
 day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
 it. A windowed calendar is listed whole every run, and an event the
 window no longer reaches leaves the mirror.
+
+**To sync a calendar often, leave the window out.** Neither Google nor
+CalDAV can pick a listing up where the last one stopped once it is
+bounded by dates, so a window costs the whole listing every run; a
+busy calendar takes seconds and several requests each time. Without
+`since` and `until`, a run after the first asks only for what changed.
+To see just the days around now, read the `render_occurrences` step's
+table, which is windowed already, rather than windowing the download.
 
 ## Calendly
 
@@ -693,7 +702,8 @@ The first time, latchkey needs an OAuth client to sign in with:
 [your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
-calendars you name. Behind a latchkey gateway, its permissions have to
+calendars you name, and `since` and `until` to a stretch of days, at
+the cost [Calendar (CalDAV)](#calendar-caldav) describes. Behind a latchkey gateway, its permissions have to
 allow reading the calendar list (`/users/me/calendarList`) as well as
 the events: every sync reads the list first.
 

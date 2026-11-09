@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+mod spoken;
 mod window;
 mod zone;
 pub use window::{widest_start, TimeBound, TimeWindow, WindowError};
@@ -454,17 +455,25 @@ fn utc_micros(dt: DateTime<FixedOffset>) -> String {
         .to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
-/// Normalize a user-typed time bound (the value behind a `before:` / `after:`
-/// search filter) into the **same canonical UTC form** as the `created_at_utc`
-/// index column, so the two compare correctly as plain strings.
+/// Normalize a user-typed time bound (the value behind a `before:` /
+/// `after:` / `since:` search filter) into the **same canonical UTC form**
+/// as the `created_at_utc` index column, so the two compare correctly as
+/// plain strings.
 ///
-/// **A user-typed timestamp with no offset means local machine time**, since
+/// **A user-typed time with no offset means local machine time**, since
 /// people type wall-clock times in the zone they are sitting in. An explicit
 /// offset is honored as given. `None` when the input matches no accepted
-/// shape, so the caller drops the bound rather than comparing against
-/// garbage. During a spring-forward gap the wall-clock instant does not exist
+/// shape: an RFC 3339 instant, a day (`2026-01-15`, `2026/01/15`), a day and
+/// time with no zone, an offset from now (`-30d`, the grammar a source's
+/// window uses), or a day as a person writes one (`Tuesday, April 3, 2026`).
+/// During a spring-forward gap the wall-clock instant does not exist
 /// locally; we take the earlier candidate.
 pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
+    user_time_to_utc(s, Local::now())
+}
+
+/// [`normalize_user_time_to_utc`] with `now` given, for an offset from it.
+pub fn user_time_to_utc(s: &str, now: DateTime<Local>) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -473,22 +482,26 @@ pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(utc_micros(dt));
     }
-    // 2. Naive date-time → local wall-clock.
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+    // 2. An offset from now, as a source's `since` writes one.
+    if let Ok(window::TimeBound::Relative(span)) = window::TimeBound::parse(s) {
+        return Some(utc_micros((now + span).fixed_offset()));
+    }
+    // 3. Naive date-time → local wall-clock.
+    let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
-    {
-        let local = Local.from_local_datetime(&naive).earliest()?;
-        return Some(utc_micros(local.fixed_offset()));
-    }
-    // 3. Bare date → local midnight.
-    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let naive = date
-            .and_hms_opt(0, 0, 0)
-            .expect("00:00:00 is always a valid time-of-day");
-        let local = Local.from_local_datetime(&naive).earliest()?;
-        return Some(utc_micros(local.fixed_offset()));
-    }
-    None
+        .ok()
+        // 4. Bare date → local midnight; `2026/11/01` is how Gmail's search
+        // writes one, and people porting a Gmail query type it so.
+        .or_else(|| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .or_else(|_| NaiveDate::parse_from_str(s, "%Y/%m/%d"))
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+        })
+        // 5. A day as a person writes or pastes one.
+        .or_else(|| spoken::spoken(s))?;
+    let local = Local.from_local_datetime(&naive).earliest()?;
+    Some(utc_micros(local.fixed_offset()))
 }
 
 pub fn validate_iso_offset(s: &str) -> Result<(), TimestampParseError> {
@@ -882,6 +895,48 @@ mod tests {
             normalize_user_time_to_utc("2026-01-15").as_deref(),
             Some(expect_local(2026, 1, 15, 0, 0).as_str())
         );
+        // Gmail's spelling of a day, which a filter typed from a Gmail
+        // query uses; it read as no date and the filter was dropped.
+        assert_eq!(
+            normalize_user_time_to_utc("2026/01/15").as_deref(),
+            Some(expect_local(2026, 1, 15, 0, 0).as_str())
+        );
+    }
+
+    /// `since:-30d` in a search: the offset grammar a source's window uses,
+    /// from the moment of the search.
+    #[test]
+    fn user_time_reads_an_offset_from_now() {
+        let now = Local.with_ymd_and_hms(2026, 11, 9, 12, 0, 0).unwrap();
+        let back = |d: i64| utc_micros((now - chrono::Duration::days(d)).fixed_offset());
+        assert_eq!(user_time_to_utc("-30d", now), Some(back(30)));
+        assert_eq!(user_time_to_utc("-2w", now), Some(back(14)));
+        assert_eq!(
+            user_time_to_utc("-12h", now),
+            Some(utc_micros(
+                (now - chrono::Duration::hours(12)).fixed_offset()
+            ))
+        );
+        assert_eq!(user_time_to_utc("30d", now), None, "the sign is required");
+    }
+
+    /// A date pasted from a page or typed in words, quoted in the query.
+    #[test]
+    fn user_time_reads_a_day_in_words_as_local() {
+        let now = Local::now();
+        let midnight = utc_micros(
+            Local
+                .with_ymd_and_hms(2029, 4, 3, 0, 0, 0)
+                .earliest()
+                .unwrap()
+                .fixed_offset(),
+        );
+        assert_eq!(
+            user_time_to_utc("Tuesday, April 3, 2029", now),
+            Some(midnight.clone())
+        );
+        assert_eq!(user_time_to_utc("Tue Apr 3rd, 2029", now), Some(midnight));
+        assert_eq!(user_time_to_utc("Monday, April 3, 2029", now), None);
     }
 
     #[test]
