@@ -1098,7 +1098,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "email",
     variantKey: "apple_mail",
     label: "Apple Mail",
-    blurb: "Copy one account of the Mail app on this Mac, from its own files.",
+    blurb: "Copy the accounts of the Mail app on this Mac, from its own files.",
     keywords: ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"],
     kind: "local",
     icon: "apple_mail",
@@ -1106,7 +1106,8 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Mail on this Mac",
     wizard: true,
     intro:
-      "Copies the mail the Mail app keeps on this Mac, with its mailboxes and read state. " +
+      "Copies the mail of every account in the Mail app on this Mac, with its mailboxes " +
+      "and read state. " +
       "A message Mail has not downloaded yet is copied once Mail has it.",
     sections: [
       { heading: "Mail folder", fields: ["apple_mail.path"] },
@@ -1143,11 +1144,10 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "text",
         target: "apple_mail.account",
-        label: "Mail account",
+        label: "Only this Mail account",
         help:
-          "apple_mail.account: Mail's id for the account, the name of its folder under " +
-          "~/Library/Mail/V10. Needed only when Mail holds mail for more than one account; a " +
-          "sync without it lists them.",
+          "apple_mail.account: copy just this account, by the name of its folder under " +
+          "~/Library/Mail/V10. Empty copies every account in Mail, each under its own id.",
       },
       {
         kind: "string_list",

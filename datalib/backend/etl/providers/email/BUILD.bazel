@@ -21,6 +21,17 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# A small Mail folder with a Gmail account and a Fastmail one, minted by
+# Python so its Envelope Index is plain SQLite written by a stock engine
+# (tests/fixtures/make_apple_mail_folder.py says what is in it). A tar,
+# since Mail's paths are not paths a Bazel output may have.
+genrule(
+    name = "tng_apple_mail",
+    srcs = ["//tests/fixtures:make_apple_mail_folder.py"],
+    outs = ["tng_apple_mail.tar"],
+    cmd = "python3 $(execpath //tests/fixtures:make_apple_mail_folder.py) $@",
+)
+
 rust_library(
     name = "datalib_etl_email",
     srcs = glob(
@@ -81,10 +92,12 @@ rust_test(
     crate_root = "tests/email_tests/main.rs",
     data = glob(["tests/email_tests/snapshots/*.snap"], allow_empty = True) + [
         ":fixtures",
+        ":tng_apple_mail",
         "//datalib/backend/datalib_step",
     ],
     edition = "2021",
     env = {
+        "APPLE_MAIL_TNG_TAR": "$(rootpath :tng_apple_mail)",
         "DATALIB_STEP_BIN": "$(rootpath //datalib/backend/datalib_step)",
         "INSTA_WORKSPACE_ROOT": ".",
         "JMAP_FIXTURE_DIR": "datalib/backend/etl/providers/email/tests/fixtures",
@@ -105,6 +118,7 @@ rust_test(
         "@datalib_crates//:mail-parser",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tar",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:zip",
