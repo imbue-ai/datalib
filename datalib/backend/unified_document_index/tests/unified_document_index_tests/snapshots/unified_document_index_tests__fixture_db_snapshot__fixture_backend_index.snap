@@ -72,7 +72,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/c6/00000000-0000-80b3-8c56-6d41b85ab9c6.md",
       "modified_at": "2026-01-07T14:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "Captain's Log — Stardate 80124.1"
     },
@@ -384,7 +384,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/86/00000000-0000-8274-a762-150808777b86.md",
       "modified_at": "2026-06-04T19:30:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Google Maps"
     },
@@ -420,7 +420,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/5f/00000000-0000-82fb-8e25-f16025ef745f.md",
       "modified_at": "2025-03-10T03:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Ten Forward regulars"
     },
@@ -432,7 +432,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/49/00000000-0000-833f-abbd-332411c97249.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Away team favourites"
     },
@@ -444,7 +444,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/6b/00000000-0000-8347-91ae-40e3ee5ec46b.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Shore leave"
     },
@@ -576,7 +576,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/31/00000000-0000-8470-ab13-35f123730831.md",
       "modified_at": "2364-03-05T16:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "+12025550147"
     },
@@ -624,7 +624,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/1e/00000000-0000-850a-8426-8fa775a4041e.md",
       "modified_at": "2364-01-30T15:20:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Tales of the Picard Maneuver"
     },
@@ -660,7 +660,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/e9/00000000-0000-85ec-8481-370bffc3afe9.md",
       "modified_at": "2026-01-08T09:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "You've won a holosuite upgrade!"
     },
@@ -732,7 +732,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/a7/00000000-0000-867f-aeba-06833685caa7.md",
       "modified_at": "2364-03-04T20:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "+12025550190"
     },
@@ -828,7 +828,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/d9/00000000-0000-86fa-aea1-8be059ba3bd9.md",
       "modified_at": "2364-03-06T17:02:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Group Conversation"
     },
@@ -984,7 +984,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/22/00000000-0000-883c-a4f2-a97869c86022.md",
       "modified_at": "2026-04-05T17:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Gemini"
     },
@@ -996,7 +996,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/dc/00000000-0000-884a-8015-997e36666cdc.md",
       "modified_at": "2364-02-21T06:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "The Art of Diplomacy"
     },
@@ -1128,7 +1128,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/e5/00000000-0000-897b-9ac3-fd20d06375e5.md",
       "modified_at": "2025-02-11T11:33:35+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -1140,7 +1140,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/07/00000000-0000-899d-b389-49d722966107.md",
       "modified_at": "2364-03-02T18:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard"
     },
@@ -1164,7 +1164,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/76/00000000-0000-89ac-8ef1-ba5e79d09b76.md",
       "modified_at": "2026-01-09T21:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "Your bar tab"
     },
@@ -1212,7 +1212,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/06/00000000-0000-8a13-8568-fa91d9598906.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_pdfs",
       "title": "Hull Integrity Survey"
     },
@@ -1248,7 +1248,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/59/00000000-0000-8a58-a8a4-0d3e51a39a59.md",
       "modified_at": "2026-01-06T08:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "Your shore leave awaits!"
     },
@@ -1308,7 +1308,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/25/00000000-0000-8a9f-9645-8fe420244325.md",
       "modified_at": "2025-03-05T21:34:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Jean-Luc Picard, William Riker"
     },
@@ -1320,7 +1320,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/a2/00000000-0000-8aaf-9e4e-5dee51e118a2.md",
       "modified_at": "2364-03-07T15:15:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Lieutenant Worf, Son of Mogh, Chief of Security"
     },
@@ -1392,7 +1392,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/bd/00000000-0000-8b31-9ca8-8e656fa220bd.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Away missions"
     },
@@ -1560,7 +1560,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/5e/00000000-0000-8c1f-b778-f9e4362cd25e.md",
       "modified_at": "2026-06-06T16:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "YouTube history"
     },
@@ -1584,7 +1584,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/09/00000000-0000-8c41-9460-69513e7ac609.md",
       "modified_at": "2364-03-03T19:00:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Wesley Crusher"
     },
@@ -1596,7 +1596,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/77/00000000-0000-8c44-9cfe-f83b78bf8077.md",
       "modified_at": null,
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "YouTube subscriptions"
     },
@@ -1644,7 +1644,7 @@ expression: snapshot
       "md_path": "google-takeout/render_markdown/17/00000000-0000-8cb8-a28e-be3592fcc817.md",
       "modified_at": "2364-03-05T17:30:00+00:00",
       "provider": "google_takeout",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "source_id": "google-takeout",
       "title": "Lieutenant Commander Geordi La Forge, Chief Engineer"
     },
@@ -1668,7 +1668,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/91/00000000-0000-8ccc-b967-791c3561a091.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_pdfs",
       "title": "warp_core_manual.pdf"
     },
@@ -1692,7 +1692,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/52/00000000-0000-8ce7-94d1-18948b029452.md",
       "modified_at": "2026-01-05T11:15:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "Mission Briefing — Sector 001"
     },
@@ -1872,7 +1872,7 @@ expression: snapshot
       "md_path": "tng_email/render_markdown/be/00000000-0000-8e37-8bef-9f0edb66b8be.md",
       "modified_at": "2026-01-07T09:00:00+00:00",
       "provider": "email",
-      "renderer_version": "rust-v1.19",
+      "renderer_version": "rust-v1.20",
       "source_id": "tng_email",
       "title": "Bridge status display"
     },
@@ -2016,7 +2016,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/7d/0b50f5ba-0c60-856f-8ff1-ea60e22c037d.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
     },
@@ -2028,7 +2028,7 @@ expression: snapshot
       "md_path": "tng_pdfs/render_markdown/21/0b50f5ba-0c60-8e25-aebf-920f19049521.md",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
     },
@@ -2100,7 +2100,7 @@ expression: snapshot
       "md_path": "github/render_markdown/b6/0b75b9f9-4400-87fe-99ef-2db45ad92cb6.md",
       "modified_at": "2369-04-15T11:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot"
     },
@@ -2112,7 +2112,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/a6/0b75b9f9-4400-887d-bae6-937c2e6ee3a6.md",
       "modified_at": "2369-04-15T11:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "gitlab",
       "title": "Add Earl Grey, hot to replicator menu"
     },
@@ -2124,7 +2124,7 @@ expression: snapshot
       "md_path": "gitlab/render_markdown/2a/0b75bad4-fe00-8155-aa7c-9db9f663482a.md",
       "modified_at": "2369-04-15T14:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "gitlab",
       "title": "Holodeck safety interlock regression test"
     },
@@ -2136,7 +2136,7 @@ expression: snapshot
       "md_path": "github/render_markdown/1c/0b75bad4-fe00-82b8-ab37-5a103480b51c.md",
       "modified_at": "2369-04-15T14:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "source_id": "github",
       "title": "Add holodeck safety interlock for live phaser fire"
     }
@@ -4035,9 +4035,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": null,
-      "byte_size": 412,
+      "byte_size": 420,
       "channel": null,
-      "content_hash": "b431f964bde79844",
+      "content_hash": "67475b7657df4b77",
       "conversation_name": "You've won a holosuite upgrade!",
       "conversation_uuid": "00000000-0000-85ec-8481-370bffc3afe9",
       "created_at": "2026-01-08T09:00:00+00:00",
@@ -8475,9 +8475,9 @@ expression: snapshot
     {
       "account": "picard@enterprise.starfleet",
       "author": "Quark's Bar <prizes@quarks.example>",
-      "byte_size": 412,
+      "byte_size": 420,
       "channel": null,
-      "content_hash": "b431f964bde79844",
+      "content_hash": "67475b7657df4b77",
       "conversation_name": "You've won a holosuite upgrade!",
       "conversation_uuid": "00000000-0000-85ec-8481-370bffc3afe9",
       "created_at": "2026-01-08T09:00:00+00:00",
