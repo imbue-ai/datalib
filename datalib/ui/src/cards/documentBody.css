@@ -86,6 +86,13 @@
   border-left: 3px solid transparent;
   margin: 0.5rem 0;
 }
+/* A message draws only inside its own box: `position: fixed`, a
+   negative margin or a transform in its text cannot cover another
+   message (docs/dev/data_architecture_parse_and_render.md §"One section
+   cannot reach the next"). */
+.chat-body .msg[data-section-uuid] {
+  contain: paint;
+}
 /* Every outermost item — a message, or a whole run of tool steps — is a
    card, so where one ends and the next begins is drawn rather than
    inferred from whitespace. Nested block sections (tool_use, thinking)

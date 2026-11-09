@@ -96,6 +96,7 @@ impl SourceRender for LightroomRender {
                 },
             );
             ctx.emit_doc(RenderedMarkdown {
+                section_layout: None,
                 markdown_uuid: built.photo.uuid.clone(),
                 source_id: ctx.name.to_string(),
                 upstream_cursor: None,

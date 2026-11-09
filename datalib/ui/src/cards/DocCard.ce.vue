@@ -230,7 +230,7 @@ const remoteContext = computed<RemoteContext>(() =>
 /// Every remote URL a body references, as written, each once.
 function remoteUrlsOf(doc: ChatResponse): string[] {
   const seen = new Set<string>();
-  return renderDocument(doc.body)
+  return renderDocument(doc.body, { sections: doc.sections ?? null })
     .remote.map((r) => r.url)
     .filter((u) => !seen.has(u) && (seen.add(u), true));
 }
@@ -790,6 +790,7 @@ watch(
           </p>
           <ChatBody
             :body="chat.body"
+            :sections="chat.sections ?? null"
             :markdown-uuid="chat.markdown_uuid"
             :selected-section-uuid="jumpTo ?? sectionUuid"
             :outgoing-edges="chat.outgoing_edges"

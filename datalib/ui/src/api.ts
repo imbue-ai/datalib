@@ -257,6 +257,11 @@ export type DocProblem = {
   first_seen_at_utc: string;
 };
 
+/// One section of a document's body: the `data-section-uuid` it wraps,
+/// or null for a piece of the page's frame (title, a `<details>` opener),
+/// and its length in UTF-16 code units, as a JavaScript string counts.
+export type BodySection = { uuid: string | null; len: number };
+
 export type ChatResponse = {
   markdown_uuid: string;
   name: string | null;
@@ -273,6 +278,10 @@ export type ChatResponse = {
   /// such a document has no page, and `body` is empty.
   image?: string | null;
   body: string;
+  /// Where each section of `body` lies, so each message renders as a
+  /// fragment of its own (`renderDocument.ts`). Absent when the renderer
+  /// declares no sections.
+  sections?: BodySection[];
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];

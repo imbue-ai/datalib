@@ -133,6 +133,7 @@ fn render_book(
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -204,6 +205,7 @@ fn render_chapter(
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

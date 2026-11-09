@@ -315,6 +315,18 @@ only when it is exactly an attachment's blob-store address,
 there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
 relative references included, is dropped.
 
+Nor can one message reach the next. The UI renders and sanitizes each
+message as a fragment of its own, from the sections this crate hands
+over (`render_markdown` returns them; the store keeps their layout), so
+a tag a message leaves open is closed at its end, and only the
+renderer's own wrapper answers to a message's id. Each wrapper also has
+`contain: paint`, so nothing in a message draws over another. Keep the
+pieces honest: a message is one keyed `Section` that opens with its
+wrapper's line and ends with its `</div>`, and the `<details>` openers
+and closers are unkeyed ones of their own
+(`docs/dev/data_architecture_parse_and_render.md` §"One section cannot
+reach the next").
+
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
 so markup that gets past the sanitizer still cannot run.

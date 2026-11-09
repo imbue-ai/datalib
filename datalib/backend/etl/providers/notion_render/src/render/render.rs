@@ -598,6 +598,7 @@ pub fn render_notion(
             let (md_path, rows) = file_document(root, md_path, &doc.rows, &out)?;
 
             on_doc_complete(RenderedMarkdown {
+                section_layout: None,
                 markdown_uuid: markdown_uuid.clone(),
                 source_id: String::new(),
                 upstream_cursor: None,
@@ -651,6 +652,7 @@ pub fn render_notion(
         let md_path = doc_md_path(&render_root, markdown_uuid);
         let (md_path, rows) = file_document(root, md_path, &doc.rows, &body)?;
         on_doc_complete(RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: markdown_uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
@@ -675,6 +677,7 @@ pub fn render_notion(
         let md_path = unindexed_doc_md_path(&render_root, &doc.markdown_uuid);
         let (md_path, rows) = file_document(root, md_path, &doc.rows, &doc.markdown)?;
         on_doc_complete(RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: doc.markdown_uuid,
             source_id: String::new(),
             upstream_cursor: None,

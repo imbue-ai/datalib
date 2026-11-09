@@ -1942,6 +1942,7 @@ markdowns
     upstream_cursor
     renderer_version
     bucket_key
+    section_layout
 problems
     problem_uuid
     source_id
