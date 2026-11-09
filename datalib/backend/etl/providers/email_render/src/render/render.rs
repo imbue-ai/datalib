@@ -58,7 +58,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v18: whether an email is unread comes from its read mark, and every
 ///     thread declares the marks it reads.
 /// v19: an email attached to an email is listed among the attachments.
-pub const RENDER_VERSION: u32 = 19;
+/// v20: an email's stamp keeps the offset its `Date` was written in.
+pub const RENDER_VERSION: u32 = 20;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -642,6 +643,12 @@ fn build_chat(
                 parsed_eml.from_display.clone()
             },
             date_ms,
+            // The sender's clock: Fastmail's `receivedAt` is the server's
+            // UTC, and its `sentAt` keeps the `Date:` header's offset.
+            date_offset_secs: [em.sent_at.as_deref(), em.received_at.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(datalib_time::written_offset_secs),
             text: (!text.trim().is_empty()).then_some(text),
             kind: ItemKind::Text,
             attachments: Vec::new(),

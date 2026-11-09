@@ -83,6 +83,7 @@ merge conflict waiting to happen.
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 - [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
 - [`docs/user/applets.md`](docs/user/applets.md), [`docs/user/contacts_app.md`](docs/user/contacts_app.md) — what the running app serves, and an agent's way into the contacts app; compiled in the same way, so a change to a route changes them.
+- [`docs/user/rendered_documents.md`](docs/user/rendered_documents.md) — what a rendered document promises any viewer: the link a person is, the `<time>` a date is, the attachment addresses. Compiled in as `help documents`, so a change to those shapes changes it.
 - [`datalib/backend/agent_docs/README.md`](datalib/backend/agent_docs/README.md) — every doc `datalib-step help` prints, how its links print, and the checks on its TOML and commands (`toml fragment`). Read before editing a doc an agent is sent to.
 
 ## Keep a forward path for existing data
@@ -879,6 +880,18 @@ Where such a column needs to sort it gets a derived UTC twin
 (`created_at_utc` + `created_offset`) rather than being rewritten. If you
 find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 `isoformat()` in Python, `to_rfc3339()` here.
+
+**`Z` means the clock is unknown; `+00:00` means it was UTC.** RFC 9557
+(2024) updated RFC 3339: `Z` now says "the instant in UTC is known, the
+local offset is not", and `+00:00` says the time really was on UTC's
+clock. RFC 3339's old spelling of "unknown", `-00:00`, is refused by ISO
+8601, and RFC 9557 asks for `Z` instead; read it, never write it. Both
+are the same instant to every parser (chrono, `Date.parse`). So a
+rendered time whose source names no clock (a Unix stamp, a service's own
+`Z`) is written `Z` (`datalib_time::with_unknown_offset`), and the viewer
+shows it on its reader's clock under "as written"; a stamp we mint, whose
+clock we know, never ends in `Z`. Which clock each source's messages are
+on: [`rendered_documents.md`](docs/user/rendered_documents.md#a-time).
 
 ## Auth (web API)
 

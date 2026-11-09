@@ -422,6 +422,24 @@ things, in this order:
    where there is no library: outside Python on a musl tarball, or on an Intel
    Mac.
 
+## Showing a rendered document
+
+The rendered documents (an email thread, a Slack channel's month) are
+markdown, served by `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+Two shapes in them are a contract your app can build on:
+
+- **A person** is a link whose href is their handle as a URI:
+  `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`.
+  Identify them by the href, never the text, and ask
+  `POST /applet/unified_document_index/people` who each handle is.
+- **A time** is `<time datetime="2026-01-05T09:00:00+01:00" …>…</time>`,
+  on the sender's clock where the source knows it, and in `Z` where it
+  does not. Format the `datetime` yourself, in your reader's zone.
+
+Attachments are linked at `/data/…` on the same server, behind the same
+token. [Showing a rendered document in your app](rendered_documents.md)
+has every shape, and what a viewer must sanitize.
+
 ## Your app's derived data as a step
 
 If your app computes something from the mirror (a work list, a

@@ -360,6 +360,7 @@ async fn load(
             author_kind,
             author_display,
             date_ms,
+            date_offset_secs: None,
             text,
             kind,
             attachments,

@@ -3,6 +3,7 @@
 # below are compiled into `datalib-step help` (//datalib/backend/agent_docs).
 exports_files([
     "applets.md",
+    "chips.md",
     "config_model.md",
     "contacts.md",
     "doltlite.md",

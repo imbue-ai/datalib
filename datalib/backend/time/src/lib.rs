@@ -14,6 +14,12 @@
 //! a stamp is right without parsing. [`IsoOffsetTimestamp::to_utc_and_offset`]
 //! and [`split_stamp`] are the two ways to get from one form to the other.
 //!
+//! **`Z` means the clock is unknown, `+00:00` that it was UTC** (RFC 9557
+//! §2, updating RFC 3339). A stamp we mint knows its clock and is written
+//! with an explicit offset; [`with_unknown_offset`] writes `Z` for an
+//! instant whose source named no clock (a Unix stamp), and
+//! [`written_offset_secs`] reads a source's `Z` as no clock.
+//!
 //! **A timestamp we cannot parse becomes a null, never a stand-in.** Every
 //! parse helper returns a `Result`, and callers are expected to let the
 //! failure become a `None`. An `unwrap_or(0)` on the way out of one of these
@@ -52,6 +58,22 @@ impl IsoOffsetTimestamp {
         DateTime::<Utc>::from_timestamp_millis(ms).map(|dt| Self(dt.fixed_offset()))
     }
 
+    /// The instant `ms` on the clock the source wrote it in, `offset_secs`
+    /// east of UTC; UTC when the source named no offset (a Unix stamp).
+    /// `None` for an instant or an offset chrono cannot represent.
+    pub fn from_unix_millis_at(ms: i64, offset_secs: Option<i32>) -> Option<Self> {
+        let utc = Self::from_unix_millis(ms)?;
+        match offset_secs {
+            None => Some(utc),
+            Some(secs) => Some(Self(utc.0.with_timezone(&FixedOffset::east_opt(secs)?))),
+        }
+    }
+
+    /// The offset this stamp was written in, in seconds east of UTC.
+    pub fn offset_secs(&self) -> i32 {
+        self.0.offset().local_minus_utc()
+    }
+
     /// Bump this timestamp forward by `n` microseconds. The canonical
     /// recipe for synthesizing sub-item stamps when upstream gave the
     /// parent a time but didn't give one to each child (claude /
@@ -62,7 +84,7 @@ impl IsoOffsetTimestamp {
     }
 
     /// Render as RFC 3339 with auto-selected sub-second precision and
-    /// an explicit offset (never bare `Z`).
+    /// an explicit offset (never bare `Z`, which says the clock is unknown).
     pub fn to_rfc3339(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::AutoSi, false)
     }
@@ -288,8 +310,46 @@ pub fn record_stamp_from_unix_millis(
     ms: Option<i64>,
     precision: RecordStampPrecision,
 ) -> Option<String> {
+    record_stamp_on_clock(ms, None, precision)
+}
+
+/// [`record_stamp_from_unix_millis`] on the clock the source wrote the
+/// stamp in, `offset_secs` east of UTC, so the offset reaches the row.
+/// `None` is a source that names no clock at all (a Unix stamp): the
+/// instant in UTC with the local offset unknown, `Z` ([`UNKNOWN_OFFSET`]).
+pub fn record_stamp_from_unix_millis_at(
+    ms: Option<i64>,
+    offset_secs: Option<i32>,
+    precision: RecordStampPrecision,
+) -> Option<String> {
+    let stamp = record_stamp_on_clock(ms, offset_secs, precision)?;
+    Some(match offset_secs {
+        Some(_) => stamp,
+        None => with_unknown_offset(stamp),
+    })
+}
+
+/// An instant whose UTC is known and whose local offset is not, as RFC
+/// 9557 §2 spells it: `Z`, where `+00:00` says the clock really was UTC.
+/// (RFC 3339 wrote this `-00:00`, which ISO 8601 refuses; RFC 9557 asks
+/// for `Z` instead.) A viewer shows such an instant on its reader's clock.
+pub const UNKNOWN_OFFSET: &str = "Z";
+
+/// `…+00:00` as `…Z`: a UTC stamp marked as having no clock of its own.
+pub fn with_unknown_offset(utc: String) -> String {
+    match utc.strip_suffix("+00:00") {
+        Some(instant) => format!("{instant}{UNKNOWN_OFFSET}"),
+        None => utc,
+    }
+}
+
+fn record_stamp_on_clock(
+    ms: Option<i64>,
+    offset_secs: Option<i32>,
+    precision: RecordStampPrecision,
+) -> Option<String> {
     let ms = ms?;
-    match IsoOffsetTimestamp::from_unix_millis(ms) {
+    match IsoOffsetTimestamp::from_unix_millis_at(ms, offset_secs) {
         Some(t) => Some(match precision {
             RecordStampPrecision::Seconds => t.to_rfc3339_secs(),
             RecordStampPrecision::Millis => t.to_rfc3339_millis(),
@@ -425,6 +485,19 @@ pub fn coerce_record_stamp(s: &str) -> Option<String> {
 pub fn record_stamp_ms(s: &str) -> Option<i64> {
     let (utc, _) = split_record_stamp(s)?;
     parse_strict(&utc).ok().map(|t| t.to_unix_millis())
+}
+
+/// The clock an RFC 3339 stamp was written on, in seconds east of UTC:
+/// `+01:00` is 3600 and `+00:00` is 0. `None` for a stamp in `Z`, which
+/// is a service stamping its own UTC rather than anyone's wall clock
+/// (Google Drive, Todoist, a JMAP `receivedAt`), and for anything that
+/// is not a stamp.
+pub fn written_offset_secs(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.ends_with(['Z', 'z']) {
+        return None;
+    }
+    parse_strict(s).ok().map(|t| t.offset_secs())
 }
 
 pub fn split_record_stamp(s: &str) -> Option<(String, String)> {
@@ -665,6 +738,61 @@ mod tests {
             (suffix.starts_with('+') || suffix.starts_with('-')) && &suffix[3..4] == ":",
             "expected explicit offset suffix, got {s:?}"
         );
+    }
+
+    /// A message header built from epoch millis alone wrote every email
+    /// in UTC, though the email said `+01:00`.
+    #[test]
+    fn a_stamp_from_millis_keeps_the_offset_it_was_written_in() {
+        let written = parse_strict("2364-04-11T09:30:00+01:00").unwrap();
+        let back =
+            IsoOffsetTimestamp::from_unix_millis_at(written.to_unix_millis(), Some(3600)).unwrap();
+        assert_eq!(back.to_rfc3339_secs(), "2364-04-11T09:30:00+01:00");
+        assert_eq!(back.offset_secs(), 3600);
+        assert_eq!(
+            IsoOffsetTimestamp::from_unix_millis_at(written.to_unix_millis(), None)
+                .unwrap()
+                .to_rfc3339_secs(),
+            "2364-04-11T08:30:00+00:00"
+        );
+        assert_eq!(
+            record_stamp_from_unix_millis_at(
+                Some(written.to_unix_millis()),
+                Some(-7 * 3600),
+                RecordStampPrecision::Seconds
+            )
+            .as_deref(),
+            Some("2364-04-11T01:30:00-07:00")
+        );
+    }
+
+    #[test]
+    fn a_stamp_in_z_names_no_ones_clock() {
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00+01:00"), Some(3600));
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00+00:00"), Some(0));
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00Z"), None);
+        assert_eq!(written_offset_secs("2364-04-11"), None);
+    }
+
+    /// A Unix stamp names no clock, and `+00:00` claimed UTC was its
+    /// sender's, so "as written" showed every such message in UTC.
+    #[test]
+    fn a_stamp_with_no_clock_says_its_offset_is_unknown() {
+        let ms = parse_strict("2364-04-11T08:30:00Z")
+            .unwrap()
+            .to_unix_millis();
+        let stamp = record_stamp_from_unix_millis_at(Some(ms), None, RecordStampPrecision::Seconds)
+            .unwrap();
+        assert_eq!(stamp, "2364-04-11T08:30:00Z");
+        // Every reader of a stored stamp still takes it as that instant.
+        assert_eq!(parse_strict(&stamp).unwrap().to_unix_millis(), ms);
+        assert_eq!(record_stamp_ms(&stamp), Some(ms));
+        assert!(validate_iso_offset(&stamp).is_ok());
+        assert_eq!(
+            record_stamp_from_unix_millis(Some(ms), RecordStampPrecision::Seconds).as_deref(),
+            Some("2364-04-11T08:30:00+00:00")
+        );
+        assert!(IsoOffsetTimestamp::from_unix_millis_at(0, Some(86_400)).is_none());
     }
 
     #[test]

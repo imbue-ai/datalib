@@ -543,6 +543,7 @@ async fn load_users(
                 email: profile.and_then(|p| opt_str(p, "email")),
                 title: profile.and_then(|p| opt_str(p, "title")),
                 avatar_url: profile.and_then(|p| opt_str(p, "image_192")),
+                tz: opt_str(&v, "tz"),
             },
         );
     }
@@ -878,6 +879,7 @@ fn ingest_user(u: &Value, default_team_id: &str, out: &mut BTreeMap<String, User
             email: profile.and_then(|p| opt_str(p, "email")),
             title: profile.and_then(|p| opt_str(p, "title")),
             avatar_url: profile.and_then(|p| opt_str(p, "image_192")),
+            tz: opt_str(u, "tz"),
         },
     );
 }
