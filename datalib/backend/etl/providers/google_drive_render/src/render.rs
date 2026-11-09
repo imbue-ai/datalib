@@ -30,7 +30,9 @@ use crate::unsupported;
 /// v3: the account's own comments mark its address as the account's, so
 ///     search reads it as `me`.
 /// v4: the files that are not Docs are counted on record.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a comment's time, which Drive stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+pub const RENDER_VERSION: u32 = 5;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";

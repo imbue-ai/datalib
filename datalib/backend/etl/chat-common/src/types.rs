@@ -181,6 +181,11 @@ pub struct NormalizedChatItem {
     /// Unix milliseconds for the item's effective timestamp, or `None`
     /// when this item has no timestamp at all.
     pub date_ms: Option<i64>,
+    /// The offset the source wrote `date_ms` in, in seconds east of UTC:
+    /// an email's `Date`, a Takeout chat's zone. `None` where the source
+    /// names an instant with no clock of its own (a Unix stamp, a Slack
+    /// `ts`); the header and the row's `created_at` are then UTC.
+    pub date_offset_secs: Option<i32>,
     /// Optional message body. Text items always carry this; attachment
     /// items use it as the caption; system items use it as the summary.
     pub text: Option<String>,

@@ -15,6 +15,7 @@ import {
   formatAt,
   formatDay,
   millisText,
+  namesNoClock,
   offsetAt,
   offsetText,
   readsAsMachine,
@@ -29,9 +30,10 @@ import { filterToken } from "@/grid/query";
 import { drawChip, type ChipLook } from "./contacts";
 
 /** What a `datetime` names: an instant with the offset it was written
- *  in, or a day with no time of day. */
+ *  in (null for `Z`, which names no clock), or a day with no time
+ *  of day. */
 export type Stamp =
-  | { kind: "instant"; ms: number; offsetMin: number }
+  | { kind: "instant"; ms: number; offsetMin: number | null }
   | { kind: "day"; year: number; month: number; day: number };
 
 const INSTANT =
@@ -46,7 +48,7 @@ export function parseStamp(datetime: string): Stamp | null {
   if (i) {
     const ms = Date.parse(s);
     if (Number.isNaN(ms)) return null;
-    const offsetMin = i[7] === "Z" ? 0 : (i[8] === "-" ? -1 : 1) * (+i[9] * 60 + +i[10]);
+    const offsetMin = namesNoClock(i[7]!) ? null : (i[8] === "-" ? -1 : 1) * (+i[9] * 60 + +i[10]);
     return { kind: "instant", ms, offsetMin };
   }
   const d = DAY.exec(s);
@@ -119,7 +121,7 @@ export function dateTitle(s: Stamp, now: number, view = timeView.value): string 
   );
   const lines = [here, `${wallText(wallClock(s, UTC))} UTC`];
   const shown = offsetAt(s, view.zone);
-  if (s.offsetMin !== 0 && s.offsetMin !== shown) {
+  if (s.offsetMin !== null && s.offsetMin !== 0 && s.offsetMin !== shown) {
     lines.push(`${wallText(wallClock(s, WRITTEN))} ${offsetText(s.offsetMin)} as written`);
   }
   lines.push(formatRelative(new Date(s.ms).toISOString(), now));

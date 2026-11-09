@@ -48,7 +48,10 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v21: so is a person's photo.
 /// v22: the account's own messages are "Me", a chip of the `me:self`
 /// handle, whatever stand-in the source used ("User", "Human").
-pub const LAYOUT_VERSION: u32 = 22;
+/// v23: a message's time is on the clock its source wrote it on, and a
+/// time whose source names no clock says so (`Z`), in the header
+/// and in the row's `created_at`.
+pub const LAYOUT_VERSION: u32 = 23;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -557,7 +560,7 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
                 who = reactor(r),
-                ts = timestamp_html(r.date_ms),
+                ts = timestamp_html(r.date_ms, None),
             ));
         }
     }
@@ -615,7 +618,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = timestamp_html(item.date_ms),
+                ts = timestamp_html(item.date_ms, item.date_offset_secs),
                 summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
@@ -627,6 +630,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                     author: &item.author_display,
                     handle: item.author_handle.as_ref(),
                     date_ms: item.date_ms,
+                    offset_secs: item.date_offset_secs,
                     source_url: item.source_url.as_deref(),
                 }
                 .render(),
@@ -864,17 +868,25 @@ fn build_grid_rows(
     // `sort_by_key`), and a bucket with no dated item at all — including
     // the empty bucket `render_markdown` renders as "_(no messages)_" —
     // then gets `None` rather than a 1970 stamp.
-    let dated = || doc.items.iter().filter_map(|i| i.date_ms);
-    let first_ts = stamp_from_ms(dated().min(), profile.stamp_precision);
-    let last_ts = stamp_from_ms(
+    // Each on the clock its own message was written on; a reaction names none.
+    let dated = || {
+        doc.items
+            .iter()
+            .filter_map(|i| Some((i.date_ms?, i.date_offset_secs)))
+    };
+    let stamp = |at: Option<(i64, Option<i32>)>| {
+        let (ms, offset) = at?;
+        record_stamp_from_unix_millis_at(Some(ms), offset, profile.stamp_precision)
+    };
+    let first_ts = stamp(dated().min_by_key(|(ms, _)| *ms));
+    let last_ts = stamp(
         dated()
             .chain(
                 doc.items
                     .iter()
-                    .flat_map(|i| i.reactions.iter().filter_map(|r| r.date_ms)),
+                    .flat_map(|i| i.reactions.iter().filter_map(|r| Some((r.date_ms?, None)))),
             )
-            .max(),
-        profile.stamp_precision,
+            .max_by_key(|(ms, _)| *ms),
     );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
@@ -968,7 +980,11 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same one.
                 .upstream_account(chat.upstream_account.clone())
-                .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
+                .created_at(record_stamp_from_unix_millis_at(
+                    item.date_ms,
+                    item.date_offset_secs,
+                    profile.stamp_precision,
+                ))
                 .byte_size(Some(text.len() as i64))
                 .item_count(item.is_message().then_some(1))
                 // An empty display is "upstream named nobody", which is a
@@ -1173,7 +1189,12 @@ fn reaction_row(
         .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
         .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
         .upstream_account(chat.upstream_account.clone())
-        .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
+        // A reaction names no clock of its own.
+        .created_at(record_stamp_from_unix_millis_at(
+            r.date_ms,
+            None,
+            profile.stamp_precision,
+        ))
         .author(non_empty(&r.reactor_display))
         .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
@@ -1229,14 +1250,10 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 }
 
 // Format helpers
-use datalib_time::{record_stamp_from_unix_millis, RecordStampPrecision};
+use datalib_time::{record_stamp_from_unix_millis_at, RecordStampPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-render every document chat-common has written.
-fn stamp_from_ms(ms: Option<i64>, precision: RecordStampPrecision) -> Option<String> {
-    record_stamp_from_unix_millis(ms, precision)
-}
-
 fn human_bytes(n: i64) -> String {
     let n = n as f64;
     if n < 1024.0 {
@@ -1315,6 +1332,7 @@ mod tests {
                     author_kind: AuthorKind::Named,
                     author_display: "Picard".to_string(),
                     date_ms: Some(12442118400000),
+                    date_offset_secs: None,
                     text: Some("Make it so.".to_string()),
                     kind: ItemKind::Text,
                     attachments: vec![],
@@ -1645,6 +1663,7 @@ mod tests {
             author_kind: AuthorKind::Named,
             author_display: "Worf".to_string(),
             date_ms: Some(12442118420000),
+            date_offset_secs: None,
             text: None,
             kind: ItemKind::System,
             attachments: vec![],
@@ -1736,7 +1755,7 @@ mod tests {
         );
         assert!(
             md.contains(
-                "<time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                "<time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00Z\" \
                  title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>"
             ),
             "{md}"
@@ -1884,7 +1903,7 @@ mod tests {
 
         assert!(
             md.contains(
-                "*<small><time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                "*<small><time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00Z\" \
                  title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time> \
                  \u{2014} system: Worf joined</small>*"
             ),
@@ -1903,6 +1922,7 @@ mod tests {
             author_kind: AuthorKind::Named,
             author_display: "tool".to_string(),
             date_ms: Some(12442118400000),
+            date_offset_secs: None,
             text: Some(text.to_string()),
             kind: ItemKind::Text,
             attachments: vec![],
@@ -2442,14 +2462,8 @@ mod tests {
         assert_eq!(docs.len(), 1, "{rows:?}");
         let chat = docs[0];
         assert_eq!(chat.kind, profile.chat_kind);
-        assert_eq!(
-            chat.created_at.as_deref(),
-            Some("2364-04-11T00:00:00+00:00")
-        );
-        assert_eq!(
-            chat.modified_at.as_deref(),
-            Some("2364-04-11T00:00:10+00:00")
-        );
+        assert_eq!(chat.created_at.as_deref(), Some("2364-04-11T00:00:00Z"));
+        assert_eq!(chat.modified_at.as_deref(), Some("2364-04-11T00:00:10Z"));
         for r in rows.iter().filter(|r| !r.is_document) {
             assert!(
                 r.modified_at.is_none(),
@@ -2458,6 +2472,27 @@ mod tests {
                 r.modified_at
             );
         }
+    }
+
+    /// The document's row and its message's row wrote `+00:00` whatever
+    /// clock the message was written on; a reaction names none.
+    #[test]
+    fn rows_keep_the_clock_their_message_was_written_on() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].date_offset_secs = Some(3600);
+        let rows = rows_of(&profile, &chat);
+        let doc = rows.iter().find(|r| r.is_document).unwrap();
+        assert_eq!(doc.created_at.as_deref(), Some("2364-04-11T01:00:00+01:00"));
+        assert_eq!(doc.modified_at.as_deref(), Some("2364-04-11T00:00:10Z"));
+        let message = rows
+            .iter()
+            .find(|r| r.uuid == chat.buckets[0].items[0].message_uuid)
+            .unwrap();
+        assert_eq!(
+            message.created_at.as_deref(),
+            Some("2364-04-11T01:00:00+01:00")
+        );
     }
 
     /// An empty bucket is reachable — `render_markdown` renders it as
@@ -2492,7 +2527,7 @@ mod tests {
         let rows = rows_of(&profile, &chat);
         assert_eq!(
             rows[0].created_at.as_deref(),
-            Some("2364-04-11T00:00:00+00:00"),
+            Some("2364-04-11T00:00:00Z"),
             "chat row keeps the bucket's earliest real stamp",
         );
     }

@@ -221,6 +221,7 @@ fn build_chat(
             author_kind,
             author_display,
             date_ms: ms,
+            date_offset_secs: None,
             text: body,
             kind,
             attachments,

@@ -12,16 +12,33 @@ use crate::source_type::SourceType;
 /// named, else the one the params hold, else the source's only live one.
 /// A source with several live ways in and none named is refused, naming
 /// them.
+/// The ways in a probe can ask through: the ones that reach a service.
+pub fn live_methods(source_type: SourceType) -> Vec<&'static str> {
+    crate::methods::ingest_methods(source_type)
+        .iter()
+        .filter(|m| m.reach == Reach::Origin)
+        .map(|m| m.path)
+        .collect()
+}
+
+/// The probe command a page prints for `source_type`, naming `--method`
+/// where [`with_method`] would refuse a probe without one.
+pub fn probe_command(source_type: SourceType) -> String {
+    match live_methods(source_type).as_slice() {
+        live @ [_, _, ..] => format!(
+            "datalib-step probe {source_type} --method <{}>",
+            live.join("|")
+        ),
+        _ => format!("datalib-step probe {source_type}"),
+    }
+}
+
 pub fn with_method(
     source_type: SourceType,
     params: &serde_json::Value,
     method: Option<&str>,
 ) -> Result<serde_json::Value> {
-    let live: Vec<&str> = crate::methods::ingest_methods(source_type)
-        .iter()
-        .filter(|m| m.reach == Reach::Origin)
-        .map(|m| m.path)
-        .collect();
+    let live = live_methods(source_type);
     let held: Vec<&str> = crate::methods::held(params, crate::methods::ingest_methods(source_type))
         .iter()
         .filter(|m| m.reach == Reach::Origin)

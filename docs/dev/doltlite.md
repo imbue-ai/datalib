@@ -159,7 +159,7 @@ with Store(path, commit) as store:  # one commit, however far main moves on
     changed = store.query("SELECT to_id FROM dolt_diff_emails(?, ?)", cursor, commit)
 ```
 
-`query` returns a list of tuples. The second form is the
+`query` returns a list of rows, each a tuple that also answers by column name; each kind of failure has its own `OSError` subclass (`datalib/reader/README.md`). The second form is the
 [detached open](#opening-a-revision-by-path) our own readers use.
 
 What to know about it:

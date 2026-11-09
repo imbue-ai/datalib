@@ -6,7 +6,7 @@
 
 use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
-use crate::jmap_tape::{Account, Tape, ACCOUNT, HOST};
+use crate::jmap_tape::{email_get_args, Account, Tape, ACCOUNT, HOST};
 use crate::support::Mirror;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -45,6 +45,35 @@ async fn a_start_over_drops_what_upstream_destroyed() {
     assert_eq!(mailboxes, vec!["MB1"]);
     assert_eq!(emails, vec!["M1"]);
     assert_eq!(joins["M1"], vec!["MB1"]);
+}
+
+/// Listing an account again fetches every email, and each request names
+/// as many as the server's `maxObjectsInGet` allows. At a fixed 50, a
+/// 277k-email Fastmail account took an hour of requests. The one request
+/// naming all three emails is refused, so a run that ignores the limit
+/// fetches nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_start_over_asks_as_many_emails_at_once_as_the_server_allows() {
+    let m = Mirror::new();
+    let tape = Tape::with_max_objects_in_get(&m.playback, 2);
+    let a = Account::new(
+        &[("MB1", "Inbox")],
+        &[("M1", &["MB1"]), ("M2", &["MB1"]), ("M3", &["MB1"])],
+    );
+    let in_batches_of_two = |tape: &Tape| {
+        tape.refuse("Email/get", email_get_args(&["M1", "M2", "M3"]), 400);
+        tape.gets(&a, &["M1", "M2"]);
+        tape.gets(&a, &["M3"]);
+    };
+    tape.serve(&a);
+    in_batches_of_two(&tape);
+    let first = run(&m).await;
+    assert_eq!(first.emails_upserted, 3, "{first:?}");
+
+    tape.serve_aged_out(&a);
+    in_batches_of_two(&tape);
+    let second = run(&m).await;
+    assert_eq!(second.emails_upserted, 3, "{second:?}");
 }
 
 async fn run(m: &Mirror) -> FetchSummary {

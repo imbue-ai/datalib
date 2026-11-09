@@ -31,7 +31,9 @@ use crate::store::{flag, str_of, uid_of, Store};
 
 /// v1: one document per project, completed tasks folded under each
 ///     section.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a comment's time, which Todoist stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "Todoist";
 const KIND_PROJECT: &str = "Todoist Project";
@@ -652,6 +654,7 @@ impl Out<'_, '_, '_> {
                 author: author.as_ref().map_or("", |p| p.name.as_str()),
                 handle: author.as_ref().and_then(|p| p.handle.as_ref()),
                 date_ms: posted.and_then(datalib_time::record_stamp_ms),
+                offset_secs: posted.and_then(datalib_time::written_offset_secs),
                 source_url: None,
             }
             .render(),

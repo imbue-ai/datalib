@@ -76,6 +76,7 @@ fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
         author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms: Some(at),
+        date_offset_secs: None,
         text: Some(body.to_string()),
         kind: ItemKind::Text,
         attachments: vec![],
