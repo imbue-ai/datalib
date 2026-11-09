@@ -247,7 +247,8 @@ pub struct Problem {
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
     /// First 80 characters of the offending value — see [`sample_of`] —
-    /// or, from [`Problem::explained`], the writer's explanation whole.
+    /// or, from [`Problem::explained`] and [`Problem::lossy_explained`],
+    /// the writer's explanation whole.
     pub sample: String,
     /// `None` takes [`Severity::default_for`] the outcome.
     pub severity: Option<Severity>,
@@ -303,6 +304,20 @@ impl Problem {
             rule: Some(rule.into()),
             sample: sample_of(sample),
             severity: None,
+        }
+    }
+
+    /// A deliberate lossy rule that fired on a whole source or record
+    /// rather than on one value, so its sample is the explanation, kept
+    /// whole as [`Problem::explained`] keeps one.
+    pub fn lossy_explained(
+        rule: impl Into<String>,
+        field: Option<String>,
+        explanation: &str,
+    ) -> Self {
+        Self {
+            rule: Some(rule.into()),
+            ..Self::explained(Reason::DeliberateLoss, field, explanation)
         }
     }
 
@@ -633,6 +648,17 @@ mod tests {
         let p = Problem::lossy("pdf.strip_repeated_chrome", None, "Page 3 of 7");
         assert_eq!(p.reason, Reason::DeliberateLoss);
         assert_eq!(p.rule.as_deref(), Some("pdf.strip_repeated_chrome"));
+    }
+
+    /// An explanation longer than a value's sample stays whole, with
+    /// the rule a lossy problem carries.
+    #[test]
+    fn a_lossy_explanation_is_kept_whole() {
+        let why = "x".repeat(200);
+        let p = Problem::lossy_explained("rule", None, &why);
+        assert_eq!(p.sample, why);
+        assert_eq!(p.reason, Reason::DeliberateLoss);
+        assert_eq!(p.rule.as_deref(), Some("rule"));
     }
 
     /// The id is a function of what names the problem: the same
