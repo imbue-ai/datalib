@@ -104,6 +104,7 @@ async fn ingest_export(
             .await
             .unwrap(),
         now: "2026-10-22T00:00:00-07:00".into(),
+        when_deleted_upstream: Default::default(),
         progress: Default::default(),
         control: Default::default(),
     })

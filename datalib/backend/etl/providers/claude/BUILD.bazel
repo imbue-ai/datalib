@@ -69,6 +69,7 @@ rust_test(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_claude",
+        "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
         "//datalib/backend/problems:datalib_problems",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:insta",

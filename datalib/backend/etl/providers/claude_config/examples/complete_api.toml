@@ -11,6 +11,12 @@ group = "claude"
 function = "ingest"
 command = "datalib-step"
 
+[steps.params]
+# What becomes of the copy of a conversation you delete on claude.ai:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
 [steps.params.common.download_params]

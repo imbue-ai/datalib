@@ -246,6 +246,27 @@ async fn an_org_whose_listing_fails_costs_only_that_org() {
     assert_eq!(acct.keys().await, no_keys());
 }
 
+/// With `keep_local_copy`, a conversation a complete listing no longer
+/// names (deleted on claude.ai) stays, and the run counts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keep_local_copy_keeps_a_conversation_deleted_upstream() {
+    let acct = Account::new(true);
+    let keeping = |o: &mut FetchOptions| {
+        o.when_deleted_upstream = datalib_etl_claude_config::WhenDeletedUpstream::KeepLocalCopy;
+    };
+    acct.holds(&[conv("c-a1", ENTERPRISE), conv("c-a2", ENTERPRISE)], &[]);
+    acct.run(keeping).await.unwrap();
+
+    acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
+    let s = acct.run(keeping).await.unwrap();
+    assert_eq!((s.pruned, s.kept_deleted_upstream), (0, 1), "{s:?}");
+    assert_eq!(acct.conversation_ids().await, ["c-a1", "c-a2"]);
+
+    let s = acct.run(|_| {}).await.unwrap();
+    assert_eq!((s.pruned, s.kept_deleted_upstream), (1, 0), "{s:?}");
+    assert_eq!(acct.conversation_ids().await, ["c-a1"]);
+}
+
 /// Every project listing that failed was a `warn!`, and a configured
 /// project uuid nothing had was another.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

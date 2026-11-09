@@ -112,6 +112,9 @@ pub struct FetchOptions {
     /// When non-empty, mirror only these project UUIDs. The per-org
     /// listing still runs; everything outside the set is skipped.
     pub project_uuids: Vec<String>,
+    /// Whether a conversation a complete listing no longer names is
+    /// deleted here too or kept.
+    pub when_deleted_upstream: datalib_etl_claude_config::WhenDeletedUpstream,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
@@ -137,6 +140,7 @@ impl FetchOptions {
             conv_uuids: Vec::new(),
             projects: true,
             project_uuids: Vec::new(),
+            when_deleted_upstream: Default::default(),
             sealer: None,
             progress: Default::default(),
             control: Default::default(),
@@ -167,6 +171,9 @@ pub struct FetchSummary {
     /// claude.ai. Never counts rows a `claude_export` ingest wrote (those
     /// carry a NULL `org_uuid` and are out of an API sync's scope).
     pub pruned: usize,
+    /// Conversations a complete listing did not name, kept because
+    /// `when_deleted_upstream = "keep_local_copy"`. Counted every run.
+    pub kept_deleted_upstream: usize,
     /// Fetch failures across every loop — conversations, docs listings.
     pub errors: usize,
     pub total: usize,
@@ -932,7 +939,12 @@ impl Ctx<'_> {
                 .filter_map(|c| c.get("uuid").and_then(Value::as_str))
                 .map(String::from)
                 .collect();
-            s.pruned += self.db.prune_org_conversations(org_uuid, &keep).await?;
+            let (deleted, kept) = self
+                .db
+                .prune_org_conversations(org_uuid, &keep, self.opts.when_deleted_upstream)
+                .await?;
+            s.pruned += deleted;
+            s.kept_deleted_upstream += kept;
         }
         if every_org_listed {
             let keep: HashSet<String> = listings_by_org

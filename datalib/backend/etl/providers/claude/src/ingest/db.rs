@@ -15,6 +15,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl_claude_config::WhenDeletedUpstream;
 use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 
@@ -351,9 +352,10 @@ impl RawDb {
         Ok(())
     }
 
-    /// Delete this org's conversations that a **complete** listing of that
-    /// org did not name, with their attachment edges and the fetch
-    /// problems of both.
+    /// This org's conversations that a **complete** listing of that org
+    /// did not name: deleted with their attachment edges and the fetch
+    /// problems of both, or, with `keep_local_copy`, kept and counted.
+    /// Answers `(deleted, kept)`.
     ///
     /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
     /// An org whose listing 403'd was never enumerated, so it must not be
@@ -370,21 +372,20 @@ impl RawDb {
         &self,
         org_uuid: &str,
         keep: &HashSet<String>,
-    ) -> Result<usize> {
+        when: WhenDeletedUpstream,
+    ) -> Result<(usize, usize)> {
         let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE org_uuid = ?")
             .bind(org_uuid)
             .fetch_one(self.pool())
             .await
             .context("count org conversations for prune")?;
-        let gone = self
-            .prune_conversations_in(&[("org_uuid", org_uuid)], keep)
+        let unlisted = self
+            .prune_conversations_in(&[("org_uuid", org_uuid)], keep, when)
             .await?;
-        datalib_etl::prune::record(
-            &format!("claude org {org_uuid} conversations"),
-            held as usize,
-            gone,
-        );
-        Ok(gone)
+        let collection = format!("claude org {org_uuid} conversations");
+        datalib_etl::prune::record(&collection, held as usize, unlisted.deleted.len());
+        datalib_etl::prune::record_kept(&collection, unlisted.kept.len());
+        Ok((unlisted.deleted.len(), unlisted.kept.len()))
     }
 
     /// Delete the stubs of conversations whose every fetch failed — no
@@ -409,7 +410,13 @@ impl RawDb {
             .into_iter()
             .filter(|id| !gone.contains(id))
             .collect();
-        let n = self.prune_conversations_in(&[], &keep).await?;
+        // A stub holds nothing to keep, so it goes whatever
+        // `when_deleted_upstream` says.
+        let n = self
+            .prune_conversations_in(&[], &keep, WhenDeletedUpstream::DeleteLocalCopy)
+            .await?
+            .deleted
+            .len();
         datalib_etl::prune::record("claude conversation stubs", stubs.len(), n);
         Ok(n)
     }
@@ -418,14 +425,21 @@ impl RawDb {
         &self,
         scope: &[(&str, &str)],
         keep: &HashSet<String>,
-    ) -> Result<usize> {
+        when: WhenDeletedUpstream,
+    ) -> Result<datalib_etl::prune::Unlisted> {
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
-        let gone =
-            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", scope, keep).await?;
-        datalib_etl::prune::delete_owned_in_tx(&mut tx, ATTACHMENTS, "conversation_uuid", &gone)
-            .await?;
+        let unlisted =
+            datalib_etl::prune::follow_deletions_in_tx(&mut tx, when, "conversations", scope, keep)
+                .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            ATTACHMENTS,
+            "conversation_uuid",
+            &unlisted.deleted,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        Ok(gone.len())
+        Ok(unlisted)
     }
 
     /// The conversation as stored, `None` for one never fetched.

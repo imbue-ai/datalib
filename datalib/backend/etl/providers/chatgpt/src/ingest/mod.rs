@@ -95,6 +95,9 @@ pub struct FetchOptions {
     /// file's bytes before chatgpt.com. Its conversations are the export
     /// step's to read (`export::Reading::FillGaps`).
     pub export: Option<PathBuf>,
+    /// Whether a conversation a complete listing no longer names is
+    /// deleted here too or kept.
+    pub when_deleted_upstream: datalib_etl_chatgpt_config::WhenDeletedUpstream,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
@@ -115,6 +118,7 @@ impl FetchOptions {
             conv_uuids: Vec::new(),
             now: None,
             export: None,
+            when_deleted_upstream: Default::default(),
             progress: datalib_etl::progress::Progress::noop(),
             control: datalib_etl::control::DownloadControl::default(),
         }
@@ -137,6 +141,10 @@ pub struct FetchSummary {
     /// Conversations a *complete* listing did not name — deleted upstream.
     /// Always 0 when the listing walk stopped early.
     pub pruned: usize,
+    /// Conversations a complete listing did not name, kept because
+    /// `when_deleted_upstream = "keep_local_copy"`. Counted every
+    /// complete listing.
+    pub kept_deleted_upstream: usize,
     /// Files fetched from chatgpt.com.
     pub new_blobs: usize,
     /// Files whose bytes came from the export.
@@ -409,7 +417,10 @@ impl Ctx<'_> {
                 .filter_map(|c| c.get("id").and_then(Value::as_str))
                 .map(String::from)
                 .collect();
-            s.pruned = self.db.prune_conversations(&keep).await?;
+            (s.pruned, s.kept_deleted_upstream) = self
+                .db
+                .prune_conversations(&keep, self.opts.when_deleted_upstream)
+                .await?;
         }
 
         // `since` gates fetching only: rows already stored stay, so moving

@@ -2,6 +2,7 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can
 //! name `ClaudeConfig` without linking the provider.
 
+pub use datalib_source_common::WhenDeletedUpstream;
 use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +54,13 @@ pub struct ClaudeConfig {
     /// the export no longer has is pruned from the store.
     #[serde(default)]
     pub export: Option<LocalPath>,
+    /// What becomes of the copy of a conversation (or anything else this
+    /// source holds) once it is deleted on claude.ai, or a newer export
+    /// leaves it out: `"delete_local_copy"` (the default) deletes it here
+    /// too; `"keep_local_copy"` keeps it as last fetched, so a person can
+    /// delete it upstream for privacy and still have it.
+    #[serde(default)]
+    pub when_deleted_upstream: WhenDeletedUpstream,
 }
 
 impl ClaudeConfig {

@@ -8,7 +8,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig};
+use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig, WhenDeletedUpstream};
 use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
@@ -24,6 +24,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
 pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
+    let when_deleted_upstream = config.when_deleted_upstream;
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
         procs.push(Box::new(ClaudeIngest {
@@ -31,12 +32,14 @@ pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn
             raw_path,
             sync,
             latchkey: config.latchkey_settings.clone(),
+            when_deleted_upstream,
         }));
     } else if let Some(export) = config.export {
         procs.push(Box::new(ClaudeExportIngest {
             id: format!("claude/{name}/download"),
             raw_path,
             input_path: export.path(),
+            when_deleted_upstream,
         }));
     }
     Ok(procs)
@@ -49,6 +52,7 @@ struct ClaudeIngest {
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block.
     latchkey: LatchkeySettings,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -96,6 +100,7 @@ impl DataProcessor for ClaudeIngest {
                 conv_uuids: self.sync.conv_uuids.clone(),
                 projects: self.sync.projects,
                 project_uuids: self.sync.project_uuids.clone(),
+                when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
                 sealer: Some(sealer),
@@ -104,7 +109,7 @@ impl DataProcessor for ClaudeIngest {
             .await?;
             Ok(format!(
                 "fetched={} skipped={} out_of_scope={} errors={} non_chat_orgs={} forbidden_orgs={} \
-             pruned={} total={} projects={} projects_skipped={} project_docs={} \
+             pruned={} kept_deleted_upstream={} total={} projects={} projects_skipped={} project_docs={} \
              project_docs_skipped={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
                 s.fetched,
@@ -114,6 +119,7 @@ impl DataProcessor for ClaudeIngest {
                 s.non_chat_orgs,
                 s.forbidden_orgs,
                 s.pruned,
+                s.kept_deleted_upstream,
                 s.total,
                 s.projects_fetched,
                 s.projects_skipped,
@@ -134,6 +140,7 @@ struct ClaudeExportIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -153,13 +160,20 @@ impl DataProcessor for ClaudeExportIngest {
                 // The run-pinned `now`, so every bookkeeping stamp this
                 // ingest writes agrees with the rest of the run.
                 now: ctx.now.to_string(),
+                when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
             })
             .await?;
             Ok(format!(
-                "users={} conversations={} projects={} project_docs={} pruned={}",
-                s.users, s.conversations, s.projects, s.project_docs, s.pruned,
+                "users={} conversations={} projects={} project_docs={} pruned={} \
+                 kept_deleted_upstream={}",
+                s.users,
+                s.conversations,
+                s.projects,
+                s.project_docs,
+                s.pruned,
+                s.kept_deleted_upstream,
             ))
         })
         .await

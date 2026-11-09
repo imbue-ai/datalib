@@ -521,6 +521,7 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       { heading: "Projects", fields: ["api.projects"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -554,6 +555,19 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on claude.ai",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -619,6 +633,7 @@ export const CATALOG: CatalogEntry[] = [
           },
         ],
       },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -650,6 +665,19 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on chatgpt.com",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -1792,7 +1820,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude-export",
     nameHint: "Claude export",
     wizard: true,
-    sections: [{ heading: "Export folder", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export folder", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1804,7 +1835,20 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. " +
           "The export is a complete snapshot: a conversation it no longer mentions is dropped " +
-          "from the copy.",
+          "from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -1819,7 +1863,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "chatgpt-export",
     nameHint: "ChatGPT export",
     wizard: true,
-    sections: [{ heading: "Export file", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export file", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1833,7 +1880,20 @@ export const CATALOG: CatalogEntry[] = [
           "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip " +
           "say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you " +
           "unzipped it into works too; type its path. The export is a complete snapshot: a " +
-          "conversation it no longer mentions is dropped from the copy.",
+          "conversation it no longer mentions is dropped from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
