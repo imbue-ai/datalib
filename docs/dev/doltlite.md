@@ -784,7 +784,7 @@ is the recipe in code.
 - **Plain tables plan as in SQLite**: on a read-only connection, inside
   a read transaction and on a detached open alike. No store runs
   `ANALYZE`, so between two one-column indexes the planner may take the
-  unselective one; how we write and test for that is in
+  unselective one; how we pin and test a plan instead is in
   [`etl/README.md`](../../datalib/backend/etl/README.md#indexes-the-planner-has-no-statistics-so-test-the-plan).
 - **`dolt_at_<table>` seeks only a primary-key equality** (text keys
   included, 0.50.12 and later). It never uses a secondary index, a

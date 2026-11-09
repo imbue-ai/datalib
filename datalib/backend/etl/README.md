@@ -679,6 +679,17 @@ So:
 - **A lookup that has to run per row** goes by the primary key, or by an
   index whose columns cover every equality in the `WHERE`, so there is
   only one good choice to make.
+- **Pin the index with `INDEXED BY` when two indexes really could fit.**
+  SQLite then uses exactly that index, and it errors if the index has
+  been renamed or dropped instead of quietly picking another: it fails
+  loudly. On the store in #1679, the old statement with `INDEXED BY
+  email_keywords_by_email` took 6.6 s instead of hours. It does not
+  check that the index fits the `WHERE`: one that does not is walked
+  whole, without an error, so the plan test below still applies.
+- **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
+  whatever rows a store held when it ran, so two libraries can plan one
+  statement two ways, and a plan can change as the rows do. Which index
+  a statement needs is known when it is written; say so in the SQL.
 - **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
   statement over the table's real DDL and assert what it must not do.
   Two templates in `providers/email/src/ingest/schema_raw.rs`:
