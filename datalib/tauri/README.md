@@ -303,7 +303,9 @@ What is still to be checked, on a Mac
 Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
-everything that Terminal runs until it quits. Run those checks from a
+everything that Terminal runs until it quits, and an Allow given for another
+app's folder lets it in too: Terminal, allowed into Docker's group container,
+then listed this one with no second dialog (macOS 26.7.2). Run those checks from a
 Terminal without Full Disk Access: one that holds it got in with no
 prompt (macOS 26.7.2), so it proves nothing. A person can list what they have
 granted with the query in `docs/user/first_time_user.md`, "Which apps

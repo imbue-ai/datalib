@@ -216,7 +216,8 @@ nothing (`reading_an_unchanged_export_again_commits_nothing`).
 
 A bulk export is a complete snapshot, so an id it stops mentioning has
 been deleted upstream: after upserting, the ingest drops the rows the
-export no longer names. Pruning is per table and runs only when that
+export no longer names, unless `when_deleted_upstream =
+"keep_local_copy"` (above). Pruning is per table and runs only when that
 table's file is present, so a partially unpacked export can't wipe the
 store.
 
@@ -326,6 +327,13 @@ payload, so no org. When every walked org listed, a stub no listing
 names is pruned too, problem and all; otherwise stubs wait for a run in
 which they all did. An org with no chat lists nothing, so it holds no
 stub back.
+
+With `when_deleted_upstream = "keep_local_copy"` none of these deletions
+happen: a conversation, project, document or user deleted on claude.ai
+(or left out of a newer export) stays as last fetched, and the run's
+summary counts it as `kept_deleted_upstream`. Stubs are still pruned;
+they hold nothing. Why someone wants that:
+[`docs/dev/deleted_upstream.md`](../../../../../docs/dev/deleted_upstream.md).
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 

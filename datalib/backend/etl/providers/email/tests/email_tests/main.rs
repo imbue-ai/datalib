@@ -2,6 +2,7 @@
 //! behaviour.
 
 mod apple_mail;
+mod apple_mail_tng;
 mod gmail_failed_fetch_is_owed;
 mod gmail_fetch_sections;
 mod gmail_filter_and_budget;

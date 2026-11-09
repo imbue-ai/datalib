@@ -40,7 +40,7 @@ sign-in works; for a type reached more than one way, name the way with
 
 ## Apple Mail
 
-`type = "email"` with an `apple_mail` table — one account of the Mail
+`type = "email"` with an `apple_mail` table — every account of the Mail
 app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
 every message Mail has downloaded, with its mailboxes (a Gmail account's
 labels among them), whether it was read, flagged or answered, and its
@@ -55,11 +55,11 @@ in the dialog reaches `~/Library/Mail`). A terminal running
 `datalib-dag` needs Full Disk Access instead (System Settings → Privacy
 & Security).
 
-When Mail holds mail for more than one account, `apple_mail.account`
-names the one to copy, by the name of its folder under
-`~/Library/Mail/V10`; a sync without it lists them. Add a source per
-account to copy several. Mail keeps no Gmail ids, so a Gmail account
-copied through Mail and through [Gmail](#gmail) is two separate copies.
+Each account is copied under its own id, made from the name of its folder
+under `~/Library/Mail/V10`; a message sent to two of your accounts is
+copied once for each. To copy just one account, set `apple_mail.account`
+to its folder's name. Mail keeps no Gmail ids, so a Gmail account copied
+through Mail and through [Gmail](#gmail) is two separate copies.
 
 ## Apple Messages
 

@@ -425,14 +425,17 @@ test("a download-only source gets its render step, and no Rendering section", as
   // Lightroom renders no documents, but its render step is what carries
   // the storage report and the download's problems into the index, so
   // the form writes it without asking — and offers none of the render
-  // or search choices.
+  // or search choices. It does offer the Photos card, on for a new source.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
   await nameField(page).fill("Photos");
   // The catalog; the backups folder below it stays empty.
   await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
-  await expect(wizard(page).locator(".wiz-section-head")).toHaveCount(0);
+  await expect(wizard(page).locator(".wiz-section-head", { hasText: "Rendering" })).toHaveCount(0);
+  await expect(
+    wizard(page).getByRole("checkbox", { name: /Turn on the Photos card/ }),
+  ).toBeChecked();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
@@ -440,6 +443,7 @@ test("a download-only source gets its render step, and no Rendering section", as
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
   expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
+  expect(text).toContain('[[applets]]\nid = "photos"\ncommand = "datalib-applet photos"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
 });

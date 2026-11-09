@@ -217,6 +217,30 @@ test.describe("toolbar", () => {
     await expect(tabLabels(page)).toHaveText(PINNED);
   });
 
+  /// The toolbar works before the card view has loaded. Enter then used to put
+  /// the card in the address, and the layout, once loaded, opened it as a tab
+  /// beside the pinned Search tab. The card view's code is held back here, so
+  /// the Enter always lands in that gap.
+  test("Enter before the cards have loaded shows the pinned Search tab", async ({ page }) => {
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let asked = false;
+    await page.route("**/assets/CardsView-*.js", async (route) => {
+      asked = true;
+      await held;
+      await route.continue();
+    });
+    await page.goto("/");
+    await searchBox(page).click();
+    await expect(tabLabels(page)).toHaveCount(0);
+    await searchBox(page).press("Enter");
+    release();
+
+    await expect(cardOf(page, "searchView()")).toBeVisible();
+    await expect(tabLabels(page)).toHaveText(PINNED);
+    expect(asked, "the card view's code was held back").toBe(true);
+  });
+
   test("the panel says what Enter does here", async ({ page }) => {
     await page.goto("/");
     await page.getByTestId("search-advanced").click();

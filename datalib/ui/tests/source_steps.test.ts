@@ -1003,12 +1003,13 @@ describe("the ChatGPT descriptor", () => {
       "export.path",
       "api.since",
       "api.conv_uuids",
+      "when_deleted_upstream",
     ]);
   });
 
   it("writes an api table even with nothing filled in", () => {
     const params = paramsObject(CHATGPT, seedFieldValues(CHATGPT), "download");
-    expect(params).toEqual({ api: {} });
+    expect(params).toEqual({ api: {}, when_deleted_upstream: "delete_local_copy" });
   });
 
   it("keeps a source it wrote editable", () => {
@@ -1035,6 +1036,7 @@ describe("the ChatGPT descriptor", () => {
     expect(paramsObject(CHATGPT, values, "download")).toEqual({
       api: {},
       export: { path: "~/Downloads/chatgpt-export.zip" },
+      when_deleted_upstream: "delete_local_copy",
     });
     const { stepsBody } = buildSource({
       entry: CHATGPT,

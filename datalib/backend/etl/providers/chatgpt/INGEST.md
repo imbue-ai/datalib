@@ -124,7 +124,11 @@ request and requires the store an uninterrupted run leaves.
    it is deleted here with its edges (its rows stay in doltlite
    history). An incomplete walk says nothing about the pages it never
    asked for, so it prunes nothing; with `since` configured, most runs
-   stop early and prune nothing.
+   stop early and prune nothing. With `when_deleted_upstream =
+   "keep_local_copy"` it deletes nothing either: the conversation stays
+   as last fetched, and the summary counts it as `kept_deleted_upstream`
+   ([`docs/dev/deleted_upstream.md`](../../../../../docs/dev/deleted_upstream.md)
+   says why someone wants that).
 4. **Conversations owed**, the never-fetched first, then the stale, so
    a run cut short by a rate limit spent its budget on new work; at
    most `limit` of them. Conversations older than `since` are never
@@ -289,7 +293,8 @@ the API walk writes, and makes no request, so no rate limit applies:
   named it is not, so nothing names it and it is not stored.
 - **Deletions.** The export is a complete snapshot, so a stored
   conversation it does not list is deleted with its edges, in the
-  transaction that writes the rest. Entries none of which has an id are
+  transaction that writes the rest, unless `when_deleted_upstream =
+  "keep_local_copy"`, which keeps it. Entries none of which has an id are
   a shape this reader does not know, not an empty account: they delete
   nothing and are a `phase:conversations.json` row.
 

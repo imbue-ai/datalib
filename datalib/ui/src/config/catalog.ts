@@ -241,6 +241,9 @@ export type CatalogEntry = {
   /// Set on an entry a package added (docs/dev/packages.md): its steps
   /// run the package's programs instead of `datalib-step`.
   package?: PackageOrigin;
+  /// The id of the built-in applet that shows this source's data
+  /// (`builtinApplets.ts`), which the form offers to turn on.
+  applet?: string;
 };
 
 /// Which package an entry came from, where it is unpacked relative to the
@@ -521,6 +524,7 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       { heading: "Projects", fields: ["api.projects"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -554,6 +558,19 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on claude.ai",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -619,6 +636,7 @@ export const CATALOG: CatalogEntry[] = [
           },
         ],
       },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -650,6 +668,19 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on chatgpt.com",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -1098,7 +1129,7 @@ export const CATALOG: CatalogEntry[] = [
     type: "email",
     variantKey: "apple_mail",
     label: "Apple Mail",
-    blurb: "Copy one account of the Mail app on this Mac, from its own files.",
+    blurb: "Copy the accounts of the Mail app on this Mac, from its own files.",
     keywords: ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"],
     kind: "local",
     icon: "apple_mail",
@@ -1106,7 +1137,8 @@ export const CATALOG: CatalogEntry[] = [
     nameHint: "Mail on this Mac",
     wizard: true,
     intro:
-      "Copies the mail the Mail app keeps on this Mac, with its mailboxes and read state. " +
+      "Copies the mail of every account in the Mail app on this Mac, with its mailboxes " +
+      "and read state. " +
       "A message Mail has not downloaded yet is copied once Mail has it.",
     sections: [
       { heading: "Mail folder", fields: ["apple_mail.path"] },
@@ -1143,11 +1175,10 @@ export const CATALOG: CatalogEntry[] = [
       {
         kind: "text",
         target: "apple_mail.account",
-        label: "Mail account",
+        label: "Only this Mail account",
         help:
-          "apple_mail.account: Mail's id for the account, the name of its folder under " +
-          "~/Library/Mail/V10. Needed only when Mail holds mail for more than one account; a " +
-          "sync without it lists them.",
+          "apple_mail.account: copy just this account, by the name of its folder under " +
+          "~/Library/Mail/V10. Empty copies every account in Mail, each under its own id.",
       },
       {
         kind: "string_list",
@@ -1792,7 +1823,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude-export",
     nameHint: "Claude export",
     wizard: true,
-    sections: [{ heading: "Export folder", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export folder", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1804,7 +1838,20 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. " +
           "The export is a complete snapshot: a conversation it no longer mentions is dropped " +
-          "from the copy.",
+          "from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -1819,7 +1866,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "chatgpt-export",
     nameHint: "ChatGPT export",
     wizard: true,
-    sections: [{ heading: "Export file", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export file", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1833,7 +1883,20 @@ export const CATALOG: CatalogEntry[] = [
           "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip " +
           "say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you " +
           "unzipped it into works too; type its path. The export is a complete snapshot: a " +
-          "conversation it no longer mentions is dropped from the copy.",
+          "conversation it no longer mentions is dropped from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -2439,6 +2502,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "lightroom",
     nameHint: "Lightroom catalog",
     wizard: true,
+    applet: "photos",
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     rendersDocuments: false,
