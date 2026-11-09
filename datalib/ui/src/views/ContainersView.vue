@@ -134,6 +134,9 @@ function withATab(box: BoxNode): BoxNode {
 // only to be thrown away.
 const root = ref<BoxNode>(makeBox(newCardId(), "tabs", []));
 const ready = ref(false);
+/// The chrome can ask before the layout is read, and the layout read then
+/// replaces whatever was opened meanwhile, so those asks wait for `start`.
+const askedBeforeReady: (() => void)[] = [];
 // Whether this window reads and writes the library's layout; the
 // others keep theirs in their session storage.
 let keeps = false;
@@ -255,6 +258,7 @@ async function start() {
   root.value = withATab({ ...tree, layout: "tabs", solidified: false });
   ready.value = true;
   if (fromUrl) void router.replace("/");
+  for (const ask of askedBeforeReady.splice(0)) ask();
 }
 void start();
 
@@ -419,11 +423,19 @@ function addBox(boxId: string, layout: Layout) {
 
 // The toolbar's "New card", and its Logs and Data sources.
 function newTab() {
+  if (!ready.value) {
+    askedBeforeReady.push(newTab);
+    return;
+  }
   addCard(root.value.id);
 }
 // A card opened from the chrome gets a tab of its own, unless the same
 // card (`sameCard`) is already open, which is shown instead.
 function showCard(source: string) {
+  if (!ready.value) {
+    askedBeforeReady.push(() => showCard(source));
+    return;
+  }
   const wanted = sameCard(source).key;
   const have = allCards.value.find((c) => sameCard(c.source).key === wanted);
   if (!have) {
