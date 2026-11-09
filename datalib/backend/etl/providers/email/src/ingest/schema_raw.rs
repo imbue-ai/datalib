@@ -599,13 +599,7 @@ async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<
             .execute(&mut *conn)
             .await?;
     }
-    for sql in [
-        "UPDATE read_marks SET muted = 1
-          WHERE id IN (SELECT email_id FROM email_keywords WHERE keyword = '$muted')",
-        "DELETE FROM email_keywords WHERE keyword = '$muted'",
-        "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$muted\"')))
-          WHERE payload -> '$.keywords.\"$muted\"' IS NOT NULL",
-    ] {
+    for sql in MUTED_INTO_READ_MARKS {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
     let has_stamps: bool = sqlx::query_scalar(
@@ -633,24 +627,37 @@ async fn move_seen_into_read_marks(conn: &mut SqliteConnection) -> anyhow::Resul
             .execute(&mut *conn)
             .await?;
     }
-    for sql in [
-        "INSERT OR REPLACE INTO read_marks (id, read_through, read)
-         SELECT e.id, NULL, EXISTS (SELECT 1 FROM email_keywords k
-                                     WHERE k.email_id = e.id AND k.keyword = '$seen')
-           FROM emails e",
-        "DELETE FROM email_keywords WHERE keyword = '$seen'",
-        // Through `json` and back, so the payload is the bytes a fresh
-        // download writes and a re-fetch of the email changes nothing.
-        "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$seen\"')))
-          WHERE payload -> '$.keywords.\"$seen\"' IS NOT NULL",
-        "UPDATE emails SET label_ids = (SELECT json_group_array(value) FROM json_each(emails.label_ids)
-                                         WHERE value != 'UNREAD')
-          WHERE EXISTS (SELECT 1 FROM json_each(emails.label_ids) WHERE value = 'UNREAD')",
-    ] {
+    for sql in SEEN_INTO_READ_MARKS {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
     Ok(())
 }
+
+/// Each statement goes over every email once. The keyword is matched as a
+/// set, never looked up per email: with no `ANALYZE` statistics SQLite may
+/// answer `k.email_id = e.id AND k.keyword = '$seen'` from the keyword
+/// index, walking every `$seen` row for each email.
+const SEEN_INTO_READ_MARKS: [&str; 4] = [
+    "INSERT OR REPLACE INTO read_marks (id, read_through, read)
+     SELECT e.id, NULL, e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')
+       FROM emails e",
+    "DELETE FROM email_keywords WHERE keyword = '$seen'",
+    // Through `json` and back, so the payload is the bytes a fresh
+    // download writes and a re-fetch of the email changes nothing.
+    "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$seen\"')))
+      WHERE payload -> '$.keywords.\"$seen\"' IS NOT NULL",
+    "UPDATE emails SET label_ids = (SELECT json_group_array(value) FROM json_each(emails.label_ids)
+                                     WHERE value != 'UNREAD')
+      WHERE EXISTS (SELECT 1 FROM json_each(emails.label_ids) WHERE value = 'UNREAD')",
+];
+
+const MUTED_INTO_READ_MARKS: [&str; 3] = [
+    "UPDATE read_marks SET muted = 1
+      WHERE id IN (SELECT email_id FROM email_keywords WHERE keyword = '$muted')",
+    "DELETE FROM email_keywords WHERE keyword = '$muted'",
+    "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$muted\"')))
+      WHERE payload -> '$.keywords.\"$muted\"' IS NOT NULL",
+];
 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -722,6 +729,61 @@ mod tests {
                 plan.iter().all(|d| !d.starts_with("SCAN email")),
                 "{sql} scans its table: {plan:?}"
             );
+        }
+    }
+
+    async fn store_with_full_ddl() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
+            .await
+            .unwrap();
+        for sql in full_ddl() {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool
+    }
+
+    /// Rung 8 once matched `$seen` per email, and SQLite answered that from
+    /// the keyword index: every `$seen` row walked for each email, hours on
+    /// a store of 276k emails (#1679). Under a correlated subquery only a
+    /// row's own JSON may be searched, never a table.
+    #[tokio::test]
+    async fn the_read_mark_rungs_never_search_a_table_per_email() {
+        let pool = store_with_full_ddl().await;
+        for sql in SEEN_INTO_READ_MARKS.iter().chain(&MUTED_INTO_READ_MARKS) {
+            let plan: Vec<(i64, i64, String)> =
+                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|r| (r.get("id"), r.get("parent"), r.get("detail")))
+                    .collect();
+            let under_a_correlated_subquery = |mut parent: i64| {
+                while let Some((_, grandparent, detail)) =
+                    plan.iter().find(|(id, ..)| *id == parent)
+                {
+                    if detail.starts_with("CORRELATED") {
+                        return true;
+                    }
+                    parent = *grandparent;
+                }
+                false
+            };
+            for (_, parent, detail) in &plan {
+                let reads_a_table = (detail.starts_with("SEARCH") || detail.starts_with("SCAN"))
+                    && !detail.contains("json_each");
+                assert!(
+                    !(reads_a_table && under_a_correlated_subquery(*parent)),
+                    "{sql} reads a table once per row: {plan:?}"
+                );
+            }
         }
     }
 }
