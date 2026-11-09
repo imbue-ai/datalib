@@ -29,7 +29,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
-use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
+use datalib_schema::markdowns::{layout_json, SectionSpan, DDL as MARKDOWNS_TABLE_DDL};
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
@@ -41,7 +41,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
-use crate::section::Section;
+use crate::section::{layout, Section};
 
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
@@ -856,6 +856,9 @@ pub struct RenderedMarkdown {
     /// that has not been taught sections, and when read back from the
     /// store, which never holds the markdown.
     pub sections: Vec<Section>,
+    /// The layout the store holds for this document, when it is read
+    /// back; `None` from a renderer, which hands `sections` instead.
+    pub section_layout: Option<Vec<SectionSpan>>,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -1886,6 +1889,8 @@ async fn upsert_markdown(
         md.source_id.clone()
     };
 
+    let section_layout = section_layout(md)?;
+
     sqlx::query("DELETE FROM markdowns WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
         .execute(&mut **conn)
@@ -1894,8 +1899,8 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, md_path, upstream_cursor, renderer_version, bucket_key) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -1909,10 +1914,36 @@ async fn upsert_markdown(
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
     .bind(&md.bucket_key)
+    .bind(section_layout.as_deref().map(layout_json))
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
     Ok(())
+}
+
+/// The layout to store: the renderer's sections, else what the store
+/// already held when the document was read back from it. Sections that
+/// do not spell the file the renderer wrote are a renderer bug, and would
+/// have the UI cut messages in the wrong places, so they fail the render.
+fn section_layout(md: &RenderedMarkdown) -> Result<Option<Vec<SectionSpan>>> {
+    if md.sections.is_empty() {
+        return Ok(md.section_layout.clone());
+    }
+    let spans = layout(&md.sections);
+    let declared: usize = spans.iter().map(|s| s.bytes).sum();
+    // A photo's document names a file it never writes.
+    if let Ok(meta) = std::fs::metadata(&md.md_path) {
+        if meta.len() != declared as u64 {
+            bail!(
+                "document {}: its sections add up to {declared} bytes, \
+                 but {} holds {}",
+                md.markdown_uuid,
+                md.md_path.display(),
+                meta.len()
+            );
+        }
+    }
+    Ok(Some(spans))
 }
 
 /// One source's account of a person, and each handle it ties to them,
@@ -2361,6 +2392,7 @@ mod write_lock_tests {
             h3: None,
         };
         RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
             upstream_cursor: None,
@@ -2727,6 +2759,7 @@ mod source_cursor_tests {
             .build()
             .unwrap();
         RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: uuid.to_string(),
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
@@ -2803,6 +2836,55 @@ mod source_cursor_tests {
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 2);
+    }
+
+    /// The layout of a document's sections goes from the renderer through
+    /// the render store, which never holds the markdown, to the index the
+    /// document route reads it from.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_documents_section_layout_reaches_the_index() {
+        use crate::section::{join, layout, Section};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let mut d = doc(root, "ten-forward", "md-s", "two messages");
+        d.sections = vec![
+            Section::unkeyed("---\n---\n\n# Ten Forward\n\n".into()),
+            Section::keyed(
+                "m1",
+                "<div data-section-uuid=\"m1\">\n\nTea, Earl Grey\n\n</div>\n\n".into(),
+            ),
+        ];
+        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&d.md_path, join(&d.sections)).unwrap();
+        render(root, "ten-forward", &[d.clone()]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT section_layout FROM markdowns WHERE markdown_uuid = 'md-s'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let read = stored
+            .as_deref()
+            .and_then(datalib_schema::markdowns::parse_layout);
+        assert_eq!(read, Some(layout(&d.sections)));
+    }
+
+    /// Sections that do not spell the file the renderer wrote would have
+    /// the UI cut messages in the wrong places; the render fails instead.
+    #[test]
+    fn sections_that_do_not_spell_the_file_fail_the_render() {
+        use crate::section::Section;
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let mut d = doc(root, "ten-forward", "md-s", "one message");
+        d.sections = vec![Section::keyed("m1", "<div>Tea, Earl Grey</div>\n".into())];
+        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&d.md_path, "<div>Tea, Earl Grey, hot</div>\n").unwrap();
+        let store = IndexedMarkdownStore::open(&rendered_root(root, "ten-forward")).unwrap();
+        let err = store.put_document(root, &d).unwrap_err();
+        store.close();
+        assert!(format!("{err:#}").contains("sections add up to"), "{err:#}");
     }
 
     /// A source taken out of the graph leaves the index with its cursor,

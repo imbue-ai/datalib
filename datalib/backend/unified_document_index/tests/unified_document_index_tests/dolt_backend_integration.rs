@@ -139,7 +139,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .unwrap()
         .is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
-    assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
+    assert!(repo.document_file("c-1").await.unwrap().is_none());
     assert!(repo
         .md_paths_for(&["c-1".to_string()])
         .await
@@ -274,7 +274,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(meta.project, None, "project was NULL");
     assert_eq!(meta.channel, None, "channel was NULL");
 
-    let qmd = repo.qmd_path_for_markdown("c-1").await.unwrap();
+    let qmd = repo.document_file("c-1").await.unwrap().map(|f| f.path);
     assert!(qmd.is_some());
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");

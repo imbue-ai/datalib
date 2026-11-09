@@ -15,6 +15,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+mod body_sections;
 pub(crate) mod columns;
 mod grouping;
 mod map;
@@ -32,6 +33,7 @@ mod search_terms;
 mod serve_tests;
 pub(crate) mod warm;
 
+use body_sections::{body_sections, BodySection};
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{markdown_uuid_of_path, GridRow, GridRowColumn};
 use datalib_unified_document_index::db::datalib_source_id;
@@ -339,10 +341,10 @@ impl SearchResponse {
 
 /// Response shape for `/applet/unified_document_index/chat/{markdown_uuid}`. The body is the raw
 /// QMD content minus the YAML frontmatter — the UI runs markdown-it on
-/// it directly. We do **not** ship a structured `messages[]` array;
-/// per-message scrolling uses the
-/// `<div id="m-{uuid}" data-section-uuid="…">` wrappers the renderer
-/// emits in the body.
+/// it, one section at a time where `sections` says where they lie. We do
+/// **not** ship a structured `messages[]` array; per-message scrolling
+/// uses the `<div id="m-{uuid}" data-section-uuid="…">` wrappers the
+/// renderer emits in the body.
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub markdown_uuid: String,
@@ -362,6 +364,11 @@ pub struct ChatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub body: String,
+    /// Where each section of `body` lies, so the UI renders each message
+    /// as a fragment of its own. Absent when the renderer declares no
+    /// sections, or the file changed since the index was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<BodySection>>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -1951,9 +1958,9 @@ async fn chat(
     // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
     // let the UI scroll-and-highlight without a structured chat schema.
     // One UUID → one file: no enumeration, no fallbacks.
-    let path = s
+    let file = s
         .repo
-        .qmd_path_for_markdown(&markdown_uuid)
+        .document_file(&markdown_uuid)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
@@ -1964,10 +1971,26 @@ async fn chat(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let body = match std::fs::read_to_string(&path) {
-        Ok(raw) => strip_frontmatter(&raw).to_string(),
+    let (body, sections) = match std::fs::read_to_string(&file.path) {
+        Ok(raw) => {
+            let body = strip_frontmatter(&raw);
+            let sections = file.section_layout.as_deref().and_then(|layout| {
+                let found = body_sections(&raw, raw.len() - body.len(), layout);
+                if found.is_none() {
+                    tracing::warn!(
+                        document = %markdown_uuid,
+                        "the stored section layout does not spell the file; \
+                         the body goes out without one",
+                    );
+                }
+                found
+            });
+            (body.to_string(), sections)
+        }
         // A picture's document is drawn by its applet, not from a page.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => String::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => {
+            (String::new(), None)
+        }
         Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
     // Synthesize page-level URLs for providers that don't carry one in
@@ -2020,6 +2043,7 @@ async fn chat(
         source_ref,
         image: meta.image,
         body,
+        sections,
         outgoing_edges,
         problems,
         errors,
@@ -2204,6 +2228,7 @@ mod tests {
         );
         row.qmd_path = Some(rel.clone());
         datalib_etl_render::grid_index::RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: row.uuid.clone(),
             source_id: source,
             upstream_cursor: None,
@@ -2234,6 +2259,78 @@ mod tests {
         }
         datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;
+    }
+
+    /// The route says where each message of the body begins, from the
+    /// sections the renderer handed over, so the UI can render each as a
+    /// fragment of its own; and says nothing once a render has rewritten
+    /// the file since the index was read, rather than cut it wrongly.
+    #[tokio::test]
+    async fn the_document_route_sends_where_each_message_lies() {
+        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
+        use datalib_etl_render::section::{join, Section};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uuid = "00000000-0000-4000-8000-0000000000d1";
+        let wrapper = |m: &str, text: &str| {
+            format!(
+                "<div id=\"m-{m}\" data-section-uuid=\"{m}\" class=\"msg msg--claude\">\n\n{text}\n\n</div>\n\n"
+            )
+        };
+        let sections = vec![
+            Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
+            Section::keyed(
+                "m1",
+                wrapper("m1", "Tea, Earl Grey 🫖 <div style=\"display:none\">"),
+            ),
+            Section::keyed("m2", wrapper("m2", "Make it so.")),
+        ];
+        let mut doc = own_document(
+            root,
+            document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
+                .build()
+                .unwrap(),
+        );
+        std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&doc.md_path, join(&sections)).unwrap();
+        doc.sections = sections.clone();
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::for_index(pool.clone());
+        apply_one(&lock, root, &doc).await.unwrap();
+        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
+        pool.close().await;
+
+        let s = index_over(root).await;
+        let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
+            .await
+            .unwrap();
+        let sent = got.sections.expect("the route sends the sections");
+        assert_eq!(
+            sent.iter().map(|b| b.uuid.as_deref()).collect::<Vec<_>>(),
+            [None, Some("m1"), Some("m2")]
+        );
+        let units: Vec<u16> = got.body.encode_utf16().collect();
+        let mut at = 0;
+        let pieces: Vec<String> = sent
+            .iter()
+            .map(|b| {
+                let piece = String::from_utf16(&units[at..at + b.len]).unwrap();
+                at += b.len;
+                piece
+            })
+            .collect();
+        assert_eq!(at, units.len(), "the sections cover the body");
+        assert_eq!(pieces[0], "\n# Ten Forward\n\n", "front matter dropped");
+        assert_eq!(pieces[1], sections[1].md);
+        assert_eq!(pieces[2], sections[2].md);
+
+        std::fs::write(&doc.md_path, "---\n---\n\nrewritten since\n").unwrap();
+        let Json(got) = chat(State(s), Path(uuid.to_string())).await.unwrap();
+        assert_eq!(got.body, "\nrewritten since\n");
+        assert!(got.sections.is_none(), "a stale layout is not sent");
     }
 
     /// Whether this process has a file open whose inode is `ino` and,

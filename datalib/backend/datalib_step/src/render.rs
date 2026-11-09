@@ -1453,6 +1453,7 @@ mod plan_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
                     markdown_uuid: uuid.to_string(),
                     source_id: "src".into(),
                     upstream_cursor: None,
@@ -1784,6 +1785,7 @@ mod stale_tree_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
                     markdown_uuid: chat_uuid.to_string(),
                     source_id: "claude_web".into(),
                     upstream_cursor: None,

@@ -2,6 +2,7 @@
 //! [`Section`] a renderer hands over so a document can be read piece by
 //! piece without parsing its markdown.
 
+use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
 
 /// One piece of a rendered document, in document order. `uuid` is the
@@ -36,6 +37,20 @@ pub fn join(sections: &[Section]) -> String {
         out.push_str(&s.md);
     }
     out
+}
+
+/// Where each section lies in the `.md` they spell: what
+/// `markdowns.section_layout` stores, so the UI can render each message
+/// as a fragment of its own without trusting the text to say where one
+/// ends.
+pub fn layout(sections: &[Section]) -> Vec<SectionSpan> {
+    sections
+        .iter()
+        .map(|s| SectionSpan {
+            uuid: s.uuid.clone(),
+            bytes: s.md.len(),
+        })
+        .collect()
 }
 
 /// HTML attribute fragment that anchors a navigable section.
@@ -86,6 +101,21 @@ mod tests {
         assert_eq!(join(&sections), "---\n---\n\n<div>a</div>\n<div>b</div>\n");
         assert_eq!(sections[0].uuid, None);
         assert_eq!(sections[1].uuid.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_layout_spans_the_joined_document() {
+        let sections = vec![
+            Section::unkeyed("---\n---\n\n".into()),
+            Section::keyed("a", "<div>é</div>\n".into()),
+        ];
+        let spans = layout(&sections);
+        assert_eq!(
+            spans.iter().map(|s| s.bytes).sum::<usize>(),
+            join(&sections).len()
+        );
+        assert_eq!(spans[1].uuid.as_deref(), Some("a"));
+        assert_eq!(spans[1].bytes, "<div>é</div>\n".len(), "bytes, not chars");
     }
 
     #[test]

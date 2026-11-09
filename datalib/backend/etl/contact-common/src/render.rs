@@ -168,6 +168,7 @@ fn render_one(
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact

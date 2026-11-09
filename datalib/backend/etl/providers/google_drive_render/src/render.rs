@@ -151,6 +151,7 @@ pub fn render_doc(
     }
 
     Ok(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

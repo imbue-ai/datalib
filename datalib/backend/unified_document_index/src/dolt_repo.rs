@@ -18,7 +18,9 @@ use crate::group::{
 use crate::problems::ProblemsQuery;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
+use crate::repo::{
+    DocRow, DocumentFile, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,
+};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
@@ -26,6 +28,7 @@ use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::markdowns::parse_layout;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
@@ -1415,16 +1418,14 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
-    async fn qmd_path_for_markdown(
-        &self,
-        markdown_uuid: &str,
-    ) -> Result<Option<PathBuf>, RepoError> {
+    async fn document_file(&self, markdown_uuid: &str) -> Result<Option<DocumentFile>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(None);
         };
         // Audited: `at.markdowns` is a literal; the uuid is bound.
         let row = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT md_path FROM {} WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
+            "SELECT md_path, section_layout FROM {} \
+             WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
             at.markdowns
         )))
         .bind(markdown_uuid)
@@ -1439,6 +1440,12 @@ impl IndexRepo for DoltRepo {
         let rel: String = r
             .try_get("md_path")
             .map_err(|e| RepoError::Internal(format!("decode md_path: {e}")))?;
-        Ok(Some(self.root.as_ref().join(rel)))
+        let layout: Option<String> = r
+            .try_get("section_layout")
+            .map_err(|e| RepoError::Internal(format!("decode section_layout: {e}")))?;
+        Ok(Some(DocumentFile {
+            path: self.root.as_ref().join(rel),
+            section_layout: layout.as_deref().and_then(parse_layout),
+        }))
     }
 }

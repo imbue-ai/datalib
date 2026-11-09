@@ -63,12 +63,17 @@ export type SanitizeOptions = {
   /** What the body is, sent along with each load so the server can
    *  judge a `document` or `source` row. */
   context?: RemoteContext;
+  /** The messages of the document this fragment is part of: an
+   *  `id="m-…"` or `data-section-uuid` naming one is taken off, so only
+   *  the renderer's own wrapper answers to it (`renderDocument.ts`). */
+  reservedSections?: ReadonlySet<string>;
 };
 
 export type Sanitized = {
   html: string;
-  /** Every remote reference the body carried, in document order,
-   *  whether held or let through. */
+  /** Every remote reference the body carried, whether held or let
+   *  through: in document order, but for a body rendered in sections,
+   *  whose frame's come first. */
   remote: RemoteRef[];
 };
 
@@ -78,6 +83,7 @@ let accept: (url: string) => boolean = () => false;
 let context: RemoteContext = NO_CONTEXT;
 let found: RemoteRef[] = [];
 let chipMark: string | null = null;
+let reserved: ReadonlySet<string> = new Set();
 
 const CHIP_MARK = "data-chip-mark";
 const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact"];
@@ -121,6 +127,7 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     el.removeAttribute("target");
   }
   keepOnlyRenderedChips(el);
+  takeOffReservedIds(el);
   if (el.namespaceURI === SVG_NS) {
     for (const { name, value } of Array.from(el.attributes)) {
       if (name === "style" || loadingAttributes(el.nodeName).includes(name)) continue;
@@ -167,6 +174,14 @@ function keepOnlyRenderedChips(el: Element): void {
   }
 }
 
+function takeOffReservedIds(el: Element): void {
+  if (reserved.size === 0) return;
+  const uuid = el.getAttribute("data-section-uuid");
+  if (uuid !== null && reserved.has(uuid)) el.removeAttribute("data-section-uuid");
+  const id = el.getAttribute("id");
+  if (id?.startsWith("m-") && reserved.has(id.slice(2))) el.removeAttribute("id");
+}
+
 /** The attribute with its references to our own origin made safe, and
  *  written back; null when nothing is left of it. */
 function ownPass(el: Element, attr: string, value: string): string | null {
@@ -185,6 +200,7 @@ export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}
   accept = options.accept ?? (() => false);
   context = options.context ?? NO_CONTEXT;
   chipMark = options.chipMark ?? null;
+  reserved = options.reservedSections ?? new Set();
   found = [];
   const clean = DOMPurify.sanitize(html, {
     // The schemes the app opens (`externalLinks.ts`), the two a chip link
@@ -222,5 +238,6 @@ export function sanitizeRenderedHtml(html: string, options: SanitizeOptions = {}
   const remote = found;
   found = [];
   chipMark = null;
+  reserved = new Set();
   return { html: clean, remote };
 }

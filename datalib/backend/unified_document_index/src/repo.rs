@@ -16,7 +16,17 @@ use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn};
+
+/// One document's file, and the layout `markdowns.section_layout` holds
+/// for it: `None` when its renderer declares no sections, or wrote a
+/// layout this build cannot read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentFile {
+    pub path: PathBuf,
+    pub section_layout: Option<Vec<SectionSpan>>,
+}
 
 /// Which rows a search holds, in order, and the commit they were read at
 /// (`None` for a root with no index yet).
@@ -148,19 +158,15 @@ pub trait IndexRepo: Send + Sync {
     /// — the same UUID `/api/chat/{markdown_uuid}` takes.
     async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
 
-    /// Resolve the on-disk QMD path for one rendered markdown, keyed
-    /// by `markdowns.markdown_uuid`. The returned path is absolute
-    /// (already joined with the data root). This is the only file
-    /// lookup left after the document_uuid → markdown_uuid cleanup:
-    /// one UUID per rendered file, no enumeration, no fallbacks.
-    async fn qmd_path_for_markdown(
-        &self,
-        markdown_uuid: &str,
-    ) -> Result<Option<PathBuf>, RepoError>;
+    /// The on-disk QMD for one rendered markdown, keyed by
+    /// `markdowns.markdown_uuid`, and where its sections lie. The path
+    /// is absolute (already joined with the data root): one UUID per
+    /// rendered file, no enumeration, no fallbacks.
+    async fn document_file(&self, markdown_uuid: &str) -> Result<Option<DocumentFile>, RepoError>;
 
     /// Resolve the on-disk paths of many rendered markdowns at once,
     /// keyed by `markdowns.markdown_uuid`. Same resolution as
-    /// [`qmd_path_for_markdown`](Self::qmd_path_for_markdown) — paths
+    /// [`document_file`](Self::document_file) — paths
     /// come back absolute — but in one round trip, because the grid's
     /// index-state columns ask about every markdown behind the current
     /// result set.
