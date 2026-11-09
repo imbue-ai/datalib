@@ -52,7 +52,10 @@ a name. Meaning covers a source only once its `embed` step has run, so a source
 with that step turned off answers in the words it is written in. A line above
 the results says how many of the documents the search could have found have no
 vectors, and hovering says which sources they are in. From a shell or the API
-it is `query_echo.without_vectors`.
+it is `query_echo.without_vectors`. While a sync is writing the index, meaning
+and that line answer from what the search last read, so a
+search stays quick; what the sync added counts once the index has been still
+for half a minute.
 
 A search covers the sources the document index holds. A source turned off can
 leave it after an upgrade changes how documents are stored, because a turned-off

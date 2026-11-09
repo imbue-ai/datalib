@@ -3,8 +3,9 @@
 //! a person's own filter reaches. On a large library that is a quarter of a
 //! minute the first search would otherwise wait, and the vectors go on being
 //! held in memory, about a gigabyte on that library, whether or not anyone
-//! searches. A change to the stored vectors drops them all (`VectorCache`), so
-//! they are loaded again once a sync has finished moving the index.
+//! searches. While a sync is writing the index a search answers from what
+//! is held (`INDEX_SETTLE`); once the index has sat still, this reads what
+//! the sync added, and a removed vector drops them all (`VectorCache`).
 
 use std::time::Duration;
 
