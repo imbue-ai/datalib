@@ -9,6 +9,7 @@ use std::time::Duration;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
+use datalib_etl_chatgpt_config::WhenDeletedUpstream;
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
@@ -51,6 +52,29 @@ async fn a_conversation_in_neither_listing_is_deleted() {
     let second = acct.run().await.unwrap();
     assert_eq!(second.pruned, 1, "{second:?}");
     assert_eq!(acct.stored().await, ["c-enterprise"]);
+}
+
+/// With `keep_local_copy`, a conversation deleted on chatgpt.com stays
+/// in the mirror, and the run counts it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keep_local_copy_keeps_a_conversation_deleted_upstream() {
+    let acct = Account::new();
+    acct.list(&["c-enterprise", "c-stargazer"], &[]);
+    acct.run_keeping(WhenDeletedUpstream::KeepLocalCopy)
+        .await
+        .unwrap();
+
+    acct.list(&["c-enterprise"], &[]);
+    let second = acct
+        .run_keeping(WhenDeletedUpstream::KeepLocalCopy)
+        .await
+        .unwrap();
+    assert_eq!(
+        (second.pruned, second.kept_deleted_upstream),
+        (0, 1),
+        "{second:?}"
+    );
+    assert_eq!(acct.stored().await, ["c-enterprise", "c-stargazer"]);
 }
 
 /// The plain listing alone is not the whole account, so when the
@@ -140,6 +164,10 @@ impl Account {
     }
 
     async fn run(&self) -> anyhow::Result<FetchSummary> {
+        self.run_keeping(WhenDeletedUpstream::default()).await
+    }
+
+    async fn run_keeping(&self, when: WhenDeletedUpstream) -> anyhow::Result<FetchSummary> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let control = datalib_etl::control::DownloadControl::default();
         // One failure is the give-up, so a refused page ends at once.
@@ -155,6 +183,7 @@ impl Account {
             guard,
             fetch(FetchOptions {
                 control,
+                when_deleted_upstream: when,
                 ..FetchOptions::new(db.clone())
             }),
         );
