@@ -75,7 +75,7 @@ until then free text finds nothing there and the answer says why.
 | `-key:value` | rows whose `key` is not `value` |
 | `key:"two words"` | a value with a space in it |
 | `key:*` / `-key:*` | rows with any value there / with none |
-| `before:2026-10-01`, `after:2026-10-01T09:00` | rows last active before or after then — a thread's last message, a page's last edit, an event's start; a time with no zone is your machine's |
+| `before:2026-10-01`, `after:2026-10-01T09:00` (`since:` is `after:`) | rows last active before or after then — a thread's last message, a page's last edit, an event's start. See "Writing a time" below |
 | `is:document` / `-is:document` | one row per document (a thread, a conversation, a page) / only the rows inside documents |
 
 The keys for what a row is and where it lives are `source:` (a
@@ -85,6 +85,21 @@ source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `email:` (an address book's columns), and the id of any other column the
 grid shows (`org_name:`, `created_at:`, …). These match the whole value
 as stored, case and all: `kind:Email`, not `kind:email`.
+
+### Writing a time
+
+`before:`, `after:` and `since:` take any of these. A time with no zone
+is your machine's.
+
+| you write | it means |
+|---|---|
+| `2026-10-01`, `2026/10/01` | midnight starting that day; the second is how Gmail writes a day |
+| `2026-10-01T09:00`, `2026-10-01T09:00:00-07:00` | that moment |
+| `-30d`, `-12h`, `-2w` | that long before now: days, hours or weeks, with the sign, as a source's `since` is written |
+| `"Tuesday, April 3, 2029"`, `"3 Apr 2029 at 9pm"`, `"Tue Apr 3rd, 2029 at 08:30"` | a day, or a day and a time, in words: in quotes, with the year. A weekday the date does not fall on is refused |
+
+Anything else is refused, with a line saying why, rather than ignored.
+`since:-30d` is the last thirty days.
 
 ### Dates and words together
 
@@ -113,7 +128,7 @@ A person is found by the part they played:
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks mentions up |
 | `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
-| `label:` | (not a person) an email's labels; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
+| `label:` (also `in:`, as Gmail writes `in:sent`) | (not a person) an email's labels and mailboxes; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
 | `place:` | (not a person) where a photo was taken: a city or a landmark; or, given an [H3](https://h3geo.org) cell at any resolution (`place:86283082fffffff`), every row whose location falls in it |
 | `near:` | (not a person) given an H3 cell, every row in it or in one of its six neighbours: what the photo card's "photos in this area" writes. `place:` with a cell can miss a row just inside the cell's edge, because H3's coarse cells do not exactly hold their finer ones; `near:` never does, and also finds some rows just outside |
 | `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |

@@ -13,6 +13,7 @@ use datalib_source_common::ExampleKind;
 
 use crate::function::Function;
 use crate::methods::ingest_methods;
+use crate::probe::probe_command;
 use crate::source_docs::{fields, source_docs, Field};
 use crate::source_type::SourceType;
 
@@ -195,16 +196,27 @@ fn known_method(t: SourceType, method: &str) -> Result<&'static str, String> {
         })
 }
 
-pub fn examples_page(word: &str) -> Result<String, String> {
+pub fn examples_page(word: &str, method: Option<&str>) -> Result<String, String> {
     let t = SourceType::parse(word)
         .ok_or_else(|| format!("no source type {word:?}. `datalib-step help` lists them."))?;
+    let methods = ingest_methods(t);
+    if let Some(m) = method.filter(|m| !methods.iter().any(|known| known.path == *m)) {
+        let names: Vec<&str> = methods.iter().map(|known| known.path).collect();
+        return Err(format!(
+            "{t} has no method {m:?}; its methods: {}",
+            names.join(", ")
+        ));
+    }
     let docs = source_docs(t);
     let mut out = format!("Config stanzas for {t}\n\n");
     for paragraph in examples_intro(t) {
         out.push_str(&wrap(&paragraph, 0, 0));
         out.push('\n');
     }
-    for m in ingest_methods(t) {
+    for m in methods
+        .iter()
+        .filter(|m| method.is_none_or(|want| want == m.path))
+    {
         for &kind in ExampleKind::VARIANTS {
             if let Some(example) = docs.example(kind, m.path) {
                 out.push_str(&format!(
@@ -300,10 +312,11 @@ fn examples_intro(t: SourceType) -> Vec<String> {
         ),
         format!(
             "Then `datalib-dag --check <config>` reports every problem with the config at \
-             once, each at its line; `datalib-step probe {t}` asks the service which \
+             once, each at its line; `{}` asks the service which \
              account the credentials reach, if the method reaches one; and \
              `datalib-dag <config> --sync <id>/ingest --by <you>` syncs the source and \
-             everything that reads it.{sign_in}"
+             everything that reads it.{sign_in}",
+            probe_command(t)
         ),
     ]
 }
@@ -472,7 +485,8 @@ fn behind_a_gateway(t: SourceType) -> String {
          `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway holds the \
          credentials instead, and those commands may be refused or sign in somewhere else: \
          sign in, or ask for access, wherever that gateway is managed. Either way, \
-         `datalib-step probe {t}` says whether the sign-in works."
+         `{}` says whether the sign-in works.",
+        probe_command(t)
     )
 }
 
@@ -780,13 +794,49 @@ mod tests {
         }
     }
 
+    /// The page with every line break a space, so a command `wrap` broke
+    /// across lines still reads as one.
+    fn one_line(page: &str) -> String {
+        page.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// `help calendar` told a person to run `datalib-step probe calendar`,
+    /// which the probe refuses for a source with several ways in.
+    #[test]
+    fn every_probe_command_a_page_prints_is_one_the_probe_takes() {
+        for &t in SourceType::VARIANTS {
+            let pages = [
+                page(&[t.as_str().into()], &commands(), "abc123").unwrap(),
+                examples_page(t.as_str(), None).unwrap(),
+            ]
+            .map(|p| one_line(&p));
+            let bare = format!("`datalib-step probe {t}`");
+            let refused = crate::probe::live_methods(t).len() > 1;
+            assert!(
+                !refused || crate::probe::with_method(t, &serde_json::json!({}), None).is_err(),
+                "{t}: the probe takes a bare probe after all"
+            );
+            for page in pages {
+                assert!(
+                    !(refused && page.contains(&bare)),
+                    "{t}: the probe refuses {bare} with no --method:\n{page}"
+                );
+            }
+        }
+        let calendar = one_line(&page(&["calendar".into()], &commands(), "abc123").unwrap());
+        assert!(
+            calendar.contains("datalib-step probe calendar --method <"),
+            "{calendar}"
+        );
+    }
+
     /// A stanza's comment ends up in a person's config, away from anything
     /// that could say when a sign-in command does not apply, so the command
     /// stays on the source's page.
     #[test]
     fn no_stanza_comment_names_a_sign_in_command() {
         for &t in SourceType::VARIANTS {
-            let page = examples_page(t.as_str()).unwrap();
+            let page = examples_page(t.as_str(), None).unwrap();
             for command in ["latchkey auth browser", "latchkey auth set"] {
                 assert!(!page.contains(command), "{t}:\n{page}");
             }
@@ -879,7 +929,7 @@ mod tests {
     #[test]
     fn the_examples_page_shows_every_stanza_of_every_method() {
         for &t in SourceType::VARIANTS {
-            let page = examples_page(t.as_str()).unwrap();
+            let page = examples_page(t.as_str(), None).unwrap();
             for m in ingest_methods(t) {
                 for &kind in ExampleKind::VARIANTS {
                     let Some(example) = source_docs(t).example(kind, m.path) else {
@@ -895,15 +945,30 @@ mod tests {
                 }
             }
         }
-        let email = examples_page("email").unwrap();
+        let email = examples_page("email", None).unwrap();
         assert!(email.contains("jmap, gmail, mbox"), "{email}");
-        let garmin = examples_page("garmin").unwrap();
+        let garmin = examples_page("garmin", None).unwrap();
         assert!(
             garmin.contains("unified_time_series_index/time_series_index"),
             "{garmin}"
         );
-        let err = examples_page("slak").unwrap_err();
+        let err = examples_page("slak", None).unwrap_err();
         assert!(err.contains("\"slak\""), "{err}");
+    }
+
+    /// `--method` prints one method's stanzas, to read before appending.
+    #[test]
+    fn the_examples_page_narrows_to_one_method() {
+        let gmail = examples_page("email", Some("gmail")).unwrap();
+        assert!(gmail.contains("## email by `gmail`, minimal"), "{gmail}");
+        assert!(gmail.contains("## email by `gmail`, complete"), "{gmail}");
+        assert!(!gmail.contains("## email by `jmap`"), "{gmail}");
+        assert!(!gmail.contains("## email by `mbox`"), "{gmail}");
+        let err = examples_page("email", Some("imap")).unwrap_err();
+        assert!(
+            err.contains("no method \"imap\"") && err.contains("gmail"),
+            "{err}"
+        );
     }
 
     #[test]
