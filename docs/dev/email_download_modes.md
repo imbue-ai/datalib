@@ -636,7 +636,12 @@ HTTP playback: `gmail_label_union`,
 request in turn and run again must leave the store an uninterrupted run
 leaves). `apple_mail` syncs a made-up Mail folder three times: once
 whole, once with nothing moved (nothing written), and once after a
-message is read and another deleted in the index.
+message is read and another deleted in the index. `apple_mail_tng`
+syncs and renders the TNG Mail folder
+(`:tng_apple_mail`, written by `tests/fixtures/make_apple_mail_folder.py`
+with Python's own SQLite): a Gmail and a Fastmail account, partial files,
+a message in both accounts and one only in the index's WAL. It is the
+Apple Mail mode's own fixture, not part of the joint TNG demo.
 Incremental correctness against the real service needs the **live
 test** — the `live` module of `tests/email_tests/`, which the
 `email_tests` target skips with `--skip live::`:
