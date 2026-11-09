@@ -7,7 +7,9 @@ import type {
   ConnectPhase,
   ConnectState,
   DagRunState,
+  PassState,
   RunKind,
+  WipeKind,
 } from "./generated/enums";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
@@ -17,7 +19,7 @@ import { pushToast } from "./toasts";
 // Rust enums into `./generated/enums`, and re-exported here so callers
 // keep one import. A variant added in Rust reaches these without a hand
 // edit; `bazel run //datalib/backend/http:ui_enums.update` regenerates.
-export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState };
+export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState, PassState, WipeKind };
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -802,10 +804,19 @@ export type ConfigResponse = {
   // The launch's upgrade (dag/README.md §"Upgrading a root"): the raw
   // stores being migrated, then what is offered for a re-render.
   upgrade: Upgrade;
+  // The newest "Free up disk space" since the server started, while it
+  // runs and after; null when there has been none.
+  free_space: FreeSpace | null;
 };
 
-/// Mirrors `supervisor::MigrateState`.
-export type MigrateState = "waiting" | "running" | "done" | "failed";
+/// How a pass over the steps stands with one of them. A step that shrank
+/// its store says how big it was before and after.
+export type PassRow = {
+  step: string;
+  state: PassState;
+  error: string | null;
+  store_bytes?: { before: number; after: number };
+};
 
 export type Upgrade = {
   // The migrate pass is running: nothing syncs until it is done.
@@ -813,10 +824,23 @@ export type Upgrade = {
   // The server has run its pass, or found it had none to run.
   settled: boolean;
   // Every step the pass asks, in the order it asks them.
-  steps: { step: string; state: MigrateState; error: string | null }[];
+  steps: PassRow[];
   // The steps that answered that they need to run again: the roots of
   // the re-render the app offers. Empty while migrating.
   rerender: string[];
+};
+
+/// Mirrors `supervisor::FreeSpace` (dag/README.md §"Resets and purges").
+export type FreeSpace = {
+  id: string;
+  // `compact` when old versions of rendered documents go too.
+  kind: WipeKind;
+  // The loop is still on it.
+  running: boolean;
+  // Why it was not done, once it is over.
+  error: string | null;
+  // Every step it asks, in order; empty until the loop takes it up.
+  steps: PassRow[];
 };
 
 export type NewerRoot = {

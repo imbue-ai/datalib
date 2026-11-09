@@ -936,6 +936,9 @@ pub struct ConfigResponse {
     /// The launch's upgrade: the steps being asked to migrate, and the ones
     /// that answered they need to run again, which the page offers to run.
     pub upgrade: UpgradeView,
+    /// The newest "Free up disk space" since this server started, while
+    /// it runs and after: how each step it asks stands.
+    pub free_space: Option<supervisor::FreeSpace>,
 }
 
 /// `dag/README.md` §"Upgrading a root", as the page needs it.
@@ -1017,6 +1020,10 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         None => (false, None, 0, Vec::new(), false),
     };
     let pass = s.sync.upgrade();
+    let free_space = s.sync.free_space().await.unwrap_or_else(|e| {
+        tracing::warn!("config: could not read the free-space pass: {e:#}");
+        None
+    });
     let rerender = match &checked {
         Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
         _ => Vec::new(),
@@ -1033,6 +1040,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView { pass, rerender },
+        free_space,
     })
 }
 
@@ -1209,6 +1217,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView::default(),
+        free_space: None,
     })
 }
 

@@ -14,6 +14,7 @@ use std::time::Duration;
 use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::pass::{PassRow, PassState};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, Store, WipeKind};
 use datalib_dag::supervisor::wipe::tree_group;
@@ -40,25 +41,24 @@ pub struct Upgrade {
     /// until it holds the runner lock, which another process may hold.
     pub settled: bool,
     /// Every step the pass asks, in the order it asks them.
-    pub steps: Vec<MigrateRow>,
+    pub steps: Vec<PassRow>,
 }
 
+/// The newest "Free up disk space" this server has seen asked for, as
+/// `/api/config` reports it: the same rows as the migrate pass, each with
+/// what its store gave back.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct MigrateRow {
-    pub step: String,
-    pub state: MigrateState,
+pub struct FreeSpace {
+    pub id: String,
+    /// `collect`, or `compact` when old versions of derived data go.
+    pub kind: WipeKind,
+    /// The loop is still on it.
+    pub running: bool,
+    /// Why it was not done, once it is over.
     pub error: Option<String>,
-}
-
-/// How the migrate pass stands with one step. Mirrored by hand in
-/// `datalib/ui/src/api.ts`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MigrateState {
-    Waiting,
-    Running,
-    Done,
-    Failed,
+    /// Every step it asks, in the order it asks them; empty until the
+    /// loop takes it up.
+    pub steps: Vec<PassRow>,
 }
 
 /// How the rest of the server reaches the loop: whether a sync is
@@ -69,6 +69,9 @@ pub struct SyncControl {
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     upgrade: Arc<Mutex<Upgrade>>,
+    /// When this server started, as the record stamps: a free-space pass
+    /// opened before it is not this server's to report.
+    started_at_utc: Arc<String>,
     /// The handlers' own connection, beside the loop's.
     mailbox: Arc<OnceCell<Store>>,
     stop: Arc<watch::Sender<bool>>,
@@ -83,6 +86,7 @@ impl SyncControl {
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
             upgrade: Arc::new(Mutex::new(Upgrade::default())),
+            started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
             mailbox: Arc::new(OnceCell::new()),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
@@ -105,6 +109,25 @@ impl SyncControl {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// The newest compaction or collection opened since this server
+    /// started, with how each of its steps stands.
+    pub async fn free_space(&self) -> anyhow::Result<Option<FreeSpace>> {
+        let store = self.mailbox().await?;
+        let Some(wipe) = store.latest_shrink_since(&self.started_at_utc).await? else {
+            return Ok(None);
+        };
+        let Some(kind) = wipe.kind else {
+            return Ok(None);
+        };
+        Ok(Some(FreeSpace {
+            steps: store.wipe_steps(&wipe.id).await?,
+            id: wipe.id,
+            kind,
+            running: wipe.closed.is_none(),
+            error: wipe.closed.flatten(),
+        }))
     }
 
     pub async fn mailbox(&self) -> anyhow::Result<&Store> {
@@ -259,7 +282,7 @@ async fn host(cfg: &HostConfig) {
         .unwrap_or_else(|e| e.into_inner())
         .settled = true;
     if let Some(tx) = &cfg.announce {
-        let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
+        let _ = tx.send(crate::watch::RootEvent::PassChanged.into());
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
     host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
@@ -313,21 +336,14 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
             .lock()
             .unwrap_or_else(|e| e.into_inner()));
         if let Some(tx) = &cfg.announce {
-            let _ = tx.send(crate::watch::RootEvent::UpgradeChanged.into());
+            let _ = tx.send(crate::watch::RootEvent::PassChanged.into());
         }
     };
     set(&|u| {
         *u = Upgrade {
             migrating: true,
             settled: false,
-            steps: asked
-                .iter()
-                .map(|step| MigrateRow {
-                    step: step.clone(),
-                    state: MigrateState::Waiting,
-                    error: None,
-                })
-                .collect(),
+            steps: asked.iter().map(|step| PassRow::waiting(step)).collect(),
         }
     });
     // Every row's Sync is disabled while the pass runs and enabled after:
@@ -363,7 +379,7 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
         Runner::new(root.as_path()).sink(sink).child_env(env.vars)
     });
     for (i, step) in asked.iter().enumerate() {
-        set(&|u| u.steps[i].state = MigrateState::Running);
+        set(&|u| u.steps[i].state = PassState::Running);
         let answer = match &runner {
             Ok(runner) => match runner
                 .migrate(&checked.graph, std::slice::from_ref(step))
@@ -385,8 +401,8 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
         }
         set(&|u| {
             (u.steps[i].state, u.steps[i].error) = match &answer {
-                Ok(_) => (MigrateState::Done, None),
-                Err(why) => (MigrateState::Failed, Some(why.clone())),
+                Ok(_) => (PassState::Done, None),
+                Err(why) => (PassState::Failed, Some(why.clone())),
             };
         });
     }
@@ -510,7 +526,8 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
         Err(e) => return fail_open_requests(store, &format!("{e:#}")).await,
     };
     let open = store.open_requests().await.unwrap_or_default();
-    let started = host::sync_start(&open);
+    let wiping = store.open_wipes().await.unwrap_or_default();
+    let started = host::period_start(&open, &wiping);
     let sink: Arc<dyn EventSink> = match host::start_record(
         &root,
         &checked.cfg,

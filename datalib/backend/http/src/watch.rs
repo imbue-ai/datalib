@@ -162,8 +162,9 @@ pub enum RootEvent {
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
-    /// The launch's migrate pass moved: `/api/config`'s `upgrade` is new.
-    UpgradeChanged,
+    /// A pass over the steps moved — the launch's migrate pass, or freeing
+    /// disk space: `/api/config`'s `upgrade` or `free_space` is new.
+    PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
 }
@@ -198,6 +199,9 @@ enum Moved {
     /// The loop's record and its mailbox, `system/supervisor.sqlite`:
     /// heard by [`watch_record`], not seen by the filesystem.
     Supervisor,
+    /// A wipe opened, closed, or moved on to its next step: heard by
+    /// [`watch_record`] in the announcement's words.
+    Wipe,
     RunStore,
     Frontend,
     GridIndex,
@@ -537,6 +541,9 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
+            }
+            Moved::Wipe => {
+                out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
                 for part in moved_parts(&datalib_runs::versions(root).await, &mut seen.runs) {
@@ -980,12 +987,38 @@ async fn watch_record(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
+        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Wipe).is_err() {
+            return;
+        }
     }
+}
+
+/// Whether an announcement may be a wipe's: opened, closed, or moved on.
+/// A change the backstop found unannounced may be one too.
+fn is_wipe_line(line: &str) -> bool {
+    use datalib_dag::supervisor::announce::UNANNOUNCED;
+    use datalib_dag::supervisor::store::WIPE_MOVED;
+    line == UNANNOUNCED
+        || ["wipe opened ", "wipe closed ", WIPE_MOVED]
+            .iter()
+            .any(|p| line.starts_with(p))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wipes_announcements_are_told_from_the_rest() {
+        assert!(is_wipe_line("wipe opened 01a1"));
+        assert!(is_wipe_line("wipe closed 01a1"));
+        assert!(is_wipe_line(&format!(
+            "{} 01a1",
+            datalib_dag::supervisor::store::WIPE_MOVED
+        )));
+        assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
+        assert!(!is_wipe_line("request opened 01a1"));
+    }
 
     #[test]
     fn the_config_and_the_runner_record_are_told_apart() {
