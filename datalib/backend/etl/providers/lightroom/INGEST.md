@@ -327,6 +327,33 @@ takes both forms, and neither is a time the camera recorded:
   `xmp:ModifyDate`. It is neither the file's modified nor its created
   date (both a year earlier in the test).
 
+**Where an offset comes from**, then, is one of three places, and only
+the first says where a photo was taken:
+
+1. **the file**, at import: whatever offset the camera or software wrote
+   (EXIF `OffsetTime*`, an XMP or IPTC time that carries one, an
+   iPhone-style video date, QuickTime's implied `Z`), copied as written.
+   Lightroom never works one out, from GPS or anything else.
+2. **the importing computer's zone**, which Lightroom adds itself: the
+   import time above, every video's `xmp:ModifyDate` (also set to the
+   import time) and `xmp:MetadataDate` (when the metadata was last
+   saved). So offsets from this source follow wherever the computer was.
+3. **nowhere new on an edit**: Edit Capture Time keeps what was there
+   (below).
+
+No other table holds a photo's offset. Searching every text column of
+the test catalog for a time with one found, besides `captureTime`, only
+Lightroom's own clocks: `AgLibraryImport.importDate` (the computer's
+zone) and `AgLibraryImageChangeCounter.changedAtTime` (UTC). There is no
+zone column; the year, month and day columns behind the Library date
+filter (`AgHarvestedExifMetadata.dateYear` and so on) carry none.
+
+Not yet measured: whether **Read Metadata from Files** takes a changed
+offset from the file into the catalog, which decides whether a catalog
+can be put right by fixing its files; **DNG and HEIC** files, which the
+test had none of; and which older version of Lightroom gave a dateless
+JPEG an offset (below).
+
 ### Where the time comes from at import
 
 | what the file holds | `captureTime` | offset in the XMP |

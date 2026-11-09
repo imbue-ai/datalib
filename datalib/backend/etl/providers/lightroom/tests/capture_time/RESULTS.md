@@ -123,3 +123,12 @@ writes Motion JPEG and PCM sound, which imported.
   F01 and F02 (`14:00:00-07:00`, 21:00 UTC) sit among the 14:00s, not with
   F10's 21:00; F23/F24 and F20/F21 (the import day, +01:00) sort last; F22's bare date
   sorts as midnight, first of 2024-08-01; F25/F27 sort first, at 1904.
+
+## Where an offset is stored
+
+- Searching every text column of the catalog after round 4 for a time with
+  an offset (or `Z`) found, besides `Adobe_images.captureTime` (7 rows):
+  `AgLibraryImport.importDate` (each import, the Mac's +01:00),
+  `AgLibraryImageChangeCounter.changedAtTime` (every image, UTC), and
+  `AgLibraryIPTC.caption` only because the captions name offsets. The XMP
+  blobs are compressed, so they are read separately (`read_catalog.py`).
