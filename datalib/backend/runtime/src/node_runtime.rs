@@ -48,7 +48,7 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// `scripts/stage_runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.21.0";
+pub const LATCHKEY_VERSION: &str = "3.22.1";
 
 /// Left unset, latchkey pings its own usage counter once a day from any run.
 /// `scripts/latchkey-wrapper.sh` sets it too, for a `latchkey` run by hand.
