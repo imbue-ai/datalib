@@ -241,6 +241,9 @@ export type CatalogEntry = {
   /// Set on an entry a package added (docs/dev/packages.md): its steps
   /// run the package's programs instead of `datalib-step`.
   package?: PackageOrigin;
+  /// The id of the built-in applet that shows this source's data
+  /// (`builtinApplets.ts`), which the form offers to turn on.
+  applet?: string;
 };
 
 /// Which package an entry came from, where it is unpacked relative to the
@@ -2499,6 +2502,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "lightroom",
     nameHint: "Lightroom catalog",
     wizard: true,
+    applet: "photos",
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     rendersDocuments: false,
