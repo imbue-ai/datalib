@@ -3,6 +3,7 @@
 //! reads the rows and emits what this returns.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline};
 use datalib_etl_render::section::Section;
 use datalib_id::{IdNamespace, Identity};
 use datalib_photo_schema::{
@@ -18,7 +19,8 @@ use crate::read::ImageRow;
 use crate::xmp::{self, XmpFields};
 
 /// Bump when what a photo's row or terms say changes.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the text a diff shows escapes the title, caption and keywords.
+pub const RENDER_VERSION: u32 = 4;
 
 /// The H3 cells a photo's card names: about a region, a town, a
 /// neighbourhood and a block. Search does not need them; it reads the
@@ -340,20 +342,18 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
 /// The photo as text, for a diff of two renders: there is no page on
 /// disk, and this is what one would say.
 fn summary(photo: &NormalizedPhoto) -> String {
-    let mut out = format!(
-        "# {}\n\n",
-        photo
-            .title
-            .as_deref()
-            .or(photo.headline.as_deref())
-            .unwrap_or(&photo.file_name)
-    );
+    let title = photo
+        .title
+        .as_deref()
+        .or(photo.headline.as_deref())
+        .unwrap_or(&photo.file_name);
+    let mut out = format!("# {}\n\n", escape_md_inline(title));
     if let Some(caption) = &photo.caption {
-        out.push_str(&format!("{caption}\n\n"));
+        out.push_str(&format!("{}\n\n", escape_md_block(caption)));
     }
     let mut line = |label: &str, value: String| {
         if !value.is_empty() {
-            out.push_str(&format!("- {label}: {value}\n"));
+            out.push_str(&format!("- {label}: {}\n", escape_md_inline(&value)));
         }
     };
     line("File", photo.file_name.clone());
@@ -398,6 +398,36 @@ mod tests {
             create_date: create.map(str::to_string),
             ..XmpFields::default()
         }
+    }
+
+    /// A diff of two renders shows this text as markdown: a caption or
+    /// a keyword in it was read as HTML, and could hide what follows.
+    #[test]
+    fn the_text_a_diff_shows_reads_as_typed() {
+        let hide = "<div style=\"display:none\">";
+        let image = ImageRow {
+            id_global: "G1".into(),
+            base_name: format!("{hide}warp"),
+            caption: Some(format!("Engage.\n{hide}\n\nhidden")),
+            keywords: vec![vec![hide.to_string()]],
+            albums: vec![hide.to_string()],
+            ..ImageRow::default()
+        };
+        let built = build(
+            &image,
+            &Context {
+                source_id: "lr",
+                qmd_path: "lr/doc.md",
+                catalog: None,
+                zone: None,
+            },
+        );
+        let md = &built.section.md;
+        assert!(!md.contains('<'), "{md}");
+        assert!(
+            md.starts_with("# &lt;div style=\"display:none\"&gt;warp\n\nEngage.\n"),
+            "{md}"
+        );
     }
 
     /// The photo's own offset wins over the configured zone, the wall

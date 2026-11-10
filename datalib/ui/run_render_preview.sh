@@ -5,6 +5,8 @@
 # browser instead of building a data root. Every contact page, from the
 # fixture's address book, LinkedIn and Facebook and from contact-common's
 # own corpus, goes on a second page of its own, `contact_preview.html`.
+# The text-edge library (datalib/backend/etl/text_edges) goes on a third,
+# `text_edges_preview.html`, drawn through the app's own renderDocument.
 #
 #   bazelisk test //datalib/ui:render_preview_test   # regenerate and diff
 #   bazelisk run  //datalib/ui:render_preview        # rewrite the golden
@@ -48,6 +50,8 @@ node_bin="$(need_runfile "$DATALIB_TEST_NODE_BIN_RLOC")"
 preview_js="$(need_runfile "$DATALIB_TEST_PREVIEW_JS_RLOC")"
 golden="$(need_runfile "$DATALIB_TEST_GOLDEN_RLOC")"
 contact_golden="$(need_runfile "$DATALIB_TEST_CONTACT_GOLDEN_RLOC")"
+edges_golden="$(need_runfile "$DATALIB_TEST_EDGES_GOLDEN_RLOC")"
+edges_json="$(need_runfile "$DATALIB_TEST_EDGES_RLOC")"
 fixture_tar="$(need_runfile "$DATALIB_TEST_FIXTURE_MD_RLOC")"
 
 work="$(mktemp -d)"
@@ -76,9 +80,10 @@ fi
 # Every page contact-common wrote opens with this block.
 "$node_bin" "$preview_js" --md "$md" --out "$work/contact_preview.html" --ui "$ui_root" \
   --only '<div class="contact-head"' --title "Contact preview"
+"$node_bin" "$preview_js" --edges "$edges_json" --out "$work/text_edges_preview.html" --ui "$ui_root"
 
 if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
-  for page in render_preview contact_preview; do
+  for page in render_preview contact_preview text_edges_preview; do
     dest="$BUILD_WORKSPACE_DIRECTORY/datalib/ui/tests/goldens/$page.html"
     cp "$work/$page.html" "$dest"
     echo "wrote $dest"
@@ -87,7 +92,8 @@ if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
 fi
 
 stale=0
-for pair in "render_preview:$golden" "contact_preview:$contact_golden"; do
+for pair in "render_preview:$golden" "contact_preview:$contact_golden" \
+  "text_edges_preview:$edges_golden"; do
   page="${pair%%:*}"
   want="${pair#*:}"
   if ! diff -u "$want" "$work/$page.html" > "$work/$page.diff"; then

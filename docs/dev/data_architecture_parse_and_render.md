@@ -190,6 +190,13 @@ reads the projection — **it never re-parses markdown** (AGENTS.md's
 
 ### Upstream text is escaped where it becomes markup
 
+Every way upstream text has gone wrong on its way to the page or to
+search is a case in the text-edge library,
+[`etl/text_edges/`](../../datalib/backend/etl/text_edges/README.md),
+and a change to how text is escaped is checked against it;
+`datalib/ui/tests/goldens/text_edges_preview.html` shows each case as
+the app draws it.
+
 The UI renders every document with markdown-it and `html: true`
 (`ui/src/cards/renderDocument.ts`), because the section wrappers are
 HTML. So a name, a subject or a text message written into the markdown
@@ -202,17 +209,25 @@ The rule: **a string that is plain text upstream is escaped at the
 point it becomes markup**, by the helper for where it lands —
 `datalib_etl_render::html` lists them (between tags, in an attribute,
 on one markdown line, a multi-line body, a link target, a code span or
-block). A string the source itself authored as markup goes in as it
-is: a Notion page's markdown, a GitHub PR's description, an email's
-HTML part after htmd. Markdown a person or a model wrote in a
-conversation — a prompt, an assistant's reply, a project's
-instructions in Claude, ChatGPT, Codex or Claude Code — keeps its
-markdown but not its HTML: `markdown_html_as_typed` shows every tag
-as typed, since one left open would hide or restyle the messages after
-it. Escaping never drops a character, and `plain_text` (the Contents
-cell) reads the escapes back. A renderer's
-test of this feeds a field `<script>x</script> & co` and checks it
-renders escaped.
+block). **Markup a source authored goes in as written**, HTML
+included: a prompt, an assistant's reply or a project's instructions
+in Claude, ChatGPT, Codex or Claude Code; a GitHub or GitLab
+description, review or comment; a Todoist task, description or
+comment; an email's HTML part and Google Takeout's Gemini answers and
+My Maps descriptions after htmd; a PDF's pages as pdf-inspector wrote
+them; a Notion page. Its formatting (`<details>`, `<img>`, `<br>`,
+`<kbd>`, a table) is what its author meant, and escaping it also
+turned its code into entities that search could not read. What keeps a
+tag in it from reaching past its own message is the page, not the
+renderer: the sanitizer and the frame's policy stop scripts, and each
+message is rendered as a fragment of its own (§"One section cannot
+reach the next"), so a renderer whose text goes in as written declares
+its sections. chat-common closes a fence or an HTML block a message
+leaves open (`close_open_blocks`), so the message's own `</div>` is not
+read as code. Escaping never drops a character, and `plain_text` (the
+Contents cell) reads the escapes back, an escaped `<tag>` as text. A
+renderer's test of a plain-text field feeds it `<script>x</script> &
+co` and checks it renders escaped.
 
 The trap is text between tags on a markdown line — the message
 header's `## <span class="msg-author">…</span>`: markdown-it parses it
@@ -241,9 +256,9 @@ by itself.
 
 ### One section cannot reach the next
 
-Escaping is the first line, and it is per field and per renderer. Text
-a source authored as markup goes in as it is, and a renderer can miss a
-field. Rendered as one string, a tag one message leaves open would run
+Escaping covers only text that was plain upstream: markup a source
+authored goes in as it is, and a renderer can miss a field. Rendered as
+one string, a tag one message leaves open would run
 on through every message after it: an unclosed
 `<div style="display:none">` would hide the rest of the conversation,
 and a copied `<div id="m-…" data-section-uuid="…" class="msg">` could
@@ -291,7 +306,8 @@ How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
 
 A renderer that declares no sections stores no layout, and its body is
 drawn as one fragment, as every body was before; its wrappers still get
-`contain: paint`. `grep -rln 'Section::keyed' datalib/backend/etl`
+`contain: paint`. Garmin, Perseus, Notion, Google Takeout's My Maps
+pages and the time-series pages declare none. `grep -rln 'Section::keyed' datalib/backend/etl`
 lists the renderers that declare them. Teaching another one is filling
 `RenderedMarkdown::sections`, and the next render stores its layout.
 

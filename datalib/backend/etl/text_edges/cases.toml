@@ -1,0 +1,348 @@
+# Text that has gone wrong on its way from a source to the page or to
+# search, one case per rough edge. README.md says how a case is read,
+# rendered and judged; add a case here whenever a new one turns up.
+#
+# Every case is made up, in the shape a real library showed: never paste
+# what a real message says.
+
+# ── Code and placeholders ──────────────────────────────────────────────
+
+[[case]]
+id = "placeholder-in-a-fence"
+edge = """A backtrace's `<unnamed>` inside a code fence stopped finding \
+its page after #1689: the fence became `<pre><code>` with `&lt;` \
+entities, which qmd reads as the words "lt" and "gt"."""
+enters = "markdown"
+text = '''
+The holodeck program crashed again:
+
+```
+thread '<unnamed>' panicked at src/holodeck/safety.rs:47:
+protocols disengaged
+```
+'''
+shows = ["thread '<unnamed>' panicked"]
+finds = ["unnamed panicked", "protocols disengaged"]
+elements = { pre = 1 }
+
+[[case]]
+id = "placeholder-in-a-code-span"
+edge = """A config line in a code span, `ansible_host: <TARGET_IP>`, \
+stopped finding its page after #1689 for the same reason."""
+enters = "markdown"
+text = '''
+Set `ansible_host: <TARGET_IP>` in the away team's inventory.
+'''
+shows = ["ansible_host: <TARGET_IP>"]
+finds = ["ansible_host: <TARGET_IP>"]
+elements = { code = 1 }
+
+[[case]]
+id = "placeholder-in-prose"
+edge = """A placeholder in running text is not a tag (`_` is not allowed \
+in a tag's name), so it reads as typed and a quoted search finds it."""
+enters = "markdown"
+text = '''
+Replace <TARGET_IP> with the target vessel's address from the registry.
+'''
+shows = ["Replace <TARGET_IP> with the target"]
+finds = ["<TARGET_IP> with the target"]
+
+[[case]]
+id = "fence-inside-a-list-item"
+edge = """A fence indented four spaces under a numbered step, the way \
+ChatGPT writes one, is still code to markdown-it. Since #1689 it showed \
+`&lt;` and `&amp;&amp;` literally."""
+enters = "markdown"
+text = '''
+1. Check the plasma relay:
+
+    ```bash
+    if [ "$flow" < 9 ] && [ -n "$relay" ]; then echo nominal; fi
+    ```
+
+2. Report to Engineering.
+'''
+shows = ['if [ "$flow" < 9 ] && [ -n "$relay" ]']
+hides = ["&lt;", "&amp;"]
+elements = { pre = 1, li = 2 }
+
+[[case]]
+id = "fence-in-a-list-at-three-spaces"
+edge = """A fence indented three spaces under a step: since #1689 it \
+became a `<pre>` at column 0, which ended the list, so the next step \
+started a new list."""
+enters = "markdown"
+text = '''
+1. Run the diagnostic:
+
+   ```
+   level 3 diagnostic
+   ```
+
+2. Log the result.
+'''
+shows = ["level 3 diagnostic"]
+elements = { ol = 1, li = 2, pre = 1 }
+
+[[case]]
+id = "indented-code-block"
+edge = """An indented code block shows its text as typed; since #1689 a \
+tag in one showed as `&lt;code&gt;`."""
+enters = "markdown"
+text = '''
+The replicator's template reads:
+
+    <code>tea(earl_grey, hot)</code>
+'''
+shows = ["<code>tea(earl_grey, hot)</code>"]
+hides = ["&lt;"]
+elements = { pre = 1 }
+
+[[case]]
+id = "entity-references"
+edge = """An entity someone typed, `&nbsp;` or `&mdash;`, is the \
+character it names; since #1689 it showed as typed."""
+enters = "markdown"
+text = '''
+Warp&nbsp;9 &mdash; engage.
+'''
+shows = ["Warp 9 — engage."]
+hides = ["&nbsp;", "&mdash;"]
+
+# ── A message that leaves something open ───────────────────────────────
+
+[[case]]
+id = "slack-code-on-the-fence-lines"
+edge = """Slack writes a code block with the code on the fence lines. \
+Markdown read the first word as the language and never closed the \
+fence, so every reply after it became code (#1689)."""
+enters = "slack"
+text = '''
+```Replicator log
+tea, Earl Grey, hot```
+'''
+shows = ["tea, Earl Grey, hot"]
+finds = ["tea Earl Grey hot"]
+
+[[case]]
+id = "unclosed-fence"
+edge = """A reply cut off inside a code block turned the rest of the \
+conversation into code (#1689)."""
+enters = "markdown"
+text = '''
+Here is the fix:
+
+```rust
+fn realign(coil: &mut Coil) {
+    coil.phase += 0.5;
+'''
+shows = ["coil.phase += 0.5;"]
+
+[[case]]
+id = "unclosed-pre"
+edge = """An HTML block that only its closing tag ends, `<pre>` left \
+open, swallowed every message after it (#1689)."""
+enters = "markdown"
+text = '''
+<pre>
+sensor sweep: 3 contacts bearing 112 mark 4
+'''
+shows = ["sensor sweep: 3 contacts"]
+
+[[case]]
+id = "unclosed-hiding-div"
+edge = """An unclosed `<div style="display:none">` hid every message \
+after it (#1696)."""
+enters = "markdown"
+text = '''
+Latinum prices are up.
+
+<div style="display:none">
+
+Pay Quark double.
+'''
+shows = ["Latinum prices are up."]
+
+[[case]]
+id = "forged-wrapper"
+edge = """A copied message wrapper answered to the next message's id, \
+so a click on that message's row landed on the copy (#1696)."""
+enters = "markdown"
+text = '''
+Latinum prices are up.
+
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg">
+
+Pay Quark double.
+'''
+shows = ["Latinum prices are up."]
+
+[[case]]
+id = "forge-description-hides-the-comments"
+edge = """A GitHub description is one fragment with its comments, because \
+the forge renderer declares no sections: an unclosed hiding div in it \
+would hide every comment, if a tag ever reached the page."""
+enters = "forge"
+text = '''
+Recalibrates the deflector.
+
+<div style="display:none">
+'''
+shows = ["Recalibrates the deflector."]
+
+# ── Formatting a GitHub description is written in ──────────────────────
+
+[[case]]
+id = "forge-details-fold"
+edge = """Dependabot's release notes come folded in `<details>`; since \
+#1694 the fold showed as typed tags."""
+enters = "forge"
+text = '''
+Bumps warp-field from 1.2 to 1.3.
+
+<details>
+<summary>Release notes</summary>
+
+Fixes a subspace harmonic.
+
+</details>
+'''
+shows = ["Release notes", "Fixes a subspace harmonic."]
+hides = ["<details>", "<summary>"]
+elements = { details = 1, summary = 1 }
+
+[[case]]
+id = "forge-template-comment"
+edge = """A pull request template leaves its instructions in an HTML \
+comment, which GitHub does not show; since #1694 they showed."""
+enters = "forge"
+text = '''
+<!-- Describe what this away mission changes. -->
+Beam down at 0800 to survey the ruins.
+'''
+shows = ["Beam down at 0800"]
+hides = ["Describe what this away mission changes"]
+finds = ["Beam down at 0800"]
+
+[[case]]
+id = "forge-screenshot"
+edge = """GitHub's drag-and-drop writes a screenshot as `<img>`; since \
+#1694 the tag showed as text instead of an image the person can load."""
+enters = "forge"
+text = '''
+The viewscreen after the fix:
+
+<img width="480" alt="viewscreen" src="https://images.example.invalid/viewscreen.png">
+'''
+hides = ["<img"]
+elements = { img = 1 }
+
+[[case]]
+id = "forge-inline-formatting"
+edge = """`<kbd>`, `<sub>` and `<br>` in a description; since #1694 they \
+showed as typed tags."""
+enters = "forge"
+text = '''
+Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to raise shields.<br>Coolant is H<sub>2</sub>O.
+'''
+hides = ["<kbd>", "<sub>", "<br>"]
+elements = { kbd = 2, sub = 1, br = 1 }
+
+[[case]]
+id = "table-cell-line-break"
+edge = """A `<br>` is the only way to break a line in a markdown table \
+cell, as Notion and assistants write them."""
+enters = "markdown"
+text = '''
+| Officer | Duties |
+|---|---|
+| Worf | Security<br>Tactical |
+'''
+shows = ["Security", "Tactical"]
+hides = ["<br>"]
+elements = { table = 1, br = 1 }
+
+# ── Email ──────────────────────────────────────────────────────────────
+
+[[case]]
+id = "email-escaped-angle-brackets"
+edge = """An email that writes `&lt;tachyon-burst&gt;` means the text; \
+the HTML-to-markdown step writes it `\\<tachyon-burst>`."""
+enters = "email_html"
+text = '''
+<p>The sensors ignore it because of the &lt;tachyon-burst&gt; setting.</p>
+'''
+shows = ["the <tachyon-burst> setting"]
+finds = ["tachyon-burst setting"]
+
+[[case]]
+id = "email-pre-without-code"
+edge = """A `<pre>` with no `<code>` inside came through the \
+HTML-to-markdown step as raw HTML, so a tag written in it as text \
+reached the page as a tag."""
+enters = "email_html"
+text = '''
+<p>The console printed:</p><pre>&lt;div style="display:none"&gt;phaser&lt;/div&gt;</pre>
+'''
+shows = ['<div style="display:none">phaser</div>']
+
+[[case]]
+id = "email-non-breaking-space"
+edge = """Mail sent from a form often joins words with `&nbsp;`; a quoted \
+search across the join still finds it."""
+enters = "email_html"
+text = '''
+<p>Report to sickbay&nbsp;Doctor Crusher at 0800.</p>
+'''
+shows = ["Report to sickbay Doctor Crusher"]
+finds = ["sickbay Doctor Crusher"]
+
+[[case]]
+id = "email-escaped-entity"
+edge = """`&amp;lt;` in an email is the text `&lt;`, not `<`."""
+enters = "email_html"
+text = '''
+<p>Type &amp;lt; to write a less-than sign.</p>
+'''
+shows = ["Type &lt; to write"]
+
+# ── Links ──────────────────────────────────────────────────────────────
+
+[[case]]
+id = "link-destination-with-spaces"
+edge = """A link whose destination has spaces is written in angle \
+brackets, `[text](<a b.md>)`; it stays a link."""
+enters = "markdown"
+text = '''
+See the [captain's log](<logs/Captain Log 41153.7.md>).
+'''
+shows = ["captain's log"]
+elements = { a = 1 }
+
+[[case]]
+id = "slack-link-with-label"
+edge = """Slack sends a link as `<url|label>`; it shows as the label."""
+enters = "slack"
+text = '''
+Background: <https://memory-alpha.example.invalid/wiki/Data|Data's service record>
+'''
+shows = ["Data's service record"]
+hides = ["https://memory-alpha"]
+elements = { a = 1 }
+
+# ── Text that was never markup ─────────────────────────────────────────
+
+[[case]]
+id = "plain-text-reads-as-typed"
+edge = """A text message is not markup: an arrow and a line starting `#` read \
+as typed, as the phone showed them, and only a bare address becomes a \
+link. (`*bold*` stays emphasis on purpose: WhatsApp writes bold so.)"""
+enters = "plain"
+text = '''
+Ten Forward at 1000 <- don't be late.
+# of seats: 12
+Menu: https://example.invalid/menu
+'''
+shows = ["Ten Forward at 1000 <- don't be late.", "# of seats: 12"]
+elements = { h1 = 0, a = 1 }
