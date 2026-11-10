@@ -134,3 +134,84 @@ writes Motion JPEG and PCM sound, which imported.
   `AgLibraryImageChangeCounter.changedAtTime` (every image, UTC), and
   `AgLibraryIPTC.caption` only because the captions name offsets. The XMP
   blobs are compressed, so they are read separately (`read_catalog.py`).
+
+## Round 5: times written straight into the catalog
+
+`edit_catalog.py` with `round5_edits.csv`, on a copy of the catalog after
+round 4, with Lightroom closed. Its first run added `exif:` and
+`photoshop:` attributes to three XMPs (E05X, F10, F12) that declared
+neither namespace, so their XMP was not well-formed XML; the probe now
+declares a missing namespace and refuses XMP that does not parse, and
+those three were rewritten after step 2.
+
+**Opening the copy (steps 1 and 2):**
+
+- **Lightroom kept every value written.** Read back after it quit,
+  `captureTime`, `originalCaptureTime`, the XMP dates and the day columns
+  were exactly as written; no "metadata changed" badge. It changed only
+  other things: develop settings and change counters of photos that were
+  viewed, and F10's `sidecarStatus` (0 to 1).
+- **The sort follows the written `captureTime`**: all 80 in (clock time,
+  file name) order. A01 moved from 12:00 to the 14:00s; D08 to 05:00; F10
+  and F12 to 2024-08-02 06:00; V01 and E05X to 14:00. A11's
+  `…14:00:00+02:00` sorted among the 14:00s by name, offset ignored.
+- **The Library filter's Date column follows the day columns**: F10 (day
+  columns moved) is under Aug 2, F12 (left) under Aug 1, though both have
+  `captureTime` 2024-08-02.
+- **Capture Date/Time and Date Time Original show the catalog's XMP
+  `exif:DateTimeOriginal`, never `captureTime`.** D08 shows the 05:00 the
+  probe wrote into its XMP, though its file still says 14:00. A01 and A11
+  (`captureTime` only) still show 12:00, while sorting at 14:00. A05
+  (offset added in the XMP) shows 05:00, as before.
+- **With no `DateTimeOriginal`, a video's Capture Date/Time is its
+  `xmp:CreateDate` as written**: V01 shows 12:00 (`…12:00:00Z`), as does
+  its Date Time Digitized, while sorting at 14:00.
+- **XMP that is not well-formed is read as empty, silently**: E05X showed
+  no Date Time (its `xmp:ModifyDate` is the import time) and a Capture
+  Date/Time of 2001-01-01 00:00, zero in Lightroom's seconds since 2001;
+  F10 and F12 fell back to the file's modified date. Lightroom neither
+  repaired nor replaced the XMP, nor warned.
+
+**Lightroom's own operations (step 3):** Read Metadata from Files ran on
+A01–A08 (not D08), and Synchronize Folder ran once as well.
+
+- **The Metadata panel reads a cache, not the catalog**:
+  `<catalog> Helper.lrdata/metadatahelper.db`, table `AgImagesMetadata`,
+  one row per photo, with a column per field the panel shows
+  (`com_adobe_captureDateTime`, `com_adobe_captureDate`, …). The copy
+  had none until step 1 built it, while E05X, F10 and F12 had broken XMP.
+  After the repair, F10 and F12 still showed the file's date (their rows
+  unchanged since step 1), while E05X's row, refreshed when it was
+  exported, held the repaired 14:00. The cache was then moved aside
+  (`Helper.lrdata.round5-step3`) to see whether a rebuilt one shows the
+  repaired times.
+- **Read Metadata from Files puts the file's times back**, after a
+  warning that it will. A01's
+  `captureTime` went from 14:00 back to the file's 12:00; A05's XMP lost
+  the −07:00 the catalog alone had. A02–A08's values were unchanged, their
+  XMP rewritten in Lightroom's order.
+- **Synchronize Folder, with no file changed on disk, kept every edit**:
+  D08, V01, F10 and F12 kept their written times.
+- **Edit Capture Time works from the time the panel shows, and drops an
+  offset in `captureTime`.** A11 (`captureTime` 14:00 +02:00, XMP 12:00),
+  shifted +1 h, became `captureTime` 13:00 with no offset, and
+  `exif:DateTimeOriginal` and `photoshop:DateCreated` 13:00 with none;
+  `originalCaptureTime` kept `…14:00:00+02:00`.
+- **An exported JPEG carries the catalog's time and offset; an exported
+  original does not.** Both exports were added back to the catalog: D08's
+  JPEG came back as 05:00 with `exif:DateTimeOriginal` and
+  `photoshop:DateCreated` −07:00, its `xmp:ModifyDate` the export time;
+  E05X's original came back as the file's own 12:00 UTC clock, the
+  catalog's 14:00 +02:00 left behind.
+- **HEIC is read like a JPEG**: G01 (14:00 +02:00) got `captureTime`
+  14:00 and the offset in its XMP; G02, no offset.
+- **Convert Photo to DNG keeps the offset**: G03's and G04's DNGs have
+  EXIF `DateTimeOriginal` with `OffsetTimeOriginal` +02:00 and −07:00, and
+  the catalog's XMP the same; their `ModifyDate` is the conversion time,
+  `OffsetTime` the Mac's +01:00.
+
+**A rebuilt cache (step 5):** with `Helper.lrdata` moved aside, Lightroom
+built it again on open, and the panel showed what was written: E05X
+Capture Date/Time, Date Time Original and Capture Time 14:00 (Date Time
+Digitized still `xmp:CreateDate`'s 12:00, Date Time the import time);
+F10 and F12 2024-08-02 06:00 in all four fields.

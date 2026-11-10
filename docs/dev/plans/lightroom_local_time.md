@@ -67,26 +67,40 @@ problems go.
 Measured on the test catalog, with the cases in
 `lightroom/tests/capture_time/`. Each answer decides how §8 works.
 
-- **Can a plugin set a photo's capture time?** Jeffrey Friedl's
-  Bag-o-Goodies page says Lightroom does not let plugins change a photo's
-  date. If that still holds, the applier cannot be a plugin, and writes
-  the `.lrcat` directly with Lightroom closed.
-- **Does a direct edit hold?** With Lightroom closed, change
-  `captureTime`, the XMP's dates and the harvested date columns behind
-  the Library filter (`AgHarvestedExifMetadata.dateYear` and its
-  neighbours). Does Lightroom show and sort by the new time, keep it, and
-  not rebuild it from the file? What does it need besides
-  (`AgLibraryImageChangeCounter`, search indexes)?
-- **An offset in `captureTime`** (`…T14:00:00+02:00`), which Lightroom
-  already writes in one case: does it survive Lightroom's own edits, a
-  Read Metadata, a re-import? If it does, the catalog carries the zone in
-  the one column everything reads.
-- **Videos**: the same for a MOV and an MP4, whose times Lightroom
-  otherwise takes from QuickTime's UTC field.
-- **DNG and HEIC**, which the cases have none of; an Adobe feature
-  request says Lightroom drops `OffsetTime` from DNGs.
-- **What an export writes** from a corrected photo, since an export is
-  how a photo leaves a catalog that is the source of truth.
+- **Can a plugin set a photo's capture time? No**, by the Lightroom
+  Classic 13.0 SDK's reference: `LrPhoto:setRawMetadata` takes no
+  capture-time key (`dateTimeOriginal` can be read, not set), only
+  `dateCreated`, the IPTC creation date, as Jeffrey Friedl's
+  Bag-o-Goodies page also says. So the applier writes the `.lrcat`
+  directly with Lightroom closed. Still to try: whether setting
+  `dateCreated` moves `captureTime`, and whether a newer SDK adds a key.
+- **Does a direct edit hold through opening the catalog? Yes**
+  (`RESULTS.md` §"Round 5"). Lightroom kept every value written, rebuilt
+  nothing from the files, and needed nothing else touched. Each place
+  feeds one thing, so a fix writes all three:
+  - `captureTime` decides the sort;
+  - the XMP's `exif:DateTimeOriginal` is what the Metadata panel shows
+    as Capture Date/Time, and what Edit Capture Time shifts from;
+  - `AgHarvestedExifMetadata.dateYear`, `dateMonth` and `dateDay` decide
+    the day the Library filter files it under.
+
+  XMP that is not well-formed XML is silently read as empty, so the
+  applier declares any namespace it uses and parses what it writes.
+- **The Metadata panel reads a cache**, `<catalog> Helper.lrdata`
+  (`metadatahelper.db`), which a direct edit does not refresh. So the
+  applier deletes it after writing, and Lightroom builds it again on the
+  next open, from the written times.
+- **Lightroom's own operations**: Synchronize Folder keeps a direct edit;
+  Read Metadata from Files undoes it, after a warning (§9); Edit Capture Time keeps it,
+  shifting from the XMP's time, but drops an offset in `captureTime`.
+- **An offset in `captureTime`** does not survive Edit Capture Time, so
+  the offset lives in the XMP (§9).
+- **Videos** hold a direct edit like photos (E05X, V01).
+- **HEIC** is read like a JPEG, and **Convert Photo to DNG** keeps
+  `OffsetTimeOriginal`.
+- **An export** of a JPEG carries the catalog's time and offset; an
+  export of the original file (as a video's usually is) carries only
+  what the file always had.
 
 ## 5. Phase 1: the render trusts the catalog
 
@@ -165,22 +179,25 @@ repository to check.
 In its own repository. Reads the CSV; with Lightroom closed (it refuses
 while the catalog's lock file is there), backs the catalog up, then per
 row writes what phase 0 found Lightroom needs: `captureTime`, the XMP's
-`exif:DateTimeOriginal` and `photoshop:DateCreated` with the offset, the
-harvested date columns. It leaves `originalCaptureTime` as Lightroom's
+`exif:DateTimeOriginal` and `photoshop:DateCreated` with the offset
+(declaring their namespaces where the XMP lacks them, and refusing XMP
+that does not parse), the harvested date columns. Then it deletes the catalog's `Helper.lrdata`
+cache, which Lightroom rebuilds. It leaves `originalCaptureTime` as Lightroom's
 record of the first time, setting it only where it is empty. It has a
 dry run that prints what would change, and is safe to run twice.
 
 ## 9. Open questions
 
-- [ ] **Plugin or direct edit** (phase 0).
-- [ ] **Where the offset lives**: `captureTime`, the XMP, or both.
+- [x] **Plugin or direct edit**: direct edit; the SDK has no way (§4).
+- [x] **Where the offset lives**: the XMP's `exif:DateTimeOriginal` and
+  `photoshop:DateCreated`. Edit Capture Time drops one in `captureTime`.
 - [ ] **Virtual copies** share a file but are separate `Adobe_images`
   rows; the CSV should name each, and the check should require they
   agree.
 - [ ] **New imports**: a camera left on home time keeps coming. The §5
   problems find each new folder that needs work; whether to do more is
   for after.
-- [ ] **Read Metadata from Files** is likely to put the files' old times
-  back over a corrected catalog, since the fix never writes the files.
-  Not measured, nor when Lightroom warns first; phase 0 should, and until
-  then it should not be run on corrected photos.
+- [ ] **Read Metadata from Files puts the files' old times back** over a
+  corrected catalog, since the fix never writes the files. Not to be run
+  on corrected photos; whether to guard against it (a keyword, a
+  smart collection of corrected photos) is open.

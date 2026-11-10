@@ -6,7 +6,9 @@ copied from `xmp:ModifyDate` on AVI, MPG, VOB and MOV videos and some JPEGs,
 an offset on JPEGs whose XMP held no date at all, and `…T14:00` copied from
 an `xmp:CreateDate` with no seconds on videos. These cases try each.
 
-Usage: python3 -I make_more_cases.py <empty out_dir>
+Usage: python3 -I make_more_cases.py <empty out_dir> [group]
+
+`group` makes only the cases whose names start with it (`G`).
 
 Every file that carries a date has its modified date set to 2001-01-01, as
 in `make_cases.py`, so a time taken from the file's date stands out. The
@@ -26,12 +28,13 @@ OLD_MTIME = "2001:01:01 00:00:00"
 SUMMER_MTIME = "2024:08:01 14:00:00-07:00"  # 2024-08-01 21:00 UTC
 WINTER_MTIME = "2024:01:15 14:00:00-08:00"  # 2024-01-15 22:00 UTC
 MOMENT = "2024-08-01T21:00:00Z"  # 14:00 at -07:00
+G_MOMENT = "2024-09-01T12:00:00Z"  # 14:00 at +02:00
 
 
 @dataclass
 class Case:
     name: str
-    kind: str  # jpg, png, tif, mov, mp4, avi, mpg, vob
+    kind: str  # jpg, png, tif, heic, mov, mp4, avi, mpg, vob
     asks: str
     tags: dict = field(default_factory=dict)
     mtime: str = OLD_MTIME
@@ -186,7 +189,45 @@ def cases() -> list[Case]:
             "MP4, QuickTime dates empty, XMP xmp:CreateDate with no seconds, 14:00",
             {"XMP-xmp:CreateDate": "2024-08-01T14:00"},
         ),
+        # File types the cases had none of: HEIC as an iPhone writes it,
+        # and JPEGs to turn into DNGs inside Lightroom (Library › Convert
+        # Photo to DNG), to see what each keeps of an offset.
+        Case(
+            "G01",
+            "heic",
+            "HEIC, EXIF DateTimeOriginal 14:00 + OffsetTimeOriginal +02:00",
+            exif("2024:09:01 14:00:00", "+02:00"),
+            true_utc=G_MOMENT,
+        ),
+        Case(
+            "G02",
+            "heic",
+            "HEIC, EXIF DateTimeOriginal 14:00, no offset",
+            exif("2024:09:01 14:00:00"),
+            true_utc=G_MOMENT,
+        ),
+        Case(
+            "G03",
+            "jpg",
+            "convert to DNG: EXIF DateTimeOriginal 14:00 + OffsetTimeOriginal +02:00",
+            exif("2024:09:01 14:00:00", "+02:00"),
+            true_utc=G_MOMENT,
+        ),
+        Case(
+            "G04",
+            "jpg",
+            "convert to DNG: EXIF DateTimeOriginal 05:00 + OffsetTimeOriginal -07:00",
+            exif("2024:09:01 05:00:00", "-07:00"),
+            true_utc=G_MOMENT,
+        ),
     ]
+
+
+def exif(dto: str, offset: str | None = None) -> dict:
+    tags = {"EXIF:DateTimeOriginal": dto}
+    if offset:
+        tags["EXIF:OffsetTimeOriginal"] = offset
+    return tags
 
 
 def run(*args):
@@ -194,6 +235,12 @@ def run(*args):
 
 
 def make_media(c: Case, path: str):
+    if c.kind == "heic":
+        jpg = path + ".jpg"
+        make_media(Case(c.name, "jpg", c.asks), jpg)
+        run("sips", "-s", "format", "heic", jpg, "--out", path)
+        os.remove(jpg)
+        return
     if c.kind in ("jpg", "png", "tif"):
         run(
             "magick",
@@ -260,7 +307,7 @@ def make_media(c: Case, path: str):
 def write_tags(c: Case, path: str):
     if c.writable:
         args = ["exiftool", "-q", "-overwrite_original", "-m"]
-        if c.kind in ("jpg", "png", "tif"):
+        if c.kind in ("jpg", "png", "tif", "heic"):
             args.append("-all=")
         args += [f"-{k}={v}" for k, v in c.tags.items() if not k.startswith("ffmpeg:")]
         args += [f"-XMP-dc:Title={c.name}", f"-XMP-dc:Description={c.asks}", path]
@@ -287,11 +334,13 @@ def sha256(path: str) -> str:
 
 def main():
     out_dir = sys.argv[1]
+    group = sys.argv[2] if len(sys.argv) > 2 else ""
+    chosen = [c for c in cases() if c.name.startswith(group)]
     os.makedirs(out_dir, exist_ok=True)
     if os.listdir(out_dir):
         sys.exit(f"{out_dir} is not empty")
     rows = []
-    for c in cases():
+    for c in chosen:
         path = os.path.join(out_dir, c.file)
         make_media(c, path)
         write_tags(c, path)
@@ -309,7 +358,7 @@ def main():
         w.writeheader()
         w.writerows(rows)
     with open(os.path.join(out_dir, "hashes.txt"), "w") as f:
-        for c in cases():
+        for c in chosen:
             f.write(f"{sha256(os.path.join(out_dir, c.file))}  {c.file}\n")
     print(f"{len(rows)} files in {out_dir}")
 

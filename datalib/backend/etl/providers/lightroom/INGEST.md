@@ -296,9 +296,16 @@ zones, though each recorded its moment correctly.
 
 | field | shows |
 |---|---|
-| Capture Date, Capture Time | `captureTime`'s clock time |
-| Capture Date/Time, Date Time Original | the file's `DateTimeOriginal`; with none, the file's modified date (`AgLibraryFile.modTime`, to the millisecond) |
+| Capture Date, Capture Time | Lightroom's own reading of the metadata, usually `captureTime`'s clock time; but for a file with no date, its modified date in the computer's zone (where `captureTime` has it in UTC); for C04's 02:30, which never happened, 03:30; and for a `captureTime` written straight into the catalog, the XMP's time |
+| Capture Date/Time, Date Time Original | `exif:DateTimeOriginal` in the catalog's XMP (the file's, until something changes it); with none, a video's `xmp:CreateDate`, as written; else the file's modified date (`AgLibraryFile.modTime`, to the millisecond) |
 | Date Time (and Date, Time) | the modify date: EXIF's tag for it is named `DateTime` |
+
+These are drawn from a cache beside the catalog,
+`<catalog> Helper.lrdata/metadatahelper.db` (`AgImagesMetadata`), which
+Lightroom fills when it opens a catalog without one and refreshes for a
+photo it edits, reads metadata for or exports. A time written into the
+catalog directly did not show until then, and did once the cache was
+deleted and Lightroom built it again.
 
 **No field shows an offset or applies one.** A photo at 05:00 −07:00
 shows 05:00 everywhere, not the 14:00 that moment was in Berlin. The
@@ -345,14 +352,21 @@ No other table holds a photo's offset. Searching every text column of
 the test catalog for a time with one found, besides `captureTime`, only
 Lightroom's own clocks: `AgLibraryImport.importDate` (the computer's
 zone) and `AgLibraryImageChangeCounter.changedAtTime` (UTC). There is no
-zone column; the year, month and day columns behind the Library date
-filter (`AgHarvestedExifMetadata.dateYear` and so on) carry none.
+zone column; the year, month and day columns behind the Library
+filter's Date column (`AgHarvestedExifMetadata.dateYear` and so on)
+carry none. That filter reads those columns, not `captureTime`.
 
-Not yet measured: whether **Read Metadata from Files** takes a changed
-offset from the file into the catalog, which decides whether a catalog
-can be put right by fixing its files; **DNG and HEIC** files, which the
-test had none of; and which older version of Lightroom gave a dateless
-JPEG an offset (below).
+**Read Metadata from Files puts the file's times back**, after a
+warning that it will replace the catalog's metadata: `captureTime`
+and the XMP's dates become what the file says, and an offset the
+catalog had and the file lacks is gone. So a time fixed in the catalog
+alone lasts only until someone reads metadata from that file; Synchronize
+Folder, with the files unchanged on disk, left such times alone.
+
+A HEIC is read like a JPEG (its `OffsetTimeOriginal` kept in the XMP),
+and Convert Photo to DNG keeps `DateTimeOriginal` and
+`OffsetTimeOriginal` in the DNG it writes. Not yet measured: which
+older version of Lightroom gave a dateless JPEG an offset (below).
 
 ### Where the time comes from at import
 
