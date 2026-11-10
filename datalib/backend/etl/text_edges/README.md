@@ -65,3 +65,12 @@ Run it:
 ```sh
 bazelisk test //datalib/ui:unit_test --test_arg=tests/text_edges.test.ts --test_output=errors
 ```
+
+## Looking at it
+
+[`text_edges_preview.html`](../../../ui/tests/goldens/text_edges_preview.html)
+draws every case as the app does: through `renderDocument`, sanitizer and
+per-message fragments included, in the document body's own CSS, beside
+the case's note and its text as typed. Open it in a browser. It is a
+golden, so a change to how text renders shows in the diff of the change
+that made it; `bazelisk run //datalib/ui:render_preview` rewrites it.
