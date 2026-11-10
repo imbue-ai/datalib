@@ -1962,7 +1962,10 @@ async fn chat(
         .repo
         .document_file(&markdown_uuid)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|e| {
+            tracing::error!(document = %markdown_uuid, error = %e, "could not find the document's file");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::NOT_FOUND)?;
     let meta = s
         .repo
@@ -1991,7 +1994,15 @@ async fn chat(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => {
             (String::new(), None)
         }
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) => {
+            tracing::error!(
+                document = %markdown_uuid,
+                path = %file.path.display(),
+                error = %e,
+                "could not read the document's file",
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly

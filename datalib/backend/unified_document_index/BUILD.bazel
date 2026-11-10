@@ -38,6 +38,7 @@ rust_library(
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
     ],
 )
 

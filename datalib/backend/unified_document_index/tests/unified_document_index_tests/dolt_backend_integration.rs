@@ -294,6 +294,44 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     let _ = std::fs::remove_file(&db_path);
 }
 
+/// An index an older build wrote has no `markdowns.section_layout` until
+/// `grid_index` rebuilds it, and opening any document there was a 500
+/// for the whole re-render an upgrade starts.
+#[tokio::test]
+async fn a_document_opens_in_an_index_without_section_layouts() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in MARKDOWNS_DDL {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    sqlx::query("ALTER TABLE markdowns DROP COLUMN section_layout")
+        .execute(&writer)
+        .await
+        .expect("take the index back to its 0.52 shape");
+    sqlx::query(
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+         renderer_version) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
+    )
+    .execute(&writer)
+    .await
+    .unwrap();
+    commit(&writer, "rows").await;
+
+    let file = repo
+        .document_file("c-1")
+        .await
+        .expect("an older shape is not an error")
+        .expect("the document is there");
+    assert!(file.path.ends_with("chats/c-1.md"), "{:?}", file.path);
+    assert!(file.section_layout.is_none());
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
 /// A search's rows are listed once, as uuids, and every page is read by
 /// uuid: the listing is in the order asked for, a qmd ranking keeps its
 /// own order unless a sort replaces it, and the rows come back in the
