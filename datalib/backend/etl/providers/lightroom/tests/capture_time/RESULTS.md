@@ -215,3 +215,14 @@ built it again on open, and the panel showed what was written: E05X
 Capture Date/Time, Date Time Original and Capture Time 14:00 (Date Time
 Digitized still `xmp:CreateDate`'s 12:00, Date Time the import time);
 F10 and F12 2024-08-02 06:00 in all four fields.
+
+## Round 6: `datalib-lightroom-retime` on the test catalog
+
+Three edits applied with Lightroom closed, each to 14:00 +02:00: A01
+(put back to its file's 12:00 by Read Metadata), E03 (Edit Capture Time
+had kept a stale −07:00) and V01 (a video with no `DateTimeOriginal`).
+With the panel's cache moved aside, Lightroom showed 14:00 for all three
+in Capture Date/Time, Date Time Original and Capture Time; E03's and
+V01's Date Time (their modify dates) and V01's Date Time Digitized
+(`xmp:CreateDate`, 12:00) were unchanged. All 84 photos in the media
+folders sorted by (clock time, file name), A01 now among the 14:00s.

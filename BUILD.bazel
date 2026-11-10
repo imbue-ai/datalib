@@ -46,6 +46,7 @@ filegroup(
     srcs = glob(["scripts/**/*.py"]) + [
         "//datalib/backend/doltlite_facts:python_sources",
         "//datalib/backend/etl/providers/lightroom:python_sources",
+        "//datalib/backend/lightroom_retime:python_sources",
         "//datalib/reader:python_sources",
         "//tests/fixtures:python_sources",
         "//tools:python_sources",

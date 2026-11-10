@@ -44,6 +44,7 @@ extend-exclude = ["third-party"]
 include = [
     "datalib/backend/doltlite_facts",
     "datalib/backend/etl/providers/lightroom/tests/capture_time",
+    "datalib/backend/lightroom_retime/tests",
     "datalib/reader",
     "scripts",
     "tests/fixtures",

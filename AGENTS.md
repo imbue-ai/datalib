@@ -262,6 +262,9 @@ datalib/
                    and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired
                    config shape into the current one.
+    lightroom_retime/ `datalib-lightroom-retime`: applies a file of
+                   capture-time edits to a Lightroom catalog, the one
+                   thing here that writes a catalog. Not shipped.
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
