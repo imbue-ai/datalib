@@ -624,7 +624,10 @@ repeated runs, and read a wrong order as a failure and a slow page as a question
 
 Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
-to its target's source. A run records how many rows the library held,
+to its target's source. `--leave-out-source <id>`, repeatable, asks every
+query whose target is in another source with `-source:<id>`: for a source
+that quotes the eval set itself, such as the coding sessions that wrote
+it, whose copy of a query would otherwise outrank its target. A run records how many rows the library held,
 since a larger library is a bigger haystack: compare scores only
 between runs on the same clone. A bare date in a query is read in the
 applet's zone, so an eval set names one (`"tz": "America/New_York"`) and the
