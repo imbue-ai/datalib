@@ -992,7 +992,7 @@ fn email_body_markdown(
 /// `<code>`, a code span holding a blank line, a link's destination or
 /// title), and a tag that reached the page could hide or fake what
 /// follows it.
-pub(crate) fn html_markdown(html: &str) -> String {
+pub fn html_markdown(html: &str) -> String {
     let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
         .build()

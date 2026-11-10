@@ -190,6 +190,11 @@ reads the projection — **it never re-parses markdown** (AGENTS.md's
 
 ### Upstream text is escaped where it becomes markup
 
+Every way upstream text has gone wrong on its way to the page or to
+search is a case in the text-edge library,
+[`etl/text_edges/`](../../datalib/backend/etl/text_edges/README.md),
+and a change to how text is escaped is checked against it.
+
 The UI renders every document with markdown-it and `html: true`
 (`ui/src/cards/renderDocument.ts`), because the section wrappers are
 HTML. So a name, a subject or a text message written into the markdown
