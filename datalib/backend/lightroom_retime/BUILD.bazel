@@ -39,11 +39,21 @@ rust_binary(
     edition = "2021",
     deps = [
         ":datalib_lightroom_retime",
+        "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",
     ],
+)
+
+# The command line: well formed, and every `--help` example parses.
+rust_test(
+    name = "retime_bin_unittests",
+    size = "small",
+    crate = ":datalib-lightroom-retime",
+    edition = "2021",
 )
 
 # The binary against a catalog stock SQLite made, as Lightroom's is, in

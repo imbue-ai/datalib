@@ -153,12 +153,14 @@ class Catalog:
         (self.cache / "metadatahelper.db").write_bytes(b"cache")
 
     def retime(
-        self, edits: list[dict[str, str]], *flags: str
+        self, edits: list[dict[str, str]], *flags: str, stdin: bool = False
     ) -> subprocess.CompletedProcess[str]:
+        text = "\n".join(json.dumps(e) for e in edits) + "\n"
         edits_file = self.dir / "edits.jsonl"
-        edits_file.write_text("\n".join(json.dumps(e) for e in edits) + "\n")
+        edits_file.write_text(text)
         return subprocess.run(
-            [str(BINARY), str(self.path), str(edits_file), *flags],
+            [str(BINARY), str(self.path), "-" if stdin else str(edits_file), *flags],
+            input=text if stdin else None,
             check=False,
             capture_output=True,
             text=True,
@@ -279,6 +281,52 @@ class RetimeTest(unittest.TestCase):
         done = c.retime(EDITS, "--write")
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("quit Lightroom", done.stderr)
+
+    def test_json_report_from_edits_on_standard_input(self) -> None:
+        c = self.catalog()
+        stale = [dict(EDITS[0]), dict(EDITS[1], expected="2024-08-01T20:00:00.000")]
+        done = c.retime(stale, "--json", stdin=True)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        rows = [json.loads(line) for line in done.stdout.splitlines()]
+        self.assertEqual(
+            [(r.get("id_global"), r.get("status")) for r in rows[:2]],
+            [("ID-A01", "write"), ("ID-F10", "refused")],
+        )
+        self.assertEqual(rows[0]["capture_time"], "2024-07-01T14:00:00+02:00")
+        self.assertIn("not the expected", rows[1]["reason"])
+        self.assertEqual(
+            rows[2],
+            {
+                "to_write": 1,
+                "already_done": 0,
+                "refused": 1,
+                "written": False,
+                "backup": None,
+                "cache_moved_to": None,
+            },
+        )
+
+    def test_help_version_and_bad_input(self) -> None:
+        def call(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(BINARY), *args], check=False, capture_output=True, text=True
+            )
+
+        help_ = call("--help")
+        self.assertEqual(help_.returncode, 0)
+        for words in ("expected", "capture_time", ".bak_timestamps_", "Exit status"):
+            self.assertIn(words, help_.stdout)
+        self.assertEqual(call("--version").returncode, 0)
+        self.assertEqual(call().returncode, 2)
+        c = self.catalog()
+        self.assertEqual(c.retime(EDITS).returncode, 0)  # writes edits.jsonl
+        gone = call(str(c.dir / "nope.lrcat"), str(c.dir / "edits.jsonl"))
+        self.assertEqual(gone.returncode, 1)
+        self.assertIn("no catalog at", gone.stderr)
+        (c.dir / "bad.jsonl").write_text('{"id_global": "x"}\n')
+        bad = call(str(c.path), str(c.dir / "bad.jsonl"))
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("line 1:", bad.stderr)
 
 
 if __name__ == "__main__":

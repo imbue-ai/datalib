@@ -145,6 +145,9 @@ async fn apply(conn: &mut SqliteConnection, edits: Vec<Edit>, planned: &[Row]) -
 }
 
 fn refuse_if_open(catalog: &Path) -> Result<()> {
+    if !catalog.is_file() {
+        bail!("no catalog at {}", catalog.display());
+    }
     if lock_file(catalog).exists() {
         bail!(
             "Lightroom has {} open (its .lock file is there); quit Lightroom first",

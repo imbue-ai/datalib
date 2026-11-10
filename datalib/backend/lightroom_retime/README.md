@@ -13,6 +13,11 @@ bazel-bin/datalib/backend/lightroom_retime/datalib-lightroom-retime <catalog.lrc
 bazel-bin/datalib/backend/lightroom_retime/datalib-lightroom-retime <catalog.lrcat> <edits.jsonl> --write  # applies it
 ```
 
+`-` reads the edits from standard input, and `--json` reports one JSON
+object per edit (`status` is `write`, `already_done` or `refused`, with
+a `reason`), then one for the run. `--help` has the format, what is
+written and the exit status.
+
 ## The edits file
 
 JSON Lines: one object per line, one line per photo.
