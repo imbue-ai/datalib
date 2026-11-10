@@ -21,7 +21,9 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_text};
+use datalib_etl_render::html::{
+    code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
@@ -60,7 +62,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     thread declares the marks it reads.
 /// v19: an email attached to an email is listed among the attachments.
 /// v20: an email's stamp keeps the offset its `Date` was written in.
-/// v21: a quote's attribution line is plain text.
+/// v21: a quote's attribution line is plain text, and an HTML body's
+///     `<pre>` and `&amp;lt;` read as the sender wrote them.
 pub const RENDER_VERSION: u32 = 21;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
@@ -985,17 +988,89 @@ fn email_body_markdown(
     Some(plain_body_markdown(&parsed.text_body))
 }
 
-/// An HTML body as markdown, with no tag of the sender's in it. htmd
-/// keeps some of the text it converts as raw HTML (a `<pre>` without a
-/// `<code>`, a code span holding a blank line, a link's destination or
-/// title), and a tag that reached the page could hide or fake what
-/// follows it.
+/// An HTML body as markdown, its text reading as the sender wrote it.
+/// Two of htmd's outputs need help: a `<pre>` with no `<code>` comes out
+/// as its decoded text, so a `&lt;div&gt;` in it became a tag, and text
+/// holding `&amp;lt;` comes out as `&lt;`, which markdown reads as `<`.
 pub fn html_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
+    let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
+        .add_handler(vec!["pre"], pre_as_code_block)
         .build()
         .convert(html)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    entity_ampersands_escaped(&md)
+}
+
+/// A `<pre>` as a code block. One holding a `<code>` already comes out
+/// fenced; one without is fenced here. htmd's one escape inside, a `\`
+/// before a leading backtick or tilde, is taken off: a code block would
+/// show it.
+fn pre_as_code_block(
+    handlers: &dyn htmd::element_handler::Handlers,
+    element: htmd::Element,
+) -> Option<htmd::element_handler::HandlerResult> {
+    let inner = handlers.walk_children(element.node).content;
+    let inner = inner.trim_matches('\n');
+    if inner.starts_with("```") || inner.starts_with("~~~") {
+        return Some(format!("\n\n{inner}\n\n").into());
+    }
+    let text = inner
+        .strip_prefix('\\')
+        .filter(|t| t.starts_with(['`', '~']))
+        .unwrap_or(inner);
+    Some(format!("\n\n{}\n\n", md_code_block("", text)).into())
+}
+
+/// htmd writes no character reference of its own, so one in its output
+/// outside code is text the sender wrote (`&amp;lt;` in the HTML). Its
+/// `&` is escaped, or markdown would read the reference as the character.
+fn entity_ampersands_escaped(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut fence: Option<(char, usize)> = None;
+    for line in md.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let marker = ['`', '~']
+            .into_iter()
+            .map(|c| (c, trimmed.chars().take_while(|&x| x == c).count()))
+            .find(|&(_, n)| n >= 3);
+        match (fence, marker) {
+            (Some((c, n)), Some((m, k))) if m == c && k >= n && trimmed.len() == k => {
+                fence = None;
+                out.push_str(line);
+            }
+            (Some(_), _) => out.push_str(line),
+            (None, Some(open)) => {
+                fence = Some(open);
+                out.push_str(line);
+            }
+            (None, None) => {
+                for (part, is_code) in code_span_parts(line) {
+                    if is_code {
+                        out.push_str(part);
+                    } else {
+                        push_entity_ampersands_escaped(&mut out, part);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn push_entity_ampersands_escaped(out: &mut String, text: &str) {
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let name_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '#'))
+            .unwrap_or(after.len());
+        let is_reference = name_len > 0 && after[name_len..].starts_with(';');
+        out.push_str(if is_reference { "&amp;" } else { "&" });
+        rest = after;
+    }
+    out.push_str(rest);
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:
@@ -1204,6 +1279,32 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
         assert!(quoted
             .expect("quoted folded")
             .starts_with("<details><summary>On Tue, Data &lt;data@e.invalid&gt; wrote:</summary>"),);
+    }
+
+    /// htmd wrote a `<pre>` without a `<code>` as its decoded text, so an
+    /// escaped tag in it became a tag, and `&amp;lt;` as `&lt;`, which the
+    /// page shows as `<`.
+    #[test]
+    fn an_html_body_reads_as_the_sender_wrote_it() {
+        assert_eq!(
+            html_markdown(
+                "<p>The console printed:</p><pre>&lt;div style=&quot;display:none&quot;&gt;phaser&lt;/div&gt;</pre>"
+            ),
+            "The console printed:\n\n```\n<div style=\"display:none\">phaser</div>\n```"
+        );
+        assert_eq!(
+            html_markdown("<pre><code class=\"language-rust\">a &lt; b</code></pre>"),
+            "```rust\na < b\n```"
+        );
+        assert_eq!(
+            html_markdown("<p>Type &amp;lt; or &amp;#60; for it. Tea &amp; biscuits.</p>"),
+            "Type &amp;lt; or &amp;#60; for it. Tea & biscuits."
+        );
+        assert_eq!(
+            html_markdown("<p><code>&amp;lt;</code></p>"),
+            "`&lt;`",
+            "code keeps its text"
+        );
     }
 
     #[test]

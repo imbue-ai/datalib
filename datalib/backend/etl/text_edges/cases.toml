@@ -286,7 +286,6 @@ text = '''
 <p>The console printed:</p><pre>&lt;div style="display:none"&gt;phaser&lt;/div&gt;</pre>
 '''
 shows = ['<div style="display:none">phaser</div>']
-fails_today = "htmd decodes the entities in a <pre> with no <code> and writes them back unescaped, so the text becomes a tag; the sanitizer keeps it to this message."
 
 [[case]]
 id = "email-non-breaking-space"
@@ -307,7 +306,6 @@ text = '''
 <p>Type &amp;lt; to write a less-than sign.</p>
 '''
 shows = ["Type &lt; to write"]
-fails_today = "htmd decodes &amp;lt; to &lt; without escaping it for markdown, so the page shows <."
 
 # ── Links ──────────────────────────────────────────────────────────────
 
@@ -337,12 +335,14 @@ elements = { a = 1 }
 
 [[case]]
 id = "plain-text-reads-as-typed"
-edge = """A text message is not markup: tags and markdown in it read as \
-typed, as the phone showed them."""
+edge = """A text message is not markup: an arrow and a line starting `#` read \
+as typed, as the phone showed them, and only a bare address becomes a \
+link. (`*bold*` stays emphasis on purpose: WhatsApp writes bold so.)"""
 enters = "plain"
 text = '''
-<b>Red alert</b> — all hands to [battle stations](https://example.invalid/alert)
+Ten Forward at 1000 <- don't be late.
+# of seats: 12
+Menu: https://example.invalid/menu
 '''
-shows = ["<b>Red alert</b>", "[battle stations](https://example.invalid/alert)"]
-# The address in it is still a link, as the phone showed it.
-elements = { b = 0, a = 1 }
+shows = ["Ten Forward at 1000 <- don't be late.", "# of seats: 12"]
+elements = { h1 = 0, a = 1 }

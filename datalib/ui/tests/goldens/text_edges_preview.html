@@ -1933,12 +1933,12 @@ Beam down at 0800 to survey the ruins.</pre>
 <div class="preview-doc" id="case-email-pre-without-code">
 <h3 class="preview-name">email-pre-without-code</h3>
 <p class="preview-edge">A `&lt;pre&gt;` with no `&lt;code&gt;` inside came through the HTML-to-markdown step as raw HTML, so a tag written in it as text reached the page as a tag.</p>
-<p class="preview-failing">Fails today: htmd decodes the entities in a &lt;pre&gt; with no &lt;code&gt; and writes them back unescaped, so the text becomes a tag; the sanitizer keeps it to this message.</p>
 <pre class="preview-typed">&lt;p&gt;The console printed:&lt;/p&gt;&lt;pre&gt;&amp;lt;div style=&quot;display:none&quot;&amp;gt;phaser&amp;lt;/div&amp;gt;&lt;/pre&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--email"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>The console printed:</p>
-<div style="display: none;">phaser</div>
+<pre><code>&lt;div style="display:none"&gt;phaser&lt;/div&gt;
+</code></pre>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--email"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
@@ -1961,11 +1961,10 @@ Beam down at 0800 to survey the ruins.</pre>
 <div class="preview-doc" id="case-email-escaped-entity">
 <h3 class="preview-name">email-escaped-entity</h3>
 <p class="preview-edge">`&amp;amp;lt;` in an email is the text `&amp;lt;`, not `&lt;`.</p>
-<p class="preview-failing">Fails today: htmd decodes &amp;amp;lt; to &amp;lt; without escaping it for markdown, so the page shows &lt;.</p>
 <pre class="preview-typed">&lt;p&gt;Type &amp;amp;lt; to write a less-than sign.&lt;/p&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--email"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
-<p>Type &lt; to write a less-than sign.</p>
+<p>Type &amp;lt; to write a less-than sign.</p>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--email"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
@@ -1977,11 +1976,15 @@ Beam down at 0800 to survey the ruins.</pre>
 <h2 class="preview-source-name">plain <span class="preview-count">1 case</span></h2>
 <div class="preview-doc" id="case-plain-text-reads-as-typed">
 <h3 class="preview-name">plain-text-reads-as-typed</h3>
-<p class="preview-edge">A text message is not markup: tags and markdown in it read as typed, as the phone showed them.</p>
-<pre class="preview-typed">&lt;b&gt;Red alert&lt;/b&gt; — all hands to [battle stations](https://example.invalid/alert)</pre>
+<p class="preview-edge">A text message is not markup: an arrow and a line starting `#` read as typed, as the phone showed them, and only a bare address becomes a link. (`*bold*` stays emphasis on purpose: WhatsApp writes bold so.)</p>
+<pre class="preview-typed">Ten Forward at 1000 &lt;- don't be late.
+# of seats: 12
+Menu: https://example.invalid/menu</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--signal"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
-<p>&lt;b&gt;Red alert&lt;/b&gt; — all hands to [battle stations](<a href="https://example.invalid/alert">https://example.invalid/alert</a>)</p>
+<p>Ten Forward at 1000 &lt;- don't be late.
+# of seats: 12
+Menu: <a href="https://example.invalid/menu">https://example.invalid/menu</a></p>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--signal"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
