@@ -1,0 +1,66 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# `datalib-lightroom-retime`: applies a JSON Lines file of capture-time
+# edits to a Lightroom Classic catalog (README.md). Not shipped: it is not
+# in //datalib/backend:bin.
+rust_library(
+    name = "datalib_lightroom_retime",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    crate_name = "datalib_lightroom_retime",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:flate2",
+        "@datalib_crates//:quick-xml",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "retime_unittests",
+    size = "small",
+    crate = ":datalib_lightroom_retime",
+    edition = "2021",
+)
+
+rust_binary(
+    name = "datalib-lightroom-retime",
+    srcs = ["src/main.rs"],
+    crate_name = "datalib_lightroom_retime_bin",
+    edition = "2021",
+    deps = [
+        ":datalib_lightroom_retime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The binary against a catalog stock SQLite made, as Lightroom's is, in
+# WAL mode, read back by stock SQLite: the binary writes with doltlite,
+# and Lightroom has to find the file whole.
+py_test(
+    name = "apply_test",
+    size = "small",
+    srcs = ["tests/apply_test.py"],
+    args = ["$(rootpath :datalib-lightroom-retime)"],
+    data = [":datalib-lightroom-retime"],
+    main = "tests/apply_test.py",
+)
+
+# This package's contribution to `//:python_sources`, which lints it.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["tests/*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)

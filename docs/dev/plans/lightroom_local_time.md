@@ -1,6 +1,6 @@
 # Lightroom photos in their local time
 
-**Status: proposal (2026-11-09), not built.** What Lightroom does with a
+**Status: phase 0 measured and the applier built (2026-11-10); phases 1 and 2 not built.** What Lightroom does with a
 capture time today, measured, is in
 [`lightroom/INGEST.md`](../../../datalib/backend/etl/providers/lightroom/INGEST.md#how-lightroom-keeps-a-capture-time);
 this plan builds on it and does not repeat it.
@@ -22,10 +22,11 @@ Decided with the catalog's owner:
   catalog only, never the photo files (so no Save Metadata to Files).
 - **Videos move to local time** like photos, though most are stored on a
   UTC clock today (about 9,500 in the one real catalog measured).
-- **The tool that writes the catalog lives in its own repository.** It
-  takes a CSV of photo id to timestamp and applies it; working out the
-  CSV is the hard part, and an agent does it, from file names, other
-  photos in the folder, the phone's times and GPS.
+- **The tool that writes the catalog lives in this repository**
+  (`datalib-lightroom-retime`, §8), first decided as its own repository.
+  It takes a file of photo id to timestamp and applies it; working out
+  that file is the hard part, and an agent does it, from file names,
+  other photos in the folder, the phone's times and GPS.
 - **"One folder, one time zone" holds mostly, not always**, so a folder
   that crosses zones has to be found and decided photo by photo.
 - **The time-zone boundary map may be tried**, though it is ODbL (§7).
@@ -54,11 +55,12 @@ clock; a "capture time" that is really a save or import time
 |---|---|---|
 | the render reads the catalog as correct, and reports where it is not | datalib | §5 |
 | the evidence an agent works from | datalib | §6 |
-| the CSV: one target time per photo | an agent, with the owner | §6 |
-| the applier: writes the CSV into the catalog | its own repository | §8 |
+| the edits file: one target time per photo | an agent, with the owner | §6 |
+| the applier: writes the edits into the catalog | `datalib-lightroom-retime`, not shipped | §8 |
 
-datalib never writes the catalog: it mirrors it, and reads the mirror.
-The loop is: sync; read the problems and the evidence; make a CSV;
+A sync never writes the catalog: it mirrors it, and reads the mirror.
+Only the applier writes it, run by the owner.
+The loop is: sync; read the problems and the evidence; make an edits file;
 review it; apply it with Lightroom closed; sync again and watch the
 problems go.
 
@@ -129,9 +131,9 @@ In `lightroom_render/src/photo.rs::capture_time`:
 This is useful before any catalog is fixed: it is right for the photos
 that are already correct, and it says where the rest are.
 
-## 6. Phase 2: the evidence, and the CSV
+## 6. Phase 2: the evidence, and the edits file
 
-An agent makes the CSV from evidence datalib already holds in the
+An agent makes the edits file from evidence datalib already holds in the
 mirror, without opening the catalog. datalib's part is a documented way
 to get, per photo:
 
@@ -148,18 +150,14 @@ photo its local time. A folder that crosses zones is decided photo by
 photo. Videos whose time is an import time have no evidence of their own
 and are left for the owner, or dated from their neighbours with a note.
 
-**The CSV**, one row per photo to change:
-
-| column | holds |
-|---|---|
-| `id_global` | the photo's uuid in the catalog |
-| `expected` | its `captureTime` as the agent read it |
-| `capture_time` | the target: local clock time with its offset, `2024-07-01T14:00:00.000+02:00` |
-| `why` | one line: which rule or evidence gave it |
-
-The applier refuses a row whose `captureTime` is no longer `expected`, so
-a CSV made from a mirror older than the catalog never overwrites a newer
-edit. Before applying, a check over the CSV: every offset is valid for
+**The edits file** is JSON Lines, one photo per line: `id_global`,
+`expected` (its `captureTime` as the agent read it), `capture_time` (the
+target, local clock time with its offset) and `why`; the applier's
+[README](../../../datalib/backend/lightroom_retime/README.md) has the
+format. The applier refuses a line whose `captureTime` is no longer
+`expected`, so a file made from a mirror older than the catalog never
+overwrites a newer edit. Still to build, before applying, a check over
+the file: every offset is valid for
 its zone on that date, and a folder's rows agree on a zone unless marked.
 
 ## 7. The time-zone map
@@ -168,23 +166,24 @@ The usual map of time-zone boundaries, timezone-boundary-builder, is
 ODbL, and datalib takes only permissively licensed code and data
 (`datalib/backend/deny.toml`; the photos plan's §9). Once the catalog is
 correct, datalib needs no map: the offset is in the catalog. So the map
-belongs with the agent and the applier, in their own repository, where
-its share-alike terms apply to that repository's choices, not datalib's.
+belongs with the agent, outside this repository, where its share-alike
+terms apply to that repository's choices, not datalib's; the applier
+here takes only the times the agent settled on.
 Whether a lookup's result (an offset per photo, written into the
 catalog) is a work its terms reach is for whoever publishes that
 repository to check.
 
 ## 8. Phase 3: the applier
 
-In its own repository. Reads the CSV; with Lightroom closed (it refuses
-while the catalog's lock file is there), backs the catalog up, then per
-row writes what phase 0 found Lightroom needs: `captureTime`, the XMP's
-`exif:DateTimeOriginal` and `photoshop:DateCreated` with the offset
-(declaring their namespaces where the XMP lacks them, and refusing XMP
-that does not parse), the harvested date columns. Then it deletes the catalog's `Helper.lrdata`
-cache, which Lightroom rebuilds. It leaves `originalCaptureTime` as Lightroom's
-record of the first time, setting it only where it is empty. It has a
-dry run that prints what would change, and is safe to run twice.
+Built: `datalib/backend/lightroom_retime/`, `datalib-lightroom-retime`,
+not yet shipped; its [README](../../../datalib/backend/lightroom_retime/README.md)
+says what it writes and how it stays safe. It writes what phase 0 found
+Lightroom needs (§4): `captureTime`, the XMP's dates with the offset,
+the day columns, `originalCaptureTime` where empty; then it deletes the
+`Helper.lrdata` cache. It refuses an open catalog, backs the catalog up,
+writes every line or none, prints without `--write`, and is safe to run
+twice. It writes through doltlite; its test reads the result back with
+stock SQLite.
 
 ## 9. Open questions
 
@@ -192,7 +191,7 @@ dry run that prints what would change, and is safe to run twice.
 - [x] **Where the offset lives**: the XMP's `exif:DateTimeOriginal` and
   `photoshop:DateCreated`. Edit Capture Time drops one in `captureTime`.
 - [ ] **Virtual copies** share a file but are separate `Adobe_images`
-  rows; the CSV should name each, and the check should require they
+  rows; the edits file should name each, and the check should require they
   agree.
 - [ ] **New imports**: a camera left on home time keeps coming. The §5
   problems find each new folder that needs work; whether to do more is

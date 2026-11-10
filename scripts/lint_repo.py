@@ -251,6 +251,7 @@ def _scan(root: Path) -> set[str]:
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
     "datalib/backend/etl/providers/lightroom/tests/capture_time",
+    "datalib/backend/lightroom_retime/tests",
     "datalib/reader",
     "scripts",
     "tests/fixtures",
