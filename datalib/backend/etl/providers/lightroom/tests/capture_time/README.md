@@ -107,3 +107,7 @@ python3 -I make_more_cases.py ~/lr-tz-test/media5 G
    - Import `media5` (Add), then select **G03** and **G04** and use
      Library › Convert Photo to DNG, keeping the JPEGs.
 4. **Quit**, and read the copy and the exported files.
+5. **Move `<copy> Helper.lrdata` aside**, the cache the Metadata panel
+   reads (`RESULTS.md` §"Round 5"), open the copy again, and note the
+   panel's times for **E05X**, **F10** and **F12**: does a rebuilt cache
+   show what was written?
