@@ -8,8 +8,9 @@ Usage: python3 -I edit_catalog.py <catalog.lrcat> <edits.csv>
 without extension), `capture_time` (the target, local clock time with
 its offset: `2024-07-01T14:00:00.000+02:00`), `touch` (`+`-joined, from
 the list below) and `asks`. Refuses a catalog Lightroom has open (its
-`.lock` file is there) and copies the catalog to `<catalog>.before-edit`
-first. Only for a catalog of these test files.
+`.lock` file is there), copies the catalog to `<catalog>.before-edit`
+first (`.before-edit-2` and on when that is taken), and refuses an XMP
+edit that would not parse. Only for a catalog of these test files.
 
   capture         `Adobe_images.captureTime` = the clock time, no offset
   capture_offset  `Adobe_images.captureTime` = the clock time and offset
@@ -27,11 +28,18 @@ import shutil
 import sqlite3
 import struct
 import sys
+import xml.etree.ElementTree as ET
 import zlib
 from datetime import datetime
 
 TOUCHES = {"capture", "capture_offset", "xmp", "days", "original"}
 XMP_DATES = ("exif:DateTimeOriginal", "photoshop:DateCreated")
+# A photo whose XMP had no such date may not declare the prefix either;
+# Lightroom then reads none of that photo's XMP.
+NAMESPACES = {
+    "exif": "http://ns.adobe.com/exif/1.0/",
+    "photoshop": "http://ns.adobe.com/photoshop/1.0/",
+}
 
 
 def unpack_xmp(blob: bytes) -> str:
@@ -52,6 +60,17 @@ def set_attr(xmp: str, name: str, value: str) -> str:
     # Add it beside the first attribute of the description.
     return re.sub(
         r'(<rdf:Description rdf:about=""\s)', rf'\1   {name}="{value}"\n', xmp, count=1
+    )
+
+
+def declare(xmp: str, prefix: str) -> str:
+    if f"xmlns:{prefix}=" in xmp:
+        return xmp
+    return re.sub(
+        r'(<rdf:Description rdf:about="")',
+        rf'\1\n    xmlns:{prefix}="{NAMESPACES[prefix]}"',
+        xmp,
+        count=1,
     )
 
 
@@ -99,7 +118,8 @@ def apply(db: sqlite3.Connection, name: str, target: datetime, touch: set[str]) 
         ).fetchone()
         xmp = unpack_xmp(blob)
         for attr in XMP_DATES:
-            xmp = set_attr(xmp, attr, with_offset(target))
+            xmp = set_attr(declare(xmp, attr.split(":")[0]), attr, with_offset(target))
+        ET.fromstring(xmp)
         db.execute(
             "UPDATE Adobe_AdditionalMetadata SET xmp = ? WHERE image = ?",
             (pack_xmp(xmp), image),
@@ -111,7 +131,11 @@ def main():
     catalog, edits = sys.argv[1], sys.argv[2]
     if os.path.exists(catalog + ".lock"):
         sys.exit(f"{catalog} is open in Lightroom (its .lock file is there)")
-    shutil.copyfile(catalog, catalog + ".before-edit")
+    backup, n = catalog + ".before-edit", 1
+    while os.path.exists(backup):
+        n += 1
+        backup = f"{catalog}.before-edit-{n}"
+    shutil.copyfile(catalog, backup)
     db = sqlite3.connect(catalog)
     with open(edits, newline="") as f:
         for row in csv.DictReader(f):

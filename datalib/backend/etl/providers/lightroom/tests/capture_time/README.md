@@ -98,6 +98,9 @@ python3 -I make_more_cases.py ~/lr-tz-test/media5 G
    Metadata › Date column, note which day F10 and F12 are under.
 2. **Quit**, and read the copy: did Lightroom rewrite anything on open?
 3. **Open it again, then**:
+   - In the Metadata panel, note Capture Date,
+     Capture Time, Capture Date/Time and Date Time Original for **A01**,
+     **E05X**, **F10** and **F12**.
    - Edit Capture Time on **A11**: Shift by set number of hours, +1.
    - Metadata › Read Metadata from Files on **A01** and **D08**.
    - Export **D08** (JPEG) and **E05X** (original) to a folder.

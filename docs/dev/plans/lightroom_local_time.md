@@ -74,12 +74,20 @@ Measured on the test catalog, with the cases in
   Bag-o-Goodies page also says. So the applier writes the `.lrcat`
   directly with Lightroom closed. Still to try: whether setting
   `dateCreated` moves `captureTime`, and whether a newer SDK adds a key.
-- **Does a direct edit hold?** With Lightroom closed, change
-  `captureTime`, the XMP's dates and the harvested date columns behind
-  the Library filter (`AgHarvestedExifMetadata.dateYear` and its
-  neighbours). Does Lightroom show and sort by the new time, keep it, and
-  not rebuild it from the file? What does it need besides
-  (`AgLibraryImageChangeCounter`, search indexes)?
+- **Does a direct edit hold through opening the catalog? Yes**
+  (`RESULTS.md` §"Round 5"). Lightroom kept every value written, rebuilt
+  nothing from the files, and needed nothing else touched. Each place
+  feeds one thing, so a fix writes all three:
+  - `captureTime` decides the sort;
+  - the XMP's `exif:DateTimeOriginal` is what the Metadata panel shows
+    as Capture Date/Time;
+  - `AgHarvestedExifMetadata.dateYear`, `dateMonth` and `dateDay` decide
+    the day the Library filter files it under.
+
+  XMP that is not well-formed XML is silently read as empty, so the
+  applier declares any namespace it uses and parses what it writes.
+  Still to see: whether the edit survives Lightroom's own edits and Read
+  Metadata from Files, and what an export writes.
 - **An offset in `captureTime`** (`…T14:00:00+02:00`), which Lightroom
   already writes in one case: does it survive Lightroom's own edits, a
   Read Metadata, a re-import? If it does, the catalog carries the zone in
@@ -168,8 +176,9 @@ repository to check.
 In its own repository. Reads the CSV; with Lightroom closed (it refuses
 while the catalog's lock file is there), backs the catalog up, then per
 row writes what phase 0 found Lightroom needs: `captureTime`, the XMP's
-`exif:DateTimeOriginal` and `photoshop:DateCreated` with the offset, the
-harvested date columns. It leaves `originalCaptureTime` as Lightroom's
+`exif:DateTimeOriginal` and `photoshop:DateCreated` with the offset
+(declaring their namespaces where the XMP lacks them, and refusing XMP
+that does not parse), the harvested date columns. It leaves `originalCaptureTime` as Lightroom's
 record of the first time, setting it only where it is empty. It has a
 dry run that prints what would change, and is safe to run twice.
 

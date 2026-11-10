@@ -297,7 +297,7 @@ zones, though each recorded its moment correctly.
 | field | shows |
 |---|---|
 | Capture Date, Capture Time | `captureTime`'s clock time |
-| Capture Date/Time, Date Time Original | the file's `DateTimeOriginal`; with none, the file's modified date (`AgLibraryFile.modTime`, to the millisecond) |
+| Capture Date/Time, Date Time Original | `exif:DateTimeOriginal` in the catalog's XMP (the file's, until something changes it); with none, a video's `xmp:CreateDate`, as written; else the file's modified date (`AgLibraryFile.modTime`, to the millisecond) |
 | Date Time (and Date, Time) | the modify date: EXIF's tag for it is named `DateTime` |
 
 **No field shows an offset or applies one.** A photo at 05:00 −07:00
@@ -345,8 +345,9 @@ No other table holds a photo's offset. Searching every text column of
 the test catalog for a time with one found, besides `captureTime`, only
 Lightroom's own clocks: `AgLibraryImport.importDate` (the computer's
 zone) and `AgLibraryImageChangeCounter.changedAtTime` (UTC). There is no
-zone column; the year, month and day columns behind the Library date
-filter (`AgHarvestedExifMetadata.dateYear` and so on) carry none.
+zone column; the year, month and day columns behind the Library
+filter's Date column (`AgHarvestedExifMetadata.dateYear` and so on)
+carry none. That filter reads those columns, not `captureTime`.
 
 Not yet measured: whether **Read Metadata from Files** takes a changed
 offset from the file into the catalog, which decides whether a catalog

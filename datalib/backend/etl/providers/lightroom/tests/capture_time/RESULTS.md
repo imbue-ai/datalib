@@ -134,3 +134,40 @@ writes Motion JPEG and PCM sound, which imported.
   `AgLibraryImageChangeCounter.changedAtTime` (every image, UTC), and
   `AgLibraryIPTC.caption` only because the captions name offsets. The XMP
   blobs are compressed, so they are read separately (`read_catalog.py`).
+
+## Round 5: times written straight into the catalog
+
+`edit_catalog.py` with `round5_edits.csv`, on a copy of the catalog after
+round 4, with Lightroom closed. Its first run added `exif:` and
+`photoshop:` attributes to three XMPs (E05X, F10, F12) that declared
+neither namespace, so their XMP was not well-formed XML; the probe now
+declares a missing namespace and refuses XMP that does not parse, and
+those three were rewritten after step 2.
+
+**Opening the copy (steps 1 and 2):**
+
+- **Lightroom kept every value written.** Read back after it quit,
+  `captureTime`, `originalCaptureTime`, the XMP dates and the day columns
+  were exactly as written; no "metadata changed" badge. It changed only
+  other things: develop settings and change counters of photos that were
+  viewed, and F10's `sidecarStatus` (0 to 1).
+- **The sort follows the written `captureTime`**: all 80 in (clock time,
+  file name) order. A01 moved from 12:00 to the 14:00s; D08 to 05:00; F10
+  and F12 to 2024-08-02 06:00; V01 and E05X to 14:00. A11's
+  `…14:00:00+02:00` sorted among the 14:00s by name, offset ignored.
+- **The Library filter's Date column follows the day columns**: F10 (day
+  columns moved) is under Aug 2, F12 (left) under Aug 1, though both have
+  `captureTime` 2024-08-02.
+- **Capture Date/Time and Date Time Original show the catalog's XMP
+  `exif:DateTimeOriginal`, never `captureTime`.** D08 shows the 05:00 the
+  probe wrote into its XMP, though its file still says 14:00. A01 and A11
+  (`captureTime` only) still show 12:00, while sorting at 14:00. A05
+  (offset added in the XMP) shows 05:00, as before.
+- **With no `DateTimeOriginal`, a video's Capture Date/Time is its
+  `xmp:CreateDate` as written**: V01 shows 12:00 (`…12:00:00Z`), as does
+  its Date Time Digitized, while sorting at 14:00.
+- **XMP that is not well-formed is read as empty, silently**: E05X showed
+  no Date Time (its `xmp:ModifyDate` is the import time) and a Capture
+  Date/Time of 2001-01-01 00:00, zero in Lightroom's seconds since 2001;
+  F10 and F12 fell back to the file's modified date. Lightroom neither
+  repaired nor replaced the XMP, nor warned.
