@@ -18,7 +18,7 @@ use crate::read::ImageRow;
 use crate::xmp::{self, XmpFields};
 
 /// Bump when what a photo's row or terms say changes.
-pub const RENDER_VERSION: u32 = 2;
+pub const RENDER_VERSION: u32 = 3;
 
 /// The H3 cells a photo's card names: about a region, a town, a
 /// neighbourhood and a block. Search does not need them; it reads the
@@ -326,7 +326,7 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
         Scope::Markdown(uuid),
         Some(uuid),
         Outcome::Nulled,
-        Problem::lossy(
+        Problem::lossy_explained(
             "capture_time_assumed_utc",
             Some("created_at".to_string()),
             "the photo records no time zone and the source names none \
@@ -444,6 +444,19 @@ mod tests {
             capture_time("not a time", &XmpFields::default(), None),
             None
         );
+    }
+
+    /// The warning on a photo read as UTC says so: cut at 80 characters
+    /// it ended before "read as UTC", and so never said what was done.
+    #[test]
+    fn the_assumed_utc_warning_is_kept_whole() {
+        let row = assumed_utc("lightroom", "00000000-0000-8000-8000-000000000001");
+        assert!(
+            row.sample.ends_with("so its time is read as UTC"),
+            "{}",
+            row.sample
+        );
+        assert_eq!(row.rule.as_deref(), Some("capture_time_assumed_utc"));
     }
 
     #[test]
