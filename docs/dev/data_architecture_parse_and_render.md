@@ -246,6 +246,69 @@ so a line break, a quote or a `---` inside cannot end the line or the
 block. The applet strips front matter at the first line that is `---`
 by itself.
 
+### One section cannot reach the next
+
+Escaping is the first line, and it is per field and per renderer. Text
+a source authored as markup goes in as it is, and a renderer can miss a
+field. Rendered as one string, a tag one message leaves open would run
+on through every message after it: an unclosed
+`<div style="display:none">` would hide the rest of the conversation,
+and a copied `<div id="m-…" data-section-uuid="…" class="msg">` could
+pose as a later message, so that a click on that message's grid row
+landed on the copy. Markdown has no "close everything here" marker.
+
+So **the UI renders and sanitizes each message as a fragment of its
+own.** The HTML parser closes whatever a fragment leaves open at the
+fragment's end, so nothing in one message can wrap or replace the next.
+
+**Where the messages begin comes from the projection, never from the
+text.** Upstream text can contain any bytes, the wrapper's included,
+but it cannot move a length the renderer recorded. A renderer hands
+its document over as `Section`s (`etl/render/src/section.rs`): keyed
+pieces, one per message, each keyed by its `data-section-uuid`, and
+unkeyed ones (the front matter and title, the `<details>` opener and
+closer around a run of tool steps). Joined in order they are the `.md`.
+The render store keeps their layout, each piece's uuid or none and its
+length in bytes, in the document's `markdowns.section_layout`; the grid
+index copies it; and the document route returns it beside the body as
+`sections`, each length counted in UTF-16 code units, the way
+JavaScript indexes a string. The route checks the layout against the
+file it read and sends none if they disagree, which only happens while
+a render is rewriting that file.
+
+How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
+
+- **The unkeyed pieces are the page's frame.** They are rendered
+  together, as one markdown string with a placeholder where each
+  message goes, so a `<details>` opened in one still closes in a later
+  one. They hold only what the renderer writes itself; the title in
+  them is escaped.
+- **Each keyed piece is rendered and sanitized alone.** One that opens
+  with the renderer's wrapper line (`<div id="m-{uuid}"
+  data-section-uuid="{uuid}" …>`, its uuid the piece's key) and ends
+  with `</div>` is drawn as that wrapper with the inside rendered as a
+  fragment of its own, so a `</div>` in a message cannot close the
+  wrapper early either.
+- **Only the renderer's wrapper answers to a message's id.** Inside a
+  piece, an `id="m-…"` or a `data-section-uuid` that names any message
+  of the document is taken off.
+- **A message draws only inside its own box.** `documentBody.css`
+  gives every wrapper `contain: paint`, so `position: fixed`, a
+  negative margin or a transform in one message cannot cover another.
+
+A renderer that declares no sections stores no layout, and its body is
+drawn as one fragment, as every body was before; its wrappers still get
+`contain: paint`. `grep -rln 'Section::keyed' datalib/backend/etl`
+lists the renderers that declare them. Teaching another one is filling
+`RenderedMarkdown::sections`, and the next render stores its layout.
+
+The cost is a sanitizer pass per message: in the unit tests' jsdom, a
+2,000-message conversation took about 0.7 s piece by piece against
+0.4 s whole. `ui/tests/section_isolation.test.ts` holds the rule, and
+`ui/tests/e2e/section-isolation.spec.ts` checks it in a browser on a
+real document, with a control that shows the same text does hide the
+next message once the layout is taken away.
+
 ## 3. The projection
 
 Three shapes, in order:

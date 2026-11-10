@@ -28,6 +28,17 @@ wrote, so **show it through an HTML sanitizer**, as you would any mail.
 Keep at least the `<time>` and `<div>` elements and the attributes this
 page names.
 
+Render it a message at a time, too, where the answer has `sections`: a
+list of `{uuid, len}` that cuts `body` into its pieces in order, `len`
+counted in UTF-16 code units (a JavaScript string's `length`). A piece
+with a `uuid` is one message; render and sanitize it on its own, and a
+tag it leaves open is closed at its end instead of hiding the messages
+after it. The pieces without one (the title, the folds around a run of
+tool steps) open and close elements between them, so render those
+together. Datalib's viewer does both in `ui/src/cards/renderDocument.ts`.
+A document whose source does not mark its messages comes without
+`sections`.
+
 ## The parts of a document
 
 Each message, comment or record in a document is wrapped in a `div`

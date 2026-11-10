@@ -84,7 +84,7 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, and what the index knows of it |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 
 How a document names people, times and attachments, for an app that

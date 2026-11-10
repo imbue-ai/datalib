@@ -330,6 +330,7 @@ fn render_one(
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
 
     Ok(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

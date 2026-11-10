@@ -250,6 +250,7 @@ def _scan(root: Path) -> set[str]:
 # all three; this check is what makes forgetting one an error.
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
+    "datalib/backend/etl/providers/lightroom/tests/capture_time",
     "datalib/reader",
     "scripts",
     "tests/fixtures",

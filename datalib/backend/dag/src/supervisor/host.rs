@@ -18,7 +18,8 @@ use crate::subprocess::{
     ENV_CHECKPOINT_CADENCE, ENV_EMBED_CONTEXTS, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID,
 };
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
-use crate::supervisor::store::{RequestOutcome, RequestRow, Store};
+use crate::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
+use strum::VariantArray;
 
 /// What an idle host does at each turn of [`run_idle`].
 pub trait Periods {
@@ -175,35 +176,86 @@ pub fn start_record(
 /// How many steps a run's reason names before it only counts the rest.
 const REASON_NAMES: usize = 3;
 
-/// Why a busy period started, from the requests open as it did.
-pub fn sync_start(requests: &[RequestRow]) -> RunStart {
-    let reason = if requests.is_empty() {
-        "the loop found work with no sync request open".to_string()
-    } else {
-        let mut by: Vec<&str> = requests.iter().map(|r| r.opened_by.as_str()).collect();
-        by.sort_unstable();
-        by.dedup();
+/// Why a busy period started, from the requests and wipes open as it did.
+/// A period with nothing but compactions and collections to do is a
+/// shrink; any other is a sync.
+pub fn period_start(requests: &[RequestRow], wipes: &[WipeRow]) -> RunStart {
+    let mut parts = Vec::new();
+    if !requests.is_empty() {
         let roots: Vec<&str> = requests
             .iter()
             .flat_map(|r| r.roots.iter().map(String::as_str))
             .collect();
-        let named = roots
+        parts.push(format!(
+            "a sync asked for by {}: {}",
+            who(requests.iter().map(|r| r.opened_by.as_str())),
+            named(&roots)
+        ));
+    }
+    for kind in WipeKind::VARIANTS {
+        let these: Vec<&WipeRow> = wipes.iter().filter(|w| w.kind == Some(*kind)).collect();
+        if these.is_empty() {
+            continue;
+        }
+        let by = who(these.iter().map(|w| w.opened_by.as_str()));
+        let targets: Vec<&str> = these
             .iter()
-            .take(REASON_NAMES)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(", ");
-        let rest = roots.len().saturating_sub(REASON_NAMES);
-        let more = if rest > 0 {
-            format!(" and {rest} more")
+            .flat_map(|w| w.targets.iter().map(String::as_str))
+            .collect();
+        let scope = if targets.is_empty() {
+            "every step".to_string()
         } else {
-            String::new()
+            named(&targets)
         };
-        format!("a sync asked for by {}: {named}{more}", by.join(", "))
-    };
+        parts.push(match kind {
+            WipeKind::Collect => format!("freeing disk space, asked for by {by}: {scope}"),
+            WipeKind::Compact => format!(
+                "freeing disk space and dropping old versions of rendered documents, \
+                 asked for by {by}: {scope}"
+            ),
+            WipeKind::Reset => format!("a reset asked for by {by}: {scope}"),
+            WipeKind::Purge => {
+                format!("deleting what a removed source left, asked for by {by}: {scope}")
+            }
+        });
+    }
+    let shrink_only = requests.is_empty()
+        && !wipes.is_empty()
+        && wipes
+            .iter()
+            .all(|w| matches!(w.kind, Some(WipeKind::Collect | WipeKind::Compact)));
     RunStart {
-        kind: RunKind::Sync,
-        reason,
+        kind: if shrink_only {
+            RunKind::Shrink
+        } else {
+            RunKind::Sync
+        },
+        reason: if parts.is_empty() {
+            "the loop found work with no sync request open".to_string()
+        } else {
+            parts.join("; ")
+        },
+    }
+}
+
+fn who<'a>(by: impl Iterator<Item = &'a str>) -> String {
+    let mut by: Vec<&str> = by.collect();
+    by.sort_unstable();
+    by.dedup();
+    by.join(", ")
+}
+
+/// The first few names, then a count of the rest.
+fn named(names: &[&str]) -> String {
+    let shown = names
+        .iter()
+        .take(REASON_NAMES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    match names.len().saturating_sub(REASON_NAMES) {
+        0 => shown,
+        rest => format!("{shown} and {rest} more"),
     }
 }
 
@@ -274,22 +326,48 @@ mod tests {
             closed: None,
             failed_step: None,
         };
-        let one = sync_start(&[request("ui", &["gmail/ingest"])]);
+        let one = period_start(&[request("ui", &["gmail/ingest"])], &[]);
         assert_eq!(one.kind, RunKind::Sync);
         assert_eq!(one.reason, "a sync asked for by ui: gmail/ingest");
-        let many = sync_start(&[
-            request("ui", &["a/ingest", "b/ingest"]),
-            request("upgrade", &["c/render_markdown", "d/render_markdown"]),
-            request("ui", &["e/ingest"]),
-        ]);
+        let many = period_start(
+            &[
+                request("ui", &["a/ingest", "b/ingest"]),
+                request("upgrade", &["c/render_markdown", "d/render_markdown"]),
+                request("ui", &["e/ingest"]),
+            ],
+            &[],
+        );
         assert_eq!(
             many.reason,
             "a sync asked for by ui, upgrade: a/ingest, b/ingest, c/render_markdown and 2 more"
         );
         assert_eq!(
-            sync_start(&[]).reason,
+            period_start(&[], &[]).reason,
             "the loop found work with no sync request open"
         );
+    }
+
+    /// Guards the free-disk run that was logged as a sync "with no sync
+    /// request open": a period that only frees disk says so, and is a
+    /// shrink.
+    #[test]
+    fn a_period_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
+        let wipe = |kind: WipeKind, targets: &[&str]| WipeRow {
+            id: "w".into(),
+            kind: Some(kind),
+            targets: targets.iter().map(|t| t.to_string()).collect(),
+            opened_by: "ui".into(),
+            closed: None,
+        };
+        let collect = period_start(&[], &[wipe(WipeKind::Collect, &[])]);
+        assert_eq!(collect.kind, RunKind::Shrink);
+        assert_eq!(
+            collect.reason,
+            "freeing disk space, asked for by ui: every step"
+        );
+        let reset = period_start(&[], &[wipe(WipeKind::Reset, &["slack/ingest"])]);
+        assert_eq!(reset.kind, RunKind::Sync);
+        assert_eq!(reset.reason, "a reset asked for by ui: slack/ingest");
     }
 
     /// The next call to be `want`, past any settle that is not it: a

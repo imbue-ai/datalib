@@ -7,13 +7,14 @@ import AgentHandoffModal from "@/components/AgentHandoffModal.vue";
 import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
-import UpgradeIndicator from "@/components/UpgradeIndicator.vue";
+import PassIndicator from "@/components/PassIndicator.vue";
 import RerenderDialog from "@/components/RerenderDialog.vue";
 import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
 import { newestAnswer, subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
 import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
+import { freeSpaceView, upgradeView } from "@/pass";
 
 // The app window has no browser chrome, so it draws the two buttons a
 // tab would have; the browser keeps its own.
@@ -53,9 +54,9 @@ watch(
 
 /// Only the newest answer is kept: an older "not ready" landing after a
 /// newer "ready" would put the gate up over a config that is fine. One
-/// fetch at a time, at most four a second: a launch's migrate pass sends
-/// two `upgrade_changed` per step, milliseconds apart, and the pill need
-/// not show every one.
+/// fetch at a time, at most four a second: a pass over the steps sends
+/// two `pass_changed` per step, milliseconds apart, and the pill need not
+/// show every one.
 const refresh = newestAnswer(
   () => fetchConfig().catch(() => null),
   (next) => {
@@ -89,12 +90,44 @@ async function onRerender(yes: boolean) {
   if (yes && config.value) await openRequest(config.value.upgrade.rerender, "upgrade");
 }
 
+// The toolbar's pills. A failed upgrade comes back on the next page load;
+// a finished "Free up disk space" stays dismissed, by its id, in this
+// browser, or it would greet every reload until the server restarts.
+const upgradeDismissed = ref(false);
+const upgradePill = computed(() =>
+  config.value ? upgradeView(config.value.upgrade, upgradeDismissed.value) : null,
+);
+const DISMISSED_KEY = "datalib.dismissedFreeSpace";
+function readDismissed(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+const freeSpaceDismissed = ref<string[]>(readDismissed());
+const freeSpacePill = computed(() => {
+  const pass = config.value?.free_space ?? null;
+  return freeSpaceView(pass, !!pass && freeSpaceDismissed.value.includes(pass.id));
+});
+function dismissFreeSpace() {
+  const id = config.value?.free_space?.id;
+  if (!id) return;
+  freeSpaceDismissed.value = [...freeSpaceDismissed.value, id].slice(-20);
+  try {
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify(freeSpaceDismissed.value));
+  } catch {
+    // Private windows and blocked storage: dismissed for this page only.
+  }
+}
+
 let stop: (() => void) | null = null;
 onMounted(() => {
   refresh();
   stop = subscribeLive({
     root: (e) => {
-      if (e.kind === "config_changed" || e.kind === "upgrade_changed") refresh();
+      if (e.kind === "config_changed" || e.kind === "pass_changed") refresh();
     },
     resync: refresh,
   });
@@ -119,7 +152,16 @@ onUnmounted(() => stop?.());
       </div>
       <template v-if="!gate">
         <div class="datalib-toolbar-sync" data-tauri-drag-region>
-          <UpgradeIndicator v-if="config" :upgrade="config.upgrade" />
+          <PassIndicator
+            :view="upgradePill"
+            testid="upgrade-pill"
+            @dismiss="upgradeDismissed = true"
+          />
+          <PassIndicator
+            :view="freeSpacePill"
+            testid="free-space-pill"
+            @dismiss="dismissFreeSpace"
+          />
           <SyncProgressChrome />
         </div>
         <div class="datalib-toolbar-search"><CommandBox /></div>

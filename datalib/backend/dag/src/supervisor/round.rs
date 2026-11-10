@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 use super::announce::{Listener, CONFIG_CHANGED};
 use super::inputs;
+use super::pass::PassState;
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
@@ -980,11 +981,11 @@ impl Runner {
                     .await
                     .map(|()| wipe::forget_groups(state, &w.targets)),
                 WipeKind::Compact => {
-                    self.shrink_in_loop(graph, &w.targets, Shrink::Compact, state, facts)
+                    self.shrink_in_loop(graph, &w, Shrink::Compact, state, facts, store)
                         .await
                 }
                 WipeKind::Collect => {
-                    self.shrink_in_loop(graph, &w.targets, Shrink::Collect, state, facts)
+                    self.shrink_in_loop(graph, &w, Shrink::Collect, state, facts, store)
                         .await
                 }
             };
@@ -1039,21 +1040,38 @@ impl Runner {
     async fn shrink_in_loop(
         &self,
         graph: &Graph,
-        targets: &[String],
+        w: &WipeRow,
         how: Shrink,
         state: &mut Record,
         facts: &mut Facts,
+        store: &Store,
     ) -> Result<()> {
+        let asked = wipe::compact_targets(graph, &w.targets);
+        let ids: Vec<&str> = asked.iter().map(|&i| graph.steps[i].id.as_str()).collect();
+        store.begin_wipe_steps(&w.id, &ids).await?;
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-        for i in wipe::compact_targets(graph, targets) {
+        for (ord, &i) in asked.iter().enumerate() {
             let step = &graph.steps[i].id;
+            store
+                .set_wipe_step(&w.id, ord, PassState::Running, None, None)
+                .await?;
             match self.shrink_one(graph, step, how).await {
-                Ok(Some(version)) => {
-                    state.steps.entry(step.clone()).or_default().version = Some(version.clone());
-                    facts.sinks[i] = Some(version);
+                Ok((version, bytes)) => {
+                    if let Some(version) = version {
+                        state.steps.entry(step.clone()).or_default().version =
+                            Some(version.clone());
+                        facts.sinks[i] = Some(version);
+                    }
+                    store
+                        .set_wipe_step(&w.id, ord, PassState::Done, None, bytes)
+                        .await?;
                 }
-                Ok(None) => {}
-                Err(e) => failed.entry(e).or_default().push(step),
+                Err(e) => {
+                    store
+                        .set_wipe_step(&w.id, ord, PassState::Failed, Some(&e), None)
+                        .await?;
+                    failed.entry(e).or_default().push(step);
+                }
             }
         }
         anyhow::ensure!(

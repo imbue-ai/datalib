@@ -645,10 +645,10 @@ async fn run(
                 return migrate::run(&env, data_root, emitter).await;
             }
             if cli.compact {
-                return compact::run(&env, data_root, compact::Verb::Compact).await;
+                return compact::run(&env, data_root, compact::Verb::Compact, emitter).await;
             }
             if cli.collect {
-                return compact::run(&env, data_root, compact::Verb::Collect).await;
+                return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
             }
             run_function(
                 env,

@@ -375,6 +375,7 @@ pub fn build(
         .build_or_record(source_id, project_id, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

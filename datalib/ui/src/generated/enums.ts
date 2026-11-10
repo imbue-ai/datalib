@@ -67,3 +67,17 @@ export type LiveTable =
   | "disk"
   | "curated";
 
+/** `PassState in datalib/backend/dag/src/supervisor/pass.rs`. */
+export type PassState =
+  | "waiting"
+  | "running"
+  | "done"
+  | "failed";
+
+/** `WipeKind in datalib/backend/dag/src/supervisor/store.rs`. */
+export type WipeKind =
+  | "reset"
+  | "purge"
+  | "compact"
+  | "collect";
+

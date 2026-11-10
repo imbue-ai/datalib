@@ -342,6 +342,7 @@ fn render_one(
     let reactions_rendered = doc.items.iter().map(|i| i.reactions.len()).sum();
 
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: doc.markdown_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

@@ -269,7 +269,8 @@ document does:
   each source's record; the time-series card's heading for each
   source; the log-line card's group and step.
 - **The app's chrome:** each row of the toolbar's "what is syncing"
-  menu, the upgrade indicator's list and the re-render dialog's list.
+  menu, the pass pills' lists (upgrading, freeing disk space) and the
+  re-render dialog's list.
   The search index keeps its plain name there ("Search index").
 
 It looks the entity up in `entities`, redraws when the answer moves,

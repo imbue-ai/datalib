@@ -105,6 +105,7 @@ fn render_one(
         .into_owned();
     let row = build_grid_row(profile, event, source_id, &md_rel, start, &mut problems);
     Ok(RenderedMarkdown {
+        section_layout: None,
         markdown_uuid: uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: event.modified_at.clone(),

@@ -142,6 +142,9 @@ struct WireOutcome {
     /// reach in place, so it has to run again.
     #[serde(default)]
     needs_rerun: bool,
+    /// A `--collect` or `--compact` answer: the store's size before and after.
+    #[serde(default)]
+    store_bytes: Option<crate::step::StoreBytes>,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
@@ -474,6 +477,7 @@ pub(crate) async fn run_subprocess(
         let w = outcome.unwrap_or_default();
         Ok(StepOutcome {
             needs_rerun: w.needs_rerun,
+            store_bytes: w.store_bytes,
             outputs: w.into_outputs(sink, &ctx.step_id),
             exit: Some(status.into()),
         })

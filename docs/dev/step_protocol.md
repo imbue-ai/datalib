@@ -678,6 +678,13 @@ content version moves nothing downstream. Report nothing when there is
 nothing to give back. As with Migrate, only `datalib-step`'s own steps
 take the verbs (`StepSpec::compacts`).
 
+A step that shrank a store also says how big it was, in bytes, before and
+after, which is what the app's free-space pill adds up:
+
+```json
+{"event":"outcome","store_bytes":{"before":6600000000,"after":3100000000},"outputs":[...]}
+```
+
 `--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
 doltlite store (`doltlite_raw::collect_garbage`), which deletes only
 chunks no commit, branch or tag reaches, so every commit stays readable.

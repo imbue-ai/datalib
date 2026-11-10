@@ -254,6 +254,240 @@ to reconstruct the `.lrcat`.
 
 Arbitrary `Table.column` globs work too, via `exclude_columns`.
 
+## How Lightroom keeps a capture time
+
+Measured on Lightroom Classic 15.6 (catalog version 1504001), on a Mac
+set to Berlin time: 80 black test photos and videos, each with its date
+written a different way by exiftool, imported into a new catalog; six of
+them changed with Edit Capture Time, everything written back with Save
+Metadata to Files, then 20 more imported to find where an offset in
+`captureTime` comes from. Where a fact here is about a real catalog
+rather than the test, it says so.
+
+### The sort: the clock time, then the file name
+
+`Adobe_images.captureTime` is free text (the column has no declared
+type), almost always the camera's clock reading with no UTC offset:
+`2024-07-01T14:00:00.000`. **Lightroom sorts on the clock part of it,
+with any offset dropped, then on the file name.** That one rule placed
+all 80 test files.
+
+- **An offset is dropped even where it is stored.** A photo whose
+  `captureTime` is `2024-07-03T14:00:00+02:00` sorts among that day's
+  other 14:00s by name. A plain text sort would put it first (`+` sorts
+  before `.`); its moment, 12:00 UTC, would put it two hours earlier.
+  Two at `14:00:00-07:00` (21:00 UTC) sort with the 14:00s, not with a
+  file at `21:00:00`.
+- **The clock part sorts like text**, since every value is written the
+  same way: subseconds in order (`.100` before `.900`), and a bare date
+  (`2024-08-01`, below) as midnight. Whether Lightroom compares the text
+  or parses it without a zone, the test cannot tell.
+- **Ties go by file name, not import order:** two files imported hours
+  later sorted before an earlier one at the same 1904 time.
+
+So photos line up in Lightroom when their clocks *read* the same, not
+when they were taken at the same moment. A photo at 14:01 +02:00 sorts
+after one taken a minute later at 05:02 −07:00; the two 02:30s of the
+night the clocks go back tie; a phone that sets its own zone and a
+camera left on home time drift apart by the difference between the
+zones, though each recorded its moment correctly.
+
+### What the Metadata panel shows
+
+| field | shows |
+|---|---|
+| Capture Date, Capture Time | `captureTime`'s clock time |
+| Capture Date/Time, Date Time Original | the file's `DateTimeOriginal`; with none, the file's modified date (`AgLibraryFile.modTime`, to the millisecond) |
+| Date Time (and Date, Time) | the modify date: EXIF's tag for it is named `DateTime` |
+
+**No field shows an offset or applies one.** A photo at 05:00 −07:00
+shows 05:00 everywhere, not the 14:00 that moment was in Berlin. The
+Capture Date/Time fallback means a photo with no `DateTimeOriginal`
+shows its file's date while it sorts by its capture time: after Save
+Metadata to Files rewrote one, it showed that day, and still sorted in
+2024.
+
+### The offset
+
+**Lightroom keeps a file's offset only in the catalog's XMP**
+(`Adobe_AdditionalMetadata.xmp`), as part of the time in
+`exif:DateTimeOriginal`, `photoshop:DateCreated`, `xmp:CreateDate` or
+`xmp:ModifyDate`. It never shows it, never sorts on it, and nothing in
+Lightroom can change one.
+
+**Two sources put an offset into `captureTime` itself**, so a reader
+takes both forms, and neither is a time the camera recorded:
+
+- **a file whose only date is a modify date with an offset**, EXIF
+  `ModifyDate` + `OffsetTime` or XMP `xmp:ModifyDate`: the offset is
+  copied, negative or positive. The time is when software last saved
+  the file, in that computer's zone.
+- **an AVI, MPG or VOB with no date: the time of the import**, in the
+  importing computer's zone with its offset, also written as
+  `xmp:ModifyDate`. It is neither the file's modified nor its created
+  date (both a year earlier in the test).
+
+**Where an offset comes from**, then, is one of three places, and only
+the first says where a photo was taken:
+
+1. **the file**, at import: whatever offset the camera or software wrote
+   (EXIF `OffsetTime*`, an XMP or IPTC time that carries one, an
+   iPhone-style video date, QuickTime's implied `Z`), copied as written.
+   Lightroom never works one out, from GPS or anything else.
+2. **the importing computer's zone**, which Lightroom adds itself: the
+   import time above, every video's `xmp:ModifyDate` (also set to the
+   import time) and `xmp:MetadataDate` (when the metadata was last
+   saved). So offsets from this source follow wherever the computer was.
+3. **nowhere new on an edit**: Edit Capture Time keeps what was there
+   (below).
+
+No other table holds a photo's offset. Searching every text column of
+the test catalog for a time with one found, besides `captureTime`, only
+Lightroom's own clocks: `AgLibraryImport.importDate` (the computer's
+zone) and `AgLibraryImageChangeCounter.changedAtTime` (UTC). There is no
+zone column; the year, month and day columns behind the Library date
+filter (`AgHarvestedExifMetadata.dateYear` and so on) carry none.
+
+Not yet measured: whether **Read Metadata from Files** takes a changed
+offset from the file into the catalog, which decides whether a catalog
+can be put right by fixing its files; **DNG and HEIC** files, which the
+test had none of; and which older version of Lightroom gave a dateless
+JPEG an offset (below).
+
+### Where the time comes from at import
+
+| what the file holds | `captureTime` | offset in the XMP |
+|---|---|---|
+| EXIF `DateTimeOriginal` and `OffsetTimeOriginal` | the clock time | yes |
+| EXIF `DateTimeOriginal` alone | the clock time | none |
+| EXIF and the file's own XMP disagree | the XMP's | the XMP's |
+| only XMP `exif:DateTimeOriginal`, or only `photoshop:DateCreated` | that | yes |
+| only EXIF `CreateDate` (digitized), with `OffsetTimeDigitized` | that | in `xmp:CreateDate` |
+| only XMP `xmp:CreateDate` with an offset | the clock time | yes |
+| only IPTC date and time with an offset (as scanners write) | the clock time | as `photoshop:DateCreated` |
+| only a modify date with an offset (EXIF or XMP) | the time **with its offset** | yes |
+| `DateTimeOriginal` with no offset, and a modify date with one | the `DateTimeOriginal` | none |
+| only `xmp:MetadataDate` | not used: the file's date, as below | |
+| only the GPS date and time stamp | not used: the file's date, as below | none (kept as `exif:GPSTimeStamp`) |
+| a time with no seconds | `:00` added | |
+| subseconds | kept (`…:00.100`) | |
+| no date at all (JPEG, PNG, TIFF) | the file's modified date, **converted to UTC**, daylight saving applied | none |
+| AVI, MPG or VOB with no date | **the import time**, with the computer's offset | as `xmp:ModifyDate` |
+| AVI with a RIFF creation date and no time | **the bare date**, `2024-08-01` | `xmp:CreateDate`, the date alone |
+| video, QuickTime `CreateDate` | as written, **not converted**: the format defines it as UTC, so this is a UTC clock | `xmp:CreateDate=…Z` |
+| video, iPhone-style `Keys:CreationDate` with an offset | its clock time | `xmp:CreateDate`, with the offset |
+| video, QuickTime `CreateDate` empty | 1904-01-01, QuickTime's zero, even over the file's own `xmp:CreateDate` or `xmp:ModifyDate` | |
+| video with an XMP `DateTimeOriginal` | that, over an empty QuickTime date | yes |
+| any video | | `xmp:ModifyDate` is set to the import time |
+
+So one catalog mixes local clock times (photos) with UTC ones (videos
+whose camera kept to the QuickTime format, and files with no date), and
+nothing in `captureTime` says which. A camera that writes its local time
+into QuickTime's UTC field looks right in Lightroom and leaves no trace
+of having done so. An AVI with an MPEG-4 Part 2 stream was refused at
+import as unrecognizable; one with Motion JPEG and PCM sound, as old
+cameras wrote, was taken.
+
+### What a real catalog holds
+
+One real catalog of about 220,000 photos, read for counts only:
+
+- **5,820 had an offset in `captureTime`**, all `-07:00` in summer or
+  `-08:00` in winter (one zone's two offsets) and none edited. 748 equal
+  their `xmp:ModifyDate`: the two sources above, 590 of them AVI, MPG,
+  VOB and MOV videos, whose "capture time" is then most likely when they
+  were imported. The other 5,072 are JPEGs whose XMP holds no date at
+  all. Lightroom 15.6 gives such a file its modified date in UTC with no
+  offset, so an older version probably wrote these; either way the time
+  is a fallback, not one the photo records.
+- **`captureTime` is spelled a dozen ways**: zero to seven fractional
+  digits, and on 157 videos no seconds at all (`…T14:00`,
+  `…T14:00-07:00`), copied from an `xmp:CreateDate` or `xmp:ModifyDate`
+  with none. Lightroom 15.6 adds the seconds instead, so these are
+  probably an older version's too. 675 have none.
+- **About 4,700 have an edited capture time**, two-thirds of them DNGs
+  (the test had none). 4,004 shifts are whole hours under a day; 360 are
+  hours plus seconds to about 20 minutes; 313 move more than a day. Which
+  were zone changes and which clock fixes, the catalog does not say; its
+  owner used whole hours for zones and minutes for drift.
+
+### Edit Capture Time
+
+**It moves the clock time and keeps the offset.** `originalCaptureTime`
+keeps the time from before the first edit, and so does `xmp:ModifyDate`;
+several edits leave only the first time and the last. For a file with no
+date, `originalCaptureTime` is the import's fallback (the file's
+modified date in UTC), not a time the file ever held.
+
+- **A shift moves the whole time**: 14:00 +02:00 shifted by +1 hour is
+  15:00 +02:00, a moment an hour later.
+- **"Adjust to a specified date and time" keeps the old offset**: 05:00
+  −07:00 set to 14:00 becomes 14:00 −07:00. The one trace in the
+  Metadata panel is Date Time, the modify date, still showing 05:00
+  beside a Capture Time of 14:00: the file had no modify date, so
+  Lightroom copied the capture time into `xmp:ModifyDate` at import, and
+  Save Metadata to Files wrote it into the file.
+- **A video's edit adds `exif:DateTimeOriginal` with the new clock time
+  and no offset**, and leaves `xmp:CreateDate`, with its `Z`, as it was.
+
+**Whether the kept offset is still right depends on what the edit was
+for**, and the catalog does not record that:
+
+- **an edit that fixed the camera's clock** (wrong time or drift, right
+  zone) leaves an offset that still belongs: clock and offset together
+  name the corrected moment;
+- **an edit that moved the time into another zone** (a camera left on
+  home time, shifted to match local clocks, or a time typed in as it
+  read where the photo was taken) leaves an offset that belongs to the
+  old zone: the photo lines up in Lightroom, and anything that reads the
+  offset puts it off by the shift.
+
+Lightroom treats both alike, and since it never shows the offset, both
+look right there.
+
+Someone who knows how they used Edit Capture Time can read the edit back.
+The camera's moment is `originalCaptureTime` with the old offset. If
+whole hours of a shift were always a change of zone, and any leftover of
+minutes and seconds a fix to the clock, then **Lightroom's edited clock
+time with the old offset plus the shift's whole hours** is the time
+Lightroom shows, in the zone it was taken in, at the camera's moment
+moved only by the fine-tune. That is an assumption about one person's
+habits, true of one real catalog's owner and not of everyone: a shift of
+an hour can just as well fix a clock left off daylight saving. It also
+needs an old offset, a clock right to the hour, and a zone shift that
+lands on a real offset (−12:00 to +14:00); a shift of more than a day put
+a wrong date right, and says nothing about the zone.
+
+### Save Metadata to Files
+
+**It rewrites every JPEG and no video**, and makes no sidecar for one: a
+video's edits live only in the catalog. Into a JPEG it writes the
+catalog's time as EXIF `DateTimeOriginal`, keeping `OffsetTimeOriginal`
+as it was, so the file can end up with an offset that does not belong to
+its time. Where the file's EXIF and XMP disagreed, the camera's EXIF
+value is replaced by the XMP's. EXIF `ModifyDate` keeps the time from
+before the edit. Each file's modified date becomes the time of the save.
+
+### What the render makes of it today
+
+`lightroom_render/src/photo.rs::capture_time` takes `captureTime` whole
+when it carries an offset; otherwise its clock time, with the offset
+from `exif:DateTimeOriginal`, else `xmp:CreateDate`, else
+`capture_time_zone`, else UTC. That is right for an unedited photo whose
+camera recorded an offset, and for an unedited video whose camera wrote
+true UTC, where `captureTime` and the `Z` are both UTC. For a photo or
+video whose time was edited, it uses the offset from before the edit (a
+shifted video's new `DateTimeOriginal` has none, so it takes the `Z`
+from `CreateDate`), which is right only when the edit fixed the clock
+rather than the zone. It is wrong for:
+
+- **an offset copied from a modify date or an import time**, which it
+  reports as from `DateTimeOriginal` though it is a save or import time;
+- **a time with no seconds, or a bare date**, which it cannot parse, so
+  the photo gets no capture time (157 videos in the real catalog);
+- **a camera that wrote local time into QuickTime's UTC field**, which
+  nothing in the catalog reveals.
+
 ## Schema evolution
 
 There is no schema-reconciliation logic, because there is nothing to
@@ -640,8 +874,10 @@ range; a Lightroom catalog (tens of MB) is nowhere near that.
 ## Rendering
 
 `lightroom_render` makes one grid row per image and writes no markdown;
-the `photos` applet draws the picture. What it reads, how a photo's time
-gets its offset, and what goes into the search terms:
+the `photos` applet draws the picture. How a photo's time gets its
+offset: [How Lightroom keeps a capture
+time](#how-lightroom-keeps-a-capture-time). What it reads and what goes
+into the search terms:
 [`docs/dev/plans/photos_applet.md`](/docs/dev/plans/photos_applet.md)
 and the crate's `src/read.rs`. Render reads only the mirror; the
 previews are read by the applet, live, from the `Previews.lrdata` beside

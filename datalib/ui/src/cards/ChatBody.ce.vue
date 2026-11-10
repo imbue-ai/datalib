@@ -3,7 +3,8 @@
 // (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
 // wrappers emitted by the ingest renderer — one wrapper per message,
 // plus nested ones for tool_use / tool_result / thinking blocks);
-// `renderDocument` runs markdown-it and the sanitizer once per body.
+// `renderDocument` runs markdown-it and the sanitizer over it, one
+// message at a time where `sections` says where each lies.
 //
 // The body is drawn inside a frame whose policy runs no script
 // (`docFrame.ts`). `body` is the frame's `<body>`: the decorations below
@@ -19,7 +20,7 @@
 // inside a shadow root, so document-head styles don't reach it. The
 // body's stylesheet (`documentBody.css`) goes in with the frame's document.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
-import type { EdgeOut } from "@/api";
+import type { BodySection, EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
 import {
   copyWithHandles,
@@ -67,6 +68,8 @@ import {
 
 const props = defineProps<{
   body: string;
+  /** Where each section of `body` lies (`renderDocument`). */
+  sections?: BodySection[] | null;
   selectedSectionUuid?: string | null;
   /**
    * Outgoing edges for the doc we're rendering. ChatBody decorates
@@ -137,6 +140,7 @@ const sanitized = computed(() =>
   renderDocument(props.body || "", {
     accept: props.remoteAccept,
     context: props.remoteContext,
+    sections: props.sections,
   }),
 );
 const html = computed(() => sanitized.value.html);

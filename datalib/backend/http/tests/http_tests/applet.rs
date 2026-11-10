@@ -65,6 +65,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
         .put_document(
             tree,
             &RenderedMarkdown {
+                section_layout: None,
                 markdown_uuid: md.to_string(),
                 source_id: "slack".into(),
                 upstream_cursor: None,

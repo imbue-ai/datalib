@@ -1284,6 +1284,10 @@ impl IndexedMarkdownStore {
                     render_version,
                     rows,
                     sections: Vec::new(),
+                    section_layout: md
+                        .section_layout
+                        .as_deref()
+                        .and_then(datalib_schema::markdowns::parse_layout),
                     edges,
                     contacts,
                     photos,
@@ -1537,6 +1541,7 @@ mod tests {
         problems: Vec<ProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
+            section_layout: None,
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
             upstream_cursor: None,
