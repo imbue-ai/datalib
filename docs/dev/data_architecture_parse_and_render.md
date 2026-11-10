@@ -204,9 +204,13 @@ point it becomes markup**, by the helper for where it lands —
 on one markdown line, a multi-line body, a link target, a code span or
 block). A string the source itself authored as markup goes in as it
 is: a Notion page's markdown, a GitHub PR's description, an email's
-HTML part after htmd, an assistant's reply. Escaping never drops a
-character; the grid's search text keeps the text as typed, and
-`plain_text` (the Contents cell) reads the escapes back. A renderer's
+HTML part after htmd. Markdown a person or a model wrote in a
+conversation — a prompt, an assistant's reply, a project's
+instructions in Claude, ChatGPT, Codex or Claude Code — keeps its
+markdown but not its HTML: `markdown_html_as_typed` shows every tag
+as typed, since one left open would hide or restyle the messages after
+it. Escaping never drops a character, and `plain_text` (the Contents
+cell) reads the escapes back. A renderer's
 test of this feeds a field `<script>x</script> & co` and checks it
 renders escaped.
 

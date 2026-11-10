@@ -292,13 +292,22 @@ becomes markup (`docs/dev/data_architecture_parse_and_render.md`
 escapes every field it writes — the author, a label, a reactor, a file
 name, a system note — and an item's `text` according to the profile's
 `text_format`: `Plain` for what a person typed (a text message, a
-LinkedIn message), `Markdown` for an assistant's reply or for markdown
-the provider built itself, having escaped the plain text it put inside
-(Facebook's posts, Beeper's reply line, an email). The grid's search
+LinkedIn message), `Markdown` for markdown the provider built itself,
+having escaped the plain text it put inside (Facebook's posts, Beeper's
+reply line, an email), or for an assistant's reply and the prompt
+before it, whose HTML the provider shows as typed
+(`markdown_html_as_typed`). The grid's search
 text is `text` as given either way. Front-matter values go through
 `yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
 document whose every plain field holds HTML and markdown through the
 app's own markdown-it and sanitizer, and checks each reads as typed.
+
+A `Markdown` body is pasted into a page of many messages, so a block it
+leaves open would run on through every message after it: an assistant's
+reply cut off inside a code block, a prompt that opens ```` ``` ```` or
+`<pre>` and never closes it. `close_open_blocks` closes any fence, or
+any HTML block that only a closing tag or marker ends, at the end of
+the body.
 
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
 through DOMPurify: scripts, event handlers, `javascript:` URLs and form
