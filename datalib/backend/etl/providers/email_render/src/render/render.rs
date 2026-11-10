@@ -21,10 +21,13 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{
+    code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
+use datalib_schema::plain_text::plain_text;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
@@ -59,7 +62,9 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     thread declares the marks it reads.
 /// v19: an email attached to an email is listed among the attachments.
 /// v20: an email's stamp keeps the offset its `Date` was written in.
-pub const RENDER_VERSION: u32 = 20;
+/// v21: a quote's attribution line is plain text, and an HTML body's
+///     `<pre>` and `&amp;lt;` read as the sender wrote them.
+pub const RENDER_VERSION: u32 = 21;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -807,11 +812,13 @@ fn split_quoted(body: &str) -> (String, Option<String>) {
         return (body.to_string(), None);
     }
     let quoted_body = lines[cut..].join("\n");
-    let summary = lines[cut].trim().trim_start_matches('>').trim();
+    // The attribution line is markdown; `<summary>` is raw HTML, where
+    // markdown is not read, so it goes in as the text it shows.
+    let summary = plain_text(lines[cut].trim().trim_start_matches('>'), usize::MAX);
     let summary = if summary.is_empty() || summary.len() > 120 {
         "Quoted text".to_string()
     } else {
-        summary.to_string()
+        escape_text(&summary)
     };
     let details = format!("<details><summary>{summary}</summary>\n\n{quoted_body}\n\n</details>");
     (fresh, Some(details))
@@ -981,13 +988,89 @@ fn email_body_markdown(
     Some(plain_body_markdown(&parsed.text_body))
 }
 
-/// An HTML body as markdown.
-pub(crate) fn html_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
+/// An HTML body as markdown, its text reading as the sender wrote it.
+/// Two of htmd's outputs need help: a `<pre>` with no `<code>` comes out
+/// as its decoded text, so a `&lt;div&gt;` in it became a tag, and text
+/// holding `&amp;lt;` comes out as `&lt;`, which markdown reads as `<`.
+pub fn html_markdown(html: &str) -> String {
+    let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
+        .add_handler(vec!["pre"], pre_as_code_block)
         .build()
         .convert(html)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    entity_ampersands_escaped(&md)
+}
+
+/// A `<pre>` as a code block. One holding a `<code>` already comes out
+/// fenced; one without is fenced here. htmd's one escape inside, a `\`
+/// before a leading backtick or tilde, is taken off: a code block would
+/// show it.
+fn pre_as_code_block(
+    handlers: &dyn htmd::element_handler::Handlers,
+    element: htmd::Element,
+) -> Option<htmd::element_handler::HandlerResult> {
+    let inner = handlers.walk_children(element.node).content;
+    let inner = inner.trim_matches('\n');
+    if inner.starts_with("```") || inner.starts_with("~~~") {
+        return Some(format!("\n\n{inner}\n\n").into());
+    }
+    let text = inner
+        .strip_prefix('\\')
+        .filter(|t| t.starts_with(['`', '~']))
+        .unwrap_or(inner);
+    Some(format!("\n\n{}\n\n", md_code_block("", text)).into())
+}
+
+/// htmd writes no character reference of its own, so one in its output
+/// outside code is text the sender wrote (`&amp;lt;` in the HTML). Its
+/// `&` is escaped, or markdown would read the reference as the character.
+fn entity_ampersands_escaped(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut fence: Option<(char, usize)> = None;
+    for line in md.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let marker = ['`', '~']
+            .into_iter()
+            .map(|c| (c, trimmed.chars().take_while(|&x| x == c).count()))
+            .find(|&(_, n)| n >= 3);
+        match (fence, marker) {
+            (Some((c, n)), Some((m, k))) if m == c && k >= n && trimmed.len() == k => {
+                fence = None;
+                out.push_str(line);
+            }
+            (Some(_), _) => out.push_str(line),
+            (None, Some(open)) => {
+                fence = Some(open);
+                out.push_str(line);
+            }
+            (None, None) => {
+                for (part, is_code) in code_span_parts(line) {
+                    if is_code {
+                        out.push_str(part);
+                    } else {
+                        push_entity_ampersands_escaped(&mut out, part);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn push_entity_ampersands_escaped(out: &mut String, text: &str) {
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let name_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '#'))
+            .unwrap_or(after.len());
+        let is_reference = name_len > 0 && after[name_len..].starts_with(';');
+        out.push_str(if is_reference { "&amp;" } else { "&" });
+        rest = after;
+    }
+    out.push_str(rest);
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:
@@ -1177,6 +1260,51 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
         assert!(q.contains("<details>"));
         assert!(q.contains("On Tue, Apr 14, Data wrote:"));
         assert!(q.contains("The warp core is at 99.7%."));
+    }
+
+    /// The attribution line becomes the fold's `<summary>`, raw HTML: a
+    /// tag in it hid everything after it on the page. It shows as the
+    /// text it reads as, less the tag.
+    #[test]
+    fn a_tag_in_the_attribution_line_shows_as_typed() {
+        let body = "ok\n\nOn Tue, \\*Q\\* <div style=\"display:none\"> wrote:\n> a\n> b";
+        let (_, quoted) = split_quoted(body);
+        let quoted = quoted.expect("quoted folded");
+        assert!(
+            quoted.starts_with("<details><summary>On Tue, *Q* wrote:</summary>"),
+            "{quoted}"
+        );
+        let typed = plain_body_markdown("ok\n\nOn Tue, Data <data@e.invalid> wrote:\n> a\n> b");
+        let (_, quoted) = split_quoted(&typed);
+        assert!(quoted
+            .expect("quoted folded")
+            .starts_with("<details><summary>On Tue, Data &lt;data@e.invalid&gt; wrote:</summary>"),);
+    }
+
+    /// htmd wrote a `<pre>` without a `<code>` as its decoded text, so an
+    /// escaped tag in it became a tag, and `&amp;lt;` as `&lt;`, which the
+    /// page shows as `<`.
+    #[test]
+    fn an_html_body_reads_as_the_sender_wrote_it() {
+        assert_eq!(
+            html_markdown(
+                "<p>The console printed:</p><pre>&lt;div style=&quot;display:none&quot;&gt;phaser&lt;/div&gt;</pre>"
+            ),
+            "The console printed:\n\n```\n<div style=\"display:none\">phaser</div>\n```"
+        );
+        assert_eq!(
+            html_markdown("<pre><code class=\"language-rust\">a &lt; b</code></pre>"),
+            "```rust\na < b\n```"
+        );
+        assert_eq!(
+            html_markdown("<p>Type &amp;lt; or &amp;#60; for it. Tea &amp; biscuits.</p>"),
+            "Type &amp;lt; or &amp;#60; for it. Tea & biscuits."
+        );
+        assert_eq!(
+            html_markdown("<p><code>&amp;lt;</code></p>"),
+            "`&lt;`",
+            "code keeps its text"
+        );
     }
 
     #[test]

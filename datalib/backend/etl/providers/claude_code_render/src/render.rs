@@ -15,7 +15,6 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::markdown_html_as_typed;
 use datalib_etl_render::inputs::{Bucket, Inputs, RawRange};
 use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
@@ -43,7 +42,9 @@ use crate::ids;
 ///     Prompt, not "Me".
 /// v7: a tool's result is the harness's, not authored by the tool's name.
 /// v8: an HTML tag in a prompt, a reply or a harness message shows as typed.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: a prompt, a reply or a harness message is markdown as written
+///     again, HTML included.
+pub const RENDER_VERSION: u32 = 9;
 
 /// Who the harness's own rows are by: what it writes in the person's place,
 /// a tool's result, its system notes. A tool's name is not a person, and
@@ -342,7 +343,7 @@ fn user_items(
                 ids::reminder(source_id, uuid, ms.map(|m| m + n as i64)),
                 HARNESS.to_string(),
                 ms.map(|m| m + n as i64),
-                markdown_html_as_typed(&reminders.join("\n\n")),
+                reminders.join("\n\n"),
                 "Harness Message",
                 true,
             )
@@ -383,7 +384,7 @@ fn user_items(
             ids::record(source_id, uuid, ms.map(|m| m + n as i64)),
             author.to_string(),
             ms.map(|m| m + n as i64),
-            markdown_html_as_typed(&text),
+            text,
             label,
             aside,
         )
@@ -462,17 +463,14 @@ fn assistant_items(
         match b.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(t) = str_of(b, "text") {
-                    text_parts.push(markdown_html_as_typed(t.trim_end()));
+                    text_parts.push(t.trim_end().to_string());
                 }
             }
             Some("thinking") => {
                 let Some(thought) = str_of(b, "thinking").filter(|t| !t.trim().is_empty()) else {
                     continue;
                 };
-                let quoted = format!(
-                    "> {}",
-                    markdown_html_as_typed(thought.trim_end()).replace('\n', "\n> ")
-                );
+                let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 out.push(NormalizedChatItem {
                     author_handle: model_handle.clone(),
                     ..item(
@@ -894,12 +892,12 @@ mod tests {
                 (
                     "Harness Message",
                     "Claude Code",
-                    "&lt;task-notification&gt;scan done&lt;/task-notification&gt;"
+                    "<task-notification>scan done</task-notification>"
                 ),
                 (
                     "Harness Message",
                     "Claude Code",
-                    "&lt;ci-monitor-event&gt;checks green&lt;/ci-monitor-event&gt;"
+                    "<ci-monitor-event>checks green</ci-monitor-event>"
                 ),
                 ("Agent Prompt", "Claude Code", "Survey the nebula"),
                 ("User Input", "Me", "Engage"),

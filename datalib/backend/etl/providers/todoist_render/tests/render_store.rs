@@ -50,7 +50,7 @@ fn account() -> Vec<(Kind, Vec<Value>)> {
     coils["description"] = json!("Check the **dilithium** matrix first.");
     coils["due"] = json!({"date": "2026-10-03", "string": "Oct 3", "is_recurring": false});
     let mut tea = task("6TaskTea", INBOX, None, None, "Tea, Earl Grey, hot", 1);
-    tea["description"] = json!("<script>x</script> & co");
+    tea["description"] = json!("Steep <b>three</b> minutes & serve.");
     let mut farpoint = task(
         "6TaskFarpoint",
         AWAY,
@@ -230,14 +230,17 @@ async fn each_project_renders_its_sections_tasks_and_comments() {
     assert_eq!(comment.channel.as_deref(), Some("Engineering"));
     assert!(refit.problems.is_empty(), "{:?}", refit.problems);
 
-    // Plain text from upstream is escaped where it becomes markup.
+    // A description is markdown its author wrote and goes in as written,
+    // in its task's own section, which the page renders alone.
     let inbox = build("todoist", &s, INBOX, &Inputs::default());
     let md: String = inbox.sections.iter().map(|x| x.md.as_str()).collect();
     assert!(
-        md.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"),
+        inbox
+            .sections
+            .iter()
+            .any(|x| x.uuid.is_some() && x.md.contains("Steep <b>three</b> minutes & serve.")),
         "{md}"
     );
-    assert!(!md.contains("<script>"), "{md}");
     assert!(
         md.contains("Pass the Starfleet physical"),
         "a completed-only task renders: {md}"

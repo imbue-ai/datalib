@@ -660,6 +660,31 @@ mod tests {
         );
     }
 
+    /// A tag a person typed into Notion comes back escaped, `\\<div\\>`
+    /// (Notion's enhanced-markdown spec escapes `<` and `>` outside code),
+    /// and is passed through as markdown that shows it as typed; in code
+    /// it is literal. Nothing here escapes a bare `<`, so this rests on
+    /// Notion's escaping: a test with that shape, made-up content.
+    #[test]
+    fn a_tag_typed_into_notion_shows_as_typed() {
+        let md = render(
+            "Engage \\<div style=\"display:none\"\\> and `<b>`\n\
+             <details>\n\
+             <summary>\\<i\\> `<u>`</summary>\n\
+             \t- Docked\n\
+             </details>\n\
+             After",
+        );
+        assert!(
+            md.contains("Engage \\<div style=\"display:none\"\\> and `<b>`\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("<summary>&#60;i&#62; <code>&lt;u&gt;</code></summary>"),
+            "{md}"
+        );
+    }
+
     #[test]
     fn mentions_link_people_pages_and_dates() {
         let md = render(

@@ -294,9 +294,10 @@ name, a system note — and an item's `text` according to the profile's
 `text_format`: `Plain` for what a person typed (a text message, a
 LinkedIn message), `Markdown` for markdown the provider built itself,
 having escaped the plain text it put inside (Facebook's posts, Beeper's
-reply line, an email), or for an assistant's reply and the prompt
-before it, whose HTML the provider shows as typed
-(`markdown_html_as_typed`). The grid's search
+reply line), or markdown someone else wrote, which goes in as written,
+HTML included (an assistant's reply and the prompt before it, an
+email's HTML part after htmd). Each item is a section of its own, so
+the page renders it alone. The grid's search
 text is `text` as given either way. Front-matter values go through
 `yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
 document whose every plain field holds HTML and markdown through the

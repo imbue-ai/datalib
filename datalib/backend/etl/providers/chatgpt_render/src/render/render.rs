@@ -19,9 +19,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::{render_batched_at, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{
-    escape_md_block, escape_md_inline, markdown_html_as_typed, md_code_block,
-};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_block};
 use datalib_etl_render::sources::{sources_list, Source};
 use datalib_handle::Handle;
 
@@ -60,7 +58,8 @@ use serde_json::Value;
 /// v14: an answer's author is its model's chip (`ai_model:` handle).
 /// v15: the account's address is tied to "Me", so search reads it as `me`.
 /// v16: an HTML tag in a message shows as typed.
-pub const RENDER_VERSION: u32 = 16;
+/// v17: a message is markdown as written again, HTML included.
+pub const RENDER_VERSION: u32 = 17;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -336,7 +335,7 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
         }
         let t = p.text.as_deref().unwrap_or("").trim_end();
         match p.kind.as_str() {
-            "text" => blocks.push(markdown_html_as_typed(t)),
+            "text" => blocks.push(t.to_string()),
             // Code the interpreter ran comes labelled `unknown`.
             "code" => blocks.push(md_code_block(
                 p.language
@@ -346,10 +345,7 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
                 t,
             )),
             "execution_output" => blocks.push(md_code_block("", t)),
-            "thoughts" | "reasoning_recap" => blocks.push(format!(
-                "> {}",
-                markdown_html_as_typed(t).replace('\n', "\n> ")
-            )),
+            "thoughts" | "reasoning_recap" => blocks.push(format!("> {}", t.replace('\n', "\n> "))),
             "tether_quote" => {
                 let title = p
                     .raw_json
@@ -364,7 +360,7 @@ fn render_message_body(parts: &[&OAContentPartRow]) -> Option<String> {
                     format!("**{}**\n\n{quote}", escape_md_inline(title))
                 });
             }
-            _ => blocks.push(markdown_html_as_typed(t)),
+            _ => blocks.push(t.to_string()),
         }
     }
     let body = blocks.join("\n\n");
@@ -502,18 +498,6 @@ mod tests {
             body,
             "````python\nprint('```')\n<script>x</script>\n````\n\n\
              ````\n```\n<script>x</script> & co\n````"
-        );
-    }
-
-    /// A tag in a reply or a thought is text. Left as a tag, an unclosed
-    /// `<div style="display:none">` hid every message after it.
-    #[test]
-    fn a_tag_in_a_message_shows_as_typed() {
-        let text = part("text", None, "<div style=\"display:none\">\nhi");
-        let thought = part("thoughts", None, "<b>x");
-        assert_eq!(
-            render_message_body(&[&text, &thought]).unwrap(),
-            "&lt;div style=\"display:none\"&gt;\nhi\n\n> &lt;b&gt;x"
         );
     }
 

@@ -16,10 +16,10 @@
 //! - a multi-line plain-text body: [`escape_md_block`];
 //! - text in another markup that must not open markdown's own
 //!   constructs (Slack's mrkdwn): [`escape_md_syntax`];
-//! - markdown another tool built from plain text without escaping it:
-//!   [`escape_html_outside_code`];
-//! - markdown someone else wrote, whose HTML must not reach the page (an
-//!   assistant's reply, a prompt): [`markdown_html_as_typed`];
+//! - markdown someone else wrote goes in as written: the page renders
+//!   each message alone and sanitizes it
+//!   (docs/dev/data_architecture_parse_and_render.md), and
+//!   [`close_open_blocks`] closes what it leaves open;
 //! - a link destination: [`md_link_dest`];
 //! - inside a code span: [`md_code_span`].
 //!
@@ -180,129 +180,6 @@ pub fn md_code_block(lang: &str, body: &str) -> String {
     format!("{fence}{lang}\n{body}\n{fence}")
 }
 
-/// Markdown that a converter built from plain text without escaping the
-/// text — a PDF's words through pdf-inspector: `<`, `>` and `&` escaped
-/// wherever markdown would read them as HTML, and left alone inside code,
-/// which markdown shows literally. A line's leading `>` stays a quote.
-pub fn escape_html_outside_code(md: &str) -> String {
-    let mut out = String::with_capacity(md.len() + 16);
-    let mut open_fence: Option<String> = None;
-    for (i, line) in md.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let trimmed = line.trim_start();
-        if let Some(fence) = &open_fence {
-            if closes_fence(trimmed, fence) {
-                open_fence = None;
-            }
-            out.push_str(line);
-            continue;
-        }
-        if let Some(fence) = fence_opener(trimmed) {
-            open_fence = Some(fence);
-            out.push_str(line);
-            continue;
-        }
-        let rest = line.trim_start_matches(['>', ' ', '\t']);
-        out.push_str(&line[..line.len() - rest.len()]);
-        escape_html_outside_code_spans(rest, &mut out);
-    }
-    out
-}
-
-/// Markdown someone else wrote, with every HTML tag in it shown as
-/// typed. A tag that reached the page could hide or restyle everything
-/// after it, or pass for a message of ours. Code is written out as our
-/// own `<pre><code>` and `<code>`, the elements markdown would have
-/// made, with every character inside escaped. So wherever this reads
-/// code differently from markdown-it, the page can only look slightly
-/// off; no tag from `md` can open.
-pub fn markdown_html_as_typed(md: &str) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut fence: Option<(String, usize, String, Vec<&str>)> = None;
-    for line in md.split('\n') {
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        let trimmed = &line[indent..];
-        let fence_line = indent <= 3 && !trimmed.starts_with('\t');
-        if let Some((mark, opened_at, lang, body)) = &mut fence {
-            if fence_line && closes_fence(trimmed, mark) {
-                out.push(pre_block(lang, body));
-                fence = None;
-            } else {
-                let strip = line.len() - line.trim_start_matches(' ').len();
-                body.push(&line[strip.min(*opened_at)..]);
-            }
-            continue;
-        }
-        if let Some(mark) = opens_fence(trimmed).filter(|_| fence_line) {
-            let lang = trimmed[mark.len()..]
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || "+-_.#".contains(*c))
-                .collect();
-            fence = Some((mark, indent, lang, Vec::new()));
-            continue;
-        }
-        let rest = line.trim_start_matches(['>', ' ', '\t']);
-        let mut escaped = line[..line.len() - rest.len()].to_string();
-        for (part, is_code) in code_span_parts(rest) {
-            if is_code {
-                escaped.push_str(&code_element(part));
-            } else {
-                escaped.push_str(&escape_tag_chars(part));
-            }
-        }
-        out.push(escaped);
-    }
-    if let Some((_, _, lang, body)) = &fence {
-        out.push(pre_block(lang, body));
-    }
-    out.join("\n")
-}
-
-/// A fenced block as markdown-it writes one, on a single line so that
-/// the HTML block it is ends where it starts.
-fn pre_block(lang: &str, body: &[&str]) -> String {
-    let class = if lang.is_empty() {
-        String::new()
-    } else {
-        format!(" class=\"language-{lang}\"")
-    };
-    let code = escape_text(&body.iter().map(|l| format!("{l}\n")).collect::<String>());
-    format!("<pre><code{class}>{code}</code></pre>")
-}
-
-/// A code span as `<code>`. Markdown still reads what sits between two
-/// tags on a line, so each mark it would act on is a character
-/// reference: nothing inside can start emphasis, a link or another span.
-fn code_element(span: &str) -> String {
-    let run = backtick_run(span);
-    let inner = &span[run..span.len() - run];
-    let inner = match inner.strip_prefix(' ').and_then(|i| i.strip_suffix(' ')) {
-        Some(stripped) if !inner.trim().is_empty() => stripped,
-        _ => inner,
-    };
-    let mut out = String::from("<code>");
-    for c in inner.chars() {
-        if "\\`*_[]<>&~!:|".contains(c) {
-            out.push_str(&format!("&#{};", c as u32));
-        } else {
-            out.push(c);
-        }
-    }
-    out.push_str("</code>");
-    out
-}
-
-fn escape_tag_chars(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// `md` with any block it leaves open closed at its end: a fence, or an
 /// HTML block that only a closing tag or marker ends (`<pre`, `<!--`,
 /// `<?`, `<!X`, `<![CDATA[`). Markdown from upstream is pasted into a
@@ -333,7 +210,7 @@ pub fn close_open_blocks(md: &str) -> String {
 
 /// [`fence_opener`], less a backtick run with a backtick after it on its
 /// line, which markdown reads as a code span.
-fn opens_fence(line: &str) -> Option<String> {
+pub(crate) fn opens_fence(line: &str) -> Option<String> {
     let fence = fence_opener(line)?;
     (!(fence.starts_with('`') && line[fence.len()..].contains('`'))).then_some(fence)
 }
@@ -391,20 +268,10 @@ fn fence_opener(line: &str) -> Option<String> {
     (run.len() >= 3).then_some(run)
 }
 
-fn closes_fence(line: &str, fence: &str) -> bool {
+pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
     let mark = fence.chars().next().expect("a fence has a mark");
     let run = line.chars().take_while(|&c| c == mark).count();
     run >= fence.len() && line[run..].trim().is_empty()
-}
-
-fn escape_html_outside_code_spans(line: &str, out: &mut String) {
-    for (part, is_code) in code_span_parts(line) {
-        if is_code {
-            out.push_str(part);
-        } else {
-            out.push_str(&escape_text(part));
-        }
-    }
 }
 
 /// `text` cut into its code spans (`true`, backticks included) and the
@@ -630,27 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn converted_text_is_escaped_everywhere_but_in_code() {
-        let md = "# A <b> & B\n\
-                  > quoted <i>\n\
-                  run `a < b && c` then <x>\n\
-                  ```\n\
-                  <div> & </div>\n\
-                  ```\n\
-                  after <y>";
-        assert_eq!(
-            escape_html_outside_code(md),
-            "# A &lt;b&gt; &amp; B\n\
-             > quoted &lt;i&gt;\n\
-             run `a < b && c` then &lt;x&gt;\n\
-             ```\n\
-             <div> & </div>\n\
-             ```\n\
-             after &lt;y&gt;"
-        );
-    }
-
-    #[test]
     fn a_link_destination_cannot_be_closed_early() {
         assert_eq!(
             md_link_dest("https://e.invalid/a?b=1&c=2"),
@@ -795,53 +641,6 @@ mod tests {
             "```x = 1```",
         ] {
             assert_eq!(close_open_blocks(md), md, "{md:?}");
-        }
-    }
-    /// A tag an assistant or a prompt wrote stays text: unclosed, it hid
-    /// or restyled every message after it on the page.
-    #[test]
-    fn markdown_written_upstream_opens_no_tag() {
-        assert_eq!(
-            markdown_html_as_typed("<div style=\"display:none\">\n**hi** & bye"),
-            "&lt;div style=\"display:none\"&gt;\n**hi** &amp; bye"
-        );
-        assert_eq!(
-            markdown_html_as_typed("> <b>x</b>"),
-            "> &lt;b&gt;x&lt;/b&gt;"
-        );
-        assert_eq!(
-            markdown_html_as_typed("use `Vec<u8>` and `*a*`"),
-            "use <code>Vec&#60;u8&#62;</code> and <code>&#42;a&#42;</code>"
-        );
-        assert_eq!(
-            markdown_html_as_typed("```rust\nlet a = b < c;\n\n</pre><div>\n```\nafter"),
-            "<pre><code class=\"language-rust\">let a = b &lt; c;&#10;&#10;&lt;/pre&gt;&lt;div&gt;&#10;</code></pre>\nafter"
-        );
-        assert_eq!(
-            markdown_html_as_typed("```\n<div>"),
-            "<pre><code>&lt;div&gt;&#10;</code></pre>",
-            "a fence left open is closed"
-        );
-    }
-
-    /// Where this reads code differently from markdown, a tag still
-    /// cannot open: each case once let one through a line-by-line guess.
-    #[test]
-    fn a_misread_of_code_still_opens_no_tag() {
-        for md in [
-            "a `b\nc` <div style=\"display:none\"> `d`",
-            "\\`<div>`",
-            "    ```\n<div>",
-            "```x``` <div>",
-            "[a]: /u 'title\n```\n'\n<div>",
-        ] {
-            let out = markdown_html_as_typed(md);
-            let ours = out
-                .replace("<code>", "")
-                .replace("</code>", "")
-                .replace("<pre>", "")
-                .replace("</pre>", "");
-            assert!(!ours.contains('<'), "{md:?} → {out:?}");
         }
     }
 }

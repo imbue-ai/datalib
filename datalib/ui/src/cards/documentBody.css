@@ -77,6 +77,18 @@
   width: max-content;
   max-width: 100%;
   overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+.chat-body th,
+.chat-body td {
+  border: 1px solid var(--datalib-border);
+  padding: 0.25rem 0.6rem;
+  vertical-align: top;
+}
+.chat-body th {
+  background: var(--datalib-code-bg);
+  text-align: left;
 }
 
 /* Per-message wrappers emitted by ingest. */

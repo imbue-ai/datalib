@@ -12,6 +12,9 @@
 //! own private text paths (Facebook posts, Claude's tool results, a
 //! time-series page's facts) are not reached here and keep their own
 //! tests.
+//!
+//! It also renders the text-edge library, `etl/text_edges/cases.toml`
+//! (`edges.rs`), for `text_edges.test.ts` to judge the same way.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -39,6 +42,8 @@ use datalib_etl_render::title::Title;
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::providers::Provider;
 use serde::Serialize;
+
+mod edges;
 
 /// HTML and markdown in one string, tagged so each field's copy can be
 /// told apart on the page: a tag, a link, an image, a table cell, a
@@ -69,6 +74,7 @@ fn slack_encoded(typed: &str) -> String {
 struct Corpus {
     documents: Vec<Document>,
     escapes: Vec<Escape>,
+    edges: edges::Edges,
 }
 
 #[derive(Serialize)]
@@ -147,6 +153,7 @@ fn main() -> Result<()> {
     let corpus = Corpus {
         documents,
         escapes: escapes(),
+        edges: edges::edges(scratch.path())?,
     };
     std::fs::write(&out, serde_json::to_string_pretty(&corpus)?)
         .with_context(|| format!("write {out}"))?;
