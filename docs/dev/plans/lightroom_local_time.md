@@ -90,8 +90,8 @@ Measured on the test catalog, with the cases in
   applier declares any namespace it uses and parses what it writes.
 - **The Metadata panel reads a cache**, `<catalog> Helper.lrdata`
   (`metadatahelper.db`), which a direct edit does not refresh. So the
-  applier deletes it after writing, and Lightroom builds it again on the
-  next open, from the written times.
+  applier moves it aside after writing, and Lightroom builds it again on
+  the next open, from the written times.
 - **Lightroom's own operations**: Synchronize Folder keeps a direct edit;
   Read Metadata from Files undoes it, after a warning (§9); Edit Capture Time keeps it,
   shifting from the XMP's time, but drops an offset in `captureTime`.
@@ -179,8 +179,8 @@ Built: `datalib/backend/lightroom_retime/`, `datalib-lightroom-retime`,
 not yet shipped; its [README](../../../datalib/backend/lightroom_retime/README.md)
 says what it writes and how it stays safe. It writes what phase 0 found
 Lightroom needs (§4): `captureTime`, the XMP's dates with the offset,
-the day columns, `originalCaptureTime` where empty; then it deletes the
-`Helper.lrdata` cache. It refuses an open catalog, backs the catalog up,
+the day columns, `originalCaptureTime` where the clock moves and it is
+empty; then it moves the `Helper.lrdata` cache aside. It refuses an open catalog, backs the catalog up,
 writes every line or none, prints without `--write`, and is safe to run
 twice. It writes through doltlite; its test reads the result back with
 stock SQLite.

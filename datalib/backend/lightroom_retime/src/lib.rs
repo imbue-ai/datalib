@@ -35,7 +35,7 @@ pub struct Report {
 #[derive(Debug)]
 pub struct Written {
     pub backup: PathBuf,
-    pub cache_removed: Option<PathBuf>,
+    pub cache_moved_to: Option<PathBuf>,
 }
 
 impl Report {
@@ -62,7 +62,7 @@ pub fn lock_file(catalog: &Path) -> PathBuf {
 }
 
 /// The cache the Metadata panel reads, which an edit made outside
-/// Lightroom does not refresh; Lightroom rebuilds it when it is gone.
+/// Lightroom does not refresh; Lightroom rebuilds it when it is missing.
 pub fn panel_cache(catalog: &Path) -> PathBuf {
     let stem = catalog.file_stem().unwrap_or_default().to_string_lossy();
     catalog.with_file_name(format!("{stem} Helper.lrdata"))
@@ -75,7 +75,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Plans every edit and, with `write`, applies them: all of them or, if
-/// any is refused, none. `stamp` names the backup.
+/// any is refused, none. `stamp` names what is kept aside.
 pub async fn run(catalog: &Path, edits: Vec<Edit>, write: bool, stamp: &str) -> Result<Report> {
     refuse_if_open(catalog)?;
     let mut conn = open(catalog).await?;
@@ -94,16 +94,17 @@ pub async fn run(catalog: &Path, edits: Vec<Edit>, write: bool, stamp: &str) -> 
     close(conn).await?;
     applied?;
     let cache = panel_cache(catalog);
-    let cache_removed = if cache.exists() {
-        fs::remove_dir_all(&cache).with_context(|| format!("removing {}", cache.display()))?;
-        Some(cache)
+    let cache_moved_to = if cache.exists() {
+        let to = aside(&cache, stamp);
+        fs::rename(&cache, &to).with_context(|| format!("moving {}", cache.display()))?;
+        Some(to)
     } else {
         None
     };
     Ok(Report {
         written: Some(Written {
             backup,
-            cache_removed,
+            cache_moved_to,
         }),
         ..report
     })
@@ -153,14 +154,20 @@ fn refuse_if_open(catalog: &Path) -> Result<()> {
     Ok(())
 }
 
-fn back_up(catalog: &Path, stamp: &str) -> Result<PathBuf> {
-    let mut backup = with_suffix(catalog, &format!(".before-retime-{stamp}"));
+/// `<path>.bak_timestamps_<stamp>`, numbered on if that is taken.
+pub fn aside(path: &Path, stamp: &str) -> PathBuf {
+    let mut to = with_suffix(path, &format!(".bak_timestamps_{stamp}"));
     for n in 2.. {
-        if !backup.exists() {
+        if !to.exists() {
             break;
         }
-        backup = with_suffix(catalog, &format!(".before-retime-{stamp}-{n}"));
+        to = with_suffix(path, &format!(".bak_timestamps_{stamp}-{n}"));
     }
+    to
+}
+
+fn back_up(catalog: &Path, stamp: &str) -> Result<PathBuf> {
+    let backup = aside(catalog, stamp);
     fs::copy(catalog, &backup).with_context(|| format!("backing up to {}", backup.display()))?;
     // A write-ahead log left by a Lightroom that did not quit cleanly
     // holds part of the catalog.
@@ -198,10 +205,13 @@ async fn read_photos(
         "SELECT i.id_global, i.id_local, coalesce(f.baseName || '.' || f.extension, ''),
                 CAST(i.captureTime AS TEXT), CAST(i.originalCaptureTime AS TEXT),
                 CAST(m.xmp AS BLOB),
-                (SELECT count(*) FROM AgHarvestedExifMetadata e WHERE e.image = i.id_local)
+                (SELECT count(*) FROM AgHarvestedExifMetadata e WHERE e.image = i.id_local),
+                CAST(d.dateYear AS REAL), CAST(d.dateMonth AS REAL), CAST(d.dateDay AS REAL)
          FROM Adobe_images i
          LEFT JOIN AgLibraryFile f ON f.id_local = i.rootFile
          LEFT JOIN Adobe_AdditionalMetadata m ON m.image = i.id_local
+         LEFT JOIN AgHarvestedExifMetadata d ON d.id_local =
+             (SELECT min(e.id_local) FROM AgHarvestedExifMetadata e WHERE e.image = i.id_local)
          WHERE i.id_global IN (SELECT value FROM json_each(?))",
     )
     .bind(serde_json::to_string(ids)?)
@@ -217,6 +227,10 @@ async fn read_photos(
             original_capture_time: row.try_get(4)?,
             xmp: row.try_get(5)?,
             exif_rows: exif_rows as usize,
+            days: match (row.try_get(7)?, row.try_get(8)?, row.try_get(9)?) {
+                (Some(y), Some(m), Some(d)) => Some((y, m, d)),
+                _ => None,
+            },
         });
     }
     Ok(photos)

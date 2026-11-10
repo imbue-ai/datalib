@@ -71,6 +71,16 @@ PHOTOS = [
             '   xmp:CreateDate="2024-07-04T12:00:00Z"/>'
         ),
     ),
+    (
+        "V01.mov",
+        "ID-V01",
+        "2024-07-05T14:00:00.000",
+        wrap(
+            '<rdf:Description rdf:about=""\n'
+            '    xmlns:xmp="http://ns.adobe.com/xap/1.0/"\n'
+            '   xmp:CreateDate="2024-07-05T12:00:00Z"/>'
+        ),
+    ),
 ]
 
 EDITS = [
@@ -89,6 +99,12 @@ EDITS = [
         "id_global": "ID-E05X",
         "expected": "2024-07-04T12:00:00.000",
         "capture_time": "2024-07-04T14:00:00.000+02:00",
+    },
+    # The clock is already right; only the offset is missing.
+    {
+        "id_global": "ID-V01",
+        "expected": "2024-07-05T14:00:00.000",
+        "capture_time": "2024-07-05T14:00:00.000+02:00",
     },
 ]
 
@@ -186,18 +202,24 @@ class RetimeTest(unittest.TestCase):
         before, files = c.digest(), c.files()
         done = c.retime(EDITS)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("3 to write, 0 already done, 0 refused.", done.stdout)
+        self.assertIn("4 to write, 0 already done, 0 refused.", done.stdout)
         self.assertEqual(c.digest(), before)
         self.assertEqual(c.files(), sorted(files + ["edits.jsonl"]))
 
-    def test_writes_every_place_backs_up_and_drops_the_panel_cache(self) -> None:
+    def test_writes_every_place_and_keeps_the_catalog_and_cache_aside(self) -> None:
         c = self.catalog()
         original = c.path.read_bytes()
         done = c.retime(EDITS, "--write")
         self.assertEqual(done.returncode, 0, done.stderr)
-        backups = [n for n in c.files() if ".before-retime-" in n]
-        self.assertEqual(len(backups), 1, c.files())
-        self.assertEqual((c.dir / backups[0]).read_bytes(), original)
+        kept = [n for n in c.files() if ".bak_timestamps_" in n]
+        self.assertEqual(len(kept), 2, c.files())
+        backup, cache = sorted(
+            kept, key=lambda n: n.startswith("test.lrcat"), reverse=True
+        )
+        self.assertEqual((c.dir / backup).read_bytes(), original)
+        self.assertTrue(backup.startswith("test.lrcat.bak_timestamps_"), backup)
+        self.assertTrue(cache.startswith("test Helper.lrdata.bak_timestamps_"), cache)
+        self.assertEqual((c.dir / cache / "metadatahelper.db").read_bytes(), b"cache")
         self.assertFalse(c.cache.exists())
         self.assertNotIn("test.lrcat-wal", c.files())
 
@@ -220,6 +242,10 @@ class RetimeTest(unittest.TestCase):
             'xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"', unpack(xmp)
         )
 
+        # A first time is kept only when the clock moves.
+        capture, original_time, _, *_ = c.photo("ID-V01")
+        self.assertEqual((capture, original_time), ("2024-07-05T14:00:00.000", None))
+
         _, _, xmp, *_ = c.photo("ID-E05X")
         text = unpack(xmp)
         self.assertIn('xmlns:exif="http://ns.adobe.com/exif/1.0/"', text)
@@ -232,7 +258,7 @@ class RetimeTest(unittest.TestCase):
         after = c.digest()
         again = c.retime(EDITS, "--write")
         self.assertEqual(again.returncode, 0, again.stderr)
-        self.assertIn("0 to write, 3 already done, 0 refused.", again.stdout)
+        self.assertIn("0 to write, 4 already done, 0 refused.", again.stdout)
         self.assertEqual(c.digest(), after)
 
     def test_one_stale_edit_and_nothing_is_written(self) -> None:

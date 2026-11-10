@@ -23,13 +23,15 @@ pub struct Photo {
     pub original_capture_time: Option<String>,
     pub xmp: Option<Vec<u8>>,
     pub exif_rows: usize,
+    /// `dateYear`, `dateMonth`, `dateDay` of its first harvested row.
+    pub days: Option<(f64, f64, f64)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Write {
     pub image: i64,
     pub capture_time: String,
-    /// Set only where Lightroom has not kept a first time already.
+    /// Set only where the clock moves and Lightroom has kept no first time.
     pub original_capture_time: Option<String>,
     pub xmp: Vec<u8>,
     pub year: f64,
@@ -74,11 +76,17 @@ pub fn plan(edit: &Edit, rows: &[Photo]) -> Outcome {
         Ok(t) => t,
         Err(e) => return Outcome::Refused(e),
     };
+    let date = edit.target.date_naive();
+    let days = (
+        f64::from(date.year()),
+        f64::from(date.month()),
+        f64::from(date.day()),
+    );
     let current = photo.capture_time.as_deref();
+    if current == Some(clock.as_str()) && already_set(&text, &stamp) && photo.days == Some(days) {
+        return Outcome::AlreadyDone;
+    }
     if current != Some(edit.expected.as_str()) {
-        if current == Some(clock.as_str()) && already_set(&text, &stamp) {
-            return Outcome::AlreadyDone;
-        }
         return Outcome::Refused(format!(
             "captureTime is {current:?}, not the expected {:?}",
             edit.expected
@@ -95,15 +103,15 @@ pub fn plan(edit: &Edit, rows: &[Photo]) -> Outcome {
         .original_capture_time
         .as_deref()
         .is_some_and(|o| !o.is_empty());
-    let date = edit.target.date_naive();
+    let clock_moves = current != Some(clock.as_str());
     Outcome::Write(Write {
         image: photo.image,
+        original_capture_time: (clock_moves && !original_kept).then(|| edit.expected.clone()),
         capture_time: clock,
-        original_capture_time: (!original_kept).then(|| edit.expected.clone()),
         xmp: xmp::pack(&new_xmp),
-        year: f64::from(date.year()),
-        month: f64::from(date.month()),
-        day: f64::from(date.day()),
+        year: days.0,
+        month: days.1,
+        day: days.2,
     })
 }
 
@@ -132,6 +140,7 @@ mod tests {
             original_capture_time: None,
             xmp: Some(xmp::pack(XMP)),
             exif_rows: 1,
+            days: Some((2024.0, 8.0, 1.0)),
         }
     }
 
@@ -196,6 +205,24 @@ mod tests {
         let mut done = photo();
         done.capture_time = Some(w.capture_time);
         done.xmp = Some(w.xmp);
+        done.days = Some((w.year, w.month, w.day));
+        assert_eq!(plan(&e, &[done.clone()]), Outcome::AlreadyDone);
+        done.days = Some((2024.0, 8.0, 1.0));
+        assert_ne!(plan(&e, &[done]), Outcome::AlreadyDone);
+    }
+
+    /// E03 and V01 on test_catalog_2: only the offset changes, so
+    /// `expected` still matches after the first run, which used to write
+    /// it all again, and record a first time equal to the new one.
+    #[test]
+    fn an_edit_that_keeps_the_clock_is_done_after_one_run() {
+        let mut e = edit("2024-08-01T21:00:00+02:00");
+        e.expected = "2024-08-01T21:00:00.000".into();
+        let w = written(plan(&e, &[photo()]));
+        assert_eq!(w.original_capture_time, None);
+        let mut done = photo();
+        done.xmp = Some(w.xmp);
+        done.days = Some((w.year, w.month, w.day));
         assert_eq!(plan(&e, &[done]), Outcome::AlreadyDone);
     }
 

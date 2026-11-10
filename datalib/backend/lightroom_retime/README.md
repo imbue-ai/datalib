@@ -45,11 +45,12 @@ Each place Lightroom keeps a capture time feeds one thing it does
 - `AgHarvestedExifMetadata.dateYear`, `dateMonth` and `dateDay`, from the
   local date: the day the Library filter files the photo under.
 
-It also sets `originalCaptureTime` to the time it replaced, where
-Lightroom has not already kept a first time there. After writing it
-deletes `<catalog> Helper.lrdata`, the cache the Metadata panel reads,
-which Lightroom rebuilds from the catalog on its next open. It never
-touches the photo files.
+Where the clock time moves and Lightroom has kept no first time, it also
+sets `originalCaptureTime` to the time it replaced. After writing it
+moves `<catalog> Helper.lrdata`, the cache the Metadata panel reads,
+aside to `<catalog> Helper.lrdata.bak_timestamps_<time>`; Lightroom builds
+a new one from the catalog on its next open. It never touches the photo
+files.
 
 ## What keeps it safe
 
@@ -61,9 +62,10 @@ touches the photo files.
   photo is missing or has no XMP; or when its XMP will not take the
   dates cleanly.
 - **A backup first**: the catalog as it was, beside it as
-  `<catalog>.before-retime-<time>`.
-- **Running it again is safe**: a photo that already has its target is
-  counted as done.
+  `<catalog.lrcat>.bak_timestamps_<time>`, numbered on if that is taken.
+- **Running it again is safe**: a photo whose `captureTime`, XMP dates
+  and day columns already have its target is counted as done, and a run
+  with nothing to do writes nothing, backup included.
 
 It writes with datalib's own SQLite, doltlite, which reads and writes
 plain SQLite files. `apply_test` builds a catalog with stock SQLite, as

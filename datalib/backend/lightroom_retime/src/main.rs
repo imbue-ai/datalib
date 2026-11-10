@@ -74,10 +74,10 @@ fn print(report: &Report, write: bool) {
     match &report.written {
         Some(w) => {
             println!("Written. The catalog as it was is {}.", w.backup.display());
-            if let Some(cache) = &w.cache_removed {
+            if let Some(to) = &w.cache_moved_to {
                 println!(
-                    "Removed {}, which Lightroom rebuilds on its next open.",
-                    cache.display()
+                    "Moved the Metadata panel's cache to {}; Lightroom builds a new one on its next open.",
+                    to.display()
                 );
             }
         }
