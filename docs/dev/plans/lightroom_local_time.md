@@ -89,9 +89,9 @@ Measured on the test catalog, with the cases in
 - **The Metadata panel reads a cache**, `<catalog> Helper.lrdata`
   (`metadatahelper.db`), which a direct edit does not refresh. So the
   applier deletes it after writing, and Lightroom builds it again on the
-  next open. Still to see: that the rebuilt cache shows the written times.
+  next open, from the written times.
 - **Lightroom's own operations**: Synchronize Folder keeps a direct edit;
-  Read Metadata from Files undoes it (§9); Edit Capture Time keeps it,
+  Read Metadata from Files undoes it, after a warning (§9); Edit Capture Time keeps it,
   shifting from the XMP's time, but drops an offset in `captureTime`.
 - **An offset in `captureTime`** does not survive Edit Capture Time, so
   the offset lives in the XMP (§9).

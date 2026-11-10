@@ -185,7 +185,8 @@ A01–A08 (not D08), and Synchronize Folder ran once as well.
   exported, held the repaired 14:00. The cache was then moved aside
   (`Helper.lrdata.round5-step3`) to see whether a rebuilt one shows the
   repaired times.
-- **Read Metadata from Files puts the file's times back.** A01's
+- **Read Metadata from Files puts the file's times back**, after a
+  warning that it will. A01's
   `captureTime` went from 14:00 back to the file's 12:00; A05's XMP lost
   the −07:00 the catalog alone had. A02–A08's values were unchanged, their
   XMP rewritten in Lightroom's order.
@@ -208,3 +209,9 @@ A01–A08 (not D08), and Synchronize Folder ran once as well.
   EXIF `DateTimeOriginal` with `OffsetTimeOriginal` +02:00 and −07:00, and
   the catalog's XMP the same; their `ModifyDate` is the conversion time,
   `OffsetTime` the Mac's +01:00.
+
+**A rebuilt cache (step 5):** with `Helper.lrdata` moved aside, Lightroom
+built it again on open, and the panel showed what was written: E05X
+Capture Date/Time, Date Time Original and Capture Time 14:00 (Date Time
+Digitized still `xmp:CreateDate`'s 12:00, Date Time the import time);
+F10 and F12 2024-08-02 06:00 in all four fields.

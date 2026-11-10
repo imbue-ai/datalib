@@ -304,7 +304,8 @@ These are drawn from a cache beside the catalog,
 `<catalog> Helper.lrdata/metadatahelper.db` (`AgImagesMetadata`), which
 Lightroom fills when it opens a catalog without one and refreshes for a
 photo it edits, reads metadata for or exports. A time written into the
-catalog directly did not show until then.
+catalog directly did not show until then, and did once the cache was
+deleted and Lightroom built it again.
 
 **No field shows an offset or applies one.** A photo at 05:00 −07:00
 shows 05:00 everywhere, not the 14:00 that moment was in Berlin. The
@@ -355,7 +356,8 @@ zone column; the year, month and day columns behind the Library
 filter's Date column (`AgHarvestedExifMetadata.dateYear` and so on)
 carry none. That filter reads those columns, not `captureTime`.
 
-**Read Metadata from Files puts the file's times back**: `captureTime`
+**Read Metadata from Files puts the file's times back**, after a
+warning that it will replace the catalog's metadata: `captureTime`
 and the XMP's dates become what the file says, and an offset the
 catalog had and the file lacks is gone. So a time fixed in the catalog
 alone lasts only until someone reads metadata from that file; Synchronize
