@@ -46,14 +46,14 @@ VERSION="${DATALIB_VERSION:-latest}"
 # their own (docs/dev/security_posture.md). So this is as trusted as a merge to
 # `main`, and nothing later can change what it installs.
 # scripts/release/pin_release.py writes these.
-PINNED_VERSION="v0.52.0"
+PINNED_VERSION="v0.53.0"
 pinned_sha256() {
     case "$1" in
-        aarch64-apple-darwin) echo a7c12227c0a87cf25d4dfa611d1004c5d9353413fa3d47fa2c7101de63bd4918 ;;
-        aarch64-unknown-linux-gnu) echo 64372760045b9b2ea491b0d639329b03cab1514062812b0ef1e4a3cf8eb266c7 ;;
-        aarch64-unknown-linux-musl) echo 232c0b143a20c90bd8bc0ee8b1c9db39bd827203703a2091addcad5b2035bec5 ;;
-        x86_64-unknown-linux-gnu) echo 44e0b6919e7f4181e9d56a47362d81d3c21c00aa7fd15618e0d2695d80d154df ;;
-        x86_64-unknown-linux-musl) echo 5fd245c3b0dcd45bb837ee2fbf85cb8e7de9568da27acdbbc326ddc68ba65cd8 ;;
+        aarch64-apple-darwin) echo 528fd8378dd37b97a1b61f18c3a63971124b92163e069c03fe4a4c790539a11f ;;
+        aarch64-unknown-linux-gnu) echo 94985fee99c54912c4d7903ec81d683947e4b2594bed22214a827a58a8cac65d ;;
+        aarch64-unknown-linux-musl) echo 43550ae7d262748552d31fc1d1fa1a45e37227f43a30c78ffbc936b6e6104a7f ;;
+        x86_64-unknown-linux-gnu) echo 77e370e0289444733a69c88a93d2a98d228d74708297db8c07caa30c644a7a9f ;;
+        x86_64-unknown-linux-musl) echo 508dbb410d2c1c14baf2c0cb80afdedeaedc454de0b0157175c155c0b7c7c874 ;;
         *) echo "" ;;
     esac
 }
