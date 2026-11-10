@@ -67,10 +67,13 @@ problems go.
 Measured on the test catalog, with the cases in
 `lightroom/tests/capture_time/`. Each answer decides how §8 works.
 
-- **Can a plugin set a photo's capture time?** Jeffrey Friedl's
-  Bag-o-Goodies page says Lightroom does not let plugins change a photo's
-  date. If that still holds, the applier cannot be a plugin, and writes
-  the `.lrcat` directly with Lightroom closed.
+- **Can a plugin set a photo's capture time? No**, by the Lightroom
+  Classic 13.0 SDK's reference: `LrPhoto:setRawMetadata` takes no
+  capture-time key (`dateTimeOriginal` can be read, not set), only
+  `dateCreated`, the IPTC creation date, as Jeffrey Friedl's
+  Bag-o-Goodies page also says. So the applier writes the `.lrcat`
+  directly with Lightroom closed. Still to try: whether setting
+  `dateCreated` moves `captureTime`, and whether a newer SDK adds a key.
 - **Does a direct edit hold?** With Lightroom closed, change
   `captureTime`, the XMP's dates and the harvested date columns behind
   the Library filter (`AgHarvestedExifMetadata.dateYear` and its
@@ -172,7 +175,7 @@ dry run that prints what would change, and is safe to run twice.
 
 ## 9. Open questions
 
-- [ ] **Plugin or direct edit** (phase 0).
+- [x] **Plugin or direct edit**: direct edit; the SDK has no way (§4).
 - [ ] **Where the offset lives**: `captureTime`, the XMP, or both.
 - [ ] **Virtual copies** share a file but are separate `Adobe_images`
   rows; the CSV should name each, and the check should require they
