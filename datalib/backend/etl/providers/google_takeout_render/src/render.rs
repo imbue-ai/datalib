@@ -52,8 +52,7 @@ use datalib_schema::providers::Provider;
 ///     as `me`; a Voice text someone else sent, and a voicemail, is to the
 ///     account (`to:me`).
 /// v12: a Chat message's stamps keep the zone its date was written in.
-/// v13: a tag in a Gemini answer or a My Maps description shows as typed.
-pub const RENDER_VERSION: u32 = 13;
+pub const RENDER_VERSION: u32 = 12;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`

@@ -24,7 +24,6 @@ protocols disengaged
 shows = ["thread '<unnamed>' panicked"]
 finds = ["unnamed panicked", "protocols disengaged"]
 elements = { pre = 1 }
-fails_today = "markdown_html_as_typed writes the fence as <pre><code> with entities: qmd reads lt/gt between the words, and plain_text decodes then strips <unnamed> as a tag."
 
 [[case]]
 id = "placeholder-in-a-code-span"
@@ -37,7 +36,6 @@ Set `ansible_host: <TARGET_IP>` in the away team's inventory.
 shows = ["ansible_host: <TARGET_IP>"]
 finds = ["ansible_host: <TARGET_IP>"]
 elements = { code = 1 }
-fails_today = "the code span becomes <code> with entities, which qmd reads as words."
 
 [[case]]
 id = "placeholder-in-prose"
@@ -49,7 +47,6 @@ Replace <TARGET_IP> with the target vessel's address from the registry.
 '''
 shows = ["Replace <TARGET_IP> with the target"]
 finds = ["<TARGET_IP> with the target"]
-fails_today = "the escape writes &lt;TARGET_IP&gt;, which qmd reads as words."
 
 [[case]]
 id = "fence-inside-a-list-item"
@@ -69,7 +66,6 @@ text = '''
 shows = ['if [ "$flow" < 9 ] && [ -n "$relay" ]']
 hides = ["&lt;", "&amp;"]
 elements = { pre = 1, li = 2 }
-fails_today = "markdown_html_as_typed does not see a fence indented four spaces, so it escapes the code inside it."
 
 [[case]]
 id = "fence-in-a-list-at-three-spaces"
@@ -88,7 +84,6 @@ text = '''
 '''
 shows = ["level 3 diagnostic"]
 elements = { ol = 1, li = 2, pre = 1 }
-fails_today = "markdown_html_as_typed writes the fence as a <pre> at column 0."
 
 [[case]]
 id = "indented-code-block"
@@ -103,7 +98,6 @@ The replicator's template reads:
 shows = ["<code>tea(earl_grey, hot)</code>"]
 hides = ["&lt;"]
 elements = { pre = 1 }
-fails_today = "markdown_html_as_typed escapes inside an indented code block."
 
 [[case]]
 id = "entity-references"
@@ -115,7 +109,6 @@ Warp&nbsp;9 &mdash; engage.
 '''
 shows = ["Warp 9 — engage."]
 hides = ["&nbsp;", "&mdash;"]
-fails_today = "markdown_html_as_typed escapes the & of every entity."
 
 # ── A message that leaves something open ───────────────────────────────
 
@@ -218,7 +211,6 @@ Fixes a subspace harmonic.
 shows = ["Release notes", "Fixes a subspace harmonic."]
 hides = ["<details>", "<summary>"]
 elements = { details = 1, summary = 1 }
-fails_today = "forge-render-common escapes every tag in a description (#1694)."
 
 [[case]]
 id = "forge-template-comment"
@@ -232,7 +224,6 @@ Beam down at 0800 to survey the ruins.
 shows = ["Beam down at 0800"]
 hides = ["Describe what this away mission changes"]
 finds = ["Beam down at 0800"]
-fails_today = "forge-render-common escapes every tag in a description (#1694)."
 
 [[case]]
 id = "forge-screenshot"
@@ -246,7 +237,6 @@ The viewscreen after the fix:
 '''
 hides = ["<img"]
 elements = { img = 1 }
-fails_today = "forge-render-common escapes every tag in a description (#1694)."
 
 [[case]]
 id = "forge-inline-formatting"
@@ -258,7 +248,6 @@ Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to raise shields.<br>Coolant is H<sub>2</sub>
 '''
 hides = ["<kbd>", "<sub>", "<br>"]
 elements = { kbd = 2, sub = 1, br = 1 }
-fails_today = "forge-render-common escapes every tag in a description (#1694)."
 
 [[case]]
 id = "table-cell-line-break"
@@ -273,7 +262,6 @@ text = '''
 shows = ["Security", "Tactical"]
 hides = ["<br>"]
 elements = { table = 1, br = 1 }
-fails_today = "markdown_html_as_typed escapes the <br>."
 
 # ── Email ──────────────────────────────────────────────────────────────
 
@@ -287,7 +275,6 @@ text = '''
 '''
 shows = ["the <tachyon-burst> setting"]
 finds = ["tachyon-burst setting"]
-fails_today = "qmd reads &lt;/&gt; as words, and plain_text strips <tachyon-burst> as a tag."
 
 [[case]]
 id = "email-pre-without-code"
@@ -299,6 +286,7 @@ text = '''
 <p>The console printed:</p><pre>&lt;div style="display:none"&gt;phaser&lt;/div&gt;</pre>
 '''
 shows = ['<div style="display:none">phaser</div>']
+fails_today = "htmd decodes the entities in a <pre> with no <code> and writes them back unescaped, so the text becomes a tag; the sanitizer keeps it to this message."
 
 [[case]]
 id = "email-non-breaking-space"
@@ -319,6 +307,7 @@ text = '''
 <p>Type &amp;lt; to write a less-than sign.</p>
 '''
 shows = ["Type &lt; to write"]
+fails_today = "htmd decodes &amp;lt; to &lt; without escaping it for markdown, so the page shows <."
 
 # ── Links ──────────────────────────────────────────────────────────────
 

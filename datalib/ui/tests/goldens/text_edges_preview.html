@@ -1520,7 +1520,6 @@ time.date-from-t0 {
 <div class="preview-doc" id="case-placeholder-in-a-fence">
 <h3 class="preview-name">placeholder-in-a-fence</h3>
 <p class="preview-edge">A backtrace's `&lt;unnamed&gt;` inside a code fence stopped finding its page after #1689: the fence became `&lt;pre&gt;&lt;code&gt;` with `&amp;lt;` entities, which qmd reads as the words &quot;lt&quot; and &quot;gt&quot;.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed writes the fence as &lt;pre&gt;&lt;code&gt; with entities: qmd reads lt/gt between the words, and plain_text decodes then strips &lt;unnamed&gt; as a tag.</p>
 <pre class="preview-typed">The holodeck program crashed again:
 
 ```
@@ -1542,7 +1541,6 @@ protocols disengaged
 <div class="preview-doc" id="case-placeholder-in-a-code-span">
 <h3 class="preview-name">placeholder-in-a-code-span</h3>
 <p class="preview-edge">A config line in a code span, `ansible_host: &lt;TARGET_IP&gt;`, stopped finding its page after #1689 for the same reason.</p>
-<p class="preview-failing">Fails today: the code span becomes &lt;code&gt; with entities, which qmd reads as words.</p>
 <pre class="preview-typed">Set `ansible_host: &lt;TARGET_IP&gt;` in the away team's inventory.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
@@ -1556,7 +1554,6 @@ protocols disengaged
 <div class="preview-doc" id="case-placeholder-in-prose">
 <h3 class="preview-name">placeholder-in-prose</h3>
 <p class="preview-edge">A placeholder in running text is not a tag (`_` is not allowed in a tag's name), so it reads as typed and a quoted search finds it.</p>
-<p class="preview-failing">Fails today: the escape writes &amp;lt;TARGET_IP&amp;gt;, which qmd reads as words.</p>
 <pre class="preview-typed">Replace &lt;TARGET_IP&gt; with the target vessel's address from the registry.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
@@ -1570,7 +1567,6 @@ protocols disengaged
 <div class="preview-doc" id="case-fence-inside-a-list-item">
 <h3 class="preview-name">fence-inside-a-list-item</h3>
 <p class="preview-edge">A fence indented four spaces under a numbered step, the way ChatGPT writes one, is still code to markdown-it. Since #1689 it showed `&amp;lt;` and `&amp;amp;&amp;amp;` literally.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed does not see a fence indented four spaces, so it escapes the code inside it.</p>
 <pre class="preview-typed">1. Check the plasma relay:
 
     ```bash
@@ -1583,7 +1579,7 @@ protocols disengaged
 <ol>
 <li>
 <p>Check the plasma relay:</p>
-<pre><code class="language-bash"><span class="hljs-keyword">if</span> [ <span class="hljs-string">"<span class="hljs-variable">$flow</span>"</span> &amp;lt; 9 ] &amp;amp;&amp;amp; [ -n <span class="hljs-string">"<span class="hljs-variable">$relay</span>"</span> ]; <span class="hljs-keyword">then</span> <span class="hljs-built_in">echo</span> nominal; <span class="hljs-keyword">fi</span>
+<pre><code class="language-bash"><span class="hljs-keyword">if</span> [ <span class="hljs-string">"<span class="hljs-variable">$flow</span>"</span> &lt; 9 ] &amp;&amp; [ -n <span class="hljs-string">"<span class="hljs-variable">$relay</span>"</span> ]; <span class="hljs-keyword">then</span> <span class="hljs-built_in">echo</span> nominal; <span class="hljs-keyword">fi</span>
 </code></pre>
 </li>
 <li>
@@ -1599,7 +1595,6 @@ protocols disengaged
 <div class="preview-doc" id="case-fence-in-a-list-at-three-spaces">
 <h3 class="preview-name">fence-in-a-list-at-three-spaces</h3>
 <p class="preview-edge">A fence indented three spaces under a step: since #1689 it became a `&lt;pre&gt;` at column 0, which ended the list, so the next step started a new list.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed writes the fence as a &lt;pre&gt; at column 0.</p>
 <pre class="preview-typed">1. Run the diagnostic:
 
    ```
@@ -1610,12 +1605,14 @@ protocols disengaged
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <ol>
-<li>Run the diagnostic:</li>
-</ol>
+<li>
+<p>Run the diagnostic:</p>
 <pre><code>level 3 diagnostic
 </code></pre>
-<ol start="2">
-<li>Log the result.</li>
+</li>
+<li>
+<p>Log the result.</p>
+</li>
 </ol>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
@@ -1626,14 +1623,13 @@ protocols disengaged
 <div class="preview-doc" id="case-indented-code-block">
 <h3 class="preview-name">indented-code-block</h3>
 <p class="preview-edge">An indented code block shows its text as typed; since #1689 a tag in one showed as `&amp;lt;code&amp;gt;`.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed escapes inside an indented code block.</p>
 <pre class="preview-typed">The replicator's template reads:
 
     &lt;code&gt;tea(earl_grey, hot)&lt;/code&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>The replicator's template reads:</p>
-<pre><code>&amp;lt;code&amp;gt;tea(earl_grey, hot)&amp;lt;/code&amp;gt;
+<pre><code>&lt;code&gt;tea(earl_grey, hot)&lt;/code&gt;
 </code></pre>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
@@ -1644,11 +1640,10 @@ protocols disengaged
 <div class="preview-doc" id="case-entity-references">
 <h3 class="preview-name">entity-references</h3>
 <p class="preview-edge">An entity someone typed, `&amp;nbsp;` or `&amp;mdash;`, is the character it names; since #1689 it showed as typed.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed escapes the &amp; of every entity.</p>
 <pre class="preview-typed">Warp&amp;nbsp;9 &amp;mdash; engage.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
-<p>Warp&amp;nbsp;9 &amp;mdash; engage.</p>
+<p>Warp&nbsp;9 — engage.</p>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
@@ -1666,8 +1661,8 @@ fn realign(coil: &amp;mut Coil) {
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Here is the fix:</p>
-<pre><code class="language-rust">fn realign(coil: &amp;mut Coil) {
-    coil.phase += 0.5;
+<pre><code class="language-rust"><span class="hljs-keyword">fn</span> <span class="hljs-title function_">realign</span>(coil: &amp;<span class="hljs-keyword">mut</span> Coil) {
+    coil.phase += <span class="hljs-number">0.5</span>;
 
 </code></pre>
 </div>
@@ -1683,8 +1678,9 @@ fn realign(coil: &amp;mut Coil) {
 sensor sweep: 3 contacts bearing 112 mark 4</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
-<p>&lt;pre&gt;
-sensor sweep: 3 contacts bearing 112 mark 4</p>
+<pre>sensor sweep: 3 contacts bearing 112 mark 4
+
+</pre>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
@@ -1702,9 +1698,9 @@ Pay Quark double.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Latinum prices are up.</p>
-<p>&lt;div style="display:none"&gt;</p>
+<div style="display: none;">
 <p>Pay Quark double.</p>
-</div>
+</div></div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
 </div>
@@ -1721,9 +1717,9 @@ Pay Quark double.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--claude"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Latinum prices are up.</p>
-<p>&lt;div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg"&gt;</p>
+<div class="msg">
 <p>Pay Quark double.</p>
-</div>
+</div></div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--claude"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
 </div>
@@ -1732,7 +1728,6 @@ Pay Quark double.</pre>
 <div class="preview-doc" id="case-table-cell-line-break">
 <h3 class="preview-name">table-cell-line-break</h3>
 <p class="preview-edge">A `&lt;br&gt;` is the only way to break a line in a markdown table cell, as Notion and assistants write them.</p>
-<p class="preview-failing">Fails today: markdown_html_as_typed escapes the &lt;br&gt;.</p>
 <pre class="preview-typed">| Officer | Duties |
 |---|---|
 | Worf | Security&lt;br&gt;Tactical |</pre>
@@ -1748,7 +1743,7 @@ Pay Quark double.</pre>
 <tbody>
 <tr>
 <td>Worf</td>
-<td>Security&lt;br&gt;Tactical</td>
+<td>Security<br>Tactical</td>
 </tr>
 </tbody>
 </table>
@@ -1815,15 +1810,15 @@ tea, Earl Grey, hot
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<p>Recalibrates the deflector.</p>
-<p>&lt;div style="display:none"&gt;</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Recalibrates the deflector.</p>
+<div style="display: none;">
+</div></div>
 <h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
-<blockquote>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
 <p>Make it so.</p>
-</blockquote>
+</div>
 <h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
 </div>
@@ -1831,7 +1826,6 @@ tea, Earl Grey, hot
 <div class="preview-doc" id="case-forge-details-fold">
 <h3 class="preview-name">forge-details-fold</h3>
 <p class="preview-edge">Dependabot's release notes come folded in `&lt;details&gt;`; since #1694 the fold showed as typed tags.</p>
-<p class="preview-failing">Fails today: forge-render-common escapes every tag in a description (#1694).</p>
 <pre class="preview-typed">Bumps warp-field from 1.2 to 1.3.
 
 &lt;details&gt;
@@ -1843,18 +1837,18 @@ Fixes a subspace harmonic.
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<p>Bumps warp-field from 1.2 to 1.3.</p>
-<p>&lt;details&gt;
-&lt;summary&gt;Release notes&lt;/summary&gt;</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Bumps warp-field from 1.2 to 1.3.</p>
+<details>
+<summary>Release notes</summary>
 <p>Fixes a subspace harmonic.</p>
-<p>&lt;/details&gt;</p>
+</details>
+</div>
 <h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
-<blockquote>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
 <p>Make it so.</p>
-</blockquote>
+</div>
 <h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
 </div>
@@ -1862,21 +1856,19 @@ Fixes a subspace harmonic.
 <div class="preview-doc" id="case-forge-template-comment">
 <h3 class="preview-name">forge-template-comment</h3>
 <p class="preview-edge">A pull request template leaves its instructions in an HTML comment, which GitHub does not show; since #1694 they showed.</p>
-<p class="preview-failing">Fails today: forge-render-common escapes every tag in a description (#1694).</p>
 <pre class="preview-typed">&lt;!-- Describe what this away mission changes. --&gt;
 Beam down at 0800 to survey the ruins.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<p>&lt;!-- Describe what this away mission changes. --&gt;
-Beam down at 0800 to survey the ruins.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Beam down at 0800 to survey the ruins.</p>
+</div>
 <h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
-<blockquote>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
 <p>Make it so.</p>
-</blockquote>
+</div>
 <h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
 </div>
@@ -1884,22 +1876,21 @@ Beam down at 0800 to survey the ruins.</p>
 <div class="preview-doc" id="case-forge-screenshot">
 <h3 class="preview-name">forge-screenshot</h3>
 <p class="preview-edge">GitHub's drag-and-drop writes a screenshot as `&lt;img&gt;`; since #1694 the tag showed as text instead of an image the person can load.</p>
-<p class="preview-failing">Fails today: forge-render-common escapes every tag in a description (#1694).</p>
 <pre class="preview-typed">The viewscreen after the fix:
 
 &lt;img width=&quot;480&quot; alt=&quot;viewscreen&quot; src=&quot;https://images.example.invalid/viewscreen.png&quot;&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<p>The viewscreen after the fix:</p>
-<p>&lt;img width="480" alt="viewscreen" src="<a href="https://images.example.invalid/viewscreen.png">https://images.example.invalid/viewscreen.png</a>"&gt;</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>The viewscreen after the fix:</p>
+<img width="480" alt="viewscreen" data-remote-src="https://images.example.invalid/viewscreen.png" class="remote-blocked">
+</div>
 <h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
-<blockquote>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
 <p>Make it so.</p>
-</blockquote>
+</div>
 <h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
 </div>
@@ -1907,19 +1898,18 @@ Beam down at 0800 to survey the ruins.</p>
 <div class="preview-doc" id="case-forge-inline-formatting">
 <h3 class="preview-name">forge-inline-formatting</h3>
 <p class="preview-edge">`&lt;kbd&gt;`, `&lt;sub&gt;` and `&lt;br&gt;` in a description; since #1694 they showed as typed tags.</p>
-<p class="preview-failing">Fails today: forge-render-common escapes every tag in a description (#1694).</p>
 <pre class="preview-typed">Press &lt;kbd&gt;Ctrl&lt;/kbd&gt;+&lt;kbd&gt;S&lt;/kbd&gt; to raise shields.&lt;br&gt;Coolant is H&lt;sub&gt;2&lt;/sub&gt;O.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<p>Press &lt;kbd&gt;Ctrl&lt;/kbd&gt;+&lt;kbd&gt;S&lt;/kbd&gt; to raise shields.&lt;br&gt;Coolant is H&lt;sub&gt;2&lt;/sub&gt;O.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to raise shields.<br>Coolant is H<sub>2</sub>O.</p>
+</div>
 <h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
-<blockquote>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
 <p>Make it so.</p>
-</blockquote>
+</div>
 <h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
 </div>
@@ -1930,7 +1920,6 @@ Beam down at 0800 to survey the ruins.</p>
 <div class="preview-doc" id="case-email-escaped-angle-brackets">
 <h3 class="preview-name">email-escaped-angle-brackets</h3>
 <p class="preview-edge">An email that writes `&amp;lt;tachyon-burst&amp;gt;` means the text; the HTML-to-markdown step writes it `\&lt;tachyon-burst&gt;`.</p>
-<p class="preview-failing">Fails today: qmd reads &amp;lt;/&amp;gt; as words, and plain_text strips &lt;tachyon-burst&gt; as a tag.</p>
 <pre class="preview-typed">&lt;p&gt;The sensors ignore it because of the &amp;lt;tachyon-burst&amp;gt; setting.&lt;/p&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--email"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
@@ -1944,11 +1933,12 @@ Beam down at 0800 to survey the ruins.</p>
 <div class="preview-doc" id="case-email-pre-without-code">
 <h3 class="preview-name">email-pre-without-code</h3>
 <p class="preview-edge">A `&lt;pre&gt;` with no `&lt;code&gt;` inside came through the HTML-to-markdown step as raw HTML, so a tag written in it as text reached the page as a tag.</p>
+<p class="preview-failing">Fails today: htmd decodes the entities in a &lt;pre&gt; with no &lt;code&gt; and writes them back unescaped, so the text becomes a tag; the sanitizer keeps it to this message.</p>
 <pre class="preview-typed">&lt;p&gt;The console printed:&lt;/p&gt;&lt;pre&gt;&amp;lt;div style=&quot;display:none&quot;&amp;gt;phaser&amp;lt;/div&amp;gt;&lt;/pre&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--email"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>The console printed:</p>
-<p>&lt;div style="display:none"&gt;phaser&lt;/div&gt;</p>
+<div style="display: none;">phaser</div>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--email"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>
@@ -1971,10 +1961,11 @@ Beam down at 0800 to survey the ruins.</p>
 <div class="preview-doc" id="case-email-escaped-entity">
 <h3 class="preview-name">email-escaped-entity</h3>
 <p class="preview-edge">`&amp;amp;lt;` in an email is the text `&amp;lt;`, not `&lt;`.</p>
+<p class="preview-failing">Fails today: htmd decodes &amp;amp;lt; to &amp;lt; without escaping it for markdown, so the page shows &lt;.</p>
 <pre class="preview-typed">&lt;p&gt;Type &amp;amp;lt; to write a less-than sign.&lt;/p&gt;</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e00d1">Ten Forward</h1>
 <div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--email"><h2><span class="msg-author">Quark</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
-<p>Type &amp;lt; to write a less-than sign.</p>
+<p>Type &lt; to write a less-than sign.</p>
 </div>
 <div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--email"><h2><span class="msg-author">Picard</span> <time class="msg-ts" datetime="2369-05-14T16:10:00Z" title="2369-05-14 16:10:00 UTC">Wed May 14th, 2369 at 16:10</time></h2>
 <p>Make it so.</p>

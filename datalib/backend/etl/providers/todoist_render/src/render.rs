@@ -12,9 +12,7 @@ use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl_render::front_matter::yaml_scalar;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{
-    escape_md_inline, escape_text, markdown_html_as_typed, md_link_dest,
-};
+use datalib_etl_render::html::{escape_md_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
@@ -33,8 +31,8 @@ use crate::store::{flag, str_of, uid_of, Store};
 ///     section.
 /// v2: a comment's time, which Todoist stamps in its own UTC, says it
 ///     names no one's clock (`Z`).
-/// v3: a tag in a task, a description or a comment shows as typed, wherever
-///     it sits next to code.
+/// v3: a task, a description or a comment is markdown as written, HTML
+///     included.
 pub const RENDER_VERSION: u32 = 3;
 
 const SOURCE_LABEL: &str = "Todoist";
@@ -457,7 +455,7 @@ fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
             s.push_str("*Archived.*\n\n");
         }
         if let Some(d) = str_of(p, "description") {
-            s.push_str(&markdown_html_as_typed(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
     }
@@ -509,7 +507,7 @@ impl Out<'_, '_, '_> {
         s.push_str("\n\n");
         s.push_str(&format!(
             "{level} {check} {}\n\n",
-            markdown_html_as_typed(&content.replace(['\r', '\n'], " "))
+            content.replace(['\r', '\n'], " ")
         ));
         let meta = self.meta(t);
         if !meta.is_empty() {
@@ -517,7 +515,7 @@ impl Out<'_, '_, '_> {
             s.push_str("\n\n");
         }
         if let Some(d) = description {
-            s.push_str(&markdown_html_as_typed(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -663,7 +661,7 @@ impl Out<'_, '_, '_> {
         );
         s.push_str("\n\n");
         if !content.is_empty() {
-            s.push_str(&markdown_html_as_typed(content));
+            s.push_str(content);
             s.push_str("\n\n");
         }
         let attachment = n.get("file_attachment").filter(|a| a.is_object());

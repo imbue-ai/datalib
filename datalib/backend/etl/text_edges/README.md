@@ -29,7 +29,7 @@ repo").
 
 | `enters` | the text | rendered by |
 |---|---|---|
-| `markdown` | Markdown an assistant or a person wrote: Claude, ChatGPT, Claude Code, Codex, Todoist | the text step those renderers share, then chat-common |
+| `markdown` | Markdown an assistant or a person wrote: Claude, ChatGPT, Claude Code, Codex, Todoist | chat-common, as written |
 | `slack` | a Slack message, as Slack's API sends it (`&lt;` for a typed `<`) | `to_commonmark`, then chat-common |
 | `forge` | a GitHub pull request's description, with a comment after it | forge-render-common |
 | `email_html` | an email's HTML body | email's HTML-to-markdown step, then chat-common |

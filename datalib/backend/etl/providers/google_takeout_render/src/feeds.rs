@@ -11,7 +11,6 @@ use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, UpstreamRef,
 };
-use datalib_etl_render::html::markdown_html_as_typed;
 use datalib_etl_render::inputs::Inputs;
 use datalib_id::Identity;
 use datalib_schema::problems::Problem;
@@ -138,16 +137,15 @@ pub fn description_item(source_id: &str, chat_id: &str, text: String) -> Normali
 }
 
 /// HTML someone wrote (a pin's description, Gemini's answer) as
-/// markdown, with none of its tags left live: htmd passes some text
-/// through as raw HTML, and a tag on the page could hide or fake what
-/// follows it. Pictures are left to the attachments that carry them.
+/// markdown. Pictures are left to the attachments that carry them.
 pub fn html_markdown(html: &str) -> String {
-    let md = htmd::HtmlToMarkdown::builder()
+    htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "img"])
         .build()
         .convert(html)
-        .unwrap_or_default();
-    markdown_html_as_typed(md.trim())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 pub fn with_text(mut item: NormalizedChatItem, text: Option<String>) -> NormalizedChatItem {
@@ -301,16 +299,6 @@ mod tests {
         assert!(problems.is_empty());
         assert_eq!(stamp_ms(&row("stardate 41153.7"), &mut problems), None);
         assert_eq!(problems.len(), 1, "a stamp that will not read is said");
-    }
-
-    /// A `<pre>` with no `<code>` came through htmd as raw HTML: a pin's
-    /// description could hide everything after it on the page.
-    #[test]
-    fn html_someone_wrote_opens_no_tag() {
-        let md = html_markdown(
-            "<p>Ten Forward</p><pre>&lt;div style=&quot;display:none&quot;&gt;\n\nx</pre>",
-        );
-        assert_eq!(md, "Ten Forward\n\n&lt;div style=\"display:none\"&gt;\n\nx");
     }
 
     /// A YouTube watch whose date the ingest could not read was stored with

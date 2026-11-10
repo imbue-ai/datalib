@@ -21,9 +21,7 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{
-    escape_md_block, escape_md_inline, escape_text, markdown_html_as_typed,
-};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_text};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
@@ -62,7 +60,7 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     thread declares the marks it reads.
 /// v19: an email attached to an email is listed among the attachments.
 /// v20: an email's stamp keeps the offset its `Date` was written in.
-/// v21: a tag in an HTML body or a quote's attribution shows as typed.
+/// v21: a quote's attribution line is plain text.
 pub const RENDER_VERSION: u32 = 21;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
@@ -993,12 +991,11 @@ fn email_body_markdown(
 /// title), and a tag that reached the page could hide or fake what
 /// follows it.
 pub fn html_markdown(html: &str) -> String {
-    let md = htmd::HtmlToMarkdown::builder()
+    htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
         .build()
         .convert(html)
-        .unwrap_or_default();
-    markdown_html_as_typed(&md)
+        .unwrap_or_default()
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:
@@ -1207,32 +1204,6 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
         assert!(quoted
             .expect("quoted folded")
             .starts_with("<details><summary>On Tue, Data &lt;data@e.invalid&gt; wrote:</summary>"),);
-    }
-
-    /// Each of these came through htmd as a live tag: text in a `<pre>`
-    /// with no `<code>`, a code span holding a blank line, text that
-    /// opens a CDATA block, and a link's or an image's attributes.
-    #[test]
-    fn an_html_body_opens_no_tag_of_the_senders() {
-        let hide = "&lt;div style=&quot;display:none&quot;&gt;";
-        for html in [
-            format!("<pre>{hide}\n\nx</pre>"),
-            format!("<p><code>{hide}\n\nx</code></p>"),
-            format!("<p>&lt;![CDATA[ {hide}</p>"),
-            "<p><span>&lt;</span>div style=\"display:none\"<span>&gt;</span></p>".to_string(),
-            format!("<p><a href=\"a&quot;&gt;{hide}\">t</a></p>"),
-            format!("<p><a href=\"https://e.invalid/\" title=\"{hide}\">t</a></p>"),
-            format!("<p><img src=\"a&quot;&gt;{hide}\" alt=\"{hide}\" title=\"{hide}\"></p>"),
-        ] {
-            let md = html_markdown(&html);
-            assert!(!md.contains('<'), "{html} → {md}");
-        }
-        assert_eq!(
-            html_markdown(
-                "<p>a &lt;b&gt; <code>&lt;c&gt;</code> <a href=\"https://e.invalid/a b\">d</a></p>"
-            ),
-            "a &lt;b&gt; <code>&#60;c&#62;</code> [d](https://e.invalid/a%20b)"
-        );
     }
 
     #[test]

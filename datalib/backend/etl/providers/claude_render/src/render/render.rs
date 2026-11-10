@@ -23,8 +23,7 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::{render_batched_at, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
-    escape_md_block, escape_md_inline, escape_text, markdown_html_as_typed, md_code_block,
-    md_code_span, md_link_dest,
+    escape_md_block, escape_md_inline, escape_text, md_code_block, md_code_span, md_link_dest,
 };
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::sources::Source;
@@ -65,7 +64,9 @@ use datalib_schema::providers::Provider;
 /// v12: the account's address is tied to "Me", so search reads it as `me`.
 /// v13: an HTML tag in a message, a project's text or a document shows
 ///     as typed.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a message, a project's text or a document is markdown as
+///     written again, HTML included.
+pub const RENDER_VERSION: u32 = 14;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -293,7 +294,7 @@ fn build_chat(
             .iter()
             .filter_map(|b| b.text.as_deref())
             .filter(|s| !s.is_empty())
-            .map(|s| markdown_html_as_typed(s.trim_end()))
+            .map(|s| s.trim_end().to_string())
             .collect();
         body_parts.extend(sources_list(&text_blocks));
 
@@ -547,7 +548,7 @@ fn build_project_page(
         let body = doc
             .content
             .as_deref()
-            .map(|c| markdown_html_as_typed(&clamp_doc_text(c, options.max_project_doc_bytes)))
+            .map(|c| clamp_doc_text(c, options.max_project_doc_bytes))
             .and_then(filter_nonempty);
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
@@ -652,7 +653,7 @@ fn project_item(id: Identity, heading: &str, kind_label: &str, text: String) -> 
         author_display: heading.to_string(),
         date_ms: id.at,
         date_offset_secs: None,
-        text: Some(markdown_html_as_typed(&text)),
+        text: Some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),
         reactions: Vec::new(),
@@ -831,10 +832,7 @@ fn block_body_md(
             if thought.is_empty() {
                 vec![]
             } else {
-                let quoted = format!(
-                    "> {}",
-                    markdown_html_as_typed(thought.trim_end()).replace('\n', "\n> ")
-                );
+                let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 vec![
                     "<details><summary>Thinking</summary>".into(),
                     String::new(),
@@ -889,7 +887,7 @@ fn block_body_md(
         }
         _ => btext
             .filter(|t| !t.is_empty())
-            .map(|t| vec![markdown_html_as_typed(t.trim_end())])
+            .map(|t| vec![t.trim_end().to_string()])
             .unwrap_or_default(),
     };
     lines.join("\n")

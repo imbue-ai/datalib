@@ -15,7 +15,6 @@ use datalib_etl_chat_common::{
     RenderProfile, TextFormat,
 };
 use datalib_etl_forge_render_common::{ChangeRequest, Comment, ForgeProfile, Parsed};
-use datalib_etl_render::html::markdown_html_as_typed;
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::Section;
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
@@ -61,8 +60,7 @@ struct CaseIn {
 #[serde(rename_all = "snake_case")]
 enum Enters {
     /// Markdown an assistant or a person wrote (Claude, ChatGPT, Claude
-    /// Code, Codex, Todoist): the text step those renderers share, then
-    /// chat-common.
+    /// Code, Codex, Todoist): as written, then chat-common.
     Markdown,
     /// A Slack message as Slack's API sends it: `to_commonmark`, then
     /// chat-common.
@@ -169,7 +167,7 @@ fn render(enters: Enters, text: &str, dir: &Path) -> Result<Rendered> {
         Enters::Markdown => chat(
             Provider::Claude,
             TextFormat::Markdown,
-            markdown_html_as_typed(text),
+            text.to_string(),
             dir,
         )?,
         Enters::Slack => {
