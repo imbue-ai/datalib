@@ -828,7 +828,17 @@ With a cursor, a raw doltlite store and something declared, the driver
 runs the **reverse lookup** (`reverse_lookup`): it pins the raw store's
 HEAD, asks `dolt_diff` for every changed key in every table
 `render_inputs` mentions between the cursor and the pin, and reads back
-the buckets that declared any of those rows. The provider is handed the
+the buckets that declared any of those rows. A table that held rows at
+the cursor and holds none at the pin — every table of a store `--reset`
+emptied — is answered without its diff, which would read every row that
+left: for each bucket that named rows of it, the bucket's keys are
+looked up at the cursor until one is found (a primary-key seek in
+`dolt_at_<table>`). That row left, so the bucket is stale and has lost
+a row; a bucket that read the table whole is stale too. A bucket that
+only ever looked up keys the table did not have read nothing that
+changed, and telling it apart needs the diff, so then the table is
+diffed after all, as it is when a key cannot be sought exactly. The
+answer is the diff's either way. The provider is handed the
 pin and that stale set (`RenderCtx::raw_pin`, `RenderCtx::stale_buckets`,
 together `RawRange`), reads at the pin and never at HEAD, so what it
 loads is what the set was computed against. A table the driver cannot
@@ -873,7 +883,7 @@ in the same transaction as the storage report and the cursor
   | the processor said | the bucket's documents |
   |---|---|
   | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a periodized bucket that re-rendered to fewer documents drops the extra ones) |
-  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: the raw diff reports `removed` for a row the bucket was last built from (its `render_inputs` as they stood before the run), or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
+  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: a row the bucket was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
   | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
   | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
 
