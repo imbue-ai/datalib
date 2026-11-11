@@ -59,6 +59,12 @@ UTF-8 run:
 … NSString 01 94 84 01 2b <len> <utf-8 bytes> 86 …
 ```
 
+The `94` is a back-reference to NSObject, the third class the archive
+named. Some bodies are an NSMutableAttributedString holding an
+NSMutableString instead; that names two more classes first, the
+reference is `95`, and the rest is the same. So the decoder takes any
+back-reference there (`0x92` and up), not one fixed byte.
+
 `<len>` is one byte below 0x80, else `0x81` and two little-endian bytes,
 else `0x82` and four. `typedstream.rs` reads exactly that and nothing
 else; the attribute runs after it (message parts, mentions, the
@@ -66,6 +72,51 @@ attachment's transfer guid) are not needed. A message that is only an
 attachment has the body `U+FFFC`, which render drops. A body that is not
 such an archive renders as a message with no text, and a problem on that
 message says so, with the size of the body and none of its bytes.
+
+A tapback carries an `attributedBody` too ("Liked “…”"), and it can be
+mutable as well. Render folds a tapback onto its target before reading
+any body, so an undecodable one costs nothing and reports nothing. A
+count of undecodable bodies over the whole table is therefore larger
+than the problem count by the tapbacks among them.
+
+### Diagnosing an undecodable body without reading it
+
+The problem says only the body's size, so a person can share what is
+wrong without sharing what was said. Group the bodies that fail by their
+structure: the header, the five bytes after the `NSString` class name
+(they end at `+`, before the length and the text) and the classes the
+archive names. Run against the source's store, read-only:
+
+```sql
+SELECT count(*) AS n,
+       associated_message_type BETWEEN 2000 AND 3999 AS tapback,
+       hex(substr(attributedBody, 1, 16)) AS header,
+       hex(substr(attributedBody,
+                  instr(attributedBody, CAST('NSString' AS BLOB)) + 8, 5)) AS after_NSString,
+       instr(attributedBody, CAST('NSMutableString' AS BLOB)) > 0 AS mutable
+  FROM message
+ WHERE (text IS NULL OR text = '') AND attributedBody IS NOT NULL
+ GROUP BY 2, 3, 4, 5;
+```
+
+```sh
+datalib-doltlite -readonly <root>/<source>/ingest/entities.doltlite_db < probe.sql
+```
+
+A header that is not `040B73747265616D7479706564…` ("streamtyped") is a
+different format; an `after_NSString` other than `01 9x 84 01 2B` is a
+layout the decoder does not know. That is how the mutable archive was
+found: six warnings, every one `019584012B` with `NSMutableString` in
+it, and a seventh such body on a tapback.
+
+## A message in no chat
+
+A page is a chat, so a `message` row that no `chat_message_join` row
+puts in a chat has nowhere to go. Render leaves it out and reports it
+as a problem on `message:<rowid>`: dropped, with no identity, saying
+whether no join row names it or the join names a chat the `chat` table
+lacks. Every pass reads the whole `message` table, so a message that
+later gets a chat loses its problem on the next pass.
 
 ## Timestamps
 

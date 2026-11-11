@@ -42,7 +42,9 @@ use crate::typedstream::attributed_body_text;
 /// v5: a `+1` number without ten digits after the 1 has no handle.
 /// v6: a message someone else sent is to the account (`to:me`).
 /// v7: a body that cannot be decoded is a problem on its message.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a body archived as an NSMutableAttributedString decodes; a
+///     message in no chat is a problem.
+pub const RENDER_VERSION: u32 = 8;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
@@ -104,6 +106,41 @@ fn profile() -> RenderProfile {
 
 pub use datalib_etl_chat_common::RenderOutcome;
 
+/// What one pass rendered, and the messages it had to leave out.
+pub struct Rendered {
+    pub outcome: RenderOutcome,
+    pub dropped: Vec<Dropped>,
+}
+
+/// The table [`Dropped`] names rows of. Every pass reads all of it, so a
+/// pass's list is whole for it.
+pub const DROPPED_FROM: &str = "message";
+
+/// A `message` row no chat holds, so no page shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped {
+    pub rowid: i64,
+    /// The chat a `chat_message_join` row names that the `chat` table
+    /// lacks; `None` when no join row names the message at all.
+    pub missing_chat: Option<i64>,
+}
+
+impl Dropped {
+    pub fn entity_id(&self) -> String {
+        format!("{DROPPED_FROM}:{}", self.rowid)
+    }
+
+    pub fn problem(&self) -> Problem {
+        let why = match self.missing_chat {
+            Some(chat) => format!(
+                "chat_message_join puts it in chat {chat}, which the chat table does not have"
+            ),
+            None => "no chat_message_join row puts it in a chat".to_string(),
+        };
+        Problem::explained(Reason::NoIdentity, None, &why)
+    }
+}
+
 pub fn render(
     raw_dir: &Path,
     out_root: &Path,
@@ -112,23 +149,26 @@ pub fn render(
     progress: &Progress,
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<RenderOutcome> {
+) -> Result<Rendered> {
     let db_path = doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderOutcome::default());
+        return Ok(Rendered {
+            outcome: RenderOutcome::default(),
+            dropped: Vec::new(),
+        });
     }
-    let (all_chats, forward, new_head) = tokio::task::block_in_place(|| {
+    let loaded = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             // No commit means nothing has been committed to render, which
             // is emptiness rather than a reason to read the working set.
             let Some(reader) = doltlite_raw::open_reader(&db_path, range.pin).await? else {
-                return Ok((Vec::new(), None, None));
+                return Ok(Loaded::default());
             };
             // chat.db's tables arrive with the first mirror; a store
             // opened before one succeeded has nothing to render yet.
             if !doltlite_raw::table_exists(reader.pool(), "handle").await? {
                 reader.close().await;
-                return Ok((Vec::new(), None, None));
+                return Ok(Loaded::default());
             }
             let loaded = load(reader.pool(), source_id, period, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
@@ -138,6 +178,12 @@ pub fn render(
         })
     })?;
 
+    let Loaded {
+        chats: all_chats,
+        forward,
+        head: new_head,
+        dropped,
+    } = loaded;
     let mut changed = changed_chats(all_chats, range, forward.as_ref(), |guid| {
         chat_uuid(source_id, guid)
     });
@@ -151,19 +197,29 @@ pub fn render(
         on_doc_complete,
     )?;
     changed.buckets.extend(summary.buckets);
-    Ok(RenderOutcome {
-        rendered: summary.docs_rendered,
-        skipped: changed.skipped,
-        new_head,
-        scan_elapsed: None,
-        buckets: changed.buckets,
+    Ok(Rendered {
+        outcome: RenderOutcome {
+            rendered: summary.docs_rendered,
+            skipped: changed.skipped,
+            new_head,
+            scan_elapsed: None,
+            buckets: changed.buckets,
+        },
+        dropped,
     })
 }
 
-type Loaded = (Vec<NormalizedChat>, Option<HashSet<String>>, Option<String>);
+#[derive(Default)]
+struct Loaded {
+    /// Every chat at the pinned commit.
+    chats: Vec<NormalizedChat>,
+    /// The guids of the chats the diff since the cursor names; `None`
+    /// renders everything.
+    forward: Option<HashSet<String>>,
+    head: Option<String>,
+    dropped: Vec<Dropped>,
+}
 
-/// Every chat at the pinned commit, the guids of the chats the diff
-/// since the cursor names (`None` renders everything), and the commit.
 async fn load(
     pool: &SqlitePool,
     source_id: &str,
@@ -220,17 +276,23 @@ async fn load(
     }
 
     let mut chat_of_message: HashMap<i64, usize> = HashMap::new();
+    let mut missing_chat_of_message: HashMap<i64, i64> = HashMap::new();
     let joins = sqlx::query("SELECT chat_id, message_id FROM chat_message_join")
         .fetch_all(pool)
         .await
         .context("select chat_message_join")?;
     for r in &joins {
         let (chat_id, message_id): (i64, i64) = (r.get("chat_id"), r.get("message_id"));
-        if let Some(&idx) = chat_idx.get(&chat_id) {
-            chats[idx]
-                .inputs
-                .read("chat_message_join", &format!("{chat_id}|{message_id}"));
-            chat_of_message.insert(message_id, idx);
+        match chat_idx.get(&chat_id) {
+            Some(&idx) => {
+                chats[idx]
+                    .inputs
+                    .read("chat_message_join", &format!("{chat_id}|{message_id}"));
+                chat_of_message.insert(message_id, idx);
+            }
+            None => {
+                missing_chat_of_message.insert(message_id, chat_id);
+            }
         }
     }
 
@@ -283,10 +345,14 @@ async fn load(
     .fetch_all(pool)
     .await
     .context("select message")?;
+    let mut dropped = Vec::new();
     for r in &messages {
         let rowid: i64 = r.get("ROWID");
         let Some(&idx) = chat_of_message.get(&rowid) else {
-            tracing::debug!(message_rowid = rowid, "message: in no chat; dropping");
+            dropped.push(Dropped {
+                rowid,
+                missing_chat: missing_chat_of_message.get(&rowid).copied(),
+            });
             continue;
         };
         let chat = &mut chats[idx];
@@ -386,11 +452,15 @@ async fn load(
     let forward = changed_rows(pool, range, pin, FORWARD_TABLES)
         .await?
         .map(|changed| forward_chats(&changed, &chats, &chat_idx, &chat_of_message));
-    let out = chats
-        .into_iter()
-        .map(|c| c.finish(source_id, period))
-        .collect();
-    Ok((out, forward, Some(pin.commit().to_string())))
+    Ok(Loaded {
+        chats: chats
+            .into_iter()
+            .map(|c| c.finish(source_id, period))
+            .collect(),
+        forward,
+        head: Some(pin.commit().to_string()),
+        dropped,
+    })
 }
 
 /// The guids of the chats the diff names, at the pinned commit. A chat
