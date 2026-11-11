@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn an_unknown_zone_nulls_the_start_and_says_why() {
         let mut e = series();
-        e.start = EventTime::from_ical("20260105T090000", Some("Pacific Standard Time"));
+        e.start = EventTime::from_ical("20260105T090000", Some("Customized Time Zone"));
         let mut problems = Vec::new();
         assert_eq!(
             resolve_start(&e, "tng_calendar", &profile(), &mut problems),
