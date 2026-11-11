@@ -12,10 +12,18 @@ extern "C" {
 
 typedef struct dl_embedder dl_embedder;
 
-// NULL on failure, with the reason in err.
+// NULL on failure, with the reason in err. With use_gpu, the model and its
+// work go to the GPU where this build and machine have one (Metal on a
+// mac); without it, everything stays on the CPU.
 dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
-                              char *err, size_t err_len);
+                              int32_t use_gpu, char *err, size_t err_len);
+
+// Whether this build and machine offer a GPU at all.
+int32_t dl_embedder_gpu_available(void);
 void dl_embedder_close(dl_embedder *e);
+
+// The device the model runs on: "CPU", or the GPU's name ("MTL0").
+const char *dl_embedder_device(const dl_embedder *e);
 
 int32_t dl_embedder_n_embd(const dl_embedder *e);
 int32_t dl_embedder_n_ctx(const dl_embedder *e);

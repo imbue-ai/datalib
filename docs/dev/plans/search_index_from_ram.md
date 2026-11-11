@@ -1,7 +1,7 @@
 # Our own search index, fed from memory
 
 **Status: proposal (2026-11-11). Steps 1 and 2 of "Order of work" are
-built (`//datalib/backend/search_index`), and step 3 on the CPU
+built (`//datalib/backend/search_index`), and step 3
 (`//datalib/backend/embedder`); the rest is not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
@@ -162,8 +162,9 @@ attention, the 512-token sliding window, mean pooling, the two dense
 layers) and its Q8_0 kernels, rather than a port of each that has to be
 proven equal. It is MIT, and builds under Bazel's `cc_library` as
 doltlite does, with a small hand-written binding to `llama.h` for what
-we call: load a model, tokenize, embed a batch. The CPU backend first;
-Metal after, if the measured rate asks for it.
+we call: load a model, tokenize, embed a batch. On macOS the build adds
+ggml's Metal backend, and the embedder runs there when asked for its best
+device.
 
 The alternative was `candle`, already a dependency through perseus. It
 would mean writing the `gemma-embedding` model and the GGUF tokenizer
@@ -187,7 +188,7 @@ test:
 - the long-section cut, against `chunkDocument` on the same text with
   the same budget, where the break rules are meant to agree.
 
-**Built, on the CPU: `datalib/backend/embedder`**, a C shim over
+**Built: `datalib/backend/embedder`**, a C shim over
 `llama.h` (`csrc/embedder.cpp`) and a Rust crate over it, with llama.cpp
 built by `third-party/llama_cpp/llama_cpp.BUILD`. `parity_test` runs
 qmd's own `formatDocForEmbedding`, `formatQueryForEmbedding`, tokenizer
@@ -195,9 +196,10 @@ and `embed` through the pinned node and package, on made-up texts, and
 finds the prompts equal string for string, the tokens equal (ours add
 BOS and EOS where node-llama-cpp adds them after tokenizing), and the
 vectors equal to a cosine above 0.9999 on the CPU and above 0.999
-against qmd on Metal.
+between our Metal and qmd's.
 
-**qmd embedded every input over 512 tokens wrongly.** node-llama-cpp
+**qmd embedded every input over 512 tokens wrongly**, a known defect
+upstream (tobi/qmd#897, with the fix in tobi/qmd#993, both open). node-llama-cpp
 gives an embedding context a batch of at most 512 tokens unless told
 otherwise (`getDefaultContextBatchSize`), qmd does not tell it, and
 llama.cpp then evaluates a longer input in 512-token pieces and pools
@@ -208,7 +210,59 @@ embedded so. Ours takes the whole input in one batch; on a 761-token
 input the two agree to a cosine of 0.84, and evaluated in qmd's pieces
 ours reproduces qmd's to 0.9999
 (`qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only`). The
-re-embed the upgrade does anyway fixes them.
+re-embed the upgrade does anyway fixes them. One commenter on #897
+checked the whole-input vector against Google's own sentence-transformers
+reference and found them equal to a cosine of 1.0000.
+
+**Rate.** 761-token inputs, one at a time, on an M4 (`measure_rate`, an
+ignored test): 2.5 a second on the CPU's 10 cores, 12.5 on Metal, which
+is qmd's ~12. Evaluating several inputs in one batch has not been tried.
+The shim picks the GPU itself and reports it (`Embedder::device`, `MTL0`
+on a mac), and `a_mac_runs_the_model_on_metal` holds it there.
+
+**Drop an embedder before the process exits.** On Metal, ggml asserts at
+exit that no model is still loaded and aborts the process if one is, so
+an embedder must never live in a static, including the search applet's
+long-lived query embedder.
+
+**Each piece is tested against qmd itself**, from the vendored source
+(`third-party/qmd`) and the pinned runtime, driven by a script in the
+test:
+
+- the prompt format, query and document, string for string with qmd's
+  `formatQueryForEmbedding` and `formatDocForEmbedding`;
+- the tokenizer's token count for a set of texts, against
+  node-llama-cpp's;
+- the vectors: on the fixture's chunks, every one within cosine 0.999 of
+  what qmd's `embed` writes for the same text;
+- the long-section cut, against `chunkDocument` on the same text with
+  the same budget, where the break rules are meant to agree.
+
+**Built: `datalib/backend/embedder`**, a C shim over
+`llama.h` (`csrc/embedder.cpp`) and a Rust crate over it, with llama.cpp
+built by `third-party/llama_cpp/llama_cpp.BUILD`. `parity_test` runs
+qmd's own `formatDocForEmbedding`, `formatQueryForEmbedding`, tokenizer
+and `embed` through the pinned node and package, on made-up texts, and
+finds the prompts equal string for string, the tokens equal (ours add
+BOS and EOS where node-llama-cpp adds them after tokenizing), and the
+vectors equal to a cosine above 0.9999 on the CPU and above 0.999
+between our Metal and qmd's.
+
+**qmd embedded every input over 512 tokens wrongly**, a known defect
+upstream (tobi/qmd#897, with the fix in tobi/qmd#993, both open). node-llama-cpp
+gives an embedding context a batch of at most 512 tokens unless told
+otherwise (`getDefaultContextBatchSize`), qmd does not tell it, and
+llama.cpp then evaluates a longer input in 512-token pieces and pools
+only the last piece. embeddinggemma attends both ways, so the earlier
+tokens never see the later ones and the vector stands for the input's
+tail. qmd's chunks are up to 900 tokens, so most of its long chunks were
+embedded so. Ours takes the whole input in one batch; on a 761-token
+input the two agree to a cosine of 0.84, and evaluated in qmd's pieces
+ours reproduces qmd's to 0.9999
+(`qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only`). The
+re-embed the upgrade does anyway fixes them. One commenter on #897
+checked the whole-input vector against Google's own sentence-transformers
+reference and found them equal to a cosine of 1.0000.
 
 **Rate on the CPU is too low; Metal is next.** 761-token inputs embed at
 2.5 a second on an M4's 10 cores (`measure_rate`, an ignored test),
@@ -266,9 +320,9 @@ that matched. Meaning search fills back in over the first day.
 2. Built: `search_index`, with the schema, `IndexDoc` → sections and
    chunks, the owed comparison, put and remove, unit-tested on made-up
    documents.
-3. The embedder in Rust: llama.cpp `b10361` under Bazel, a binding,
-   qmd's prompt format, the parity tests against qmd above. Built on the
-   CPU; the Metal backend is left, and its rate against qmd's.
+3. Built: the embedder in Rust, llama.cpp `b10361` under Bazel on the CPU
+   and Metal, a binding, qmd's prompt format, the parity tests against
+   qmd above.
 4. `markdowns.content_hash` in the render store.
 5. `keyword_index` and `embed` write the new index, embedding in
    process; the aggregator drops a removed source's rows.

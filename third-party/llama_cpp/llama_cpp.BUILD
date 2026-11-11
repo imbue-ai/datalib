@@ -4,8 +4,9 @@
 # index's embedder needs to run one GGUF embedding model. The source lists
 # follow ggml/src/CMakeLists.txt, ggml/src/ggml-cpu/CMakeLists.txt and
 # src/CMakeLists.txt at the pinned release; a bump re-reads them.
-# Left out: every GPU backend, OpenMP, Accelerate and KleidiAI (a second
-# download), and the tools under common/ and tools/.
+# On macOS, Metal too, with its shader source embedded in the binary.
+# Left out: every other GPU backend, OpenMP, Accelerate and KleidiAI (a
+# second download), and the tools under common/ and tools/.
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
@@ -37,6 +38,73 @@ ARCH_SRCS = select({
     ],
 })
 
+# ggml-metal's Objective-C, compiled as such through cc_library, which does
+# not take a `.m`: each file is copied under a `.c` name and built with
+# `-x objective-c`, in a library of its own so the flag reaches nothing else.
+METAL_OBJC = [
+    "ggml-metal-device",
+    "ggml-metal-context",
+]
+
+[
+    genrule(
+        name = "copy_" + name,
+        srcs = ["ggml/src/ggml-metal/%s.m" % name],
+        outs = ["ggml/src/ggml-metal/%s_objc.c" % name],
+        cmd = "cp $< $@",
+    )
+    for name in METAL_OBJC
+]
+
+genrule(
+    name = "metal_embed",
+    srcs = [
+        "ggml/src/ggml-metal/ggml-metal.metal",
+        "ggml/src/ggml-common.h",
+        "ggml/src/ggml-metal/ggml-metal-impl.h",
+    ],
+    outs = ["ggml/src/ggml-metal/ggml-metal-embed.s"],
+    cmd = "python3 $(execpath @@//third-party/llama_cpp:embed_metal.py) $(SRCS) $@",
+    tools = ["@@//third-party/llama_cpp:embed_metal.py"],
+)
+
+cc_library(
+    name = "ggml_headers",
+    hdrs = glob([
+        "ggml/include/*.h",
+        "ggml/src/*.h",
+        "ggml/src/ggml-metal/*.h",
+    ]),
+    includes = [
+        "ggml/include",
+        "ggml/src",
+        "ggml/src/ggml-metal",
+    ],
+)
+
+cc_library(
+    name = "ggml_metal_objc",
+    srcs = [":copy_" + name for name in METAL_OBJC],
+    copts = COMMON_COPTS + [
+        "-x",
+        "objective-c",
+        "-DGGML_METAL_EMBED_LIBRARY",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":ggml_headers"],
+)
+
+METAL_SRCS = select({
+    "@platforms//os:macos": [
+        "ggml/src/ggml-metal/ggml-metal.cpp",
+        "ggml/src/ggml-metal/ggml-metal-device.cpp",
+        "ggml/src/ggml-metal/ggml-metal-common.cpp",
+        "ggml/src/ggml-metal/ggml-metal-ops.cpp",
+        ":metal_embed",
+    ],
+    "//conditions:default": [],
+})
+
 cc_library(
     name = "ggml",
     srcs = [
@@ -64,9 +132,10 @@ cc_library(
         "ggml/src/ggml-cpu/vec.cpp",
         "ggml/src/ggml-cpu/ops.cpp",
         "ggml/src/ggml-cpu/llamafile/sgemm.cpp",
-    ] + ARCH_SRCS + glob([
+    ] + ARCH_SRCS + METAL_SRCS + glob([
         "ggml/src/*.h",
         "ggml/src/ggml-cpu/**/*.h",
+        "ggml/src/ggml-metal/*.h",
     ]),
     hdrs = glob(["ggml/include/*.h"]),
     conlyopts = ["-std=gnu11"],
@@ -75,9 +144,15 @@ cc_library(
         "-DGGML_COMMIT=\\\"" + LLAMA_RELEASE + "\\\"",
         "-DGGML_USE_LLAMAFILE",
         "-DGGML_USE_CPU_REPACK",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["-DGGML_METAL_EMBED_LIBRARY"],
+        "//conditions:default": [],
+    }),
     cxxopts = ["-std=c++17"],
-    defines = ["GGML_USE_CPU"],
+    defines = ["GGML_USE_CPU"] + select({
+        "@platforms//os:macos": ["GGML_USE_METAL"],
+        "//conditions:default": [],
+    }),
     includes = [
         "ggml/include",
         "ggml/src",
@@ -89,9 +164,21 @@ cc_library(
             "-ldl",
             "-lm",
         ],
+        "@platforms//os:macos": [
+            "-framework",
+            "Foundation",
+            "-framework",
+            "Metal",
+            "-framework",
+            "MetalKit",
+        ],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
+    deps = select({
+        "@platforms//os:macos": [":ggml_metal_objc"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

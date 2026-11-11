@@ -15,6 +15,7 @@
 struct dl_embedder {
     llama_model *model;
     llama_context *ctx;
+    const char *device;
 };
 
 namespace {
@@ -44,11 +45,25 @@ void init_once() {
 
 extern "C" {
 
+// The one GPU to run on, or NULL for none.
+ggml_backend_dev_t gpu() {
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    return dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+}
+
+int32_t dl_embedder_gpu_available(void) {
+    init_once();
+    return gpu() ? 1 : 0;
+}
+
 dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
-                              char *err, size_t err_len) {
+                              int32_t use_gpu, char *err, size_t err_len) {
     init_once();
     llama_model_params mp = llama_model_default_params();
-    mp.n_gpu_layers = 0;
+    ggml_backend_dev_t dev = use_gpu ? gpu() : nullptr;
+    ggml_backend_dev_t devices[] = {dev, nullptr};
+    mp.devices = devices;
+    mp.n_gpu_layers = dev ? -1 : 0;
     llama_model *model = llama_model_load_from_file(model_path, mp);
     if (!model) {
         set_err(err, err_len, "llama.cpp could not load the model");
@@ -62,6 +77,9 @@ dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_t
     cp.embeddings = true;
     cp.swa_full = false;
     cp.no_perf = true;
+    // Otherwise llama.cpp sends a large batch's matrix products to the GPU
+    // even with every layer on the CPU.
+    cp.op_offload = dev != nullptr;
     if (n_threads > 0) {
         cp.n_threads = n_threads;
         cp.n_threads_batch = n_threads;
@@ -78,7 +96,7 @@ dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_t
         set_err(err, err_len, "the model pools nothing: not an embedding model");
         return nullptr;
     }
-    return new dl_embedder{model, ctx};
+    return new dl_embedder{model, ctx, dev ? ggml_backend_dev_name(dev) : "CPU"};
 }
 
 void dl_embedder_close(dl_embedder *e) {
@@ -87,6 +105,8 @@ void dl_embedder_close(dl_embedder *e) {
     llama_model_free(e->model);
     delete e;
 }
+
+const char *dl_embedder_device(const dl_embedder *e) { return e->device; }
 
 int32_t dl_embedder_n_embd(const dl_embedder *e) { return llama_model_n_embd_out(e->model); }
 

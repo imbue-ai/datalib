@@ -24,10 +24,13 @@ mod ffi {
             model_path: *const c_char,
             n_ctx: i32,
             n_threads: i32,
+            use_gpu: i32,
             err: *mut c_char,
             err_len: usize,
         ) -> *mut Embedder;
+        pub fn dl_embedder_gpu_available() -> i32;
         pub fn dl_embedder_close(e: *mut Embedder);
+        pub fn dl_embedder_device(e: *const Embedder) -> *const c_char;
         pub fn dl_embedder_n_embd(e: *const Embedder) -> i32;
         pub fn dl_embedder_n_ctx(e: *const Embedder) -> i32;
         pub fn dl_embedder_tokenize(
@@ -53,6 +56,22 @@ mod ffi {
 /// `src/llm.ts`), which is also embeddinggemma's training context.
 pub const CONTEXT_TOKENS: i32 = 2048;
 
+/// Where the model runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Device {
+    Cpu,
+    /// The GPU where there is one (Metal on a mac), else the CPU.
+    Best,
+}
+
+/// Whether this build and machine offer a GPU.
+pub fn gpu_available() -> bool {
+    unsafe { ffi::dl_embedder_gpu_available() != 0 }
+}
+
+/// A loaded model and one context over it. Drop it before the process
+/// exits: on Metal, ggml asserts at exit that no model is still loaded, and
+/// aborts the process otherwise, so an embedder must not live in a static.
 pub struct Embedder {
     raw: NonNull<ffi::Embedder>,
     dim: usize,
@@ -65,7 +84,7 @@ unsafe impl Send for Embedder {}
 
 impl Embedder {
     /// `threads` of 0 is llama.cpp's own choice.
-    pub fn open(model: &Path, threads: u32) -> Result<Embedder> {
+    pub fn open(model: &Path, device: Device, threads: u32) -> Result<Embedder> {
         let path = CString::new(model.as_os_str().as_encoded_bytes())
             .context("a model path with a NUL in it")?;
         let mut err = [0 as c_char; 256];
@@ -74,6 +93,7 @@ impl Embedder {
                 path.as_ptr(),
                 CONTEXT_TOKENS,
                 i32::try_from(threads)?,
+                i32::from(device == Device::Best),
                 err.as_mut_ptr(),
                 err.len(),
             )
@@ -88,6 +108,12 @@ impl Embedder {
             dim: usize::try_from(dim)?,
             context: usize::try_from(context)?,
         })
+    }
+
+    /// What the model runs on: `CPU`, or the GPU's name (`MTL0` on a mac).
+    pub fn device(&self) -> String {
+        let name = unsafe { std::ffi::CStr::from_ptr(ffi::dl_embedder_device(self.raw.as_ptr())) };
+        name.to_string_lossy().into_owned()
     }
 
     pub fn dim(&self) -> usize {

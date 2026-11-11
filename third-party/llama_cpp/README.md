@@ -3,7 +3,11 @@
 [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT, its `LICENSE` in
 the archive) at release `b10361`, fetched by `MODULE.bazel` as
 `@llama_cpp` and built by [`llama_cpp.BUILD`](llama_cpp.BUILD): ggml with
-its CPU backend, and libllama over it. The search index's embedder
+its CPU backend, and on macOS its Metal backend, and libllama over it.
+Metal's shader source is put in the binary by
+[`embed_metal.py`](embed_metal.py), as llama.cpp's own
+`GGML_METAL_EMBED_LIBRARY` does, and Metal compiles it when the device
+opens, so the build needs no Metal compiler. The search index's embedder
 (`datalib/backend/embedder`) is the one thing that links it.
 
 **Why this release.** It is the one node-llama-cpp 3.20.0 is built on

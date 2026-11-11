@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use datalib_embedder::{format, Embedder};
+use datalib_embedder::{format, Device, Embedder};
 use serde_json::{json, Value};
 
 fn runfile(var: &str) -> PathBuf {
@@ -115,19 +115,10 @@ fn qmd_cpu() -> &'static (Vec<Side>, Vec<Side>) {
     ONCE.get_or_init(|| qmd(true))
 }
 
-fn ours() -> &'static std::sync::Mutex<Embedder> {
-    static ONCE: OnceLock<std::sync::Mutex<Embedder>> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        std::sync::Mutex::new(Embedder::open(&runfile("EMBED_MODEL_RLOC"), 2).unwrap())
-    })
-}
-
-/// One embedder for every test; a test that fails holding it does not
-/// fail the others.
-fn embedder() -> std::sync::MutexGuard<'static, Embedder> {
-    ours()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// An embedder of the test's own, dropped when it ends: on Metal, ggml
+/// aborts at exit if a model is still loaded, so none may live in a static.
+fn open(device: Device) -> Embedder {
+    Embedder::open(&runfile("EMBED_MODEL_RLOC"), device, 2).unwrap()
 }
 
 fn ours_formatted() -> (Vec<String>, Vec<String>) {
@@ -161,7 +152,7 @@ fn the_prompts_are_qmds_string_for_string() {
 #[test]
 fn the_tokens_are_qmds_with_bos_and_eos() {
     let (docs, queries) = qmd_cpu();
-    let embedder = embedder();
+    let embedder = open(Device::Cpu);
     for side in docs.iter().chain(queries) {
         let mut expected = vec![2i64];
         expected.extend(&side.tokens);
@@ -185,7 +176,7 @@ const QMD_BATCH: usize = 512;
 #[test]
 fn the_vectors_match_qmd_on_the_cpu() {
     let (docs, queries) = qmd_cpu();
-    let mut embedder = embedder();
+    let mut embedder = open(Device::Cpu);
     for side in docs.iter().chain(queries) {
         let tokens = embedder.tokenize(&side.formatted).unwrap();
         let got = embedder.embed_in_batches(&tokens, QMD_BATCH).unwrap();
@@ -203,7 +194,7 @@ fn the_vectors_match_qmd_on_the_cpu() {
 #[test]
 fn qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only() {
     let (docs, queries) = qmd_cpu();
-    let mut embedder = embedder();
+    let mut embedder = open(Device::Cpu);
     let mut long = 0;
     for side in docs.iter().chain(queries) {
         let tokens = embedder.tokenize(&side.formatted).unwrap();
@@ -223,16 +214,38 @@ fn qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only() {
 }
 
 /// What qmd wrote into a real index ran on the GPU where there was one
-/// (Metal on a mac); it still agrees closely with ours on the CPU.
+/// (Metal on a mac). Ours on its best device, evaluated in qmd's batches,
+/// agrees with it closely.
 #[test]
 fn the_vectors_match_qmd_on_its_default_backend() {
     let (docs, queries) = qmd(false);
-    let mut embedder = embedder();
+    let mut embedder = open(Device::Best);
     for side in docs.iter().chain(&queries) {
         let tokens = embedder.tokenize(&side.formatted).unwrap();
         let got = embedder.embed_in_batches(&tokens, QMD_BATCH).unwrap();
         let c = cosine(&got, &side.vector);
         assert!(c > 0.999, "cosine {c} for {:?}", side.formatted);
+    }
+}
+
+/// A mac's build has Metal, and the best device on one is its GPU.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_mac_runs_the_model_on_metal() {
+    assert!(datalib_embedder::gpu_available());
+    assert!(open(Device::Best).device().starts_with("MTL"));
+    assert_eq!(open(Device::Cpu).device(), "CPU");
+}
+
+/// The GPU's vectors and the CPU's agree, whole inputs included.
+#[test]
+fn the_best_device_agrees_with_the_cpu() {
+    let mut gpu = open(Device::Best);
+    let mut cpu = open(Device::Cpu);
+    for (title, text) in docs() {
+        let text = format::document(&text, title);
+        let c = cosine(&gpu.embed(&text).unwrap(), &cpu.embed(&text).unwrap());
+        assert!(c > 0.999, "cosine {c} for {text:?}");
     }
 }
 
@@ -245,20 +258,22 @@ fn measure_rate() {
         .repeat(40);
     let text = format::document(&text[..3600], Some("Log"));
     let threads = std::thread::available_parallelism().unwrap().get() as u32;
-    let mut embedder = Embedder::open(&runfile("EMBED_MODEL_RLOC"), threads).unwrap();
-    let tokens = embedder.tokenize(&text).unwrap();
-    embedder.embed_tokens(&tokens).unwrap();
-    let n = 20;
-    let started = std::time::Instant::now();
-    for _ in 0..n {
+    for device in [Device::Cpu, Device::Best] {
+        let mut embedder = Embedder::open(&runfile("EMBED_MODEL_RLOC"), device, threads).unwrap();
+        let tokens = embedder.tokenize(&text).unwrap();
         embedder.embed_tokens(&tokens).unwrap();
+        let n = 40;
+        let started = std::time::Instant::now();
+        for _ in 0..n {
+            embedder.embed_tokens(&tokens).unwrap();
+        }
+        let secs = started.elapsed().as_secs_f64();
+        writeln!(
+            std::io::stderr(),
+            "{device:?}: {} tokens per input, {threads} threads: {:.1} inputs/s",
+            tokens.len(),
+            n as f64 / secs
+        )
+        .unwrap();
     }
-    let secs = started.elapsed().as_secs_f64();
-    writeln!(
-        std::io::stderr(),
-        "{} tokens per input, {threads} threads: {:.1} inputs/s",
-        tokens.len(),
-        n as f64 / secs
-    )
-    .unwrap();
 }
