@@ -69,8 +69,6 @@ pub enum ColumnType {
     /// A row of [`Action`]s, drawn as buttons; the viewer maps a known
     /// id to code it already holds and draws nothing for one it doesn't.
     Actions,
-    /// A `markdowns.uuid`, shown as its title; opens the document on click.
-    MarkdownUuid,
     /// A picture, by its name (`datalib:photo/<id>`): drawn small, by
     /// whichever applet says it serves that kind of name; empty where none
     /// does.
@@ -117,6 +115,11 @@ pub struct ColumnSpec {
     /// them reaches the viewer as a double-click on that field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub badges: Option<String>,
+    /// Pixels the column starts at, where its type's usual width is
+    /// wrong for what it holds: one short chip, or the column a person
+    /// reads. Absent, the viewer sizes it by its type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u16>,
 }
 
 /// The key a term on this column starts with (`author:`), and the row
@@ -224,6 +227,7 @@ impl ColumnSpec {
             editable: false,
             search: None,
             badges: None,
+            width: None,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -240,6 +244,10 @@ impl ColumnSpec {
     }
     pub fn badges(mut self, field: &str) -> Self {
         self.badges = Some(field.into());
+        self
+    }
+    pub fn width(mut self, px: u16) -> Self {
+        self.width = Some(px);
         self
     }
 }

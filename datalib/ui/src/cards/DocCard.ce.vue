@@ -47,7 +47,7 @@ import { endWait, startWait, type Wait } from "@/telemetry";
 import DocTitleBar from "./DocTitleBar.ce.vue";
 import { sourceSource } from "./cardSources";
 import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
-import { problemLabel } from "./problems";
+import { problemLabel, severityWord } from "./problems";
 import { ensureFrontend } from "./frontendRegistry";
 import { photoCardSource, photoImageUrl } from "./photos";
 import { parsePhoto } from "@/uri";
@@ -667,7 +667,7 @@ watch(
             :data-problem-uuid="p.problem_uuid"
             :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
           >
-            <span class="problem-severity">{{ p.severity }}</span>
+            <span class="problem-severity">{{ severityWord(p.severity) }}</span>
             <span class="problem-text">
               <a
                 v-if="p.item_uuid"

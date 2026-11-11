@@ -21,7 +21,7 @@ source's record, the contacts app — is [`contacts.md`](contacts.md).
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step, a date |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a date |
 | **chip link** | how a chip is written down: a markdown link, `[text](href "title")` |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -54,7 +54,8 @@ backend writes a handle's URI with `Handle::to_uri`; one of your
 contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
 read by `contactFromUri` in `chipLinks.js`); a group is
 `datalib:group/<id>` and a step `datalib:step/<group>/<function>`
-(`datalib_columns::Entity::uri`).
+(`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
+(`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`).
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:
@@ -223,6 +224,14 @@ A grid draws a chip from an `identity` typed cell
   the Source cell's id. The search and problems grids' Source column
   is one (`Sources::identity` sets `entity` for every source the
   config declares).
+- **A document**: the cell's `entity` is its `datalib:doc/<uuid>`, its
+  `label` the document's title (`markdowns.title`, the heading its page
+  opens with, or "Untitled document"), its `icon` and `detail` its
+  source's mark and name. The search grid's Document column is one,
+  and so is the problems grid's (`columns.rs::document_identity`, the
+  titles read beside the rows by `dolt_repo.rs::document_titles`). It
+  is drawn by `documentChip.ts::documentCell` whether or not the grid
+  resolves chips, since nothing in it needs resolving (§"A document").
 - **A date**: a `datetime` cell (the search grid's Touched, Created
   and Modified) is the date chip a document draws (§"A date"), through
   `cellRenderers.ts::renderDateTime`; a value it cannot read stays
@@ -309,6 +318,32 @@ is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
 `chipMenu`'s, so the dashboard, the log or "Everything with" is still a
 right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
+
+## A document
+
+**A rendered document is a chip by its title**, named by its
+`datalib:doc/<uuid>` (`ui/src/cards/documentChip.ts`). Unlike a person,
+a group or a step it has **no resolver**: the producer sends the title,
+and a title changes only when the document is rendered again, which
+changes the index row the producer read it from. So a grid draws it
+from the cell alone, and a new search shows the new title.
+
+- **look**: the title, led by its source's mark; "From Work Slack" and
+  the URI on hover.
+- **double-click**: the document's card. In the search and problems
+  grids it opens beside the grid at the row's own section, as clicking
+  the row does.
+- **right-click**: Open “<title>”; Copy ID (the uuid), the title, or
+  Copy title and link, which puts a link on the clipboard —
+  `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
+  rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
+  href is the document's name, which datalib reads; no app registers
+  the scheme, so outside datalib it is a name, not a link that opens
+  anything. The rest of the title
+  bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
+  document itself, which a chip does not hold.
+- **drag**: no search key names a document in the search grid, so it
+  drags as a link.
 
 ## A date
 
@@ -475,14 +510,15 @@ A new kind of *handle* is a person and goes through
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`, `dates.test.ts`, and
+- The rules: `contacts.test.ts`, `entities.test.ts`, `documentChip.test.ts`, `dates.test.ts`, and
   `chipActions.test.ts` (one menu order for every kind, and where each
   entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
 - The writers: `etl_render_unittests` (`chip_link`), the storage
   report's test in `introspect.rs`, chat-common's header and reactor
   tests.
-- End to end: `chip-menu.spec.ts` (a person in a document),
+- End to end: `problems-grid.spec.ts` (a problem's Document chip),
+  `chip-menu.spec.ts` (a person in a document),
   `grid-chips.spec.ts` (the Author and Source cells, the storage
   report), `contacts.spec.ts` (two handles linked to one contact,
   followed by an open grid), and `data-sources-sync.spec.ts` (a run
@@ -492,7 +528,9 @@ A new kind of *handle* is a person and goes through
 ## Not built
 
 A system event as a chip ("Worf joined the channel"), which needs each
-provider to carry the handle on its system events; chips for a channel
-or a document (a document chip's menu is to be the document title bar's,
-`ui/src/cards/documentMenu.ts`); and editing a contact on the person card
+provider to carry the handle on its system events; a chip for a
+channel; a document chip in a rendered page (a `datalib:doc/` link in
+markdown is not marked as one yet, and would need a resolver for its
+title) or in the search field (no `doc:` key in the search grid); the
+title bar's whole menu on a document chip; and editing a contact on the person card
 ([`plans/contact_editing.md`](plans/contact_editing.md)).

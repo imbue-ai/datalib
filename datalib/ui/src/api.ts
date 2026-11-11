@@ -1223,6 +1223,8 @@ export type ColumnSpec = {
   // On an identity column: the row field of chips drawn after the label,
   // as bare counts. Double-clicking them is a double-click on that field.
   badges?: string;
+  // Pixels the column starts at, where its type's usual width is wrong.
+  width?: number;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -1233,8 +1235,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
-  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
-  /// when the viewer should draw it as a chip it can resolve and open.
+  /// The group, step or document this names, as a chip's URI
+  /// (`datalib:group/slack`, `datalib:doc/<uuid>`), when the viewer should
+  /// draw it as a chip it can open.
   entity?: string | null;
 };
 

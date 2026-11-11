@@ -297,7 +297,6 @@
 .tg-btn:hover:not(:disabled) { background: var(--datalib-hover); }
 .tg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .tg-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
-.tg-link { color: inherit; text-decoration: underline dotted; }
 
 /* ── slickgrid cells ───────────────────────────────────────────── */
 /* The theme, brought closer to the app: its own font rather than

@@ -20,8 +20,8 @@ use datalib_unified_document_index::view;
 use serde::{Deserialize, Serialize};
 
 use super::columns::{
-    counted, free_text_of, keys_of, searchable, value_source, words_holding, Sources, ValueSource,
-    ValuesParams,
+    counted, document_identity, free_text_of, keys_of, searchable, value_source, words_holding,
+    Sources, ValueSource, ValuesParams,
 };
 use super::{grouping, results, Index};
 
@@ -54,6 +54,8 @@ pub struct ProblemView {
     pub stage: &'static str,
     pub outcome: &'static str,
     pub reason: &'static str,
+    /// The reason in words a person reads: `Not Found` for `not_found`.
+    pub reason_label: String,
     /// What a problem with no document is about, in words: the listing,
     /// configured entry or raw record its scope key names.
     pub about: Option<String>,
@@ -63,6 +65,8 @@ pub struct ProblemView {
     /// The document this is about — its scope's, or its item's — which
     /// the viewer opens on click.
     pub markdown_uuid: Option<String>,
+    /// That document as its chip, by its title.
+    pub document_ref: Option<Identity>,
     pub item_uuid: Option<String>,
     pub scope_kind: &'static str,
     pub scope_key: String,
@@ -74,14 +78,18 @@ pub struct ProblemView {
 
 impl ProblemView {
     fn of(located: LocatedProblem, sources: &Sources) -> Self {
-        let LocatedProblem { row, markdown_uuid } = located;
+        let LocatedProblem {
+            row,
+            markdown_uuid,
+            document_title,
+        } = located;
         let chip = Chip {
             kind: match row.severity {
                 Severity::Error => ChipKind::Error,
                 Severity::Warning => ChipKind::Warning,
                 Severity::Info => ChipKind::Metric,
             },
-            text: row.severity.as_str().to_string(),
+            text: severity_word(row.severity).to_string(),
             title: format!(
                 "{}: {}",
                 row.severity.as_str(),
@@ -100,20 +108,26 @@ impl ProblemView {
                     .unwrap_or_else(|| row.scope_key.clone()),
             ),
         };
+        let source_ref = sources.identity(&row.source_id);
+        let document_ref = markdown_uuid
+            .as_deref()
+            .map(|doc| document_identity(doc, document_title.as_deref(), &source_ref));
         ProblemView {
             problem_uuid: row.problem_uuid,
             severity: row.severity.as_str(),
             severity_chip: vec![chip],
-            source_ref: sources.identity(&row.source_id),
+            source_ref,
             source_id: row.source_id,
             stage: row.stage.as_str(),
             outcome: row.outcome.as_str(),
             reason: row.reason.as_str(),
+            reason_label: words(row.reason.as_str()),
             about,
             field: row.field,
             rule: row.rule,
             sample: row.sample,
             markdown_uuid,
+            document_ref,
             item_uuid: row.item_uuid,
             scope_kind: row.scope_kind.as_str(),
             scope_key: row.scope_key,
@@ -123,6 +137,31 @@ impl ProblemView {
             render_version: row.render_version,
         }
     }
+}
+
+/// How a severity reads on its chip: short and loud, as a log level does.
+fn severity_word(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "ERROR",
+        Severity::Warning => "WARN",
+        Severity::Info => "INFO",
+    }
+}
+
+/// A snake_case word as a person reads it: `not_found` is `Not Found`.
+fn words(snake: &str) -> String {
+    snake
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            chars
+                .next()
+                .map(|c| c.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// One problem as the document view shows it above the body: enough
@@ -188,41 +227,56 @@ pub fn rows_spec() -> RowsSpec {
 
 pub fn columns() -> Vec<ColumnSpec> {
     searchable::<ProblemColumn>(vec![
-        ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips).describe(
-            "error: something failed. warning: something is missing or degraded for a reason \
-             you can act on — access, a configured entry, a limit. info: a finding, nothing \
-             lost. Hover a chip for what became of the data.",
-        ),
-        ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
-        ColumnSpec::new("markdown_uuid", "Document", ColumnType::MarkdownUuid).describe(
-            "The document the record belongs to. Empty when there is none: a listing, a \
-             configured entry, or a record that never reached the mirror — About says which.",
-        ),
+        ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips)
+            .describe(
+                "ERROR: something failed. WARN: something is missing or degraded for a reason \
+                 you can act on — access, a configured entry, a limit. INFO: a finding, nothing \
+                 lost. Hover a chip for what became of the data.",
+            )
+            .width(90),
+        // Second and wide: what went wrong is what a person opened this for.
+        ColumnSpec::new("sample", "Detail", ColumnType::Text)
+            .describe(
+                "What went wrong: the first 80 characters of the offending value, or, for a \
+                 listing, phase or configured entry, the download's explanation whole.",
+            )
+            .width(420),
+        ColumnSpec::new("document_ref", "Document", ColumnType::Identity)
+            .describe(
+                "The document the record belongs to, by its title. Empty when there is none: a \
+                 listing, a configured entry, or a record that never reached the mirror — About \
+                 says which.",
+            )
+            .width(200),
         ColumnSpec::new("about", "About", ColumnType::Text).describe(
             "What a problem with no document is about: a listing or phase the download \
              could not do, a configured entry, a raw record, a render store the index could \
              not read.",
         ),
-        ColumnSpec::new("stage", "Stage", ColumnType::Text).describe(
-            "Which step noticed it: fetch (downloading), parse (reading the stored payload), \
-             render (projecting it), grid_row (building the index row). The fix is in a \
-             different place for each.",
-        ),
-        ColumnSpec::new("reason", "Reason", ColumnType::Text),
-        ColumnSpec::new("field", "Field", ColumnType::Text),
-        ColumnSpec::new("sample", "Detail", ColumnType::Text).describe(
-            "What went wrong: the first 80 characters of the offending value, or, for a \
-             listing, phase or configured entry, the download's explanation whole.",
-        ),
+        ColumnSpec::new("reason_label", "Reason", ColumnType::Text)
+            .describe("Why, in a word or two: Not Found, Access Denied, Coercion Failed.")
+            .width(130),
+        ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
+        ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
+        ColumnSpec::new("changed_at_utc", "Last changed", ColumnType::Timestamp),
+        ColumnSpec::new("stage", "Stage", ColumnType::Text)
+            .describe(
+                "Which step noticed it: fetch (downloading), parse (reading the stored payload), \
+                 render (projecting it), grid_row (building the index row). The fix is in a \
+                 different place for each.",
+            )
+            .hidden(),
+        ColumnSpec::new("field", "Field", ColumnType::Text)
+            .describe("The field of the record that was lost or left empty, where it was one.")
+            .hidden(),
         ColumnSpec::new("outcome", "Outcome", ColumnType::Text).hidden(),
         ColumnSpec::new("rule", "Rule", ColumnType::Text)
             .describe("The deliberate lossy rule that fired, when one did.")
             .hidden(),
+        ColumnSpec::new("markdown_uuid", "Document id", ColumnType::Text).hidden(),
         ColumnSpec::new("item_uuid", "Item", ColumnType::Text)
             .describe("The grid row the record has, or would have had.")
             .hidden(),
-        ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
-        ColumnSpec::new("changed_at_utc", "Last changed", ColumnType::Timestamp),
         ColumnSpec::new("scope_kind", "Scope", ColumnType::Text)
             .describe("What clears this row when reprocessed: the document, or the raw entity.")
             .hidden(),
@@ -703,8 +757,12 @@ mod tests {
             Some(("severity".into(), "severity".into()))
         );
         assert_eq!(
-            search("markdown_uuid"),
+            search("document_ref"),
             Some(("doc".into(), "scope_key".into()))
+        );
+        assert_eq!(
+            search("reason_label"),
+            Some(("reason".into(), "reason".into()))
         );
         assert_eq!(search("sample"), None);
     }
@@ -752,6 +810,7 @@ mod tests {
         let located = LocatedProblem {
             row,
             markdown_uuid: Some("md-1".into()),
+            document_title: Some("Captain's log".into()),
         };
         let view = ProblemView::of(located, &Sources::default());
         let json = serde_json::to_value(&view).unwrap();
@@ -778,7 +837,14 @@ mod tests {
             .filter_map(|c| c.search.as_ref())
             .all(|s| keys.contains(s.field.as_str())));
         assert_eq!(view.markdown_uuid.as_deref(), Some("md-1"));
+        let doc = view.document_ref.as_ref().unwrap();
+        assert_eq!(
+            (doc.label.as_str(), doc.entity.as_deref()),
+            ("Captain's log", Some("datalib:doc/md-1"))
+        );
         assert_eq!(view.severity_chip[0].kind, ChipKind::Warning);
+        assert_eq!(view.severity_chip[0].text, "WARN");
+        assert_eq!(view.reason_label, "Coercion Failed");
         assert_eq!(
             view.source_ref.label, "slack",
             "an unconfigured source shows its id"

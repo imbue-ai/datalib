@@ -37,3 +37,18 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what}: ${p.reason as string}`;
   }
 }
+
+/** How a severity reads on its chip, as the problems table writes it:
+ *  short and loud, as a log level does. */
+export function severityWord(severity: string): string {
+  switch (severity) {
+    case "error":
+      return "ERROR";
+    case "warning":
+      return "WARN";
+    case "info":
+      return "INFO";
+    default:
+      return severity;
+  }
+}

@@ -1278,6 +1278,9 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   touched_at: "touched_at",
   author_ref: "author",
   contact_ref: "contact",
+  // Every row from one source — a `source:` search, or the problems of
+  // one — says the same thing on every line.
+  source_ref: "source_id",
   account: "account",
 };
 
@@ -1622,7 +1625,6 @@ watch(
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
-      onOpenDocument: (_uuid, row) => pickAndOpen(row),
       picture: thumbnailUrl,
       groupable: true,
       chips: {
@@ -2201,9 +2203,9 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   saveState();
 }
 
-/// A Document cell's link: a link opens on one click, so the row is
-/// picked, as a click on the row picks it, and its document opens
-/// beside the grid — again, too, when it has been closed.
+/// A Document chip's double-click: the row is picked, as a click on the
+/// row picks it, and its document opens beside the grid at the row's
+/// own section — again, too, when it has been closed.
 function pickAndOpen(data: Row) {
   if (!vueGrid) return;
   const selected = selectedRows();
@@ -2236,22 +2238,19 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
-  // A document link's first click already opened the document beside
-  // the grid; the second is not a request to open it again.
-  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  if (target?.closest?.("a.tg-link")) {
-    e.stopImmediatePropagation();
-    return;
-  }
   // Double-click on a chip opens its card: a person's, led by this
-  // row's source, or a group's dashboard or a step's log
-  // (docs/dev/chips.md § Clicks).
+  // row's source, a group's dashboard, a step's log, or the row's
+  // document at the row (docs/dev/chips.md § Clicks).
   const el = chipAt(e);
   const chip = el ? chipOf(el) : null;
   if (!chip) return;
   e.stopImmediatePropagation();
-  const seenIn = rowData(args.row)?.source_id || null;
-  const source = chipCardSource(chip.ref, seenIn);
+  const data = rowData(args.row);
+  if (chip.ref.kind === "document" && data) {
+    pickAndOpen(data);
+    return;
+  }
+  const source = chipCardSource(chip.ref, data?.source_id || null);
   if (source) props.ctx.host.openCards(source);
 }
 

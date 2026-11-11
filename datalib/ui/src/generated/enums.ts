@@ -32,7 +32,6 @@ export type ColumnType =
   | "status"
   | "chips"
   | "actions"
-  | "markdown_uuid"
   | "image"
   | "membership";
 

@@ -43,6 +43,8 @@ pub struct Listing {
 pub struct LocatedProblem {
     pub row: ProblemRow,
     pub markdown_uuid: Option<String>,
+    /// That document's title, where it has one.
+    pub document_title: Option<String>,
 }
 
 /// Reads of the grid index: `grid_rows`, `markdowns`, `edges`.
