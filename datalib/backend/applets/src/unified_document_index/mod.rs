@@ -31,6 +31,7 @@ mod search_finds_itself_tests;
 mod search_terms;
 #[cfg(test)]
 mod serve_tests;
+mod sql;
 pub(crate) mod warm;
 
 use body_sections::{body_sections, BodySection};
@@ -77,6 +78,8 @@ struct Index {
     coverage: Arc<tokio::sync::Mutex<results::VectorCoverage>>,
     /// The sources the grid holds, and the commit they were read at.
     grid_sources: Arc<tokio::sync::Mutex<Option<GridSources>>>,
+    /// Turns for `/sql`'s queries, [`sql::AT_ONCE`] at a time.
+    sql_slots: Arc<tokio::sync::Semaphore>,
 }
 
 type GridSources = (Option<String>, Arc<Vec<String>>);
@@ -105,6 +108,7 @@ impl Index {
             keyed: Arc::default(),
             coverage: Arc::default(),
             grid_sources: Arc::default(),
+            sql_slots: Arc::new(tokio::sync::Semaphore::new(sql::AT_ONCE)),
             repo: Arc::new(repo),
             root,
         })
@@ -216,6 +220,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/keys", get(problems::keys_handler))
             .route("/problems/values", get(problems::values_handler))
             .route("/chat/{markdown_uuid}", get(chat))
+            .route("/sql", post(sql::handler))
+            .route("/sql/stores", get(sql::stores_handler))
             .route(
                 "/health",
                 get(|| async { Json(serde_json::json!({"ok": true})) }),

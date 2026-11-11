@@ -406,8 +406,8 @@ A few things to keep in mind:
 
 ## Reading from your program
 
-Stock SQLite cannot open a raw store, so your program needs one of two
-things, in this order:
+Stock SQLite cannot open a raw store, so your program needs one of
+three things, in this order:
 
 1. **A connection in your own process.** A query on an open connection
    takes about 0.01 ms. From Python, under any interpreter, uv's included,
@@ -421,6 +421,15 @@ things, in this order:
    costs a process start and a store open per query, about 15 ms. Use it
    where there is no library: outside Python on a musl tarball, or on an Intel
    Mac.
+3. **The app, over HTTP.** With the app up, `POST
+   /applet/unified_document_index/sql` runs one `SELECT` against any store
+   and answers a page of rows as JSON, behind the API token
+   ([applets.md](applets.md#reading-any-store-with-sql)). It needs
+   nothing installed and no shell, so it suits an agent that can make
+   HTTP requests and run nothing else, or one in a container. It costs a
+   store open per page and works only while the app runs, so a step,
+   which may run with no app up, reads the store itself. It reads and
+   nothing else, and stops a query after 20 seconds.
 
 ## Showing a rendered document
 

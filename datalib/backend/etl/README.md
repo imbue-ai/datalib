@@ -385,7 +385,9 @@ table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
 `COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
 their blobs, at a commit the writer has since moved past (the
-time-series applet's read) — and that list is the allowlist. Any other
+time-series applet's read), and on a detached open, any `SELECT`
+`datalib_sql_guard` lets through (the search applet's `/sql`) — and
+that list is the allowlist. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and

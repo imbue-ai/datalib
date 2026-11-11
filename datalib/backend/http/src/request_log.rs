@@ -35,7 +35,7 @@ pub const TARGET: &str = "http.request";
 
 /// POSTs that change nothing a person asked to change: a page asking what
 /// to draw, or reporting what it did.
-const ROUTINE_POSTS: [&str; 8] = [
+const ROUTINE_POSTS: [&str; 9] = [
     "/api/config/check",
     "/api/entities",
     "/api/manage/rows/refresh",
@@ -44,6 +44,7 @@ const ROUTINE_POSTS: [&str; 8] = [
     "/api/ui/events",
     "/applet/unified_document_index/people",
     "/applet/unified_document_index/qmd_state",
+    "/applet/unified_document_index/sql",
 ];
 
 /// Where a page keeps its own layout: written on every drag.

@@ -1018,12 +1018,60 @@ async fn rev_read(args: &Args) -> Result<Value> {
                     errors.push(format!("range in window {txn}: {e:#}"));
                 }
             }
+            if args.flag("guarded") {
+                if let Err(e) = guarded_reads(&pool).await {
+                    errors.push(format!("guarded reads in window {txn}: {e:#}"));
+                }
+            }
             tokio::time::sleep(interval).await;
         }
         pool.close().await;
         txn += 1;
     }
     Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
+}
+
+/// What the search applet's `/sql` route sends a store: each statement
+/// paged and checked by `datalib_sql_guard`, on a connection it guards.
+/// Doltlite's history functions, a temporary table (`DISTINCT`, `IN`), a
+/// group and a pragma table.
+const GUARDED_READS: [(&str, Option<&str>); 6] = [
+    (
+        "SELECT DISTINCT substr(id, 1, 2) FROM entities ORDER BY 1",
+        None,
+    ),
+    (
+        "SELECT id FROM entities WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+        Some(r#"["a", "b"]"#),
+    ),
+    (
+        "SELECT substr(id, 1, 1), count(*), max(length(body)) FROM entities GROUP BY 1",
+        None,
+    ),
+    (
+        "SELECT commit_hash FROM dolt_log() ORDER BY date DESC",
+        None,
+    ),
+    ("SELECT name FROM pragma_table_info('entities')", None),
+    ("SELECT dolt_hashof('HEAD')", None),
+];
+
+async fn guarded_reads(pool: &SqlitePool) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    datalib_sql_guard::guard(&mut conn, Instant::now() + Duration::from_secs(60)).await?;
+    for (sql, param) in GUARDED_READS {
+        let paged = datalib_sql_guard::paged(sql, 0, 100);
+        datalib_sql_guard::check(&mut conn, &paged)
+            .await
+            .map_err(|r| anyhow!("{sql}: {r:?}"))?;
+        // Audited: `paged` wraps a literal above in integers this file chose.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(paged));
+        if let Some(param) = param {
+            query = query.bind(param);
+        }
+        query.fetch_all(&mut *conn).await?;
+    }
+    Ok(())
 }
 
 async fn main_tip(db: &Path) -> Result<String> {
