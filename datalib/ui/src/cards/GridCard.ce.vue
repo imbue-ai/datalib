@@ -100,7 +100,7 @@ import {
   type FilterEntry,
 } from "@/grid/query";
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
-import { keptSelection, newlyPicked, rowsToRestore } from "@/grid/selection";
+import { keptSelection, newlyPicked, rowsToRestore, withoutLeftOut } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import {
   openRowsOn,
@@ -951,6 +951,7 @@ async function runSearch(q: string, refresh = false) {
     else {
       showNew();
       answered(q, "rows", { rows: win.rows.length, total: r.total });
+      void keepWhatTheSearchHolds();
     }
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -2227,6 +2228,51 @@ function restoreKept() {
   const rows = rowsToRestore(kept, (id) => dataView.getRowById(id), grid.getSelectedRows());
   if (!rows) return;
   asOwnChange(() => grid.setSelectedRows(rows));
+}
+
+/// How many ids one `among` question names, so its URL stays short.
+const AMONG_BATCH = 100;
+
+/// A new search, or a new order, keeps the selected records still among
+/// its rows and drops the rest for good: a later, wider search does not
+/// bring back what a narrower one left out. The rows loaded answer for
+/// themselves; when the answer has more pages, the search is asked about
+/// the rest (`among`).
+async function keepWhatTheSearchHolds() {
+  const search = shown;
+  if (!vueGrid || !win || !search || !isSearch) return;
+  const { dataView } = vueGrid;
+  const asked = [...kept].filter((id) => dataView.getRowById(id) == null);
+  if (asked.length === 0) return;
+  let found: string[] = [];
+  if (win.next !== null) {
+    const batches: string[][] = [];
+    for (let i = 0; i < asked.length; i += AMONG_BATCH) {
+      batches.push(asked.slice(i, i + AMONG_BATCH));
+    }
+    try {
+      const answers = await Promise.all(
+        batches.map((among) =>
+          fetchRows<Row>(
+            url,
+            search.q,
+            1,
+            undefined,
+            { toast: false },
+            { sort: search.sort, among },
+          ),
+        ),
+      );
+      if (answers.some((a) => !a.among)) throw new Error("the search did not answer `among`");
+      found = answers.flatMap((a) => a.among!);
+    } catch (e) {
+      // Nothing is dropped on a question that went unanswered.
+      console.warn("could not ask which selected rows the search still holds", e);
+      return;
+    }
+  }
+  if (search !== shown) return;
+  kept = withoutLeftOut(kept, asked, found);
 }
 
 function asOwnChange(change: () => void) {

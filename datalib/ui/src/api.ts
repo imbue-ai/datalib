@@ -193,6 +193,9 @@ export type RowsResponse<Row> = RowsSpec & {
   // Why the query cannot be read as typed (the search's alone). Not an
   // error: mid-keystroke it is usually a filter not finished yet.
   refused?: string[];
+  // The search's alone: which of the ids the request named in `among` are
+  // among its rows. Absent when it named none.
+  among?: string[];
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -662,6 +665,9 @@ export type SearchPageSpec = {
   sort?: string | null;
   through?: string | null;
   within?: string | null;
+  /// Record ids the answer says are or are not among the search's rows,
+  /// wherever they fall (`RowsResponse.among`).
+  among?: string[];
 };
 
 export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
@@ -691,6 +697,7 @@ export async function fetchRows<Row>(
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
+  if (spec.among?.length) params.set("among", JSON.stringify(spec.among));
   const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
