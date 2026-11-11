@@ -444,7 +444,8 @@ place for what the engine does, with the recipes;
 Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`,
 `//datalib/backend/etl:doltlite_two_process_test` or, for the PyPI
 wheels, `//datalib/backend/doltlite_facts:python_package_test`,
-`:python_reader_test` and `//datalib/reader:reader_wheel_test`, so a doltlite
+`:python_reader_test` and `//datalib/reader:reader_wheel_test`, or, for
+the vec1 vector search, `:vec1_facts_test`, so a doltlite
 bump that moves one fails by name.
 
 The rules, none optional. How our code enforces them is in

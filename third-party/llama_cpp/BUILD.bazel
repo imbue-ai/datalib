@@ -1,0 +1,5 @@
+# Built by llama_cpp.BUILD; see README.md.
+exports_files([
+    "embed_metal.py",
+    "llama_cpp.BUILD",
+])

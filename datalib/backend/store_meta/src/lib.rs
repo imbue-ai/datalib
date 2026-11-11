@@ -53,6 +53,9 @@ pub enum StoreKind {
     TimeSeriesIndex,
     /// The grid index (`unified_document_index/grid_index`).
     GridIndex,
+    /// Every source's keyword index and embeddings, keyed by document,
+    /// holding no text (`unified_document_index/search_index`). Plain SQLite.
+    SearchIndex,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.
@@ -232,6 +235,22 @@ async fn table_exists(pool: &SqlitePool) -> Result<bool> {
             .await
             .context("probe _datalib_meta")?;
     Ok(n > 0)
+}
+
+/// The shape a store records, read inside a caller's transaction: an owner
+/// that rebuilds a store in another shape checks again under its write
+/// lock, so two openers do not both rebuild it. `None` when nothing is
+/// recorded, and creates the table if it is missing.
+pub async fn schema_hash_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<String>> {
+    sqlx::query(DDL)
+        .execute(&mut *conn)
+        .await
+        .context("create _datalib_meta")?;
+    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
+        .bind(Key::SchemaHash.as_str())
+        .fetch_optional(conn)
+        .await
+        .context("read _datalib_meta.schema_hash")
 }
 
 /// key → (value, written_at_utc).

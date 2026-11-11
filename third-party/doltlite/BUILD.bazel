@@ -268,6 +268,29 @@ cc_binary(
     deps = [":sqlite3"],
 )
 
+# The same shell with SQLite's `vec1` vector-search extension compiled in
+# (`-DDOLTLITE_VEC1=1`), for the facts tests that pin what vec1 does
+# (docs/dev/doltlite.md § "Vector search: vec1"). Test-only: nothing we
+# ship has vec1, and `:sqlite3` and `:doltlite` above stay as they are.
+cc_library(
+    name = "sqlite3_vec1",
+    testonly = True,
+    srcs = ["sqlite3.c"],
+    hdrs = ["sqlite3.h"],
+    copts = DOLTLITE_LIBRARY_COPTS + ["-DDOLTLITE_VEC1=1"],
+    includes = ["."],
+    linkopts = DOLTLITE_LINKOPTS,
+)
+
+cc_binary(
+    name = "doltlite_vec1",
+    testonly = True,
+    srcs = ["@doltlite_autoconf//:ext/wasm/bld/doltlite-build/shell.c"],
+    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + ["-DDOLTLITE_VEC1=1"],
+    visibility = ["//datalib/backend/doltlite_facts:__pkg__"],
+    deps = [":sqlite3_vec1"],
+)
+
 # That the CLI links, runs, and has a real dolt-SQL surface (a shell
 # linked against stock SQLite fails on `dolt_commit`). Its `--version`
 # check compares DOLTLITE_VERSION with itself; pin drift between the two

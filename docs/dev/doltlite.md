@@ -14,8 +14,9 @@ test each, in a module named for its section here;
 a writer and a reader in two processes, and
 `//datalib/backend/doltlite_facts:python_package_test` and
 `:python_reader_test` the ones in
-[Reading a store from Python](#reading-a-store-from-python). After a
-doltlite bump, run all four. A fact that moved fails by name: fix it here, then the test,
+[Reading a store from Python](#reading-a-store-from-python), and
+`:vec1_facts_test` the ones in [Vector search: vec1](#vector-search-vec1).
+After a doltlite bump, run all five. A fact that moved fails by name: fix it here, then the test,
 then whatever in the tree leaned on it.
 
 > **GUI option:** For a macOS sqlite-browser build patched to load
@@ -960,6 +961,64 @@ pinning the index pages it rewrote) and the plain file 0.7 MB.
 `dolt_gc()` took the store to 144 MB. An exact address matched in
 0.3 ms in the store and 0.1 ms in the plain file; a prefix with the
 join back, 27 ms and 6 ms.
+
+### Vector search: vec1
+
+The amalgamation carries SQLite's `vec1` extension (version 0.7,
+<https://sqlite.org/vec1>), compiled only with `-DDOLTLITE_VEC1=1`.
+**Nothing we ship has it**; the test-only
+`//third-party/doltlite:doltlite_vec1` shell does, and the tests are
+`vec1_facts_test`, mostly on a plain SQLite file. It builds on an arm64
+mac (NEON).
+
+A table is `CREATE VIRTUAL TABLE v USING vec1(embedding, source_id, …)`:
+a vector column (a float32 blob, `vec1_from_json('[…]')`) and up to
+256 more columns. A query passes the query vector as the hidden column
+`cmd` and K as `arg`, either a number or JSON such as
+`'{"K":10,"nprobe":8}'`, or else a `LIMIT`. With neither, it is refused.
+`rowid` and the hidden `distance` come back nearest first.
+`vec1_l2_distance` is the *squared* distance.
+
+A table answers one of three ways. It starts **untrained**: a scan of
+every row, exact. `INSERT INTO v(cmd, arg) VALUES ('rebuild',
+'{"index":"flat"}')` makes it **flat**: still every row, still exact.
+A model from the aggregate `vec1_train(embedding, '{"nbucket":…,
+"codesize":…}')`, passed to `rebuild`, makes it **trained**: vectors
+split among `nbucket` buckets (IVF), stored as product-quantization
+codes, and a query reads only the `nprobe` buckets nearest it (default
+5% of them, at least one).
+
+- **A filter on one of the vec1 table's own columns runs before the K
+  nearest are chosen.** `=`, `IN`, `<`, `>`, `IS NULL` and the like
+  are handed to vec1 (the plan shows `INDEX 5:PA00`), so K rows from
+  source `b` come back even when every nearer row is source `a`. Same
+  in a doltlite store.
+- **A filter on `rowid`, or a join to another table, runs after.**
+  vec1 takes no `rowid` constraint into the search, so `rowid IN
+  (SELECT doc_id FROM docs WHERE source_id = ?)` and a join on `rowid`
+  both filter the K nearest overall, and return nothing in that case.
+  A filter that is to cut the search has to be a column of the vec1
+  table.
+- **Exact ranking over a set found by an ordinary index works**, by
+  ordering on the distance instead of asking vec1 for neighbours:
+  `SELECT … FROM docs d JOIN v ON v.rowid = d.doc_id WHERE d.source_id
+  = ? ORDER BY vec1_l2_distance(?, v.embedding) LIMIT k` searches
+  `docs` by its index and reads each vector by rowid. It costs one
+  vector read per row of the set.
+- **Untrained and flat tables rank by exact distance.**
+- **A trained table ranks by the approximate distance and never
+  re-ranks**: `distance` is the code's distance, not the vector's, and
+  the order can differ from the exact one. The raw vector is still kept,
+  so a query can re-rank its candidates itself with `vec1_l2_distance`.
+- **A trained table filters only within the buckets it probes.** If the
+  rows that pass sit in other buckets, fewer than K come back, none at
+  the default `nprobe` in the test. `"nprobe"` set to every bucket
+  finds them all; so does `"streaming":1`, which keeps opening the next
+  nearest bucket until the `LIMIT` is met.
+- **A row inserted after training is indexed with the existing model**
+  and found at once, without retraining.
+- **Product quantization needs 512 training vectors; buckets alone
+  need 4 each.**
 
 ### Plain SQLite files and SQLite compatibility
 
