@@ -171,8 +171,19 @@ fn the_tokens_are_qmds_with_bos_and_eos() {
 /// (`getDefaultContextBatchSize`: the context, at most 512 tokens).
 const QMD_BATCH: usize = 512;
 
+/// How closely ours and qmd's agree on the CPU. On arm64 both run ggml's
+/// NEON kernels and agree to rounding. On x86 node-llama-cpp's prebuilt
+/// picks AVX2 kernels at run time, while our build keeps to the portable
+/// ones so it runs on any x86, and the two round differently (0.99975 on
+/// CI's runner): far closer than anything that would move a ranking.
+const CPU_AGREEMENT: f64 = if cfg!(target_arch = "aarch64") {
+    0.9999
+} else {
+    0.999
+};
+
 /// On the same backend as qmd's CPU path, and evaluated in qmd's batches,
-/// the vectors agree to rounding.
+/// the vectors agree to within `CPU_AGREEMENT`.
 #[test]
 fn the_vectors_match_qmd_on_the_cpu() {
     let (docs, queries) = qmd_cpu();
@@ -182,7 +193,7 @@ fn the_vectors_match_qmd_on_the_cpu() {
         let got = embedder.embed_in_batches(&tokens, QMD_BATCH).unwrap();
         assert_eq!(got.len(), side.vector.len());
         let c = cosine(&got, &side.vector);
-        assert!(c > 0.9999, "cosine {c} for {:?}", side.formatted);
+        assert!(c > CPU_AGREEMENT, "cosine {c} for {:?}", side.formatted);
     }
 }
 
@@ -200,7 +211,11 @@ fn qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only() {
         let tokens = embedder.tokenize(&side.formatted).unwrap();
         let whole = cosine(&embedder.embed_tokens(&tokens).unwrap(), &side.vector);
         if tokens.len() <= QMD_BATCH {
-            assert!(whole > 0.9999, "cosine {whole} for {:?}", side.formatted);
+            assert!(
+                whole > CPU_AGREEMENT,
+                "cosine {whole} for {:?}",
+                side.formatted
+            );
         } else {
             long += 1;
             assert!(

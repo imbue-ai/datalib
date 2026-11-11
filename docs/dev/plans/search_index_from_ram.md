@@ -195,8 +195,11 @@ qmd's own `formatDocForEmbedding`, `formatQueryForEmbedding`, tokenizer
 and `embed` through the pinned node and package, on made-up texts, and
 finds the prompts equal string for string, the tokens equal (ours add
 BOS and EOS where node-llama-cpp adds them after tokenizing), and the
-vectors equal to a cosine above 0.9999 on the CPU and above 0.999
-between our Metal and qmd's.
+vectors equal to a cosine above 0.9999 on an arm64 CPU (0.99975 on x86,
+where node-llama-cpp's prebuilt picks AVX2 kernels and our build keeps to
+portable ones) and above 0.999 between our Metal and qmd's. The x86 build
+is slow for that reason; giving it ggml's run-time choice of CPU kernels
+is left for when a Linux machine embeds for real.
 
 **qmd embedded every input over 512 tokens wrongly**, a known defect
 upstream (tobi/qmd#897, with the fix in tobi/qmd#993, both open). node-llama-cpp
