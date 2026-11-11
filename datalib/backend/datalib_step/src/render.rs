@@ -835,17 +835,19 @@ pub(crate) fn seal_run(
         let kept_documents: BTreeSet<&str> =
             held_by_kept.iter().map(|(_, uuid)| uuid.as_str()).collect();
         if end.sweep {
-            for uuid in store.all_document_uuids()? {
-                if end.keep.contains(&uuid) || kept_documents.contains(uuid.as_str()) {
-                    continue;
-                }
-                store
-                    .remove_document(data_root, &uuid)
-                    .with_context(|| format!("remove document {uuid}"))?;
-                sealed.removed += 1;
+            let gone: Vec<String> = store
+                .all_document_uuids()?
+                .into_iter()
+                .filter(|uuid| !end.keep.contains(uuid) && !kept_documents.contains(uuid.as_str()))
+                .collect();
+            store
+                .remove_documents(data_root, &gone)
+                .context("remove the documents this source no longer produces")?;
+            sealed.removed += gone.len();
+            if !gone.is_empty() {
                 tracing::info!(
-                    document = %uuid,
-                    "this source no longer produces this document; dropped it",
+                    documents = gone.len(),
+                    "this source no longer produces these documents; dropped them",
                 );
             }
         }
@@ -869,19 +871,29 @@ pub(crate) fn seal_run(
                 .put_inputs(bucket, &[])
                 .with_context(|| format!("clear inputs of bucket {bucket}"))?;
         }
+        let mut gone_by_bucket: BTreeMap<String, usize> = BTreeMap::new();
+        let mut gone: Vec<String> = Vec::new();
         for (bucket, uuid) in store.documents_for_buckets(&swept)? {
-            if end.keep.contains(&uuid) {
-                continue;
+            if !end.keep.contains(&uuid) {
+                *gone_by_bucket.entry(bucket).or_default() += 1;
+                gone.push(uuid);
             }
-            store
-                .remove_document(data_root, &uuid)
-                .with_context(|| format!("remove document {uuid}"))?;
-            sealed.removed += 1;
+        }
+        store
+            .remove_documents(data_root, &gone)
+            .context("remove the documents swept buckets no longer produce")?;
+        sealed.removed += gone.len();
+        // One line for the sweep, not one per document: a source that
+        // emptied drops every document it had.
+        if !gone.is_empty() {
             tracing::info!(
-                document = %uuid,
-                bucket,
-                "this bucket no longer produces this document; dropped it",
+                documents = gone.len(),
+                buckets = gone_by_bucket.len(),
+                "swept buckets no longer produce these documents; dropped them",
             );
+        }
+        for (bucket, documents) in &gone_by_bucket {
+            tracing::debug!(bucket, documents, "dropped this bucket's documents");
         }
         // The report is skipped whole when no count moved: its byte
         // sizes wobble from run to run, so a rewrite would be a diff for
