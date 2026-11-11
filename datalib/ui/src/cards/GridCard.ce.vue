@@ -102,7 +102,12 @@ import {
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { keptSelection, newlyPicked, rowsToRestore } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
-import { openRowsOn, selectAllRowsOnKey, tabLeavesRows } from "@/grid/rowIdioms";
+import {
+  openRowsOn,
+  selectAllRowsOnKey,
+  stepThroughSelection,
+  tabLeavesRows,
+} from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchNotices, type SearchEcho } from "@/grid/searchCoverage";
 import { registerSearchCard } from "@/search/searchCards";
@@ -238,7 +243,8 @@ shows the same results with every column, sorting and grouping: a click selects 
 <b>Open document</b> on its right-click menu opens it. A new search opens on the one you
 picked last.</p>
 <p>In either view, ↑ and ↓ move from result to result, Enter opens the one picked, and Tab
-moves on past the results. In the table, F6 reaches the column headers.</p>
+moves on past the results. In the table, F6 reaches the column headers, and with several
+rows selected ↑ and ↓ move among them alone.</p>
 `
     : null,
 );
@@ -2291,11 +2297,36 @@ function inRows(target: EventTarget | null): boolean {
 
 function onRowsKey(e: KeyboardEvent) {
   noteAdds(e);
+  if (inRows(e.target) && stepAmongSelected(e)) return;
   const exit = inRows(e.target) ? tabLeavesRows(e) : null;
   if (!exit) return;
   // In the capture phase, so the grid never sees the key to walk a cell.
   e.stopPropagation();
   (exit === "after" ? afterRows : beforeRows).value?.focus();
+}
+
+/// Several rows selected: ↑ and ↓ move among them and keep them all
+/// selected, so a selection a re-sort scattered is easy to walk. The
+/// row moved to is the one picked, and the one Enter opens.
+function stepAmongSelected(e: KeyboardEvent): boolean {
+  const grid = vueGrid?.slickGrid;
+  if (!grid) return false;
+  const active = grid.getActiveCell();
+  const to = stepThroughSelection(e, active?.row ?? null, grid.getSelectedRows());
+  if (to == null) return false;
+  // In the capture phase, so the grid never selects the next row alone.
+  e.stopPropagation();
+  e.preventDefault();
+  // The event is suppressed, or the grid would select this row alone.
+  grid.setActiveCell(to, active?.cell ?? 0, false, false, true);
+  grid.scrollRowIntoView(to);
+  const data = rowData(to);
+  if (data) {
+    selectedRow.value = data;
+    sel.value = rowKey(data);
+    saveState();
+  }
+  return true;
 }
 
 /// Tab into the grid lands on the rows, where the arrows move: on the

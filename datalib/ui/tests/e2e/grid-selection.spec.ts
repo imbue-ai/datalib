@@ -211,6 +211,41 @@ test("Tab leaves the table's rows, and comes back to the selected one", async ({
   await expect.poll(() => isSelected(page, uuid), { message: "↓ moved on" }).toBe(false);
 });
 
+/// With several rows selected, ↓ and ↑ move among them alone and keep
+/// them all selected, as Lightroom's filmstrip does; the grid's own ↓
+/// selected the next row alone.
+test("the arrows move among several selected rows and keep them", async ({ page }) => {
+  await openTable(page);
+  await gridSettled(page);
+  const uuidAt = (row: number) =>
+    page.evaluate(
+      (r) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(r)!,
+      row,
+    );
+  const activeUuid = () =>
+    page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());
+  const [a, b] = [await uuidAt(1), await uuidAt(4)];
+  const between = await uuidAt(2);
+
+  await selectRowByUuid(page, a);
+  await actOnRowByUuid(page, b, (row) =>
+    row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
+  );
+  await expect.poll(() => isSelected(page, b), { message: "the ⌘-clicked row" }).toBe(true);
+  await expect.poll(activeUuid, { message: "the ⌘-click makes b active" }).toBe(b);
+
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(activeUuid, { message: "↑ skips the rows between" }).toBe(a);
+  expect(await isSelected(page, b), "and keeps b").toBe(true);
+  expect(await isSelected(page, between)).toBe(false);
+
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(activeUuid, { message: "the first stays put" }).toBe(a);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(activeUuid, { message: "↓ back to b" }).toBe(b);
+  expect(await isSelected(page, a), "a is still selected").toBe(true);
+});
+
 /// The list's results were buttons the arrows did not move between, and
 /// every one of them was a Tab stop.
 test("the arrows move the list's pick, and Tab leaves the list", async ({ page }) => {
