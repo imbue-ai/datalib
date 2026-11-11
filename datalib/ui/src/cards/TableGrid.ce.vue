@@ -98,8 +98,6 @@ const emit = defineEmits<{
   /// An in-place edit of an `editable` cell was committed. The card
   /// decides what it means; the value never lands in the row.
   edit: [row: T, field: string, value: string];
-  /// A `markdown_uuid` cell was clicked.
-  openDocument: [uuid: string];
   /// A tree row was opened or closed.
   rowGroupOpened: [row: T, expanded: boolean];
   /// A movable row was dropped above `before`, a sibling of it, or
@@ -250,7 +248,6 @@ function buildColumns(): Column<T>[] {
     tree: props.tree,
     actions: props.actions,
     onMembership: props.membership,
-    onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
     chips: props.chips,
   }).map((c, i) =>

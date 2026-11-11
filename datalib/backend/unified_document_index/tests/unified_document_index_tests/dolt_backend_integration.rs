@@ -238,8 +238,8 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     insert_rows(&writer, &[chat_row("c-1", "chats/c-1.md"), message]).await;
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
+         renderer_version, title) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1','Test conv')",
     )
     .execute(&writer)
     .await
@@ -248,6 +248,12 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
+    // The chat's row and its message's both carry the document's title.
+    assert!(
+        rows.iter()
+            .all(|r| r.document_title.as_deref() == Some("Test conv")),
+        "{rows:?}"
+    );
     // Newest first: the message came a minute after the chat began.
     assert_eq!(rows[0].kind, "User Input");
     assert_eq!(rows[1].kind, "Chat");
@@ -902,9 +908,21 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
+    for (_t, ddl) in GRID_DDL
+        .iter()
+        .chain(MARKDOWNS_DDL.iter())
+        .chain(PROBLEMS_DDL.iter())
+    {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
+    sqlx::query(
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+         renderer_version, title) \
+         VALUES ('md-1','slack','slack','thread','slack/md-1.md','test-v1','Away team')",
+    )
+    .execute(&writer)
+    .await
+    .expect("insert markdown row");
     let row = ProblemRow::new(
         "slack",
         Stage::GridRow,
@@ -926,7 +944,8 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         all,
         vec![LocatedProblem {
             row: row.clone(),
-            markdown_uuid: Some("md-1".into())
+            markdown_uuid: Some("md-1".into()),
+            document_title: Some("Away team".into()),
         }]
     );
     assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);

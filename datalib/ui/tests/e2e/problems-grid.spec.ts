@@ -145,10 +145,10 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
   expect(new Set(kept.map((r) => r.severity))).toEqual(new Set([target.severity]));
 });
 
-/// A Document cell is a link, and one click on it opens the document
-/// beside the grid. It used to swallow the click and do nothing, so only
-/// the row's double-click — a whole new window — reached the document.
-test("a Document link opens its document beside the grid on one click", async ({
+/// A Document cell is the document's chip, by its title rather than its
+/// uuid, and a double-click on it opens the document beside the grid,
+/// in this window.
+test("a Document chip names its document and opens it beside the grid", async ({
   page,
   request,
 }) => {
@@ -165,8 +165,15 @@ test("a Document link opens its document beside the grid on one click", async ({
   await actOnRowByUuid(
     page,
     problem_uuid,
-    (row) => row.locator('[col-id="markdown_uuid"] a.tg-link').click({ timeout: 3_000 }),
-    "markdown_uuid",
+    async (row) => {
+      const chip = row.locator('[col-id="document_ref"] a.chip[data-doc]');
+      await expect(chip).toHaveAttribute("data-doc", `datalib:doc/${markdown_uuid}`, {
+        timeout: 3_000,
+      });
+      await expect(chip).not.toContainText(markdown_uuid!);
+      await chip.dblclick({ timeout: 3_000 });
+    },
+    "document_ref",
   );
   await expect(cardOf(page, `documentView(${JSON.stringify(markdown_uuid)}`)).toBeVisible({
     timeout: 10_000,

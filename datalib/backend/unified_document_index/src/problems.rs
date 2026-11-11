@@ -21,6 +21,10 @@ pub enum ProblemColumn {
     SourceRef,
     Stage,
     Reason,
+    /// The reason in words (`Not Found`).
+    ReasonLabel,
+    /// The document drawn as its chip.
+    DocumentRef,
     /// What a problem with no document is about — a listing, a
     /// configured entry, a raw record — in words.
     About,
@@ -65,6 +69,7 @@ impl View for ProblemColumn {
             ProblemColumn::SourceRef => same(P::SourceId),
             ProblemColumn::Stage => same(P::Stage),
             ProblemColumn::Reason => same(P::Reason),
+            ProblemColumn::ReasonLabel => same(P::Reason),
             // Words read off the scope key, so sorted and kept by it.
             ProblemColumn::About => same(P::ScopeKey),
             ProblemColumn::Field => same(P::Field),
@@ -72,6 +77,7 @@ impl View for ProblemColumn {
             // The document a markdown-scoped problem is about is its
             // scope key.
             ProblemColumn::MarkdownUuid => same(P::ScopeKey),
+            ProblemColumn::DocumentRef => same(P::ScopeKey),
             ProblemColumn::Outcome => same(P::Outcome),
             ProblemColumn::Rule => same(P::Rule),
             ProblemColumn::ItemUuid => same(P::ItemUuid),

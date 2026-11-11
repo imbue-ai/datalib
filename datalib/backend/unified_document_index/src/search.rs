@@ -114,6 +114,14 @@ pub struct SearchRow {
     /// index.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subject_ref: Vec<datalib_columns::Identity>,
+    /// The title of the document the row is in (`markdowns.title`), the
+    /// heading its page opens with. Read beside the row.
+    #[serde(skip)]
+    pub document_title: Option<String>,
+    /// The Document cell: the document as its chip, by its title.
+    /// Resolved by the applet; never read from the index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_ref: Option<datalib_columns::Identity>,
     /// What a `from:` term names this row's author by: the handle where
     /// there is one, else the name shown. What the Author cell's Keep
     /// only writes. Resolved by the applet; never read from the index.

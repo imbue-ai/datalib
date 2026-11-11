@@ -1304,10 +1304,20 @@ function presetColumns(): Set<string> | null {
 // column worth reading.
 function adaptiveFields(): [string, keyof SearchRow][] {
   const allowed = presetColumns();
-  if (!allowed) return Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][];
-  return [...allowed]
-    .filter((c) => c !== "snippet")
-    .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)]);
+  const listed: [string, keyof SearchRow][] = allowed
+    ? [...allowed]
+        .filter((c) => c !== "snippet")
+        .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)])
+    : (Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][]);
+  // A column its producer says repeats itself is compared on the value
+  // its search names, the id behind the label.
+  const declared = columns.value
+    .filter((c) => c.hide_when_uniform && !listed.some(([id]) => id === c.field))
+    .map((c): [string, keyof SearchRow] => [
+      c.field,
+      (c.search?.field ?? c.field) as keyof SearchRow,
+    ]);
+  return [...listed, ...declared];
 }
 
 function stringifyForCompare(v: unknown): string {
@@ -1624,7 +1634,6 @@ watch(
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
-      onOpenDocument: (_uuid, row) => pickAndOpen(row),
       picture: thumbnailUrl,
       groupable: true,
       chips: {
@@ -2203,9 +2212,9 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   saveState();
 }
 
-/// A Document cell's link: a link opens on one click, so the row is
-/// picked, as a click on the row picks it, and its document opens
-/// beside the grid — again, too, when it has been closed.
+/// A Document chip's double-click: the row is picked, as a click on the
+/// row picks it, and its document opens beside the grid at the row's
+/// own section — again, too, when it has been closed.
 function pickAndOpen(data: Row) {
   if (!vueGrid) return;
   const selected = selectedRows();
@@ -2281,22 +2290,19 @@ function onClick(_e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
-  // A document link's first click already opened the document beside
-  // the grid; the second is not a request to open it again.
-  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  if (target?.closest?.("a.tg-link")) {
-    e.stopImmediatePropagation();
-    return;
-  }
   // Double-click on a chip opens its card: a person's, led by this
-  // row's source, or a group's dashboard or a step's log
-  // (docs/dev/chips.md § Clicks).
+  // row's source, a group's dashboard, a step's log, or the row's
+  // document at the row (docs/dev/chips.md § Clicks).
   const el = chipAt(e);
   const chip = el ? chipOf(el) : null;
   if (!chip) return;
   e.stopImmediatePropagation();
-  const seenIn = rowData(args.row)?.source_id || null;
-  const source = chipCardSource(chip.ref, seenIn);
+  const data = rowData(args.row);
+  if (chip.ref.kind === "document" && data) {
+    pickAndOpen(data);
+    return;
+  }
+  const source = chipCardSource(chip.ref, data?.source_id || null);
   if (source) props.ctx.host.openCards(source);
 }
 

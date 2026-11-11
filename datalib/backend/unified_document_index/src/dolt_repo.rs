@@ -109,6 +109,17 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
     }
     add_contact_handles(at, by_uuid.values_mut()).await?;
     add_subject_people(at, by_uuid.values_mut()).await?;
+    let docs: Vec<String> = by_uuid
+        .values()
+        .filter_map(|r| r.markdown_uuid.clone())
+        .collect();
+    let titles = at.document_titles(&docs).await?;
+    for row in by_uuid.values_mut() {
+        row.document_title = row
+            .markdown_uuid
+            .as_ref()
+            .and_then(|d| titles.get(d).cloned());
+    }
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
 }
 
@@ -357,6 +368,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
         contact_ref: None,
         subject_people: Vec::new(),
         subject_ref: Vec::new(),
+        document_title: None,
+        document_ref: None,
         author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
@@ -653,7 +666,7 @@ impl At {
             .filter_map(|r| r.item_uuid.clone())
             .collect();
         let documents = self.documents_of(&items).await?;
-        Ok(rows
+        let located: Vec<(ProblemRow, Option<String>)> = rows
             .into_iter()
             .map(|row| {
                 let markdown_uuid = match row.scope_kind {
@@ -663,9 +676,47 @@ impl At {
                         .as_ref()
                         .and_then(|item| documents.get(item).cloned()),
                 };
-                LocatedProblem { row, markdown_uuid }
+                (row, markdown_uuid)
+            })
+            .collect();
+        let docs: Vec<String> = located.iter().filter_map(|(_, d)| d.clone()).collect();
+        let titles = self.document_titles(&docs).await?;
+        Ok(located
+            .into_iter()
+            .map(|(row, markdown_uuid)| LocatedProblem {
+                document_title: markdown_uuid.as_ref().and_then(|d| titles.get(d).cloned()),
+                row,
+                markdown_uuid,
             })
             .collect())
+    }
+
+    /// The title of each of `documents` that has one (`markdowns.title`).
+    async fn document_titles(
+        &mut self,
+        documents: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError> {
+        if documents.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted = serde_json::to_string(documents)
+            .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
+        let sql = format!(
+            "SELECT markdown_uuid, title FROM {} \
+             WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+               AND title IS NOT NULL AND title != ''",
+            self.markdowns
+        );
+        // Audited: the table name is a literal; the uuids are one bound array.
+        match sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(wanted)
+            .fetch_all(&mut *self.tx)
+            .await
+        {
+            Ok(rows) => Ok(rows.into_iter().collect()),
+            Err(e) if is_missing_table(&e, "markdowns") => Ok(std::collections::HashMap::new()),
+            Err(e) => Err(RepoError::Internal(format!("read document titles: {e}"))),
+        }
     }
 
     /// The document each of `uuids` is a row of, for the ones the
