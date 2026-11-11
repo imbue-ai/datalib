@@ -330,9 +330,15 @@ a day. Ask the record of when the download looked instead:
 
 A first sync of a large source can take hours: a whole Gmail mailbox
 goes at about 80 messages a minute, which is Google's quota. To have
-something useful in minutes, sync a short window first, then widen it.
-Each record is still fetched once, because a source owes what its listing
+something useful in minutes, sync a short window first, then widen it in
+two or three stages: a few days, then a month, then everything. Each
+record is still fetched once, because a source owes what its listing
 names and its store does not hold.
+
+The middle stage is worth its extra step. A backfill fetches newest
+first either way, but a stage that ends gives your app a seal and a
+"done" it can check, so it knows when the last month is whole instead
+of guessing how far a long backfill has reached.
 
 This works for any source whose `since` backfills: Slack, Claude and
 ChatGPT, Gmail, Todoist and Garmin
@@ -360,10 +366,11 @@ the source still owes" for step 5, where it has one.
    mailbox's change history, so later syncs pick up new mail, archives
    and relabels for a few quota units.
 
-3. **Widen the window.** Set `since` to what you want in the end
-   (`"-365d"`, a date, or remove it for the whole mailbox). See "Changing
-   the config while a sync runs": with no app up, let the open requests
-   finish first, or the loop runs the old params.
+3. **Widen the window to the next stage.** Set `since` to `"-30d"`, and
+   on the last stage to what you want in the end (`"-365d"`, a date, or
+   remove it for the whole mailbox). See "Changing the config while a
+   sync runs": with no app up, let the open requests finish first, or
+   the loop runs the old params.
 
 4. **Backfill without waiting for it.** File the sync and go on; older
    mail arrives newest first while your app works from what is there:
@@ -381,14 +388,15 @@ the source still owes" for step 5, where it has one.
 5. **Know when it is done:** the newest `sync_runs` row is `ok` and
    started after your edit, and the count in "What the source still owes"
    above is zero. A `listed_whole` row says nothing here, since the short
-   window's walk already wrote it.
+   window's walk already wrote it. Then go back to step 3 for the next
+   stage.
 
 A few things to keep in mind:
 
-- **Start narrow.** Widening backfills, but narrowing does not cancel
-  what a wider listing already owes.
-- **What you compute from history is over the short window** until the
-  backfill finishes (who the account has written to, where a thread
+- **Start narrow, and only widen.** Widening backfills, but narrowing
+  does not cancel what a wider listing already owes.
+- **What you compute from history is over the current stage's window**
+  until the last stage finishes (who the account has written to, where a thread
   starts). Work it out again when the mirror moves, as you would anyway.
 - **A kept message brings its whole thread** with `only_extract_labels`
   and `whole_threads`, so a short window can still bring in older mail.

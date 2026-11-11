@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SlickEvent, SlickEventData, type SlickGrid } from "@slickgrid-universal/common";
-import { openRowsOn, selectAllRowsOnKey } from "./rowIdioms";
+import { openRowsOn, selectAllRowsOnKey, stepThroughList, tabLeavesRows } from "./rowIdioms";
 
 type Line = { seq: number };
 
@@ -129,5 +129,47 @@ describe("select all", () => {
     selectAllRowsOnKey(slick, lineAt);
     grid.onKeyDown.notify({ row: 0, cell: 0 } as never, key("a"));
     expect(grid.getSelectedRows()).toEqual([]);
+  });
+});
+
+const press = (key: string, mods: Partial<KeyboardEvent> = {}) => ({
+  key,
+  shiftKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  altKey: false,
+  ...mods,
+});
+
+describe("Tab in a table's rows", () => {
+  it("leaves the table, forward or back, instead of walking the row's cells", () => {
+    expect(tabLeavesRows(press("Tab"))).toBe("after");
+    expect(tabLeavesRows(press("Tab", { shiftKey: true }))).toBe("before");
+  });
+  it("leaves every other key to the grid", () => {
+    expect(tabLeavesRows(press("ArrowDown"))).toBeNull();
+    expect(tabLeavesRows(press("Tab", { ctrlKey: true }))).toBeNull();
+  });
+});
+
+describe("the arrows in a list", () => {
+  it("move the pick one row, and stop at either end", () => {
+    expect(stepThroughList(press("ArrowDown"), 0, 3)).toBe(1);
+    expect(stepThroughList(press("ArrowDown"), 2, 3)).toBe(2);
+    expect(stepThroughList(press("ArrowUp"), 1, 3)).toBe(0);
+    expect(stepThroughList(press("ArrowUp"), 0, 3)).toBe(0);
+  });
+  it("start from the top when nothing is picked", () => {
+    expect(stepThroughList(press("ArrowDown"), -1, 3)).toBe(0);
+    expect(stepThroughList(press("ArrowUp"), -1, 3)).toBe(0);
+  });
+  it("jump to the ends on Home and End", () => {
+    expect(stepThroughList(press("Home"), 2, 3)).toBe(0);
+    expect(stepThroughList(press("End"), 0, 3)).toBe(2);
+  });
+  it("move nothing in an empty list, or with a modifier held", () => {
+    expect(stepThroughList(press("ArrowDown"), -1, 0)).toBeNull();
+    expect(stepThroughList(press("ArrowDown", { shiftKey: true }), 0, 3)).toBeNull();
+    expect(stepThroughList(press("Enter"), 0, 3)).toBeNull();
   });
 });

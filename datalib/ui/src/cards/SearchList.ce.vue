@@ -3,7 +3,7 @@
 // were typed marked, and the picked one read in place beside the list.
 // One of the Search card's two views (GridCard.ce.vue hosts it and owns
 // the query); the other is the table.
-import { onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import type { SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
@@ -27,6 +27,7 @@ import {
   type PagedWindow,
 } from "@/grid/pagedWindow";
 import { sortsBySize } from "@/grid/searchSort";
+import { stepThroughList, tabLeavesRows } from "@/grid/rowIdioms";
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -213,6 +214,56 @@ function openPicked() {
   if (src) props.ctx.host.openCards(src);
 }
 
+// The list is one stop for Tab, on the picked result; the arrows move
+// the pick, and Enter opens it, as they do in the table. Tab from a
+// result focuses one of these zero-size stops either side of the list,
+// and the browser's own Tab goes on from there, past the chips in the
+// results below it.
+const beforeList = useTemplateRef<HTMLElement>("beforeList");
+const afterList = useTemplateRef<HTMLElement>("afterList");
+
+function onListKey(e: KeyboardEvent) {
+  if (!(e.target as Element | null)?.closest?.(".sc-result")) return;
+  const exit = tabLeavesRows(e);
+  if (exit) return void (exit === "after" ? afterList : beforeList).value?.focus();
+  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+    if (!picked.value) return;
+    e.preventDefault();
+    openPicked();
+    return;
+  }
+  const at = results.value.findIndex((r) => r.uuid === picked.value?.uuid);
+  const to = stepThroughList(e, at, results.value.length);
+  if (to == null) return;
+  e.preventDefault();
+  if (e.key === "ArrowDown" && to === at && nextOffset.value != null) {
+    void more().then(() => pickAt(at + 1));
+    return;
+  }
+  pickAt(to);
+}
+
+/// Tab into the list from outside lands on the picked result, not on
+/// a chip in one (a chip is a link, so the browser stops on each).
+function onListFocus(e: FocusEvent) {
+  const el = e.target as HTMLElement;
+  const inResult = el.closest?.(".sc-result") && !el.classList.contains("sc-result");
+  if (!inResult || !el.matches(":focus-visible")) return;
+  const at = results.value.findIndex((r) => r.uuid === picked.value?.uuid);
+  pickAt(Math.max(at, 0));
+}
+
+function pickAt(i: number) {
+  const row = results.value[i];
+  if (!row) return;
+  picked.value = row;
+  void nextTick(() => {
+    const el = rowsEl.value?.querySelectorAll<HTMLElement>(".sc-result")[i];
+    el?.focus();
+    el?.scrollIntoView({ block: "nearest" });
+  });
+}
+
 function title(row: SearchRow): string {
   return row.conversation_name || row.channel || row.kind || "Untitled";
 }
@@ -287,11 +338,19 @@ onBeforeUnmount(() => {
     <p v-if="notice" class="sc-notice">{{ notice }}</p>
 
     <div class="sc-main" :data-shown-query="shownQuery">
-      <ul ref="rowsEl" class="sc-list" aria-label="Results">
+      <span ref="beforeList" class="sc-edge" tabindex="-1" />
+      <ul
+        ref="rowsEl"
+        class="sc-list"
+        aria-label="Results"
+        @keydown="onListKey"
+        @focusin="onListFocus"
+      >
         <li v-for="r in results" :key="r.uuid">
           <button
             class="sc-result"
             :class="{ 'is-picked': picked?.uuid === r.uuid }"
+            :tabindex="(picked ?? results[0])?.uuid === r.uuid ? 0 : -1"
             @click="picked = r"
             @dblclick="openPicked"
           >
@@ -337,6 +396,7 @@ onBeforeUnmount(() => {
           Nothing matches. Try fewer words.
         </li>
       </ul>
+      <span ref="afterList" class="sc-edge" tabindex="-1" />
       <section class="sc-preview" aria-label="Preview">
         <p v-if="!picked" class="sc-empty">Pick a result to read it here.</p>
         <div ref="previewEl" class="sc-preview-body" />
@@ -393,6 +453,12 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
+}
+.sc-edge {
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  outline: none;
 }
 .sc-list {
   flex: 0 0 min(440px, 42%);

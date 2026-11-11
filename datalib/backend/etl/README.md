@@ -509,6 +509,14 @@ pub const LADDER: &[Migration] = &[Migration {
 }];
 ```
 
+**A long rung says which statement it is on.** A rung that touches
+every row of a big store can run for many minutes, and a person
+watching has only the step's status to go on. The open already says
+which rung, from which version to which, and the store's size; a rung
+of several statements runs them through `doltlite_raw::run_statements`,
+each a `Statement { what, sql }`, so the status also says which one
+(email's `SEEN_INTO_READ_MARKS`).
+
 A rung may read the old shape through `dolt_at_<table>('HEAD')` and
 write the new one, and it clears a cursor table itself (`DELETE FROM
 sync_scope_state`) when the change alters what the cursor means. The
