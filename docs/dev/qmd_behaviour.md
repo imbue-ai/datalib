@@ -256,6 +256,12 @@ does not carry over to `createStore()` without being re-measured.
 
 ## What the shipped steps do with these
 
+The same steps also fill the search index that is to replace qmd's
+(`docs/dev/plans/search_index_from_ram.md`): `keyword_index` after qmd's
+update, and `embed` after qmd's embed when the config sets
+`embed_search_index`, and the aggregator sweeps it. Nothing below is
+about that index.
+
 `qmd_aggregator` keeps the collection set to the sources it reads and
 indexes nothing. Each source has a `keyword_index` step (registers its
 own collection, then `update({collections:[g]})`, finding 1) and an

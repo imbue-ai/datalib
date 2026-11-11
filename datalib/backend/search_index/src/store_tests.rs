@@ -255,3 +255,18 @@ async fn an_index_in_another_shape_is_emptied_and_one_in_this_shape_kept() {
         Some(datalib_store_meta::StoreKind::SearchIndex)
     );
 }
+
+/// A source taken out of the config leaves the index, and the hashes
+/// the cache keeps on a sweep are the ones still named.
+#[tokio::test]
+async fn a_source_no_longer_configured_leaves_and_takes_its_hashes() {
+    let (_dir, index) = open().await;
+    let mut chat = doc("c1", "h9", "Chat", &[(Some("x"), "hello there")]);
+    chat.source_id = "chat".into();
+    index.put(&[thread("h1"), chat]).await.unwrap();
+    assert_eq!(index.keep_sources(&["mail".to_string()]).await.unwrap(), 1);
+    assert!(index.indexed("chat").await.unwrap().is_empty());
+    let hashes = index.all_hashes().await.unwrap();
+    assert!(!hashes.contains(&crate::chunk::chunk_hash("Chat", "hello there")));
+    assert_eq!(hashes.len(), index.chunks("mail").await.unwrap().len());
+}

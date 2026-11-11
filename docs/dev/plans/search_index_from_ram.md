@@ -1,6 +1,6 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 to 5 of "Order of work" are
+**Status: proposal (2026-11-11). Steps 1 to 5 and 7 of "Order of work" are
 built (`//datalib/backend/search_index`), and step 3
 (`//datalib/backend/embedder`); the rest is not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
@@ -409,8 +409,11 @@ that matched. Meaning search fills back in over the first day.
    a heading starts a chunk.
 6. The search tables move into the grid index's file; each owner empties
    only its own tables on a change of shape.
-7. `keyword_index` and `embed` write the new index, embedding in
-   process; the aggregator drops a removed source's rows.
+7. Built, beside qmd's: `keyword_index` writes the new index after qmd's
+   update; `embed` fills the inference cache after qmd's embed, only
+   where the config sets `embed_search_index` (off by default, since
+   search does not read it yet); the aggregator drops a source it no
+   longer reads and sweeps the cache (`datalib_step/src/search_index.rs`).
 8. Search reads the new index and embeds a query in process;
    `search_eval.py` against qmd.
 9. Retire qmd's update and embed, `qmd_sdk.mjs`, its tables and the

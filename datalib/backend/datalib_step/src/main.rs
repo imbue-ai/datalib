@@ -31,6 +31,7 @@ mod render_diff;
 #[cfg(test)]
 mod render_model_test;
 mod reset;
+mod search_index;
 mod source;
 mod source_docs;
 mod source_type;

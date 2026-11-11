@@ -23,6 +23,6 @@ definitions, and run the embedder's tests. Moving away from qmd's
 release means the parity test compares against a different engine, so
 say in the change what moved.
 
-**Not shipped yet.** No released binary links it, so
-`scripts/third_party_notices.sh` does not carry its notice; the change
-that links it into one adds it.
+**Shipped in `datalib-step`.** `//third-party:bundled_licenses` carries
+its license, and the header of llamafile's `sgemm.cpp` (Mozilla's
+copyright), into a release's `licenses/llama.cpp/`.

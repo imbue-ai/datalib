@@ -200,4 +200,7 @@ cc_library(
     deps = [":ggml"],
 )
 
-exports_files(["LICENSE"])
+exports_files([
+    "LICENSE",
+    "ggml/src/ggml-cpu/llamafile/sgemm.cpp",
+])

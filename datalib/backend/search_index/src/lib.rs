@@ -15,7 +15,7 @@ mod store;
 
 pub use cache::InferenceCache;
 pub use owed::{owed, Owed};
-pub use store::Index;
+pub use store::{ChunkSpan, Index};
 
 /// A rendered document, its sections in order. Laid end to end, the
 /// sections' texts are the document; every offset the index stores is a

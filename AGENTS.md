@@ -275,6 +275,13 @@ datalib/
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
                    and the applet.
+    search_index/  the search index that replaces qmd's storage: keyword
+                   rows per message, chunks keyed by their prompt's hash,
+                   and the inference cache of vectors, holding no text
+                   (docs/dev/plans/search_index_from_ram.md).
+    embedder/      text to vectors in process: llama.cpp
+                   (third-party/llama_cpp) behind a small C shim, on
+                   Metal on a mac. Tested against qmd itself.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     sql_guard/     reads SQL a caller wrote, and nothing else: a

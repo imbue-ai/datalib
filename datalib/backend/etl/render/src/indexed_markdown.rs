@@ -838,6 +838,17 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Every `markdowns` row, ordered by id: what the search index reads to
+    /// learn which documents it owes and where their sections lie.
+    pub fn markdown_rows(&self) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
+        blocking(async {
+            sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
+                .fetch_all(&self.pool)
+                .await
+                .context("read markdowns")
+        })
+    }
+
     /// Every document this store holds. The other half of a sweep: a
     /// renderer that walked its whole raw store says what should be here,
     /// and whatever else is here is what the store lost.
