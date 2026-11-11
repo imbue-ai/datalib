@@ -897,6 +897,15 @@ own layout shape and decodes to nothing when it cannot be read.
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when settled, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
 
+Beside its type a column can say how it is laid out: `width`, the
+pixels it starts at where its type's usual width is wrong for what it
+holds (the problems grid's one-chip Severity, its Detail); and
+`hide_when_uniform`, which has `GridCard` hide it while every row it
+holds has the same value in it and show it again when they differ — the
+problems grid's Source, which a source's own problems would repeat on
+every line. It compares the value the column's search names (the id),
+not its label.
+
 The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
 viewer decides what the icon token looks like. An action is an *id*,

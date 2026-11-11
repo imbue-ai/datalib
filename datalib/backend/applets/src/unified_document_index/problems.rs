@@ -256,7 +256,9 @@ pub fn columns() -> Vec<ColumnSpec> {
         ColumnSpec::new("reason_label", "Reason", ColumnType::Text)
             .describe("Why, in a word or two: Not Found, Access Denied, Coercion Failed.")
             .width(130),
-        ColumnSpec::new("source_ref", "Source", ColumnType::Identity),
+        // The Manage screen opens one source's problems: the same name on
+        // every line says nothing.
+        ColumnSpec::new("source_ref", "Source", ColumnType::Identity).hide_when_uniform(),
         ColumnSpec::new("first_seen_at_utc", "First seen", ColumnType::Timestamp),
         ColumnSpec::new("changed_at_utc", "Last changed", ColumnType::Timestamp),
         ColumnSpec::new("stage", "Stage", ColumnType::Text)
@@ -765,6 +767,22 @@ mod tests {
             Some(("reason".into(), "reason".into()))
         );
         assert_eq!(search("sample"), None);
+    }
+
+    /// One source's problems repeat its name on every line, so the
+    /// problems grid hides Source while they do; the search grid, whose
+    /// `source:` searches read that column, keeps it.
+    #[test]
+    fn only_the_problems_source_hides_when_it_repeats() {
+        let hides = |specs: Vec<ColumnSpec>| {
+            specs
+                .into_iter()
+                .filter(|c| c.hide_when_uniform)
+                .map(|c| c.field)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(hides(columns()), ["source_ref"]);
+        assert!(hides(super::super::columns::columns()).is_empty());
     }
 
     /// Every spec names a key the row serializes, and every serialized

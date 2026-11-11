@@ -1278,9 +1278,6 @@ const ADAPTIVE_FIELDS: Record<string, keyof SearchRow> = {
   touched_at: "touched_at",
   author_ref: "author",
   contact_ref: "contact",
-  // Every row from one source — a `source:` search, or the problems of
-  // one — says the same thing on every line.
-  source_ref: "source_id",
   account: "account",
 };
 
@@ -1305,10 +1302,20 @@ function presetColumns(): Set<string> | null {
 // column worth reading.
 function adaptiveFields(): [string, keyof SearchRow][] {
   const allowed = presetColumns();
-  if (!allowed) return Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][];
-  return [...allowed]
-    .filter((c) => c !== "snippet")
-    .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)]);
+  const listed: [string, keyof SearchRow][] = allowed
+    ? [...allowed]
+        .filter((c) => c !== "snippet")
+        .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)])
+    : (Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][]);
+  // A column its producer says repeats itself is compared on the value
+  // its search names, the id behind the label.
+  const declared = columns.value
+    .filter((c) => c.hide_when_uniform && !listed.some(([id]) => id === c.field))
+    .map((c): [string, keyof SearchRow] => [
+      c.field,
+      (c.search?.field ?? c.field) as keyof SearchRow,
+    ]);
+  return [...listed, ...declared];
 }
 
 function stringifyForCompare(v: unknown): string {

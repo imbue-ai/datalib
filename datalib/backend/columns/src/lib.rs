@@ -120,6 +120,12 @@ pub struct ColumnSpec {
     /// reads. Absent, the viewer sizes it by its type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<u16>,
+    /// The viewer hides the column while every row it holds has the same
+    /// value in it, and shows it again when they differ: a column that
+    /// would repeat one word down the page, such as the source of a
+    /// source's own problems.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hide_when_uniform: bool,
 }
 
 /// The key a term on this column starts with (`author:`), and the row
@@ -216,6 +222,10 @@ fn yes() -> bool {
     true
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 impl ColumnSpec {
     pub fn new(field: &str, header: &str, r#type: ColumnType) -> Self {
         ColumnSpec {
@@ -228,6 +238,7 @@ impl ColumnSpec {
             search: None,
             badges: None,
             width: None,
+            hide_when_uniform: false,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -248,6 +259,10 @@ impl ColumnSpec {
     }
     pub fn width(mut self, px: u16) -> Self {
         self.width = Some(px);
+        self
+    }
+    pub fn hide_when_uniform(mut self) -> Self {
+        self.hide_when_uniform = true;
         self
     }
 }

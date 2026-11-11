@@ -1225,6 +1225,8 @@ export type ColumnSpec = {
   badges?: string;
   // Pixels the column starts at, where its type's usual width is wrong.
   width?: number;
+  // Hidden while every row holds the same value in it.
+  hide_when_uniform?: boolean;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
