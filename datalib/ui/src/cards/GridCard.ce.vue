@@ -100,7 +100,7 @@ import {
   type FilterEntry,
 } from "@/grid/query";
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
-import { newlyPicked } from "@/grid/selection";
+import { keptSelection, newlyPicked, rowsToRestore } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
 import { openRowsOn, selectAllRowsOnKey, tabLeavesRows } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
@@ -1170,7 +1170,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
   total.value = grouped.groups.reduce((n, g) => n + g.count, 0);
   if (kind === "new") {
     handed = handedOf(items, rowKey);
-    vueGrid.dataset = items;
+    asOwnChange(() => (vueGrid!.dataset = items));
     vueGrid.slickGrid.scrollRowIntoView(0);
     refreshQmdState();
   } else {
@@ -1183,6 +1183,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
       refreshQmdState();
     } else askAboutVisibleRows();
   }
+  restoreKept();
   tryRestoreSelection();
   loadGroupsInView();
 }
@@ -1253,7 +1254,7 @@ function tryRestoreSelection() {
   const row = vueGrid.dataView.getRowById(target_sel);
   if (row == null) return;
   restoring = true;
-  vueGrid.slickGrid.setSelectedRows([row]);
+  restoreKept();
   vueGrid.slickGrid.scrollRowIntoView(row);
   selectedRow.value = target;
   restoring = false;
@@ -1361,7 +1362,7 @@ function showNew() {
   if (!vueGrid || !win) return;
   handed = handedOf(win.rows, rowKey);
   const shownRows = display(win.rows);
-  vueGrid.dataset = shownRows;
+  asOwnChange(() => (vueGrid!.dataset = shownRows));
   applyAdaptiveVisibility();
   // Newest at the bottom for the default order, the top row otherwise;
   // then at now, for an order by a date, unless a selection is wanted.
@@ -1369,6 +1370,7 @@ function showNew() {
     vueGrid.slickGrid.scrollRowIntoView(shown?.tail ? shownRows.length - 1 : 0);
   if (!seekingSelection) void goToNow();
   tryRestoreSelection();
+  restoreKept();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
   refreshQmdState();
@@ -1384,6 +1386,7 @@ function showChanged(indexMoved: boolean) {
   handed = next.handed;
   applyPatch(next.patch, display(win.rows));
   tryRestoreSelection();
+  restoreKept();
   if (indexMoved) refreshQmdState();
   else askAboutVisibleRows();
   loadWanted();
@@ -1400,14 +1403,16 @@ function applyPatch(patch: RowPatch<Row>, order: Row[]) {
   const anchor = anchorRow ? rowKey(anchorRow) : null;
   const position = new Map(order.map((r, i) => [rowKey(r), i]));
   keepActiveOnRecord(grid, dataView, () => {
-    redrawChanged(grid, dataView, () => {
-      dataView.beginUpdate();
-      for (const id of patch.removed) dataView.deleteItem(id);
-      for (const row of patch.changed) dataView.updateItem(rowKey(row), row);
-      for (const row of patch.added) dataView.addItem(row);
-      dataView.sort((a, b) => position.get(rowKey(a))! - position.get(rowKey(b))!);
-      dataView.endUpdate();
-    });
+    redrawChanged(grid, dataView, () =>
+      asOwnChange(() => {
+        dataView.beginUpdate();
+        for (const id of patch.removed) dataView.deleteItem(id);
+        for (const row of patch.changed) dataView.updateItem(rowKey(row), row);
+        for (const row of patch.added) dataView.addItem(row);
+        dataView.sort((a, b) => position.get(rowKey(a))! - position.get(rowKey(b))!);
+        dataView.endUpdate();
+      }),
+    );
     const moved = anchor ? dataView.getRowById(anchor) : undefined;
     if (moved != null && moved !== top) grid.scrollRowToTop(moved);
   });
@@ -1960,6 +1965,10 @@ function gridOptions(): GridOption {
     enableSelection: true,
     multiSelect: true,
     selectionOptions: { selectActiveRow: true },
+    // The card keeps the selection across new rows itself (`kept`): the
+    // grid's own keeping holds on to a row a search hid even after a
+    // plain click asked for one row alone.
+    dataView: { syncGridSelection: false },
     // The server sorts: a shift-click adds a column, numbered by how it
     // ranks, and each breaks the ties of the one before.
     enableSorting: true,
@@ -2190,12 +2199,50 @@ function installSearchDrop() {
 
 /// The records selected as of the last change the grid reported.
 let selectedIds = new Set<string>();
+/// The records the person selected, kept across a re-sort, another
+/// search or a refresh, and selected again wherever they turn up
+/// (`keptSelection`). Starts as the selection the card's state carries.
+let kept = new Set<string>(sel.value ? [sel.value] : []);
+/// The last press in the grid held ⌘, Ctrl or Shift: it adds to the
+/// selection rather than replacing it.
+let adds = false;
+/// A selection change of the card's own making, by new rows or a
+/// restore, not the person's.
+let ownChange = false;
+
+function noteAdds(e: KeyboardEvent | PointerEvent) {
+  adds = e.metaKey || e.ctrlKey || e.shiftKey;
+}
+
+/// Select again the kept records the grid holds now.
+function restoreKept() {
+  if (!vueGrid) return;
+  const { dataView, slickGrid: grid } = vueGrid;
+  const rows = rowsToRestore(kept, (id) => dataView.getRowById(id), grid.getSelectedRows());
+  if (!rows) return;
+  asOwnChange(() => grid.setSelectedRows(rows));
+}
+
+function asOwnChange(change: () => void) {
+  ownChange = true;
+  try {
+    change();
+  } finally {
+    ownChange = false;
+  }
+}
 
 function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
   if (!vueGrid) return;
+  const { dataView } = vueGrid;
   const now = args.rows.map(rowData).filter((d): d is Row => d != null);
+  const fromPerson = !ownChange && !restoring;
+  if (fromPerson) {
+    kept = keptSelection(kept, now.map(rowKey), (id) => dataView.getRowById(id) != null, adds);
+  }
   const { picked, selected } = newlyPicked(selectedIds, now, rowKey);
   selectedIds = selected;
+  if (!fromPerson) return;
   const data = picked[picked.length - 1];
   if (!data) return;
   selectedRow.value = data;
@@ -2242,7 +2289,8 @@ function inRows(target: EventTarget | null): boolean {
   return !!el.closest(".slick-viewport") || el.parentElement === boxEl.value;
 }
 
-function tabOutOfRows(e: KeyboardEvent) {
+function onRowsKey(e: KeyboardEvent) {
+  noteAdds(e);
   const exit = inRows(e.target) ? tabLeavesRows(e) : null;
   if (!exit) return;
   // In the capture phase, so the grid never sees the key to walk a cell.
@@ -2493,7 +2541,8 @@ onBeforeUnmount(() => {
         <div
           class="grid"
           :class="{ 'grid--loading': loading, 'grid--stale': showingStale }"
-          @keydown.capture="tabOutOfRows"
+          @keydown.capture="onRowsKey"
+          @pointerdown.capture="noteAdds"
           @focusin="focusRowsOnEntry"
         >
           <div
