@@ -1,7 +1,8 @@
 # Our own search index, fed from memory
 
 **Status: proposal (2026-11-11). Steps 1 and 2 of "Order of work" are
-built (`//datalib/backend/search_index`); the rest is not.** Numbers were
+built (`//datalib/backend/search_index`), and step 3 on the CPU
+(`//datalib/backend/embedder`); the rest is not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
@@ -151,11 +152,26 @@ loaded model at a time.
 ### Embedding in Rust
 
 The steps embed in process, so progress, stopping and memory are ours to
-report and control rather than a node child's to relay. `candle` is
-already a dependency (perseus); embeddinggemma is a Gemma 3 model, and
-the pinned file is a Q8_0 GGUF, which candle's quantized loader reads.
-`llama-cpp-2`, which builds llama.cpp under Bazel, is the fallback if
-candle cannot run it fast enough. The query embedder in the search
+report and control rather than a node child's to relay.
+
+**What runs the model: llama.cpp, built from source.** It is what runs
+GGUF files, and what runs this one today: qmd 2.8.3's node-llama-cpp
+3.20.0 is built on llama.cpp release `b10361`. Pinning the same release
+gets its tokenizer, its `gemma-embedding` graph (bidirectional
+attention, the 512-token sliding window, mean pooling, the two dense
+layers) and its Q8_0 kernels, rather than a port of each that has to be
+proven equal. It is MIT, and builds under Bazel's `cc_library` as
+doltlite does, with a small hand-written binding to `llama.h` for what
+we call: load a model, tokenize, embed a batch. The CPU backend first;
+Metal after, if the measured rate asks for it.
+
+The alternative was `candle`, already a dependency through perseus. It
+would mean writing the `gemma-embedding` model and the GGUF tokenizer
+ourselves, and proving both equal to llama.cpp, for a pure-Rust build.
+
+The pinned GGUF holds everything the model needs: the architecture, the
+dense layers and the whole tokenizer (262,144 tokens with scores, BOS
+and EOS added, no space prefix). The query embedder in the search
 applet moves in process too, and node leaves search.
 
 **Each piece is tested against qmd itself**, from the vendored source
@@ -171,8 +187,35 @@ test:
 - the long-section cut, against `chunkDocument` on the same text with
   the same budget, where the break rules are meant to agree.
 
-Speed is measured against qmd's ~12 chunks/s on this mac before the
-switch; slower is a reason to try `llama-cpp-2`, not to keep node.
+**Built, on the CPU: `datalib/backend/embedder`**, a C shim over
+`llama.h` (`csrc/embedder.cpp`) and a Rust crate over it, with llama.cpp
+built by `third-party/llama_cpp/llama_cpp.BUILD`. `parity_test` runs
+qmd's own `formatDocForEmbedding`, `formatQueryForEmbedding`, tokenizer
+and `embed` through the pinned node and package, on made-up texts, and
+finds the prompts equal string for string, the tokens equal (ours add
+BOS and EOS where node-llama-cpp adds them after tokenizing), and the
+vectors equal to a cosine above 0.9999 on the CPU and above 0.999
+against qmd on Metal.
+
+**qmd embedded every input over 512 tokens wrongly.** node-llama-cpp
+gives an embedding context a batch of at most 512 tokens unless told
+otherwise (`getDefaultContextBatchSize`), qmd does not tell it, and
+llama.cpp then evaluates a longer input in 512-token pieces and pools
+only the last piece. embeddinggemma attends both ways, so the earlier
+tokens never see the later ones and the vector stands for the input's
+tail. qmd's chunks are up to 900 tokens, so most of its long chunks were
+embedded so. Ours takes the whole input in one batch; on a 761-token
+input the two agree to a cosine of 0.84, and evaluated in qmd's pieces
+ours reproduces qmd's to 0.9999
+(`qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only`). The
+re-embed the upgrade does anyway fixes them.
+
+**Rate on the CPU is too low; Metal is next.** 761-token inputs embed at
+2.5 a second on an M4's 10 cores (`measure_rate`, an ignored test),
+against qmd's ~12 a second with Metal. ggml's Metal backend
+(`ggml/src/ggml-metal`, with its shader library embedded in the binary)
+goes into the same build, used where the machine has it and checked
+against the CPU's vectors by the same tests.
 
 ### Search moving over
 
@@ -184,7 +227,15 @@ every vector held in memory. A hit carries its section, and
 **Not an ANN index, yet.** doltlite 0.51.3's amalgamation carries
 SQLite's `vec1` extension (an IVF index with product quantization,
 cosine or L2, version 0.7), compiled out unless the build sets
-`DOLTLITE_VEC1=1`; ours does not. Brute force over vectors in memory is
+`DOLTLITE_VEC1=1`; ours does not. What it does is in
+[`doltlite.md`](../doltlite.md) § "Vector search: vec1", each fact a
+test in `vec1_facts_test` against a test-only shell built with it. For
+this plan: a filter on a column of the vec1 table itself (a `source_id`
+carried there) is applied before the nearest are chosen, but a filter
+through another table's index, a `rowid IN (…)` or a join, is applied
+after, and loses rows; a trained index ranks by compressed codes and
+finds a filtered row only in the buckets it probes; and ranking by
+`vec1_l2_distance` over rows an ordinary index found is exact. Brute force over vectors in memory is
 exact and, at a million 768-wide vectors, about 0.7 billion
 multiply-adds a query, on the order of 0.1 s on one core (an estimate,
 not yet measured);
@@ -215,8 +266,9 @@ that matched. Meaning search fills back in over the first day.
 2. Built: `search_index`, with the schema, `IndexDoc` → sections and
    chunks, the owed comparison, put and remove, unit-tested on made-up
    documents.
-3. The embedder in Rust: load the pinned GGUF, qmd's prompt format, the
-   parity tests against qmd above, the speed measurement.
+3. The embedder in Rust: llama.cpp `b10361` under Bazel, a binding,
+   qmd's prompt format, the parity tests against qmd above. Built on the
+   CPU; the Metal backend is left, and its rate against qmd's.
 4. `markdowns.content_hash` in the render store.
 5. `keyword_index` and `embed` write the new index, embedding in
    process; the aggregator drops a removed source's rows.

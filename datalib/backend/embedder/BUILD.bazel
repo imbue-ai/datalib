@@ -1,0 +1,65 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Text to vectors in process, with llama.cpp (//third-party/llama_cpp)
+# running a GGUF embedding model. The search index's replacement for
+# `qmd embed` (docs/dev/plans/search_index_from_ram.md).
+cc_library(
+    name = "embedder_shim",
+    srcs = ["csrc/embedder.cpp"],
+    hdrs = ["csrc/embedder.h"],
+    copts = [
+        "-O2",
+        "-fPIC",
+    ],
+    cxxopts = ["-std=c++17"],
+    deps = ["@llama_cpp//:llama"],
+)
+
+rust_library(
+    name = "datalib_embedder",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_embedder",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":embedder_shim",
+        "@datalib_crates//:anyhow",
+    ],
+)
+
+rust_test(
+    name = "embedder_unittests",
+    size = "small",
+    crate = ":datalib_embedder",
+    edition = "2021",
+)
+
+# The embedder against qmd itself: the pinned qmd package run by the
+# pinned node, on the pinned model, on the same texts.
+rust_test(
+    name = "parity_test",
+    size = "medium",
+    srcs = ["tests/parity.rs"],
+    data = [
+        "tests/qmd_embed.mjs",
+        "@nodejs_host//:node_bin",
+        "//third-party/qmd/runtime:qmd_package_dir",
+        "//third-party/qmd/runtime:qmd_tree",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+        "QMD_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
+        "QMD_SCRIPT_RLOC": "$(rlocationpath tests/qmd_embed.mjs)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)
