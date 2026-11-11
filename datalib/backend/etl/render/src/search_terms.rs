@@ -280,7 +280,7 @@ fn placeholders(rows: usize, per_row: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid_index::{apply_one, delete_markdown, open_index, RenderedMarkdown, WriteLock};
+    use crate::grid_index::{apply_one, delete_markdowns, open_index, RenderedMarkdown, WriteLock};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
@@ -410,7 +410,7 @@ mod tests {
                 apply_one(&lock, &self.root, md).await.unwrap();
             }
             for md in remove {
-                delete_markdown(&lock, md).await.unwrap();
+                delete_markdowns(&lock, &[md.to_string()]).await.unwrap();
             }
             crate::grid_index::seal(&lock).await.unwrap();
         }

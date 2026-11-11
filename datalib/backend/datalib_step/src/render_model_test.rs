@@ -643,7 +643,7 @@ type StoreView = (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>);
 
 /// The render store at one commit, as documents, plus the `.md` files
 /// on disk, which must be exactly the documents' — a deleted document
-/// left on disk stays searchable (`remove_document`'s reason to exist).
+/// left on disk stays searchable (`remove_documents`' reason to exist).
 fn render_store_at(data_root: &Path, commit: Option<&str>) -> StoreView {
     try_render_store_at(data_root, commit).expect("a readable commit")
 }
