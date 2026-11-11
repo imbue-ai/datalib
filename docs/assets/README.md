@@ -11,8 +11,11 @@ app has no icon for:
   of the one `google_takeout` source, which the app shows as one entry.
 - `mission.svg`: the mission statement at the top of the README, drawn
   as an edited page. It is an image because GitHub's markdown can set
-  neither a font nor a colour; it carries its own paper background so it
-  reads the same in GitHub's light and dark themes.
+  neither a font nor a colour. The README shows `mission-light.png` and
+  `mission-dark.png`, not the SVG: the SVG names macOS fonts, and a
+  phone without them draws it with the wrong letters and spacing. After
+  editing the SVG, run `scripts/render_mission.sh` on a Mac to remake
+  both PNGs.
 
 Never a copy of an app icon: `scripts/lint_repo.py` (check 13) refuses a
 file here that shares a name with one there.
