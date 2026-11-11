@@ -58,3 +58,31 @@ export function selectAllRowsOnKey<T>(grid: SlickGrid, recordAt: (row: number) =
     grid.setSelectedRows(rows);
   });
 }
+
+type Keys = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "metaKey" | "altKey">;
+
+/// Where Tab sends the focus from a table's rows: past the whole table,
+/// ahead or behind, rather than from cell to cell along one row. The
+/// arrows move between rows. Null for any other key.
+export function tabLeavesRows(key: Keys): "after" | "before" | null {
+  if (key.key !== "Tab" || key.ctrlKey || key.metaKey || key.altKey) return null;
+  return key.shiftKey ? "before" : "after";
+}
+
+/// The index a list's arrow keys move its pick to, or null for a key
+/// that moves nothing. `at` is the pick's index, -1 for none.
+export function stepThroughList(key: Keys, at: number, length: number): number | null {
+  if (length === 0 || key.ctrlKey || key.metaKey || key.altKey || key.shiftKey) return null;
+  switch (key.key) {
+    case "ArrowDown":
+      return Math.min(at + 1, length - 1);
+    case "ArrowUp":
+      return Math.max(at - 1, 0);
+    case "Home":
+      return 0;
+    case "End":
+      return length - 1;
+    default:
+      return null;
+  }
+}

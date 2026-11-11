@@ -102,7 +102,7 @@ import {
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
 import { newlyPicked } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
-import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
+import { openRowsOn, selectAllRowsOnKey, tabLeavesRows } from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchNotices, type SearchEcho } from "@/grid/searchCoverage";
 import { registerSearchCard } from "@/search/searchCards";
@@ -237,6 +237,8 @@ shows the same results with every column, sorting and grouping: a click selects 
 (⌘ and Shift add to the selection, ⌘A takes them all), and a double-click, Enter or
 <b>Open document</b> on its right-click menu opens it. A new search opens on the one you
 picked last.</p>
+<p>In either view, ↑ and ↓ move from result to result, Enter opens the one picked, and Tab
+moves on past the results. In the table, F6 reaches the column headers.</p>
 `
     : null,
 );
@@ -2219,10 +2221,53 @@ function chipAt(e: SlickEventData): HTMLElement | null {
   return chipElAt(e.getNativeEvent<MouseEvent>()?.target);
 }
 
-function onClick(e: SlickEventData, args: OnClickEventArgs) {
-  // A chip is a link; a click on it selects the row and nothing more —
-  // the mail client its href would open is not what a click here asks.
-  if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
+/// A chip is a link, and a click on it selects its row and nothing more:
+/// the mail client its href would open is not what a click here asks.
+/// The grid has selected the row by the time the click bubbles up to its
+/// box; a click the grid sees already prevented selects nothing.
+function followNoChipLink(e: MouseEvent) {
+  if (chipElAt(e.target)) e.preventDefault();
+}
+
+// Zero-size stops either side of the grid. Tab from a row focuses one,
+// and the browser's own Tab goes on from there to what is past the grid.
+const beforeRows = ref<HTMLElement | null>(null);
+const afterRows = ref<HTMLElement | null>(null);
+
+/// The rows have the keyboard: a cell, or one of the grid's own focus
+/// holders, the box's only children that take focus.
+function inRows(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  if (!el?.closest) return false;
+  return !!el.closest(".slick-viewport") || el.parentElement === boxEl.value;
+}
+
+function tabOutOfRows(e: KeyboardEvent) {
+  const exit = inRows(e.target) ? tabLeavesRows(e) : null;
+  if (!exit) return;
+  // In the capture phase, so the grid never sees the key to walk a cell.
+  e.stopPropagation();
+  (exit === "after" ? afterRows : beforeRows).value?.focus();
+}
+
+/// Tab into the grid lands on the rows, where the arrows move: on the
+/// selected row, or the first in view. Without this it stops on every column
+/// header and its menu button, then on every chip in a cell (a chip is a
+/// link). F6 from the rows still reaches the headers.
+function focusRowsOnEntry(e: FocusEvent) {
+  const el = e.target as HTMLElement;
+  const grid = vueGrid?.slickGrid;
+  if (!grid || !el.matches?.(":focus-visible")) return;
+  const fromOutside = !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null);
+  const ontoChip = inRows(el) && !!chipElAt(el);
+  if (!ontoChip && !(fromOutside && !inRows(el))) return;
+  if (!grid.getActiveCell() && grid.getDataLength() > 0) {
+    grid.setActiveCell(grid.getSelectedRows()[0] ?? grid.getViewport().top, 0);
+  }
+  grid.focus("internal");
+}
+
+function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
@@ -2444,9 +2489,21 @@ onBeforeUnmount(() => {
              is built in (its theme's dark mode among them), and a Vue
              class binding on that same element would wipe them on every
              change. -->
-        <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
-          <div ref="boxEl" class="grid-box" @contextmenu.capture="notePointedChip" />
+        <span ref="beforeRows" class="focus-edge" tabindex="-1" />
+        <div
+          class="grid"
+          :class="{ 'grid--loading': loading, 'grid--stale': showingStale }"
+          @keydown.capture="tabOutOfRows"
+          @focusin="focusRowsOnEntry"
+        >
+          <div
+            ref="boxEl"
+            class="grid-box"
+            @click="followNoChipLink"
+            @contextmenu.capture="notePointedChip"
+          />
         </div>
+        <span ref="afterRows" class="focus-edge" tabindex="-1" />
         <div v-if="loading" class="grid-spinner" aria-label="searching">
           <div class="grid-spinner__ring" />
           <div class="grid-spinner__label">searching…</div>
@@ -2710,6 +2767,13 @@ onBeforeUnmount(() => {
 }
 .grid-box {
   height: 100%;
+}
+.focus-edge {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  outline: none;
 }
 .grid--loading {
   filter: blur(2px);

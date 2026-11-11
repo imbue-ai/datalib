@@ -245,7 +245,11 @@ run log draws its Group and Step columns as chips the same way
 `TableGrid` takes the option too, as the contacts app's table and the
 Sources table do: a double-click on a chip there opens its card
 (`openCard`) instead of the cell's in-place edit, and its right-click
-is still the row's menu. A group row of an identity column draws its
+is still the row's menu. In every grid a single click on a chip selects
+its row, as a click anywhere else in the row does. The chip's href is
+stopped by a click listener on the grid's box, which the click reaches
+after the grid has selected the row: SlickGrid selects nothing for a
+click already `preventDefault`ed when it sees it. A group row of an identity column draws its
 value as the chip of the group's first row, where the rows are loaded
 (`typedColumns.ts`), and the run log's Group and Step group rows draw
 theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
