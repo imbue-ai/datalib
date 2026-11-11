@@ -378,6 +378,9 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
             };
         Runner::new(root.as_path()).sink(sink).child_env(env.vars)
     });
+    if let Ok(runner) = &runner {
+        runner.plan(&checked.graph, &asked);
+    }
     for (i, step) in asked.iter().enumerate() {
         set(&|u| u.steps[i].state = PassState::Running);
         let answer = match &runner {

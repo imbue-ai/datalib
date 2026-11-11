@@ -223,9 +223,17 @@ which never end, keep sqlx's own `warn`.
 
 **A migration says so from its start.** A step asked to migrate first
 says `migrate: updating the raw store for this build; nothing is
-downloaded`, as a line and as its status, and each rung says `migrating
-the store: <its name>` before it runs and `migrated`, with its `ms`,
-after.
+downloaded`, as a line and as its status. Each rung then says, before
+it runs, where the climb starts and ends and how big the store is —
+`migrating the store (13.0 GB) from version 7 to 9, now version 8:
+<its name>` — and `migrated`, with its `ms`, after. A rung written as
+several statements says `migrating: statement 3 of 4: <what it does>`
+before each, and its status is the rung's line with `; statement 3 of
+4: <what it does>` after it. Every one of these is the step's status too, so the
+Manage row says which rung and statement is running
+(`datalib_store_meta::ladder::report_to`, set by `datalib-step`). The
+migrate run lists every step it will ask as `pending` before it asks
+the first, like any other run.
 
 **A render says where its time went.** Every render ends with one line
 of its `total_ms` and `write_ms`. A Claude Code or Codex render also

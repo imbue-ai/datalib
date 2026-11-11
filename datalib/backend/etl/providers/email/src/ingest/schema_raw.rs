@@ -599,9 +599,7 @@ async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<
             .execute(&mut *conn)
             .await?;
     }
-    for sql in MUTED_INTO_READ_MARKS {
-        sqlx::query(sql).execute(&mut *conn).await?;
-    }
+    dr::run_statements(&mut *conn, &MUTED_INTO_READ_MARKS).await?;
     let has_stamps: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
     )
@@ -627,9 +625,7 @@ async fn move_seen_into_read_marks(conn: &mut SqliteConnection) -> anyhow::Resul
             .execute(&mut *conn)
             .await?;
     }
-    for sql in SEEN_INTO_READ_MARKS {
-        sqlx::query(sql).execute(&mut *conn).await?;
-    }
+    dr::run_statements(&mut *conn, &SEEN_INTO_READ_MARKS).await?;
     Ok(())
 }
 
@@ -637,26 +633,49 @@ async fn move_seen_into_read_marks(conn: &mut SqliteConnection) -> anyhow::Resul
 /// set, never looked up per email: with no `ANALYZE` statistics SQLite may
 /// answer `k.email_id = e.id AND k.keyword = '$seen'` from the keyword
 /// index, walking every `$seen` row for each email.
-const SEEN_INTO_READ_MARKS: [&str; 4] = [
-    "INSERT OR REPLACE INTO read_marks (id, read_through, read)
+const SEEN_INTO_READ_MARKS: [dr::Statement; 4] = [
+    dr::Statement {
+        what: "a read mark for every email",
+        sql: "INSERT OR REPLACE INTO read_marks (id, read_through, read)
      SELECT e.id, NULL, e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')
        FROM emails e",
-    "DELETE FROM email_keywords WHERE keyword = '$seen'",
+    },
+    dr::Statement {
+        what: "removing $seen from the keywords",
+        sql: "DELETE FROM email_keywords WHERE keyword = '$seen'",
+    },
     // Through `json` and back, so the payload is the bytes a fresh
     // download writes and a re-fetch of the email changes nothing.
-    "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$seen\"')))
+    dr::Statement {
+        what: "removing $seen from every read email's payload",
+        sql: "UPDATE emails
+         SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$seen\"')))
       WHERE payload -> '$.keywords.\"$seen\"' IS NOT NULL",
-    "UPDATE emails SET label_ids = (SELECT json_group_array(value) FROM json_each(emails.label_ids)
+    },
+    dr::Statement {
+        what: "removing UNREAD from the Gmail labels",
+        sql: "UPDATE emails SET label_ids = (SELECT json_group_array(value) FROM json_each(emails.label_ids)
                                      WHERE value != 'UNREAD')
       WHERE EXISTS (SELECT 1 FROM json_each(emails.label_ids) WHERE value = 'UNREAD')",
+    },
 ];
 
-const MUTED_INTO_READ_MARKS: [&str; 3] = [
-    "UPDATE read_marks SET muted = 1
+const MUTED_INTO_READ_MARKS: [dr::Statement; 3] = [
+    dr::Statement {
+        what: "marking muted emails",
+        sql: "UPDATE read_marks SET muted = 1
       WHERE id IN (SELECT email_id FROM email_keywords WHERE keyword = '$muted')",
-    "DELETE FROM email_keywords WHERE keyword = '$muted'",
-    "UPDATE emails SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$muted\"')))
+    },
+    dr::Statement {
+        what: "removing $muted from the keywords",
+        sql: "DELETE FROM email_keywords WHERE keyword = '$muted'",
+    },
+    dr::Statement {
+        what: "removing $muted from every muted email's payload",
+        sql: "UPDATE emails
+         SET payload = jsonb(json(jsonb_remove(payload, '$.keywords.\"$muted\"')))
       WHERE payload -> '$.keywords.\"$muted\"' IS NOT NULL",
+    },
 ];
 
 pub fn full_ddl() -> Vec<String> {
@@ -756,7 +775,11 @@ mod tests {
     #[tokio::test]
     async fn the_read_mark_rungs_never_search_a_table_per_email() {
         let pool = store_with_full_ddl().await;
-        for sql in SEEN_INTO_READ_MARKS.iter().chain(&MUTED_INTO_READ_MARKS) {
+        for sql in SEEN_INTO_READ_MARKS
+            .iter()
+            .chain(&MUTED_INTO_READ_MARKS)
+            .map(|s| s.sql)
+        {
             let plan: Vec<(i64, i64, String)> =
                 sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
                     .fetch_all(&pool)
