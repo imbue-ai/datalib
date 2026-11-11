@@ -2268,6 +2268,7 @@ mod tests {
         row.qmd_path = Some(rel.clone());
         datalib_etl_render::grid_index::RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: row.uuid.clone(),
             source_id: source,
             upstream_cursor: None,

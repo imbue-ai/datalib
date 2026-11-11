@@ -9,8 +9,6 @@ use std::ptr::NonNull;
 
 use anyhow::{bail, Context, Result};
 
-pub mod format;
-
 mod ffi {
     use std::ffi::c_char;
 

@@ -369,6 +369,7 @@ mod tests {
             .unwrap();
         RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,

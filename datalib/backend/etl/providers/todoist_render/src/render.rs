@@ -374,6 +374,7 @@ pub fn build(
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

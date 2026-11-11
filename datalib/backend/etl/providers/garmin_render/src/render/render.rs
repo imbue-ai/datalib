@@ -155,6 +155,7 @@ impl Out<'_> {
         let rows = build_rows(&md_rel, &mut problems);
         (self.on_doc)(RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: m_uuid.to_string(),
             source_id: self.source_id.to_string(),
             // Not the raw HEAD: it moves on every ingest, and a row whose

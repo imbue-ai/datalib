@@ -169,6 +169,7 @@ fn render_one(
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact

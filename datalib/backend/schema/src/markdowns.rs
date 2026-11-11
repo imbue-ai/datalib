@@ -99,6 +99,11 @@ pub struct MarkdownRow {
     /// declares no sections.
     #[col(sql = "TEXT")]
     pub section_layout: Option<String>,
+    /// blake3 of the document's text, its sections end to end, as hex: what
+    /// the search index compares to learn whether it holds this rendering.
+    /// NULL from a renderer that declares no sections.
+    #[col(sql = "VARCHAR(64)")]
+    pub content_hash: Option<String>,
 }
 
 /// One piece of a document's `.md`: the `data-section-uuid` it wraps, or

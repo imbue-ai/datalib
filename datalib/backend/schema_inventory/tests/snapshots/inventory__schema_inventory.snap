@@ -1943,6 +1943,7 @@ markdowns
     renderer_version
     bucket_key
     section_layout
+    content_hash
 problems
     problem_uuid
     source_id

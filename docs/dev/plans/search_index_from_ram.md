@@ -1,6 +1,6 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 and 2 of "Order of work" are
+**Status: proposal (2026-11-11). Steps 1 to 5 of "Order of work" are
 built (`//datalib/backend/search_index`), and step 3
 (`//datalib/backend/embedder`); the rest is not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
@@ -45,7 +45,8 @@ the `data-section-uuid` the hit falls in.
   collection per source; each source's `keyword_index` and `embed` steps
   write that source's rows into it. The new index keeps that shape: one
   file, rows tagged with `source_id`, each source's steps writing only
-  their own. BM25's statistics stay global across sources, as now.
+  their own. BM25's statistics stay global across sources, as now. The
+  file becomes the grid index's ("One file with the grid index", below).
 - **The model and the prompt format**: the pinned embeddinggemma GGUF and
   qmd's `title: … | text: …` format, so vectors mean what they meant. What
   runs the model moves from node-llama-cpp into Rust ("Embedding in
@@ -55,9 +56,10 @@ the `data-section-uuid` the hit falls in.
 
 ## The index
 
-A new crate, `search_index`, owns one plain SQLite file in WAL mode
-(`unified_document_index/search_index/index.sqlite`), like the grid
-index: not doltlite, rebuilt from the render stores whenever it is lost.
+A new crate, `search_index`, owns its tables in one plain SQLite file in
+WAL mode: built in a file of its own, and moving into the grid index's
+("One file with the grid index", below). Not doltlite; rebuilt from the
+render stores whenever it is lost.
 Its input is a value, never a path:
 
 ```rust
@@ -88,10 +90,9 @@ Tables (no document text anywhere):
   use neither. `fts_facts_test` holds each fact on the SQLite we link,
   doltlite 0.51.3's.
 - `chunks(doc_id, seq, start_byte, end_byte, first_section,
-  last_section)`: what each embedded chunk covers.
-- `vectors(doc_id, seq, vector BLOB)`. Still to come with the embedder: a
-  one-row `embedding_model` naming the model pin and a fingerprint of the
-  chunker and the prompt format; a change to either empties `vectors`.
+  last_section, hash)`: what each embedded chunk covers.
+- `chunks.hash`: the hash of the prompt each chunk is embedded as. The
+  vectors are in the inference cache, below.
 
 A file in another shape is emptied under the write lock, so two steps
 opening an old index together empty it once.
@@ -127,6 +128,44 @@ inside itself, at the last paragraph, line, sentence or word break, and
 its pieces overlap by 540 bytes (qmd's 15%). Whole messages need no
 overlap. A hit then names its messages from `chunks`, and `land` reads
 no file.
+
+**A heading starts a chunk.** Packing never carries a chunk across a
+heading of level one or two, inside a message or between them, so an
+edit under one heading moves the chunks under that heading and no
+others. Without it, an edit that changes one section's length shifts
+every cut after it.
+
+### The inference cache
+
+A vector is the model's answer to one exact string, so it is cached
+under that: `chunks.hash` is the blake3 of the prompt the chunk is
+embedded as (`prompt::document`: qmd's frame, the title, the chunk's
+text), and the vector is kept in the **inference cache** under
+`(model, hash)` (`cache.rs`, its own file). Embedding a source asks the
+cache which of its chunks' hashes it lacks, and embeds only those.
+
+A model is a pure function, so an entry is never wrong, only unused. A
+different model, or a change to the prompt, misses the cache rather than
+reading a vector made another way, and needs no invalidation. A sweep,
+once the index names every chunk it holds, deletes what no chunk names
+and every other model's entries. The cache joins nothing; search joins
+from `chunks` to it. Kept in a file of its own, it survives the index
+being emptied for a change of shape, and the grid index being rebuilt.
+
+What that saves:
+
+- **a thread that grows** re-embeds its last chunk and the new ones:
+  packing runs from the top, so the chunks before the new message are
+  unchanged (`a_grown_thread_keeps_its_earlier_chunks`);
+- **an edit under one heading** re-embeds that heading's chunks
+  (`an_edit_under_one_heading_moves_only_its_chunks`);
+- **the same chunk in many documents**, a footer or a signature block
+  under one title, is embedded once;
+- **a change to the chunker** re-embeds only the chunks whose text moved.
+
+What it does not: the title is part of every chunk's prompt, so a
+document whose title changes re-embeds all of its chunks. The title is
+context the model reads the chunk in.
 
 ### Writing it
 
@@ -301,6 +340,45 @@ worth measuring when that memory is the problem, not before. Snippets are
 the one thing still read from the file: the few lines of the landed
 message a page shows, read only for those rows, as today.
 
+## One file with the grid index
+
+**Every table the search reads goes into the grid index's file**
+(`unified_document_index/grid_index/db.sqlite`): the keyword rows and
+the chunks beside `grid_rows`, whose columns are the
+filters (`source:`, `kind:`, `from:`, dates). One query can then narrow
+by a filter through `grid_rows`' own indexes and rank what is left by
+words or by meaning, in SQL, reaching the vectors in the inference
+cache's file through `ATTACH`. An ANN table such as vec1's is built from
+the cache into the grid index's file, and can always be built again. That is also the precondition for vec1
+(`doltlite.md` § "Vector search: vec1"), with one more condition: vec1
+applies a filter before ranking only when the column is in the vec1
+table itself, so the filters an ANN query needs are copied into it,
+per chunk. A chunk spans messages, so only what is the same for every
+message of a document copies cleanly (source, kind, account, the
+document's date range); a per-message filter such as `from:` goes
+through the exact path, a join to `grid_rows` and `vec1_l2_distance`
+over what it keeps.
+
+The keyword rows key on the message: the section's uuid is its
+`grid_rows.uuid`, so `sections_fts` joins straight to the row it lands
+on.
+
+Two things in the grid index change to make room:
+
+- **A change of shape drops the grid's own tables, not the file.**
+  Today an index written in another shape is deleted and rebuilt, which
+  costs one local read of the render stores, and would now also cost
+  every source's keyword index. Each owner checks its own schema hash
+  (`_datalib_meta` per owner, or one row per owner) and empties only its
+  tables, as `search_index` already does under the write lock. The
+  vectors are not at risk either way: they are in the cache's file.
+- **Several writers share it.** `grid_index` writes it in one
+  transaction per source; each source's `keyword_index` and `embed`
+  steps write their own batches. WAL serializes them, so a batch of
+  keyword rows waits while `grid_index` loads a large source. Measure
+  that wait on a real root before relying on it; the embed step's writes
+  go to the cache's file and wait on nothing.
+
 ## Forward path for existing data
 
 Everything here is derived, so it is rebuilt, not migrated. The first
@@ -326,12 +404,16 @@ that matched. Meaning search fills back in over the first day.
 3. Built: the embedder in Rust, llama.cpp `b10361` under Bazel on the CPU
    and Metal, a binding, qmd's prompt format, the parity tests against
    qmd above.
-4. `markdowns.content_hash` in the render store.
-5. `keyword_index` and `embed` write the new index, embedding in
+4. Built: `markdowns.content_hash` in the render store.
+5. Built: the inference cache, chunks keyed by their prompt's hash, and
+   a heading starts a chunk.
+6. The search tables move into the grid index's file; each owner empties
+   only its own tables on a change of shape.
+7. `keyword_index` and `embed` write the new index, embedding in
    process; the aggregator drops a removed source's rows.
-6. Search reads the new index and embeds a query in process;
+8. Search reads the new index and embeds a query in process;
    `search_eval.py` against qmd.
-7. Retire qmd's update and embed, `qmd_sdk.mjs`, its tables and the
+9. Retire qmd's update and embed, `qmd_sdk.mjs`, its tables and the
    `qmd_keyword` lock.
 
 ## Later

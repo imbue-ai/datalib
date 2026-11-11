@@ -226,6 +226,7 @@ pub fn render_all(
         let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &md_rel, &mut problems);
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: cr.uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,

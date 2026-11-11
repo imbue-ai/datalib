@@ -307,6 +307,7 @@ pub fn render_diff_source(
             // the real thing, which is what a person copying it wants.
             let doc = RenderedMarkdown {
                 section_layout: None,
+                content_hash: None,
                 markdown_uuid: uuid.to_string(),
                 source_id: name.clone(),
                 upstream_cursor: base.md.upstream_cursor.clone(),
@@ -601,6 +602,7 @@ mod tests {
                 for i in 0..self.0 {
                     let emitted = ctx.emit_doc(RenderedMarkdown {
                         section_layout: None,
+                        content_hash: None,
                         markdown_uuid: format!("d{i}"),
                         source_id: "s".into(),
                         upstream_cursor: None,
@@ -682,6 +684,7 @@ mod tests {
         fs::write(&path, "---\ntitle: t\n---\n\n# T\n\nbody\n").unwrap();
         let md = RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: "d".into(),
             source_id: "s".into(),
             upstream_cursor: None,

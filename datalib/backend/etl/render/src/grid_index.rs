@@ -904,6 +904,9 @@ pub struct RenderedMarkdown {
     /// The layout the store holds for this document, when it is read
     /// back; `None` from a renderer, which hands `sections` instead.
     pub section_layout: Option<Vec<SectionSpan>>,
+    /// The `content_hash` the store holds for this document, when it is
+    /// read back; `None` from a renderer, whose sections give it.
+    pub content_hash: Option<String>,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -1995,6 +1998,11 @@ async fn upsert_markdown(
     };
 
     let section_layout = section_layout(md)?;
+    let content_hash = if md.sections.is_empty() {
+        md.content_hash.clone()
+    } else {
+        Some(crate::section::content_hash(&md.sections))
+    };
 
     sqlx::query("DELETE FROM markdowns WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
@@ -2004,8 +2012,9 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
+          content_hash) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -2020,6 +2029,7 @@ async fn upsert_markdown(
     .bind(&version_str)
     .bind(&md.bucket_key)
     .bind(section_layout.as_deref().map(layout_json))
+    .bind(content_hash)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -2496,6 +2506,7 @@ mod write_lock_tests {
         };
         RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
             upstream_cursor: None,
@@ -2863,6 +2874,7 @@ mod source_cursor_tests {
             .unwrap();
         RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
@@ -2941,11 +2953,12 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 2);
     }
 
-    /// The layout of a document's sections goes from the renderer through
-    /// the render store, which never holds the markdown, to the index the
-    /// document route reads it from.
+    /// The layout of a document's sections, and the hash of its text, go
+    /// from the renderer through the render store, which never holds the
+    /// markdown, to the index: the layout for the document route, the hash
+    /// for the search index to tell a changed document by.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_documents_section_layout_reaches_the_index() {
+    async fn a_documents_section_layout_and_hash_reach_the_index() {
         use crate::section::{join, layout, Section};
         let td = tempdir().unwrap();
         let root = td.path();
@@ -2971,6 +2984,14 @@ mod source_cursor_tests {
             .as_deref()
             .and_then(datalib_schema::markdowns::parse_layout);
         assert_eq!(read, Some(layout(&d.sections)));
+
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT content_hash FROM markdowns WHERE markdown_uuid = 'md-s'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let file = std::fs::read(&d.md_path).unwrap();
+        assert_eq!(hash, Some(blake3::hash(&file).to_hex().to_string()));
     }
 
     /// Sections that do not spell the file the renderer wrote would have

@@ -263,6 +263,7 @@ pub fn write_page(
 
     on_doc_complete(RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.to_string(),
         source_id: source_id.to_string(),
         // Not the raw HEAD: it moves on every ingest, and a row whose

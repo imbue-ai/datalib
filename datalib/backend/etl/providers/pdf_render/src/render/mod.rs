@@ -334,6 +334,7 @@ fn render_one(
 
     Ok(RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

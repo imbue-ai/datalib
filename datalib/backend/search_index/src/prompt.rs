@@ -1,7 +1,10 @@
 //! What the model is shown: qmd's prompts for embeddinggemma
 //! (`formatQueryForEmbedding` and `formatDocForEmbedding` in its
 //! `src/llm.ts`). A query and a document are framed differently, and a
-//! vector is comparable only with one framed the way it was.
+//! vector is comparable only with one framed the way it was. A chunk's
+//! vector is cached under the hash of exactly this string
+//! (`chunk::chunk_hash`), so a change here misses the cache rather than
+//! reading a vector made from another prompt.
 
 pub fn query(text: &str) -> String {
     format!("task: search result | query: {text}")

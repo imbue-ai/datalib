@@ -1,17 +1,18 @@
 //! The index file: one plain SQLite file in WAL mode that every source's
 //! index steps write their own documents into, and search reads. It holds
-//! where each message and chunk falls in its document, the keyword
-//! postings and the vectors, and never the text.
+//! where each message and chunk falls in its document, each chunk's prompt
+//! hash, and the keyword postings, and never the text. The vectors are in
+//! the inference cache (`cache.rs`), under those hashes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::{AssertSqlSafe, SqliteConnection};
+use datalib_store_meta::StoreKind;
+use sqlx::sqlite::SqlitePool;
+use sqlx::SqliteConnection;
 
-use crate::chunk::chunks;
+use crate::chunk::{chunk_hash, chunks};
 use crate::IndexDoc;
 
 const DDL: [&str; 6] = [
@@ -44,16 +45,13 @@ const DDL: [&str; 6] = [
         end_byte INTEGER NOT NULL,
         first_section INTEGER NOT NULL,
         last_section INTEGER NOT NULL,
+        hash TEXT NOT NULL,
         PRIMARY KEY (doc_id, seq)
     ) WITHOUT ROWID",
-    "CREATE TABLE IF NOT EXISTS vectors (
-        doc_id INTEGER NOT NULL,
-        seq INTEGER NOT NULL,
-        vector BLOB NOT NULL,
-        PRIMARY KEY (doc_id, seq)
-    ) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS chunks_by_hash ON chunks (hash)",
 ];
 
+#[cfg(test)]
 fn schema_hash() -> String {
     datalib_store_meta::schema_hash(DDL)
 }
@@ -67,17 +65,10 @@ impl Index {
     /// shape: every row is derived from the render stores, so the steps
     /// index everything again.
     pub async fn open(path: &Path) -> Result<Index> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        }
-        let pool = connect(path).await?;
-        match set_up(&pool).await {
-            Ok(()) => Ok(Index { pool }),
-            Err(e) => {
-                pool.close().await;
-                Err(e).with_context(|| format!("set up the search index at {}", path.display()))
-            }
-        }
+        let pool = crate::file::open(path, &DDL, StoreKind::SearchIndex)
+            .await
+            .with_context(|| format!("open the search index at {}", path.display()))?;
+        Ok(Index { pool })
     }
 
     pub async fn close(self) {
@@ -96,8 +87,8 @@ impl Index {
     }
 
     /// Indexes `docs` in one transaction. A document already held with the
-    /// same hash is left alone, vectors and all; a changed one loses its
-    /// old sections, chunks and vectors.
+    /// same hash is left alone; a changed one has its sections and chunks
+    /// replaced.
     pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         for doc in docs {
@@ -122,6 +113,20 @@ impl Index {
             .execute(&mut *tx)
             .await?;
         tx.commit().await.context("commit the removed documents")
+    }
+
+    /// Every chunk of `source_id`'s documents: `(markdown_uuid, seq, prompt
+    /// hash)`, in document order. What the embed step asks the cache about.
+    pub async fn chunks(&self, source_id: &str) -> Result<Vec<(String, i64, String)>> {
+        sqlx::query_as(
+            "SELECT d.markdown_uuid, c.seq, c.hash FROM chunks c \
+               JOIN documents d ON d.doc_id = c.doc_id \
+              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
+        )
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("read the indexed chunks")
     }
 
     #[cfg(test)]
@@ -189,10 +194,12 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<()> {
         at = end;
     }
     let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
+    let whole = texts.concat();
     for (seq, c) in chunks(&texts).iter().enumerate() {
         sqlx::query(
-            "INSERT INTO chunks (doc_id, seq, start_byte, end_byte, first_section, last_section) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chunks \
+             (doc_id, seq, start_byte, end_byte, first_section, last_section, hash) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(doc_id)
         .bind(seq as i64)
@@ -200,6 +207,7 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<()> {
         .bind(c.end as i64)
         .bind(c.first_section as i64)
         .bind(c.last_section as i64)
+        .bind(chunk_hash(&doc.title, &whole[c.start..c.end]))
         .execute(&mut *conn)
         .await?;
     }
@@ -214,75 +222,8 @@ async fn clear(conn: &mut SqliteConnection, doc_ids: &[i64]) -> Result<()> {
          (SELECT section_id FROM sections WHERE doc_id IN (SELECT value FROM json_each(?)))",
         "DELETE FROM sections WHERE doc_id IN (SELECT value FROM json_each(?))",
         "DELETE FROM chunks WHERE doc_id IN (SELECT value FROM json_each(?))",
-        "DELETE FROM vectors WHERE doc_id IN (SELECT value FROM json_each(?))",
     ] {
         sqlx::query(sql).bind(&ids).execute(&mut *conn).await?;
-    }
-    Ok(())
-}
-
-async fn connect(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::new()
-        .filename(datalib_runtime::plain_sqlite::uri(path))
-        .create_if_missing(true)
-        // Search reads the last committed batch while a step writes the next.
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
-        .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
-        .pragma("temp_store", "memory")
-        // Every source's steps write this one file, a batch at a time.
-        .busy_timeout(Duration::from_secs(60));
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open the search index at {}", path.display()))
-}
-
-/// Brings the file to this build's shape under the write lock, so two
-/// steps opening an old index together empty it once, and neither empties
-/// what the other has started writing: the second finds the new shape.
-async fn set_up(pool: &SqlitePool) -> Result<()> {
-    let want = schema_hash();
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::schema_hash_in(&mut tx).await?;
-    if have.as_ref().is_some_and(|h| *h != want) {
-        tracing::info!("the search index was written in another shape; emptying it");
-        drop_tables(&mut tx).await?;
-    }
-    for ddl in DDL {
-        sqlx::query(ddl).execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-    datalib_store_meta::write(
-        pool,
-        datalib_store_meta::StoreKind::SearchIndex,
-        &want,
-        datalib_store_meta::Versions::default(),
-    )
-    .await?;
-    Ok(())
-}
-
-/// Every table but `_datalib_meta`, virtual tables first so their shadow
-/// tables go with them.
-async fn drop_tables(conn: &mut SqliteConnection) -> Result<()> {
-    for virtual_only in [true, false] {
-        let names: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' \
-               AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
-               AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
-        )
-        .bind(virtual_only)
-        .fetch_all(&mut *conn)
-        .await?;
-        for name in names {
-            // A name read from this file's own schema, quoted as an identifier.
-            let sql = format!("DROP TABLE IF EXISTS \"{}\"", name.replace('"', "\"\""));
-            sqlx::query(AssertSqlSafe(sql)).execute(&mut *conn).await?;
-        }
     }
     Ok(())
 }

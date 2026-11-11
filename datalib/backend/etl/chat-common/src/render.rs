@@ -343,6 +343,7 @@ fn render_one(
 
     on_doc_complete(RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: doc.markdown_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,

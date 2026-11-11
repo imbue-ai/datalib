@@ -39,6 +39,16 @@ pub fn join(sections: &[Section]) -> String {
     out
 }
 
+/// blake3 of the `.md` a list of sections spells, as hex:
+/// `markdowns.content_hash`.
+pub fn content_hash(sections: &[Section]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for s in sections {
+        hasher.update(s.md.as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// Where each section lies in the `.md` they spell: what
 /// `markdowns.section_layout` stores, so the UI can render each message
 /// as a fragment of its own without trusting the text to say where one
