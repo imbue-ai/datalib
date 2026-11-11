@@ -97,7 +97,13 @@ impl AppStore {
             }
             for rung in datalib_store_meta::ladder::pending(ladder, stored).map_err(internal)? {
                 sqlx::query(datalib_store_meta::DDL).execute(pool).await?;
-                datalib_store_meta::ladder::apply(pool, rung, datalib_store_meta::Ladder::Own)
+                let climb = datalib_store_meta::ladder::Climb {
+                    ladder: datalib_store_meta::Ladder::Own,
+                    from: stored,
+                    top,
+                    store_bytes: std::fs::metadata(&path).ok().map(|m| m.len()),
+                };
+                datalib_store_meta::ladder::apply(pool, rung, &climb)
                     .await
                     .map_err(internal)?;
                 if commits {

@@ -189,6 +189,18 @@ impl Runner {
         Ok((i, version))
     }
 
+    /// Every step a pass will ask, written to the run's record as pending
+    /// before the first is asked, so a reader can say how many are left.
+    /// A step the pass never reaches leaves no row when the run ends.
+    pub fn plan(&self, graph: &Graph, steps: &[StepId]) {
+        let planned = steps
+            .iter()
+            .filter_map(|s| graph.by_id.get(s))
+            .map(|&i| crate::events::PlannedStep::of(&graph.steps[i]))
+            .collect();
+        self.sink.emit(&Event::RunPlan { steps: planned });
+    }
+
     /// Ask each named step to bring what it wrote to this build's shape,
     /// fetching nothing: each is invoked once with `--migrate` appended
     /// (`step_protocol.md` § Migrate). What a step can migrate in place it

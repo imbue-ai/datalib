@@ -487,6 +487,10 @@ async fn main() {
         .or_else(|| std::env::current_dir().ok())
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
     let emitter = Emitter::new(step_id);
+    // A store's migration rung can run for many minutes; whatever verb
+    // opened the store, the step's row says which rung and statement.
+    let rung_progress = emitter.progress();
+    datalib_store_meta::ladder::report_to(move |msg| rung_progress.set_message(msg));
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
     // SIGTERM (a process manager stopping a step run by hand, as

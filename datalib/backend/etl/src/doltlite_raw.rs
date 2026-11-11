@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+pub use datalib_store_meta::ladder::{run_statements, Statement};
 use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
@@ -1016,7 +1017,13 @@ async fn open_inner(
                 .execute(&pool)
                 .await
                 .context("create _datalib_meta before migrating")?;
-            datalib_store_meta::ladder::apply(&pool, rung, which).await?;
+            let climb = datalib_store_meta::ladder::Climb {
+                ladder: which,
+                from: stored,
+                top,
+                store_bytes: std::fs::metadata(db_path).ok().map(|m| m.len()),
+            };
+            datalib_store_meta::ladder::apply(&pool, rung, &climb).await?;
             let label = match which {
                 Ladder::Shared => "migrate shared",
                 Ladder::Own => "migrate",

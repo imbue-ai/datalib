@@ -186,6 +186,63 @@ async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
+/// While the first step is still migrating, the run's record already lists
+/// every step the pass will ask, the rest as pending, so a person can see
+/// how many are left (#1678: a migrate run listed only the steps reached).
+#[tokio::test]
+async fn the_migrate_run_lists_every_step_it_will_ask_from_the_start() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    std::fs::write(root.join("config.toml"), source("a") + &source("b")).unwrap();
+    std::fs::write(root.join("hold"), "").unwrap();
+
+    let state = boot(&root, &bin).await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let first = loop {
+        if let Some(line) = invoked(&root).first() {
+            break line.trim_start_matches("migrate ").to_string();
+        }
+        assert!(Instant::now() < deadline, "no step was asked to migrate");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let steps = [
+        "a/ingest",
+        "a/render_markdown",
+        "b/ingest",
+        "b/render_markdown",
+    ];
+    let want: Vec<(String, &str)> = steps
+        .iter()
+        .map(|s| {
+            let state = if *s == first { "running" } else { "pending" };
+            (s.to_string(), state)
+        })
+        .collect();
+    loop {
+        let snap = datalib_runs::snapshot(&root).await;
+        let mut got: Vec<(String, &str)> = snap
+            .steps
+            .iter()
+            .map(|s| (s.step.clone(), s.state.as_str()))
+            .collect();
+        got.sort();
+        if snap.kind.as_deref() == Some("migrate") && got == want {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "while {first} migrates, the run's rows never read {want:?}: {:?} {got:?}",
+            snap.kind
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    std::fs::remove_file(root.join("hold")).unwrap();
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
 /// While the pass runs the app stays open, so every Sync on the Sources
 /// card must say it is paused rather than queue a sync that cannot
 /// start; once the pass is over they are offered again.
