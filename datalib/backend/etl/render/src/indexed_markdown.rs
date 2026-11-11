@@ -615,6 +615,50 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// The buckets that declared any input from `table`, a whole-table
+    /// one included.
+    pub fn buckets_reading_table(&self, table: &str) -> Result<HashSet<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let buckets = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT bucket_key FROM render_inputs WHERE input_table = ?",
+            )
+            .bind(table)
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("the buckets that read one table")?;
+            Ok(buckets.into_iter().collect())
+        })
+    }
+
+    /// Up to `limit` of the row ids `bucket_key` declared from `table`,
+    /// in order, after `after`; a whole-table input is not a row.
+    pub fn ids_read_from(
+        &self,
+        bucket_key: &str,
+        table: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            sqlx::query_scalar::<_, String>(
+                "SELECT input_id FROM render_inputs \
+                  WHERE bucket_key = ?1 AND input_table = ?2 AND input_id <> ?3 \
+                    AND (?4 IS NULL OR input_id > ?4) \
+                  ORDER BY input_id LIMIT ?5",
+            )
+            .bind(bucket_key)
+            .bind(table)
+            .bind(WHOLE_TABLE)
+            .bind(after)
+            .bind(limit as i64)
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("the rows a bucket read from one table")
+        })
+    }
+
     /// Every document rendered under any of `bucket_keys`, as
     /// `(bucket, document)`. One chunked query rather than one per
     /// bucket — a run declares as many buckets as it rendered.
