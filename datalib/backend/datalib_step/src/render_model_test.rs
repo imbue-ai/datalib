@@ -416,6 +416,7 @@ fn to_rendered(
         .collect();
     RenderedMarkdown {
         section_layout: None,
+        content_hash: None,
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
         upstream_cursor: None,

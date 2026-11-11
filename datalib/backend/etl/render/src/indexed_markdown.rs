@@ -1343,6 +1343,7 @@ impl IndexedMarkdownStore {
                         .section_layout
                         .as_deref()
                         .and_then(datalib_schema::markdowns::parse_layout),
+                    content_hash: md.content_hash.clone(),
                     edges,
                     contacts,
                     photos,
@@ -1601,6 +1602,7 @@ mod tests {
     ) -> RenderedMarkdown {
         RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
             upstream_cursor: None,

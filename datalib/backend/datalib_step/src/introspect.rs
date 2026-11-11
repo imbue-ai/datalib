@@ -460,6 +460,7 @@ pub fn plan(
     Ok(Some(Measured {
         doc: RenderedMarkdown {
             section_layout: None,
+            content_hash: None,
             markdown_uuid,
             source_id: source_id.to_string(),
             upstream_cursor: None,
