@@ -174,7 +174,7 @@ enum Clock {
 
 impl Clock {
     fn of(t: &EventTime, calendar_zone: Option<&str>) -> Result<Clock, Unexpandable> {
-        let tz = |n: &str| crate::zone::named(n).ok_or_else(|| Unexpandable::Zone(n.to_string()));
+        let tz = |n: &str| NamedZone::get(n).ok_or_else(|| Unexpandable::Zone(n.to_string()));
         Ok(match t {
             EventTime::Date(_) => Clock::Date,
             EventTime::At { zone, .. } => match zone {
@@ -191,7 +191,7 @@ impl Clock {
                     name: None,
                 } => Clock::Fixed(*offset_seconds),
                 Zone::Utc => Clock::Utc,
-                Zone::Floating => Clock::Floating(calendar_zone.and_then(crate::zone::named)),
+                Zone::Floating => Clock::Floating(calendar_zone.and_then(NamedZone::get)),
             },
         })
     }
@@ -312,7 +312,7 @@ impl Length {
                     Zone::Fixed {
                         name: Some(n),
                         offset_seconds,
-                    } => match crate::zone::named(n) {
+                    } => match NamedZone::get(n) {
                         Some(tz) => Clock::GoogleNamed(tz, n.clone()).time_at(local),
                         None => Clock::Fixed(*offset_seconds).time_at(local),
                     },

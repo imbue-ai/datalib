@@ -4,6 +4,7 @@
 //! they are kept apart until something needs the instant.
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use datalib_time::NamedZone;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventTime {
@@ -16,7 +17,7 @@ pub enum EventTime {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Zone {
     Utc,
-    /// A `TZID`'s name, resolved by `zone::named`.
+    /// A `TZID`'s name, resolved by `NamedZone::get`.
     Named(String),
     /// A time that came with its offset (Google's `dateTime`), and the
     /// zone name it was written in, if the source said.
@@ -31,7 +32,7 @@ pub enum Zone {
 /// Why a time has no instant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unresolved {
-    /// A `TZID` `zone::named` does not know (Outlook's `Customized Time
+    /// A `TZID` `NamedZone::get` does not know (Outlook's `Customized Time
     /// Zone`, a typo). The wall-clock time is still shown.
     UnknownZone(String),
     /// The offset is out of range.
@@ -85,7 +86,7 @@ impl EventTime {
     ) -> Option<Self> {
         if let Some(dt) = date_time {
             let at = DateTime::parse_from_rfc3339(dt).ok()?;
-            let named = zone.and_then(|z| Some((z, crate::zone::named(z)?)));
+            let named = zone.and_then(|z| Some((z, NamedZone::get(z)?)));
             let (local, offset_seconds, name) = match named {
                 Some((name, tz)) => {
                     let there = tz.at(&at);
@@ -204,7 +205,7 @@ impl EventTime {
 }
 
 fn in_named_zone(local: &NaiveDateTime, name: &str) -> Result<DateTime<FixedOffset>, Unresolved> {
-    let tz = crate::zone::named(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
+    let tz = NamedZone::get(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
     // A time in the spring-forward gap does not exist; RFC 5545 §3.3.5
     // reads it as the same span after the gap, which one hour covers for
     // every zone that has one.

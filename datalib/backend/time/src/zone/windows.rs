@@ -1,56 +1,9 @@
-//! The zone a calendar's `TZID` names. RFC 5545 lets a `TZID` be any
-//! string; besides IANA's names two kinds turn up, each meaning one thing
-//! wherever it appears: Windows' names, which Outlook and Exchange write
-//! (`Pacific Standard Time`), and a bare offset (`GMT-0700`), whose
-//! `VTIMEZONE` is that offset all year. Any other name is unknown, never
-//! guessed.
-
-use datalib_time::NamedZone;
-
-pub fn named(tzid: &str) -> Option<NamedZone> {
-    let tzid = tzid.trim();
-    NamedZone::get(tzid)
-        .or_else(|| windows(tzid))
-        .or_else(|| offset(tzid))
-}
-
-fn windows(name: &str) -> Option<NamedZone> {
-    let (_, iana) = WINDOWS.iter().find(|(w, _)| w.eq_ignore_ascii_case(name))?;
-    NamedZone::get(iana)
-}
-
-/// `GMT-0700`, `UTC+05:30`, `GMT+8`: east of UTC, as ISO 8601 signs it
-/// (not POSIX's or `Etc/GMT+7`'s reversed sign).
-fn offset(name: &str) -> Option<NamedZone> {
-    let prefix = name.get(..3)?;
-    if !(prefix.eq_ignore_ascii_case("GMT") || prefix.eq_ignore_ascii_case("UTC")) {
-        return None;
-    }
-    let rest = &name[3..];
-    let (sign, digits) = match rest.as_bytes().first()? {
-        b'+' => (1, &rest[1..]),
-        b'-' => (-1, &rest[1..]),
-        _ => return None,
-    };
-    let digits = digits.replacen(':', "", 1);
-    if !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let (h, m) = match digits.len() {
-        1 | 2 => (digits.as_str(), "0"),
-        4 => digits.split_at(2),
-        _ => return None,
-    };
-    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
-    if h > 14 || m >= 60 {
-        return None;
-    }
-    NamedZone::fixed(sign * (h * 3600 + m * 60))
-}
+//! Windows' zone names, which Outlook and Exchange write, and the IANA
+//! zone each one is.
 
 /// CLDR's `windowsZones.xml` (release 47), each name's territory-`001`
 /// zone. © Unicode, Inc., Unicode License v3.
-const WINDOWS: &[(&str, &str)] = &[
+pub(super) const WINDOWS: &[(&str, &str)] = &[
     ("AUS Central Standard Time", "Australia/Darwin"),
     ("AUS Eastern Standard Time", "Australia/Sydney"),
     ("Afghanistan Standard Time", "Asia/Kabul"),
@@ -191,79 +144,3 @@ const WINDOWS: &[(&str, &str)] = &[
     ("Yakutsk Standard Time", "Asia/Yakutsk"),
     ("Yukon Standard Time", "America/Whitehorse"),
 ];
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::NaiveDateTime;
-
-    fn at(tzid: &str, local: &str) -> String {
-        let local = NaiveDateTime::parse_from_str(local, "%Y-%m-%dT%H:%M").unwrap();
-        named(tzid)
-            .unwrap_or_else(|| panic!("{tzid} did not resolve"))
-            .from_local(&local)
-            .single()
-            .unwrap()
-            .to_rfc3339()
-    }
-
-    #[test]
-    fn every_windows_name_reaches_a_zone_the_database_holds() {
-        let missing: Vec<_> = WINDOWS
-            .iter()
-            .filter(|(_, iana)| NamedZone::get(iana).is_none())
-            .collect();
-        assert!(missing.is_empty(), "{missing:?}");
-    }
-
-    /// Outlook writes `TZID=Pacific Standard Time` with the US rules in
-    /// its `VTIMEZONE`; it was refused as unknown.
-    #[test]
-    fn a_windows_name_keeps_its_daylight_saving() {
-        assert_eq!(
-            at("Pacific Standard Time", "2026-01-05T09:00"),
-            "2026-01-05T09:00:00-08:00"
-        );
-        assert_eq!(
-            at("Pacific Standard Time", "2026-07-06T09:00"),
-            "2026-07-06T09:00:00-07:00"
-        );
-        assert_eq!(
-            at("india standard time", "2026-07-06T09:00"),
-            "2026-07-06T09:00:00+05:30"
-        );
-    }
-
-    /// `TZID=GMT-0700` comes with a `VTIMEZONE` that is -07:00 all year;
-    /// it was refused as unknown.
-    #[test]
-    fn a_gmt_offset_is_that_offset_all_year() {
-        assert_eq!(
-            at("GMT-0700", "2026-01-05T09:00"),
-            "2026-01-05T09:00:00-07:00"
-        );
-        assert_eq!(
-            at("GMT-0700", "2026-07-06T09:00"),
-            "2026-07-06T09:00:00-07:00"
-        );
-        assert_eq!(
-            at("UTC+05:30", "2026-07-06T09:00"),
-            "2026-07-06T09:00:00+05:30"
-        );
-        assert_eq!(at("GMT+8", "2026-07-06T09:00"), "2026-07-06T09:00:00+08:00");
-    }
-
-    #[test]
-    fn anything_else_is_unknown() {
-        for name in [
-            "Customized Time Zone",
-            "GMT-0760",
-            "GMT+1500",
-            "GMT 0700",
-            "GMT-07000",
-            "GMT-07:0",
-        ] {
-            assert!(named(name).is_none(), "{name}");
-        }
-    }
-}

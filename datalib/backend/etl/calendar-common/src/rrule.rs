@@ -90,7 +90,8 @@ fn until_date(until: &str, tz: Option<&str>) -> String {
     let Some(t) = EventTime::from_ical(until, None) else {
         return until.to_string();
     };
-    let (Some(tz), Ok(instant)) = (tz.and_then(crate::zone::named), t.instant(None)) else {
+    let (Some(tz), Ok(instant)) = (tz.and_then(datalib_time::NamedZone::get), t.instant(None))
+    else {
         return t.display_date();
     };
     if t.is_all_day() {

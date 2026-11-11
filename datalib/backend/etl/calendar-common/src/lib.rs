@@ -9,7 +9,6 @@ pub mod render;
 pub mod rrule;
 pub mod types;
 pub mod when;
-pub mod zone;
 
 pub use render::{render_all, CalendarRenderProfile, RenderSummary};
 pub use types::{

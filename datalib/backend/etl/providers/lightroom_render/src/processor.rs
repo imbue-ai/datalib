@@ -31,7 +31,7 @@ pub fn plan_render(
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
     if let Some(name) = &config.capture_time_zone {
         NamedZone::get(name)
-            .ok_or_else(|| anyhow!("capture_time_zone {name:?} is not an IANA zone name"))?;
+            .ok_or_else(|| anyhow!("capture_time_zone {name:?} is not a time zone name"))?;
     }
     Ok(plan_source_render(
         ctx,

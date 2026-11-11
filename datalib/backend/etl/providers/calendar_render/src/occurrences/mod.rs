@@ -308,7 +308,7 @@ fn google_time(t: &EventTime, zone: Option<Value>) -> Value {
 /// `singleEvents=true` lists. A time already on that clock keeps its
 /// spelling.
 fn on_calendar_clock(payload: &mut Value, calendar_zone: Option<&str>) {
-    let Some(tz) = calendar_zone.and_then(datalib_etl_calendar_common::zone::named) else {
+    let Some(tz) = calendar_zone.and_then(datalib_time::NamedZone::get) else {
         return;
     };
     for key in ["start", "end", "originalStartTime"] {
