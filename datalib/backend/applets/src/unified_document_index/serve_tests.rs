@@ -192,6 +192,57 @@ fn people_by_handle_gives_each_sources_account() {
     child.kill().ok();
 }
 
+/// `/sql` as the gateway reaches it: the store listing names the grid
+/// index, a query over it answers a page, and neither route answers
+/// without the secret.
+#[test]
+fn sql_reads_a_store_it_lists() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_qmd_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+    let grid = "unified_document_index/grid_index/db.sqlite";
+
+    let (status, body) = get(port, "/sql/stores", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let listed: Vec<&str> = body["stores"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["store"].as_str().unwrap())
+        .collect();
+    assert!(listed.contains(&grid), "{body}");
+
+    let (status, body) = post(
+        port,
+        "/sql",
+        &serde_json::json!({
+            "store": grid,
+            "sql": "SELECT source_id, count(*) AS n FROM grid_rows WHERE source_id = ? GROUP BY 1",
+            "params": ["slack"],
+        })
+        .to_string(),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["columns"],
+        serde_json::json!(["source_id", "n"]),
+        "{body}"
+    );
+    assert_eq!(body["rows"][0][0], "slack", "{body}");
+    assert!(body["rows"][0][1].as_i64() > Some(0), "{body}");
+    assert_eq!(body["next_offset"], serde_json::Value::Null, "{body}");
+
+    let (status, _) = get(port, "/sql/stores", None);
+    assert_eq!(status, 401, "a request without the secret got through");
+    child.kill().ok();
+}
+
 fn percent_encoded(s: &str) -> String {
     s.bytes()
         .map(|b| match b {

@@ -441,7 +441,9 @@ Pick the surface that fits the question:
   the shell for each one: see that doc's §"Reading a store from Python".
   If you would rather not
   touch the store at all, `datalib-http`'s endpoints below serve the
-  same rows.
+  same rows, and `POST /applet/unified_document_index/sql` runs your
+  own `SELECT` against this or any other store, the raw stores and the
+  log included, a page at a time ([the applets](user/applets.md#reading-any-store-with-sql)).
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).

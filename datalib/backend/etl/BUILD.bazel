@@ -67,6 +67,7 @@ rust_binary(
         ":datalib_etl",
         "//datalib/backend/history:datalib_history",
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/sql_guard:datalib_sql_guard",
         "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",

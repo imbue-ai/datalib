@@ -86,12 +86,95 @@ has the parameters.
 | `GET /docs` | the documents |
 | `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
-
-How a document names people, times and attachments, for an app that
-shows one: [showing a rendered document](rendered_documents.md).
 | `GET /problems?q=` | what a step could not fully do to a record |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
 | `GET /embedding_map` | the documents' embeddings laid out on a plane; `/embedding_map/matches` the ones a search finds |
+| `POST /sql` | one `SELECT` over any store under the data root, a page of rows at a time (below) |
+| `GET /sql/stores` | the stores `/sql` reads |
+
+How a document names people, times and attachments, for an app that
+shows one: [showing a rendered document](rendered_documents.md).
+
+### Reading any store with SQL
+
+`POST /sql` runs one `SELECT` you write against any store under the data
+root and answers a page of rows as JSON. It is the shell's
+`datalib-doltlite -readonly` over HTTP, behind the API token like every
+route here: nothing to install, and the same answer from a container or
+another machine that can reach the app. What each store's tables hold is
+in [reading the raw stores](raw_stores.md), [the grid index's
+columns](../dev/grid_rows.md) and [the log store](../dev/logging.md).
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"store": "slack/ingest/entities.doltlite_db",
+       "sql": "SELECT id, ts FROM messages WHERE channel_id = ?1 ORDER BY ts DESC",
+       "params": ["C0123"], "limit": 100}' \
+  "<origin>/applet/unified_document_index/sql"
+```
+
+```json
+{"store": "slack/ingest/entities.doltlite_db", "kind": "doltlite",
+ "commit": "4f1c…", "columns": ["id", "ts"], "rows": [["…", "…"], …],
+ "next_offset": 100}
+```
+
+The request:
+
+- **`store`** is the file's path under the data root: a `.doltlite_db`
+  or `.sqlite` file in a step's tree (`<group>/<step>/…`), or one of
+  `system/runs/runs.sqlite` (the log and every run's metrics),
+  `system/supervisor.sqlite` (sync requests and each step's state),
+  `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,
+  `system/disk_stats.sqlite` and `system/usage.doltlite_db`. Nothing
+  else under `system/` is a store here. `GET /sql/stores` lists them,
+  with each one's `kind` and `bytes`, the qmd index
+  (`unified_document_index/qmd_aggregator/qmd/index.sqlite`) among them.
+  Any other store deeper than `<group>/<step>/<file>` reads by name but
+  is not listed.
+- **`sql`** is one statement that returns rows: a `SELECT`, a `WITH …
+  SELECT` or a `VALUES`. A trailing `;` is fine; a second statement is
+  refused. `PRAGMA table_info(t)` is written `SELECT * FROM
+  pragma_table_info('t')`.
+- **`params`** is a list, one value per `?` or `?NNN` in order: a
+  string, a number, `true`/`false` (bound as 1/0) or `null`. Named
+  parameters (`:x`) are refused. To match a set, bind one JSON array as
+  a string: `id IN (SELECT value FROM json_each(?1))`.
+- **`limit`** is the page's rows, 500 by default and at most 10,000;
+  **`offset`** is where the page starts.
+- **`commit`**, for a doltlite store, is the commit to read. Leave it out
+  and the page reads the store's newest commit and says which.
+
+The answer's `rows` are lists in `columns`' order. An integer is a JSON
+number, exact to 64 bits (JavaScript's `JSON.parse` rounds past 2^53;
+select it as text if you read it there), a real is a number, text is a
+string, and a blob is `{"base64": "…"}`.
+
+**Paging.** Send the same request again with `offset` set to
+`next_offset`, and stop when it is `null`. Give the statement an
+`ORDER BY`, or two pages may disagree on the order. On a doltlite store,
+send the first page's `commit` with every later page, and they all read
+that commit however far the sync has moved on. A plain SQLite store (the
+grid index, the run store) has no commits, so a page reads it as it is
+then; to walk one that is being written, page by key instead (`WHERE
+seq > ?1 ORDER BY seq`). A page can stop short of `limit` when its
+values pass 8 MB; `next_offset` still says where to go on.
+
+**What it will not do.** It reads, and nothing else. The store is opened
+read-only and pinned to one commit, and every statement is checked before
+it runs: reading tables and calling SQLite's functions is allowed, and so
+are doltlite's that only answer (`dolt_hashof`, `dolt_merge_base`,
+`dolt_version`), its history tables (`dolt_log()`, `dolt_diff_<table>`,
+`dolt_history_<table>`) and the `pragma_…` tables that describe a schema.
+Anything else is refused with a 403 naming it: a write, `ATTACH`, and
+doltlite's functions that change or reach past the store (`dolt_commit`,
+`dolt_push`, `dolt_clone`, `dolt_creds_new`). A query still running after
+20 seconds is stopped with a 504; narrow it or page with a smaller
+`limit`. Four run at once, and the rest wait their turn.
+
+Other errors are a JSON `{"error": "…"}`: 400 for a statement SQLite
+cannot run (its message, such as `no such table`) or a request that does
+not fit the above, and 404 for a store or commit that is not there.
 
 ## `datalib_contacts`
 
