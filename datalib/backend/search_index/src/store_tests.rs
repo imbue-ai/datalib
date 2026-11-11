@@ -1,5 +1,6 @@
 use super::*;
 use crate::{IndexDoc, IndexSection};
+use sqlx::AssertSqlSafe;
 
 const SENTENCE: &str = "the quarterly budget review moved to thursday afternoon";
 
@@ -127,20 +128,12 @@ async fn a_document_with_no_text_is_found_by_its_title() {
     assert_eq!(count(&index, "chunks").await, 0);
 }
 
-/// An unchanged document is not rewritten, so its vectors stay; a changed
-/// one drops its old words, sections and vectors.
+/// A changed document drops its old words and sections; each chunk
+/// carries the hash of the prompt it would be embedded as.
 #[tokio::test]
-async fn only_a_changed_hash_replaces_a_document() {
+async fn a_changed_hash_replaces_a_document() {
     let (_dir, index) = open().await;
     index.put(&[thread("h1")]).await.unwrap();
-    sqlx::query("INSERT INTO vectors SELECT doc_id, 0, x'00' FROM documents")
-        .execute(index.pool())
-        .await
-        .unwrap();
-
-    index.put(&[thread("h1")]).await.unwrap();
-    assert_eq!(count(&index, "vectors").await, 1);
-
     let changed = doc(
         "d1",
         "h2",
@@ -148,7 +141,6 @@ async fn only_a_changed_hash_replaces_a_document() {
         &[(Some("m3"), "dinner on saturday")],
     );
     index.put(&[changed]).await.unwrap();
-    assert_eq!(count(&index, "vectors").await, 0);
     assert_eq!(count(&index, "sections").await, 1);
     assert_eq!(postings(&index, "thursday").await, 0);
     assert_eq!(hits(&index, "dinner").await, [hit("d1", Some("m3"))]);
@@ -156,6 +148,39 @@ async fn only_a_changed_hash_replaces_a_document() {
         index.indexed("mail").await.unwrap(),
         BTreeMap::from([("d1".to_string(), "h2".to_string())])
     );
+    assert_eq!(
+        index.chunks("mail").await.unwrap(),
+        [(
+            "d1".to_string(),
+            0,
+            crate::chunk::chunk_hash("Planning", "dinner on saturday")
+        )]
+    );
+}
+
+/// A thread that grows by a message keeps the hashes of the chunks
+/// before it, so their cached vectors are found again.
+#[tokio::test]
+async fn a_grown_thread_keeps_its_earlier_chunks() {
+    let (_dir, index) = open().await;
+    let message = |i: usize| format!("message {i}: {}\n", "words ".repeat(100));
+    let sections: Vec<(Option<String>, String)> = (0..12)
+        .map(|i| (Some(format!("m{i}")), message(i)))
+        .collect();
+    let as_doc = |n: usize, hash: &str| {
+        let refs: Vec<(Option<&str>, &str)> = sections[..n]
+            .iter()
+            .map(|(u, t)| (u.as_deref(), t.as_str()))
+            .collect();
+        doc("d1", hash, "Planning", &refs)
+    };
+    index.put(&[as_doc(11, "h1")]).await.unwrap();
+    let before = index.chunks("mail").await.unwrap();
+    index.put(&[as_doc(12, "h2")]).await.unwrap();
+    let after = index.chunks("mail").await.unwrap();
+    assert!(before.len() >= 2, "{before:?}");
+    assert_eq!(before[..before.len() - 1], after[..before.len() - 1]);
+    assert_ne!(before.last(), after.get(before.len() - 1));
 }
 
 #[tokio::test]

@@ -56,6 +56,9 @@ pub enum StoreKind {
     /// Every source's keyword index and embeddings, keyed by document,
     /// holding no text (`unified_document_index/search_index`). Plain SQLite.
     SearchIndex,
+    /// Each chunk's vector under the model that made it and the hash of
+    /// its prompt (`unified_document_index/search_index`). Plain SQLite.
+    InferenceCache,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.

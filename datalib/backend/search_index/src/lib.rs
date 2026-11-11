@@ -6,10 +6,14 @@
 
 use std::borrow::Cow;
 
+pub mod cache;
 pub mod chunk;
+mod file;
 pub mod owed;
+pub mod prompt;
 mod store;
 
+pub use cache::InferenceCache;
 pub use owed::{owed, Owed};
 pub use store::Index;
 

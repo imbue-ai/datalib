@@ -58,6 +58,7 @@ rust_test(
     tags = ["cpu:2"],
     deps = [
         ":datalib_embedder",
+        "//datalib/backend/search_index:datalib_search_index",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use datalib_embedder::{format, Device, Embedder};
+use datalib_embedder::{Device, Embedder};
+use datalib_search_index::prompt as format;
 use serde_json::{json, Value};
 
 fn runfile(var: &str) -> PathBuf {
