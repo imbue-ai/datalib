@@ -89,9 +89,14 @@ instant only when asked (`when.rs`):
   are as current as the `jiff-tzdb` in `Cargo.lock`. When IANA moves a
   zone's clocks (British Columbia kept -07:00 from November 2026), run
   `cargo update -p jiff-tzdb` in `datalib/backend` and build, which
-  repins `MODULE.bazel.lock`. A name the database does not know — an
-  Outlook zone, a typo — is not guessed: the start is nulled on the
-  grid row and a `problems` row says why; the page still shows the wall-clock time and the name.
+  repins `MODULE.bazel.lock`. `zone.rs` takes two other kinds of name
+  that mean one thing wherever they appear: a Windows zone name, which
+  Outlook and Exchange write (`Pacific Standard Time`, mapped by CLDR's
+  `windowsZones.xml`), and a bare offset (`GMT-0700`, whose `VTIMEZONE`
+  is that offset all year). Any other name — Outlook's `Customized Time
+  Zone`, a typo — is not guessed, and the `VTIMEZONE` beside it is not
+  read: the start is nulled on the grid row and a `problems` row says
+  why; the page still shows the wall-clock time and the name.
 - A floating time (no zone) is read in the calendar's own zone, else as
   UTC with a `problems` row recording the guess.
 - An all-day date is its midnight UTC. `after:2026-09-13` then finds an

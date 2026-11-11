@@ -174,7 +174,7 @@ enum Clock {
 
 impl Clock {
     fn of(t: &EventTime, calendar_zone: Option<&str>) -> Result<Clock, Unexpandable> {
-        let tz = |n: &str| NamedZone::get(n).ok_or_else(|| Unexpandable::Zone(n.to_string()));
+        let tz = |n: &str| crate::zone::named(n).ok_or_else(|| Unexpandable::Zone(n.to_string()));
         Ok(match t {
             EventTime::Date(_) => Clock::Date,
             EventTime::At { zone, .. } => match zone {
@@ -191,7 +191,7 @@ impl Clock {
                     name: None,
                 } => Clock::Fixed(*offset_seconds),
                 Zone::Utc => Clock::Utc,
-                Zone::Floating => Clock::Floating(calendar_zone.and_then(NamedZone::get)),
+                Zone::Floating => Clock::Floating(calendar_zone.and_then(crate::zone::named)),
             },
         })
     }
@@ -312,7 +312,7 @@ impl Length {
                     Zone::Fixed {
                         name: Some(n),
                         offset_seconds,
-                    } => match NamedZone::get(n) {
+                    } => match crate::zone::named(n) {
                         Some(tz) => Clock::GoogleNamed(tz, n.clone()).time_at(local),
                         None => Clock::Fixed(*offset_seconds).time_at(local),
                     },
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn a_zone_or_rule_it_cannot_read_is_said_not_guessed() {
-        let start = ical("20261001T090000", Some("Pacific Standard Time"));
+        let start = ical("20261001T090000", Some("Customized Time Zone"));
         let rules = ["FREQ=DAILY".to_string()];
         let s = Series {
             start: &start,
@@ -634,7 +634,7 @@ mod tests {
         let w = window("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z");
         assert_eq!(
             expand(&s, &w, None),
-            Err(Unexpandable::Zone("Pacific Standard Time".into()))
+            Err(Unexpandable::Zone("Customized Time Zone".into()))
         );
         let start = ical("20261001T090000", Some(LA));
         let rules = ["FREQ=FORTNIGHTLY".to_string()];

@@ -21,6 +21,13 @@ impl NamedZone {
         BUNDLED.get(name).ok().map(Self)
     }
 
+    /// A clock that is `offset_seconds` east of UTC all year, with no
+    /// daylight saving; `None` past ±25:59:59.
+    pub fn fixed(offset_seconds: i32) -> Option<Self> {
+        let offset = Offset::from_seconds(offset_seconds).ok()?;
+        Some(Self(jiff::tz::TimeZone::fixed(offset)))
+    }
+
     /// The wall clock here at `instant`.
     pub fn at<Tz: TimeZone>(&self, instant: &DateTime<Tz>) -> DateTime<FixedOffset> {
         let utc = instant.with_timezone(&Utc);
@@ -120,6 +127,16 @@ mod tests {
     fn the_hour_the_clocks_skip_has_none() {
         let la = NamedZone::get("America/Los_Angeles").unwrap();
         assert_eq!(la.from_local(&local("2026-03-08T02:30")), LocalResult::None);
+    }
+
+    #[test]
+    fn a_fixed_zone_has_no_daylight_saving() {
+        let z = NamedZone::fixed(-7 * 3600).unwrap();
+        let winter = z.from_local(&local("2026-01-05T09:00")).single().unwrap();
+        let summer = z.from_local(&local("2026-07-06T09:00")).single().unwrap();
+        assert_eq!(winter.to_rfc3339(), "2026-01-05T09:00:00-07:00");
+        assert_eq!(summer.to_rfc3339(), "2026-07-06T09:00:00-07:00");
+        assert!(NamedZone::fixed(30 * 3600).is_none());
     }
 
     #[test]

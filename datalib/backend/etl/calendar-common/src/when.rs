@@ -4,7 +4,6 @@
 //! they are kept apart until something needs the instant.
 
 use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use datalib_time::NamedZone;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventTime {
@@ -17,7 +16,7 @@ pub enum EventTime {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Zone {
     Utc,
-    /// An IANA name from a `TZID`, resolved against the zone database.
+    /// A `TZID`'s name, resolved by `zone::named`.
     Named(String),
     /// A time that came with its offset (Google's `dateTime`), and the
     /// zone name it was written in, if the source said.
@@ -32,8 +31,8 @@ pub enum Zone {
 /// Why a time has no instant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unresolved {
-    /// A `TZID` the zone database does not know (an Outlook name, a
-    /// typo). The wall-clock time is still shown.
+    /// A `TZID` `zone::named` does not know (Outlook's `Customized Time
+    /// Zone`, a typo). The wall-clock time is still shown.
     UnknownZone(String),
     /// The offset is out of range.
     BadOffset(i32),
@@ -86,7 +85,7 @@ impl EventTime {
     ) -> Option<Self> {
         if let Some(dt) = date_time {
             let at = DateTime::parse_from_rfc3339(dt).ok()?;
-            let named = zone.and_then(|z| Some((z, NamedZone::get(z)?)));
+            let named = zone.and_then(|z| Some((z, crate::zone::named(z)?)));
             let (local, offset_seconds, name) = match named {
                 Some((name, tz)) => {
                     let there = tz.at(&at);
@@ -205,7 +204,7 @@ impl EventTime {
 }
 
 fn in_named_zone(local: &NaiveDateTime, name: &str) -> Result<DateTime<FixedOffset>, Unresolved> {
-    let tz = NamedZone::get(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
+    let tz = crate::zone::named(name).ok_or_else(|| Unresolved::UnknownZone(name.to_string()))?;
     // A time in the spring-forward gap does not exist; RFC 5545 §3.3.5
     // reads it as the same span after the gap, which one hour covers for
     // every zone that has one.
@@ -293,13 +292,27 @@ mod tests {
 
     #[test]
     fn an_unknown_zone_is_not_guessed() {
-        let t = at("20260115T200000", Some("Pacific Standard Time"));
+        let t = at("20260115T200000", Some("Customized Time Zone"));
         assert_eq!(
             t.instant(None),
-            Err(Unresolved::UnknownZone("Pacific Standard Time".into()))
+            Err(Unresolved::UnknownZone("Customized Time Zone".into()))
         );
         assert_eq!(t.key(None), "20260115T200000");
-        assert!(t.display().contains("Pacific Standard Time"));
+        assert!(t.display().contains("Customized Time Zone"));
+    }
+
+    /// Fastmail held events with `TZID=GMT-0700` and `TZID=Pacific
+    /// Standard Time`; each start was nulled as an unknown zone.
+    #[test]
+    fn an_outlook_or_offset_tzid_has_an_instant() {
+        let outlook = at("20260706T090000", Some("Pacific Standard Time"));
+        assert_eq!(
+            outlook.instant(None).unwrap().at.to_rfc3339(),
+            "2026-07-06T09:00:00-07:00"
+        );
+        let offset = at("20260105T090000", Some("GMT-0700"));
+        assert_eq!(offset.key(None), "20260105T160000Z");
+        assert!(offset.display().ends_with("(GMT-0700)"));
     }
 
     #[test]
@@ -337,7 +350,7 @@ mod tests {
         let unknown = EventTime::from_google(
             None,
             Some("2023-12-10T02:00:00-05:00"),
-            Some("Tokyo Standard Time"),
+            Some("Customized Time Zone"),
         )
         .unwrap();
         assert_eq!(unknown.display(), "Sun 10 Dec 2023, 02:00 (UTC−05:00)");

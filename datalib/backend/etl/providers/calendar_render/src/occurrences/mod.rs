@@ -18,7 +18,6 @@ use datalib_etl_calendar_common::occurrences::{self, Occurrence, Series, Window}
 use datalib_etl_calendar_common::when::Zone;
 use datalib_etl_calendar_common::EventTime;
 use datalib_etl_render::inputs::RawRange;
-use datalib_time::NamedZone;
 use serde_json::{json, Value};
 
 use crate::render::parse::{self, Parsed};
@@ -309,7 +308,7 @@ fn google_time(t: &EventTime, zone: Option<Value>) -> Value {
 /// `singleEvents=true` lists. A time already on that clock keeps its
 /// spelling.
 fn on_calendar_clock(payload: &mut Value, calendar_zone: Option<&str>) {
-    let Some(tz) = calendar_zone.and_then(NamedZone::get) else {
+    let Some(tz) = calendar_zone.and_then(datalib_etl_calendar_common::zone::named) else {
         return;
     };
     for key in ["start", "end", "originalStartTime"] {
