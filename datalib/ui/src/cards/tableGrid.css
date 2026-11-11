@@ -405,6 +405,22 @@
   background-color: rgba(234, 179, 8, 0.3);
 }
 
+/* ── the selected rows ─────────────────────────────────────────── */
+/* The theme's selected grey is close to its hover grey, and in the dark
+   scheme close to the rows themselves. A selected row is tinted with
+   the accent instead, and marked by a bar down its left edge, as the
+   search list marks its pick: on the first cell drawn in the leftmost
+   pane, so a row that pinned columns split gets one bar. */
+.grid-pane .slick-row .slick-cell.selected {
+  background-color: color-mix(in srgb, var(--datalib-accent) 22%, var(--datalib-bg));
+}
+.grid-pane .slick-row:is(:hover, .datalib-row-hover) .slick-cell.selected {
+  background-color: color-mix(in srgb, var(--datalib-accent) 30%, var(--datalib-bg));
+}
+.grid-pane .grid-canvas-left .slick-row > .slick-cell.selected:first-child {
+  box-shadow: inset 3px 0 0 var(--datalib-accent);
+}
+
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */
 /* Closer to a native menu than the theme's roomy one: a row a little
    taller than the text, in the grid's own size. */

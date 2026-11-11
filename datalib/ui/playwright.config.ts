@@ -546,6 +546,8 @@ export default defineConfig({
         /row-msg-index-alignment\.spec\.ts/,
         /score-sort-order\.spec\.ts/,
         /selected-message-outline\.spec\.ts/,
+        // Clicks, modifier clicks and Tab: where the engines' focus differs.
+        /grid-selection\.spec\.ts/,
         /qmd-index-columns\.spec\.ts/,
         // The search field, a CodeMirror editor: the desktop app's typing.
         /search-field\.spec\.ts/,

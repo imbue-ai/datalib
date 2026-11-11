@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { SlickEvent, SlickEventData, type SlickGrid } from "@slickgrid-universal/common";
-import { openRowsOn, selectAllRowsOnKey, stepThroughList, tabLeavesRows } from "./rowIdioms";
+import {
+  openRowsOn,
+  selectAllRowsOnKey,
+  stepThroughList,
+  stepThroughSelection,
+  tabLeavesRows,
+} from "./rowIdioms";
 
 type Line = { seq: number };
 
@@ -171,5 +177,36 @@ describe("the arrows in a list", () => {
     expect(stepThroughList(press("ArrowDown"), -1, 0)).toBeNull();
     expect(stepThroughList(press("ArrowDown", { shiftKey: true }), 0, 3)).toBeNull();
     expect(stepThroughList(press("Enter"), 0, 3)).toBeNull();
+  });
+});
+
+describe("the arrows among several selected rows", () => {
+  const selected = [40, 3, 17];
+
+  it("move to the next or previous selected row, skipping the rest", () => {
+    expect(stepThroughSelection(press("ArrowDown"), 3, selected)).toBe(17);
+    expect(stepThroughSelection(press("ArrowDown"), 17, selected)).toBe(40);
+    expect(stepThroughSelection(press("ArrowUp"), 40, selected)).toBe(17);
+  });
+  it("start from wherever the active row is, selected or not", () => {
+    expect(stepThroughSelection(press("ArrowDown"), 10, selected)).toBe(17);
+    expect(stepThroughSelection(press("ArrowUp"), 10, selected)).toBe(3);
+    expect(stepThroughSelection(press("ArrowDown"), null, selected)).toBe(3);
+  });
+  /// Past the last selected row the grid's own ↓ would select the next
+  /// row alone, and the selection would be lost.
+  it("stay put at either end", () => {
+    expect(stepThroughSelection(press("ArrowDown"), 40, selected)).toBe(40);
+    expect(stepThroughSelection(press("ArrowUp"), 3, selected)).toBe(3);
+  });
+  /// After a re-sort the active row can be past the last selected one,
+  /// on a record that is not selected.
+  it("go to the nearest selected row from an unselected one past the end", () => {
+    expect(stepThroughSelection(press("ArrowDown"), 43, selected)).toBe(40);
+    expect(stepThroughSelection(press("ArrowUp"), 1, selected)).toBe(3);
+  });
+  it("leave one row's arrows, and Shift's range, to the grid", () => {
+    expect(stepThroughSelection(press("ArrowDown"), 3, [3])).toBeNull();
+    expect(stepThroughSelection(press("ArrowDown", { shiftKey: true }), 3, selected)).toBeNull();
   });
 });

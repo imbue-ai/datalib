@@ -86,3 +86,27 @@ export function stepThroughList(key: Keys, at: number, length: number): number |
       return null;
   }
 }
+
+/// With several rows selected, ↑ and ↓ move among them alone, as
+/// Lightroom's filmstrip does: to the row before or after `active` that
+/// is selected, staying put at either end, and the selection stays
+/// whole. Null, leaving the key to the grid, when one row or none is
+/// selected or for any other key.
+export function stepThroughSelection(
+  key: Keys,
+  active: number | null,
+  selected: readonly number[],
+): number | null {
+  if (selected.length < 2 || key.ctrlKey || key.metaKey || key.altKey || key.shiftKey) return null;
+  const rows = [...selected].sort((a, b) => a - b);
+  // Past either end: the active row when it is one of them, else the
+  // nearest of them (a re-sort leaves the active row on another record).
+  const atEnd = (nearest: number) => (active != null && rows.includes(active) ? active : nearest);
+  if (key.key === "ArrowDown") {
+    return rows.find((r) => r > (active ?? -1)) ?? atEnd(rows[rows.length - 1]);
+  }
+  if (key.key === "ArrowUp") {
+    return [...rows].reverse().find((r) => r < (active ?? Infinity)) ?? atEnd(rows[0]);
+  }
+  return null;
+}
