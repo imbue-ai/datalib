@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use serde_json::{json, Value};
+use sqlx::sqlite::SqliteConnection;
 use sqlx::{Connection, Executor};
 use tokio::sync::Semaphore;
 
@@ -126,8 +127,11 @@ async fn values_keep_their_sqlite_type() {
     );
 }
 
+/// The same rows, by every way a parameter is written: `?`, `?NNN`, and
+/// `:x`, `@x` or `$x` keyed with or without the sigil, one name used twice,
+/// and a blob sent as base64.
 #[tokio::test]
-async fn params_bind_by_position() {
+async fn params_bind_by_position_or_by_name() {
     let root = tempfile::tempdir().unwrap();
     plain_store(root.path()).await;
     for (sql, params) in [
@@ -143,6 +147,18 @@ async fn params_bind_by_position() {
             "SELECT name FROM t WHERE id IN (SELECT value FROM json_each(?1)) AND ?2",
             json!(["[3, 4]", true]),
         ),
+        (
+            "SELECT name FROM t WHERE id > :lo AND score < @hi",
+            json!({"lo": 2, "@hi": 5}),
+        ),
+        (
+            "SELECT name FROM t WHERE id > $n AND id < $n + 3",
+            json!({"n": 2}),
+        ),
+        (
+            "SELECT name FROM t WHERE id IN (:a, :b) AND name != :blob ORDER BY id",
+            json!({"a": 3, "b": 4, "blob": {"base64": "AAH/"}}),
+        ),
     ] {
         let page = ask(
             root.path(),
@@ -152,6 +168,14 @@ async fn params_bind_by_position() {
         .unwrap_or_else(|f| panic!("{sql}: {}", f.error));
         assert_eq!(page.rows, [[json!("data")], [json!("worf")]], "{sql}");
     }
+
+    let page = ask(
+        root.path(),
+        json!({"store": PLAIN, "sql": "SELECT name FROM t WHERE data = :d", "params": {"d": {"base64": "AAH/"}}}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.rows, [[json!("riker")]]);
 
     for (sql, params, says) in [
         (
@@ -167,7 +191,32 @@ async fn params_bind_by_position() {
         (
             "SELECT name FROM t WHERE id = :id",
             json!([2]),
-            ":id is a named parameter",
+            ":id is a named parameter: send params as an object",
+        ),
+        (
+            "SELECT name FROM t WHERE id = :id",
+            json!({"idd": 2}),
+            "params has no value for :id",
+        ),
+        (
+            "SELECT name FROM t WHERE id = :id",
+            json!({"id": 2, "name": "riker"}),
+            "the statement has no parameter name",
+        ),
+        (
+            "SELECT name FROM t WHERE id = ?",
+            json!({"id": 2}),
+            "takes its value by position",
+        ),
+        (
+            "SELECT name FROM t WHERE id = :id",
+            json!({"id": {"base64": "not base64!"}}),
+            "standard base64",
+        ),
+        (
+            "SELECT name FROM t WHERE id = :id",
+            json!("2"),
+            "params is a list",
         ),
         (
             "SELECT name FROM t WHERE id = ?",
@@ -252,12 +301,23 @@ async fn doltlites_reads_and_the_pragma_tables_pass_the_guard() {
             json!(second),
         ),
         ("VALUES (7)".to_string(), json!(7)),
+        (
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'crew'".to_string(),
+            json!("crew"),
+        ),
     ] {
         let page = ask(root.path(), json!({"store": DOLT, "sql": sql}))
             .await
             .unwrap_or_else(|f| panic!("{sql}: {}", f.error));
         assert_eq!(page.rows[0][0], want, "{sql}");
     }
+    let page = ask(
+        root.path(),
+        json!({"store": DOLT, "sql": "SELECT name, type FROM pragma_table_info(:table)", "params": {"table": "crew"}}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.rows, [[json!("name"), json!("TEXT")]]);
 }
 
 /// Nothing a caller sends writes: a statement that asks to is refused
@@ -369,11 +429,8 @@ async fn nothing_a_caller_sends_writes() {
 async fn a_guarded_connection_refuses_attach_and_writes_at_prepare() {
     let root = tempfile::tempdir().unwrap();
     plain_store(root.path()).await;
-    let opts = datalib_sqlite_open::file(&root.path().join(PLAIN)).read_only(true);
-    let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
-    guard::guard(&mut conn, std::time::Instant::now() + DEADLINE)
-        .await
-        .unwrap();
+    let name = datalib_sqlite_open::literal(&root.path().join(PLAIN));
+    let mut reader = guard::Reader::open(&name, std::time::Instant::now() + DEADLINE).unwrap();
     let other = root.path().join("other.sqlite");
     for (sql, refused) in [
         (format!("ATTACH '{}' AS o", other.display()), "ATTACH"),
@@ -388,12 +445,11 @@ async fn a_guarded_connection_refuses_attach_and_writes_at_prepare() {
         ),
     ] {
         assert_eq!(
-            guard::check(&mut conn, &sql).await,
+            reader.check(&sql),
             Err(guard::Refusal::Refused(refused.to_string())),
             "{sql}"
         );
     }
-    conn.close().await.unwrap();
 }
 
 /// A query still running at its deadline is stopped, and says so.
@@ -447,4 +503,13 @@ async fn a_store_is_named_under_the_root_and_must_be_there() {
     .await
     .unwrap_err();
     assert!(failure.error.contains("no commits"), "{}", failure.error);
+
+    dolt_commit_rows(root.path(), &["picard"]).await;
+    let failure = ask(
+        root.path(),
+        json!({"store": DOLT, "sql": "SELECT 1", "commit": "0".repeat(40)}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(failure.status, StatusCode::NOT_FOUND, "{}", failure.error);
 }

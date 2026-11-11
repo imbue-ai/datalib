@@ -223,8 +223,8 @@ fn sql_reads_a_store_it_lists() {
         "/sql",
         &serde_json::json!({
             "store": grid,
-            "sql": "SELECT source_id, count(*) AS n FROM grid_rows WHERE source_id = ? GROUP BY 1",
-            "params": ["slack"],
+            "sql": "SELECT source_id, count(*) AS n FROM grid_rows WHERE source_id = :source GROUP BY 1",
+            "params": {"source": "slack"},
         })
         .to_string(),
     );

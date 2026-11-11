@@ -8,7 +8,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
@@ -16,11 +16,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine as _;
-use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnection, SqliteRow};
-use sqlx::{Connection, Row, TypeInfo, ValueRef};
 use tokio::sync::Semaphore;
 
 use datalib_sql_guard as guard;
@@ -49,9 +46,10 @@ pub const AT_ONCE: usize = 4;
 pub struct SqlRequest {
     pub store: String,
     pub sql: String,
-    /// The values of the statement's `?` or `?NNN` parameters, in order.
+    /// The statement's parameters: a list for `?` and `?NNN`, an object
+    /// for `:name`, `@name` and `$name`.
     #[serde(default)]
-    pub params: Vec<Value>,
+    pub params: Value,
     /// A doltlite store's commit to read; its newest when absent.
     #[serde(default)]
     pub commit: Option<String>,
@@ -138,6 +136,7 @@ pub async fn run(
             "limit {limit}: a page holds 1 to {MAX_LIMIT} rows"
         )));
     }
+    let params = params_of(request.params).map_err(Failure::bad)?;
     let store = store::resolve(root, &request.store).map_err(|e| match e {
         store::NotAStore::Refused(why) => Failure::bad(why),
         store::NotAStore::Missing(why) => Failure::new(StatusCode::NOT_FOUND, why),
@@ -146,23 +145,40 @@ pub async fn run(
         .await
         .map_err(|_| past_deadline(budget))?
         .map_err(|e| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (mut conn, commit) = open(&store, request.commit.as_deref()).await?;
-    let read = read_page(&mut conn, &request, limit, deadline).await;
-    // A read-only connection has nothing to flush; a failed close loses nothing.
-    let _ = conn.close().await;
-    let (columns, rows, next_offset) = read.map_err(|e| {
+    let (name, commit) = name_to_open(&store, request.commit.as_deref()).await?;
+    let window = guard::Window {
+        offset: request.offset,
+        limit,
+        max_bytes: MAX_PAGE_BYTES,
+    };
+    let (sql, kind, store_name) = (request.sql, store.kind, store.name.clone());
+    let read = tokio::task::spawn_blocking(move || {
+        let mut reader = guard::Reader::open(&name, deadline).map_err(|e| match kind {
+            StoreKind::Doltlite => Failure::new(StatusCode::NOT_FOUND, e),
+            StoreKind::Sqlite => Failure::bad(e),
+        })?;
+        reader.read(&sql, &params, window).map_err(refused)
+    })
+    .await
+    .map_err(|e| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| {
         if Instant::now() >= deadline {
             past_deadline(budget)
         } else {
             e
         }
     })?;
+    let next_offset = read.more.then(|| request.offset + read.rows.len() as u64);
     Ok(Page {
-        store: store.name,
-        kind: store.kind,
+        store: store_name,
+        kind,
         commit,
-        columns,
-        rows,
+        columns: read.columns,
+        rows: read
+            .rows
+            .into_iter()
+            .map(|row| row.into_iter().map(json_value).collect())
+            .collect(),
         next_offset,
     })
 }
@@ -177,27 +193,33 @@ fn past_deadline(budget: Duration) -> Failure {
     )
 }
 
-async fn open(
+fn refused(refusal: guard::Refusal) -> Failure {
+    match refusal {
+        guard::Refusal::Refused(what) => Failure::new(
+            StatusCode::FORBIDDEN,
+            format!("this reads and nothing else, and the statement asks for {what}"),
+        ),
+        guard::Refusal::NotOneStatement => {
+            Failure::bad("send one SELECT statement (a WITH … SELECT is one)")
+        }
+        guard::Refusal::Params(why) | guard::Refusal::Sql(why) => Failure::bad(why),
+    }
+}
+
+/// The name SQLite opens for `store`, and the commit it reads: the one
+/// asked for, or the newest.
+async fn name_to_open(
     store: &store::Store,
     commit: Option<&str>,
-) -> Result<(SqliteConnection, Option<String>), Failure> {
-    let failed = |e: sqlx::Error| Failure::bad(format!("open {}: {e}", store.name));
+) -> Result<(PathBuf, Option<String>), Failure> {
     match store.kind {
-        StoreKind::Sqlite => {
-            if commit.is_some() {
-                return Err(Failure::bad(format!(
-                    "{} is plain SQLite, which has no commits to read",
-                    store.name
-                )));
-            }
-            let opts = datalib_sqlite_open::file(&store.path)
-                .read_only(true)
-                .create_if_missing(false);
-            let conn = SqliteConnection::connect_with(&opts)
-                .await
-                .map_err(failed)?;
-            Ok((conn, None))
-        }
+        StoreKind::Sqlite => match commit {
+            Some(_) => Err(Failure::bad(format!(
+                "{} is plain SQLite, which has no commits to read",
+                store.name
+            ))),
+            None => Ok((datalib_sqlite_open::literal(&store.path), None)),
+        },
         StoreKind::Doltlite => {
             let pin = match commit {
                 Some(commit) => {
@@ -205,16 +227,10 @@ async fn open(
                 }
                 None => head(store).await?,
             };
-            let opts = datalib_sqlite_open::revision(&store.path, pin.commit())
-                .read_only(true)
-                .create_if_missing(false);
-            let conn = SqliteConnection::connect_with(&opts).await.map_err(|e| {
-                Failure::new(
-                    StatusCode::NOT_FOUND,
-                    format!("{} at {}: {e}", store.name, pin.commit()),
-                )
-            })?;
-            Ok((conn, Some(pin.commit().to_string())))
+            Ok((
+                datalib_sqlite_open::revision_name(&store.path, pin.commit()),
+                Some(pin.commit().to_string()),
+            ))
         }
     }
 }
@@ -234,159 +250,63 @@ async fn head(store: &store::Store) -> Result<datalib_pin::Pin, Failure> {
         })
 }
 
-type PageRows = (Vec<String>, Vec<Vec<Value>>, Option<u64>);
-
-async fn read_page(
-    conn: &mut SqliteConnection,
-    request: &SqlRequest,
-    limit: usize,
-    deadline: Instant,
-) -> Result<PageRows, Failure> {
-    guard::guard(conn, deadline)
-        .await
-        .map_err(|e| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let sql = guard::paged(&request.sql, request.offset, limit);
-    let checked = guard::check(conn, &sql)
-        .await
-        .map_err(|refusal| match refusal {
-            guard::Refusal::Refused(what) => Failure::new(
-                StatusCode::FORBIDDEN,
-                format!("this reads and nothing else, and the statement asks for {what}"),
-            ),
-            guard::Refusal::NotOneStatement => {
-                Failure::bad("send one SELECT statement (a WITH … SELECT is one)")
-            }
-            guard::Refusal::Sql(message) => Failure::bad(message),
-        })?;
-    let binds = ordered(&request.params, &checked.parameters).map_err(Failure::bad)?;
-
-    // Audited: the caller's SQL is what this route runs. `guard::check`
-    // has just prepared this exact text on this connection, which is
-    // read-only and holds every statement to the authorizer; the LIMIT and
-    // OFFSET are integers this function formatted.
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
-    for bind in binds {
-        query = match bind {
-            Bind::Null => query.bind(None::<i64>),
-            Bind::Integer(i) => query.bind(i),
-            Bind::Real(f) => query.bind(f),
-            Bind::Text(s) => query.bind(s),
-        };
-    }
-    let mut stream = query.fetch(&mut *conn);
-    let mut rows = Vec::new();
-    let mut bytes = 0;
-    let mut more = false;
-    while let Some(row) = stream
-        .try_next()
-        .await
-        .map_err(|e| Failure::bad(sql_message(&e)))?
-    {
-        if rows.len() == limit {
-            more = true;
-            break;
+/// A cell as JSON. A blob is `{"base64": …}`; a real JSON cannot hold (an
+/// infinity) is its text.
+fn json_value(value: guard::Value) -> Value {
+    match value {
+        guard::Value::Null => Value::Null,
+        guard::Value::Integer(i) => i.into(),
+        guard::Value::Real(f) => {
+            serde_json::Number::from_f64(f).map_or_else(|| f.to_string().into(), Value::Number)
         }
-        let (values, size) = json_row(&row).map_err(|e| Failure::bad(sql_message(&e)))?;
-        rows.push(values);
-        bytes += size;
-        if bytes > MAX_PAGE_BYTES {
-            more = true;
-            break;
+        guard::Value::Text(s) => s.into(),
+        guard::Value::Blob(b) => {
+            serde_json::json!({ "base64": base64::engine::general_purpose::STANDARD.encode(b) })
         }
     }
-    let next_offset = more.then(|| request.offset + rows.len() as u64);
-    Ok((checked.columns, rows, next_offset))
 }
 
-fn sql_message(e: &sqlx::Error) -> String {
-    match e {
-        sqlx::Error::Database(db) => db.message().to_string(),
-        other => other.to_string(),
-    }
-}
-
-/// A row as JSON, and about how many bytes its values hold. A blob is
-/// `{"base64": …}`; a real SQLite cannot write as JSON (an infinity) is
-/// its text.
-fn json_row(row: &SqliteRow) -> Result<(Vec<Value>, usize), sqlx::Error> {
-    let mut values = Vec::with_capacity(row.len());
-    let mut size = 0;
-    for i in 0..row.len() {
-        let raw = row.try_get_raw(i)?;
-        let value = if raw.is_null() {
-            Value::Null
-        } else {
-            match raw.type_info().name() {
-                "INTEGER" => row.try_get_unchecked::<i64, _>(i)?.into(),
-                "REAL" => {
-                    let f = row.try_get_unchecked::<f64, _>(i)?;
-                    serde_json::Number::from_f64(f)
-                        .map_or_else(|| f.to_string().into(), Value::Number)
-                }
-                "BLOB" => {
-                    let bytes = row.try_get_unchecked::<Vec<u8>, _>(i)?;
-                    size += bytes.len();
-                    serde_json::json!({
-                        "base64": base64::engine::general_purpose::STANDARD.encode(bytes)
-                    })
-                }
-                _ => {
-                    let text = row.try_get_unchecked::<String, _>(i)?;
-                    size += text.len();
-                    text.into()
-                }
-            }
-        };
-        size += 8;
-        values.push(value);
-    }
-    Ok((values, size))
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Bind {
-    Null,
-    Integer(i64),
-    Real(f64),
-    Text(String),
-}
-
-fn bind_of(value: &Value) -> Result<Bind, String> {
-    Ok(match value {
-        Value::Null => Bind::Null,
-        Value::Bool(b) => Bind::Integer(i64::from(*b)),
-        Value::Number(n) => match (n.as_i64(), n.as_f64()) {
-            (Some(i), _) => Bind::Integer(i),
-            (None, Some(_)) if n.is_u64() => {
-                return Err(format!("{n} is past SQLite's largest integer"))
-            }
-            (None, Some(f)) => Bind::Real(f),
-            (None, None) => return Err(format!("{n} is not a number SQLite holds")),
-        },
-        Value::String(s) => Bind::Text(s.clone()),
-        Value::Array(_) | Value::Object(_) => {
-            return Err("a parameter is a string, a number, a boolean or null; \
-                 pass JSON as a string and read it with json(?)"
-                .into())
+/// `params` as the request sent it: absent, a list, or an object of names.
+pub fn params_of(params: Value) -> Result<guard::Params, String> {
+    Ok(match params {
+        Value::Null => guard::Params::ByPosition(Vec::new()),
+        Value::Array(values) => {
+            guard::Params::ByPosition(values.iter().map(bind_of).collect::<Result<_, _>>()?)
         }
+        Value::Object(pairs) => guard::Params::ByName(
+            pairs
+                .into_iter()
+                .map(|(k, v)| Ok((k, bind_of(&v)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        _ => return Err("params is a list (for `?1`, `?2`) or an object (for `:name`)".into()),
     })
 }
 
-/// The values to bind, one per parameter (`names[i]` is parameter
-/// `i + 1`'s name). sqlx binds by position only, so a named parameter
-/// (`:x`, `@x`, `$x`) is refused rather than left unbound.
-pub fn ordered(params: &[Value], names: &[Option<String>]) -> Result<Vec<Bind>, String> {
-    if let Some(named) = names.iter().flatten().find(|name| !name.starts_with('?')) {
-        return Err(format!(
-            "{named} is a named parameter; write `?1`, `?2`, … and send params as a list"
-        ));
-    }
-    if params.len() != names.len() {
-        return Err(format!(
-            "the statement has {} parameter(s) and params holds {}",
-            names.len(),
-            params.len()
-        ));
-    }
-    params.iter().map(bind_of).collect()
+fn bind_of(value: &Value) -> Result<guard::Value, String> {
+    Ok(match value {
+        Value::Null => guard::Value::Null,
+        Value::Bool(b) => guard::Value::Integer(i64::from(*b)),
+        Value::Number(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(i), _) => guard::Value::Integer(i),
+            (None, Some(_)) if n.is_u64() => {
+                return Err(format!("{n} is past SQLite's largest integer"))
+            }
+            (None, Some(f)) => guard::Value::Real(f),
+            (None, None) => return Err(format!("{n} is not a number SQLite holds")),
+        },
+        Value::String(s) => guard::Value::Text(s.clone()),
+        Value::Object(o) if o.len() == 1 && o.contains_key("base64") => {
+            let blob = o["base64"]
+                .as_str()
+                .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+                .ok_or("{\"base64\": …} holds a blob as standard base64 text")?;
+            guard::Value::Blob(blob)
+        }
+        Value::Array(_) | Value::Object(_) => {
+            return Err("a parameter is a string, a number, a boolean, null or \
+                 {\"base64\": …}; pass JSON as a string and read it with json(?)"
+                .into())
+        }
+    })
 }

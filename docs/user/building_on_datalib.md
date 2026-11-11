@@ -430,8 +430,9 @@ three things, in this order:
    where there is no library: outside Python on a musl tarball, or on an Intel
    Mac.
 3. **The app, over HTTP.** With the app up, `POST
-   /applet/unified_document_index/sql` runs one `SELECT` against any store
-   and answers a page of rows as JSON, behind the API token
+   /applet/unified_document_index/sql` runs one `SELECT` against any store,
+   its parameters bound by name (`:source`) or position, and answers a
+   page of rows as JSON, behind the API token
    ([applets.md](applets.md#reading-any-store-with-sql)). It needs
    nothing installed and no shell, so it suits an agent that can make
    HTTP requests and run nothing else, or one in a container. It costs a

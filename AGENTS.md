@@ -277,9 +277,10 @@ datalib/
                    and the applet.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
-    sql_guard/     what keeps SQL a caller wrote to reading: the
-                   authorizer, deadline and one-statement check behind
-                   the search applet's `POST /sql`.
+    sql_guard/     reads SQL a caller wrote, and nothing else: a
+                   read-only open over SQLite's C API, the authorizer,
+                   deadline and one-statement check, parameters by name
+                   or position; behind the search applet's `POST /sql`.
     blob_store/    the blob store's shape: the one part of a step's data
                    `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
