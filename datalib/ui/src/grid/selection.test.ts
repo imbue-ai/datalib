@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keptSelection, newlyPicked, rowsToRestore } from "./selection";
+import { keptSelection, newlyPicked, rowsToRestore, withoutLeftOut } from "./selection";
 
 const keyOf = (r: { uuid: string }) => r.uuid;
 
@@ -51,5 +51,17 @@ describe("restoring a kept selection", () => {
   });
   it("clears rows selected that are not kept", () => {
     expect(rowsToRestore(new Set(["b"]), rowOf, [1, 4])).toEqual([1]);
+  });
+});
+
+describe("what a new search leaves of a selection", () => {
+  it("drops the records asked about that the search does not hold", () => {
+    expect(withoutLeftOut(new Set(["a", "b", "c"]), ["b", "c"], ["c"])).toEqual(
+      new Set(["a", "c"]),
+    );
+  });
+  /// A record selected after the question went out was not asked about.
+  it("keeps records it was not asked about", () => {
+    expect(withoutLeftOut(new Set(["a", "late"]), ["a"], [])).toEqual(new Set(["late"]));
   });
 });

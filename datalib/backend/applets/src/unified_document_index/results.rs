@@ -206,6 +206,20 @@ pub fn reaching(list: &[Entry], offset: usize, limit: usize, through: Option<&st
     limit.max(needed).min(MAX_PAGE)
 }
 
+/// Which of `ids` are among the search's rows, in the order asked: how a
+/// grid learns whether a selected row it has not loaded is still in the
+/// results of a new search.
+pub fn among(list: &[Entry], ids: &[String]) -> Vec<String> {
+    let held: std::collections::HashSet<&str> = list
+        .iter()
+        .flat_map(|e| [e.uuid.as_str(), e.row()])
+        .collect();
+    ids.iter()
+        .filter(|id| held.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// The `limit` entries from `offset`, and the offset of the next page, or
 /// `None` when these reach the end.
 pub fn page(list: &[Entry], offset: usize, limit: usize) -> (&[Entry], Option<usize>) {
@@ -244,6 +258,13 @@ mod tests {
         let (exact, next) = page(&l, 3, 2);
         assert_eq!(exact.len(), 2);
         assert_eq!(next, None, "a page ending on the last row is the last");
+    }
+
+    #[test]
+    fn among_answers_which_ids_the_search_holds_in_the_order_asked() {
+        let ids = ["u7", "gone", "u2"].map(String::from);
+        assert_eq!(among(&list(10), &ids), ["u7", "u2"]);
+        assert!(among(&list(10), &[]).is_empty());
     }
 
     #[test]

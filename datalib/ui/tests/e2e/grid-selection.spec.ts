@@ -64,10 +64,12 @@ test("a click on a chip in a row selects the row", async ({ page }) => {
   await expect.poll(() => isSelected(page, uuid), { message: "the chip's row" }).toBe(true);
 });
 
-/// A ⌘-click adds a row; a re-sort, and a search that leaves one of the
-/// rows out and then brings it back, keep both; a plain click is the
-/// whole selection again.
-test("a selection of several rows survives a re-sort and another search", async ({ page }) => {
+/// A ⌘-click adds a row; a re-sort keeps both, a narrower search keeps
+/// the one still in it and drops the other for good, so widening again
+/// does not bring it back; a plain click is the whole selection again.
+test("a selection survives a re-sort, and a search keeps the rows still in it", async ({
+  page,
+}) => {
   const q = "source:tng_calendar is:document";
   const all = await answer(page, q);
   // Every row on the first page, so a re-sort cannot push one out of
@@ -105,12 +107,68 @@ test("a selection of several rows survives a re-sort and another search", async 
 
   await runSearch(page, q);
   await gridSettled(page);
-  await expect.poll(() => isSelected(page, b), { message: "b, back in the search" }).toBe(true);
-  await expect.poll(() => isSelected(page, a), { message: "a, still" }).toBe(true);
+  await expect.poll(() => isSelected(page, a), { message: "a, in the wider search" }).toBe(true);
+  expect(await isSelected(page, b), "b, left out by the narrower search, stays out").toBe(false);
 
+  await actOnRowByUuid(page, b, (row) =>
+    row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
+  );
+  await expect.poll(() => isSelected(page, b), { message: "b, ⌘-clicked again" }).toBe(true);
   await actOnRowByUuid(page, a, (row) => row.click({ position: { x: 40, y: 10 }, timeout: 3_000 }));
   await expect.poll(() => isSelected(page, b), { message: "a plain click replaces" }).toBe(false);
   expect(await isSelected(page, a)).toBe(true);
+});
+
+/// With more rows than the grid loads at once, whether a selected row is
+/// still in a narrower search is the server's to say (`among`): a row the
+/// search holds past the loaded page is kept, one it leaves out is not.
+test("a search of many rows keeps the selected rows it holds past the loaded page", async ({
+  page,
+}) => {
+  const newest = await answer(page, "", { sort: "touched_at:desc" });
+  const a = newest[0];
+  const bAt = newest.findIndex((r) => r.kind !== a.kind);
+  expect(bAt, "the newest rows must be of two kinds").toBeGreaterThan(0);
+  expect(bAt, "both on the grid's first page").toBeLessThan(200);
+  const b = newest[bAt];
+  const narrower = `-kind:"${b.kind}"`;
+  const narrowedOldest = await answer(page, narrower, { sort: "touched_at:asc", limit: "100000" });
+  expect(narrowedOldest.length, "the narrower search must pass one page").toBeGreaterThan(200);
+  const at = narrowedOldest.findIndex((r) => r.uuid === a.uuid);
+  expect(at, "the narrower search holds a past its first page").toBeGreaterThanOrEqual(200);
+
+  await page.goto(EVERY_ROW);
+  await viewTab(page, "Table").click();
+  await firstRowUuid(page);
+  await gridSettled(page);
+  await selectRowByUuid(page, a.uuid);
+  await actOnRowByUuid(page, b.uuid, (row) =>
+    row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
+  );
+  await expect.poll(() => isSelected(page, b.uuid), { message: "the ⌘-clicked row" }).toBe(true);
+  await sortPick(page).selectOption({ label: "Oldest first" });
+  await gridSettled(page);
+
+  // The question is asked after the rows land; wait for its answer before
+  // the next search, which would make it moot.
+  const asked = page.waitForResponse((r) => r.url().includes("among="));
+  await runSearch(page, narrower);
+  await gridSettled(page);
+  await asked;
+
+  await runSearch(page, "");
+  await gridSettled(page);
+  await page.evaluate(
+    async (ids) => {
+      const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
+      for (const id of ids) await api.seek(id);
+    },
+    [a.uuid, b.uuid],
+  );
+  await expect
+    .poll(() => isSelected(page, a.uuid), { message: "a, held past the page" })
+    .toBe(true);
+  expect(await isSelected(page, b.uuid), "b, left out by the narrower search").toBe(false);
 });
 
 /// The grid's own keeping held on to a row a search hid, even after a

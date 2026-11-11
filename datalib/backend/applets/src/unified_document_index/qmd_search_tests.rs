@@ -673,6 +673,7 @@ async fn a_search_naming_a_tab_is_refused() {
         offset: None,
         sort: None,
         through: None,
+        among: None,
         within: None,
         tab: Some("words".to_string()),
     };

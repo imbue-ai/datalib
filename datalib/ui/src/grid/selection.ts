@@ -43,3 +43,16 @@ export function rowsToRestore(
   const already = new Set(selected);
   return rows.length === already.size && rows.every((r) => already.has(r)) ? null : rows;
 }
+
+/// What a new search leaves of a kept selection: the records it was asked
+/// about (`asked`, those not among the rows loaded) and did not find are
+/// dropped, and a later, wider search does not bring them back. Records
+/// not asked about stay.
+export function withoutLeftOut(
+  kept: ReadonlySet<string>,
+  asked: readonly string[],
+  found: readonly string[],
+): Set<string> {
+  const gone = new Set(asked.filter((id) => !found.includes(id)));
+  return new Set([...kept].filter((id) => !gone.has(id)));
+}

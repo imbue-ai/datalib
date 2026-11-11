@@ -863,11 +863,15 @@ again, and the only ones that should know the grid's DOM or options:
   inside one selected row copies as the browser would. Each grid says
   what a cell copies as (`copyText` in `cards/typedColumns.ts` by type).
 - `grid/selection.ts` — what the search grid's selection keeps across
-  a re-sort, another search or a refresh: the records selected, found
-  again wherever they land, those not loaded yet included. A plain click
-  or arrow replaces it; ⌘, Ctrl or Shift adds. `GridCard` turns the
-  grid's own keeping (`syncGridSelection`) off for this, since that one
-  keeps a row a search hid even after a plain click.
+  a re-sort, another search or a refresh: the records selected that the
+  answer still holds, found again wherever they land, those not loaded
+  yet included. A record a search leaves out is dropped for good, so a
+  wider search does not bring it back; for records past the loaded rows
+  the grid asks the search (`among`, a JSON array of ids, answered with
+  those it holds). A plain click or arrow replaces the selection; ⌘,
+  Ctrl or Shift adds. `GridCard` turns the grid's own keeping
+  (`syncGridSelection`) off for this, since that one keeps a row a
+  search hid even after a plain click.
 - `grid/rowHover.ts` — lights both halves of a row that pinned columns
   split in two; the theme's `:hover` reaches only the half under the
   pointer.

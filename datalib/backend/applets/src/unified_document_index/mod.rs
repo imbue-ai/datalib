@@ -273,6 +273,9 @@ pub struct SearchParams {
     /// A row's uuid the page must reach, however far past `offset` it is:
     /// see `results::reaching`.
     pub through: Option<String>,
+    /// Record ids as a JSON array: the answer says which of them are among
+    /// the search's rows, wherever they fall (`SearchResponse::among`).
+    pub among: Option<String>,
     /// The group whose rows to list, as `[[column, value], …]` (see
     /// `grouping`); none for the whole search.
     pub within: Option<String>,
@@ -291,6 +294,7 @@ struct PageSpec<'a> {
     offset: usize,
     limit: usize,
     through: Option<&'a str>,
+    among: &'a [String],
 }
 
 #[derive(Debug, Serialize)]
@@ -325,6 +329,10 @@ pub struct SearchResponse {
     /// UI keeps what it showed and says why beside the bar.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused: Vec<String>,
+    /// Which of the ids the request named in `among` are among the
+    /// search's rows; absent when it named none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub among: Option<Vec<String>>,
 }
 
 impl SearchResponse {
@@ -341,6 +349,7 @@ impl SearchResponse {
             at: None,
             errors,
             refused: Vec::new(),
+            among: None,
         }
     }
 }
@@ -444,12 +453,21 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
             return SearchResponse::unread(errors);
         }
     };
+    let among = match p.among.as_deref().map(serde_json::from_str::<Vec<String>>) {
+        None => Vec::new(),
+        Some(Ok(ids)) => ids,
+        Some(Err(e)) => {
+            errors.push(format!("`among` is not a JSON array of ids: {e}"));
+            return SearchResponse::unread(errors);
+        }
+    };
     let spec = PageSpec {
         sort: &sort,
         within: &within,
         offset,
         limit,
         through,
+        among: &among,
     };
     let answered = search_page(s, &q, &parsed, spec).await;
     let read = answered.is_ok();
@@ -526,6 +544,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         at: page.at,
         errors,
         refused: Vec::new(),
+        among: page.among,
     }
 }
 
@@ -727,6 +746,7 @@ struct Page {
     at: Option<String>,
     /// What part of the search could not answer, when the rest did.
     partial: Option<String>,
+    among: Option<Vec<String>>,
 }
 
 /// One page of the search, with qmd's score and matched words on each
@@ -740,12 +760,14 @@ async fn search_page(
     let (list, at, partial) = search_results(s, q, parsed, spec.sort, spec.within).await?;
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
     let (rows, next_offset) = page_rows(s, parsed, &list, spec.offset, limit).await?;
+    let among = (!spec.among.is_empty()).then(|| results::among(&list, spec.among));
     Ok(Page {
         rows,
         total: list.len(),
         next_offset,
         at,
         partial,
+        among,
     })
 }
 
@@ -2444,6 +2466,49 @@ mod tests {
         assert_eq!(uuids(&narrowed), Vec::<&str>::new());
     }
 
+    /// A grid that holds one page asks whether its selected rows are still
+    /// in a new search, wherever they fall in it: `among` answers for every
+    /// row the search holds, not just the page.
+    #[tokio::test]
+    async fn among_says_which_named_rows_are_in_the_search_past_the_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            "00000000-0000-4000-8000-0000000000a1",
+            "00000000-0000-4000-8000-0000000000b2",
+            "00000000-0000-4000-8000-0000000000c3",
+        );
+        index_rows(
+            tmp.path(),
+            vec![
+                document_row(a, "2026-01-01T09:00:00+00:00", "Chat")
+                    .build()
+                    .unwrap(),
+                document_row(b, "2026-01-02T09:00:00+00:00", "Chat")
+                    .build()
+                    .unwrap(),
+                document_row(c, "2026-01-03T09:00:00+00:00", "Email")
+                    .build()
+                    .unwrap(),
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+        let params = SearchParams {
+            q: Some("kind:Chat".to_string()),
+            limit: Some(1),
+            offset: None,
+            sort: None,
+            through: None,
+            among: Some(serde_json::json!([c, a, b]).to_string()),
+            within: None,
+            tab: None,
+        };
+        let r = search_handler(State(s.clone()), Query(params)).await.0;
+        assert_eq!(r.rows.len(), 1, "one page of one row");
+        assert_eq!(r.among, Some(vec![a.to_string(), b.to_string()]));
+        assert_eq!(search(&s, "kind:Chat", None, 1, None).await.among, None);
+    }
+
     /// Commits each row as a document of its own, with the search terms a
     /// render supplies for it (an email's To and Cc).
     async fn index_rows_with_terms(
@@ -2887,6 +2952,7 @@ mod tests {
             offset,
             sort: sort.map(String::from),
             through: None,
+            among: None,
             within: None,
             tab: None,
         };
@@ -3155,6 +3221,7 @@ mod tests {
             offset: None,
             sort: None,
             through: None,
+            among: None,
             within: Some(within.to_string()),
             tab: None,
         };
