@@ -306,7 +306,7 @@ export function rangeEndText(start: Stamp, end: Stamp, view = timeView.value): s
 
 /** Draw every `<time datetime>` under `root` as a date chip. A stamp the
  *  viewer cannot read keeps the render's own text and hover. */
-export function decorateDates(root: HTMLElement, now = Date.now(), view = timeView.value): void {
+export function decorateDates(root: ParentNode, now = Date.now(), view = timeView.value): void {
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("time[datetime]"))) {
     const s = parseStamp(el.getAttribute("datetime") ?? "");
     if (!s) continue;

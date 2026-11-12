@@ -144,9 +144,12 @@ export default function photos(appletId, uuid) {
         c.addEventListener("click", () => ctx.host.openCards(search(q)));
         return c;
       };
+      // A <time> the app draws as its date chip.
       if (p.captured_at) {
+        const taken = el("time", "", p.captured_at);
+        taken.setAttribute("datetime", p.captured_at);
         const assumed = p.offset_from === "assumed_utc" ? " (time zone unknown; read as UTC)" : "";
-        row("Taken", p.captured_at + assumed);
+        row("Taken", taken, assumed);
       }
       if (p.people.length) {
         const r = row("People", ...p.people.map((x) => chip(x.name, `label:${quoted(x.name)}`)));

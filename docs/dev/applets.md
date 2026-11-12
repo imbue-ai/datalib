@@ -235,6 +235,12 @@ exactly like ones a user dropped in by hand. Writing the two files
 yourself into `system/frontend/user/` defines a component with no
 applet and no config entry involved.
 
+**A component's card writes a date as `<time datetime="…">`** and the
+app draws it as the date chip a document draws, with its clicks
+(`chips.md` §"A date"; `ui/src/cards/appletDates.ts`). A component
+has none of the app's code, so this is how its dates follow the status
+bar's clock. A `datetime` the chip cannot read stays as written.
+
 ### Why the name is a hash and the metadata is separate
 
 Addressing code by content buys two things. The browser keeps one
