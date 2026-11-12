@@ -673,7 +673,27 @@ Everything is in `datalib/ui/src/cards/`:
   then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
-contacts as `/people` ranked them, then the text the source showed.
+contacts as `/people` ranked them, then the text the source showed. A
+message's own header is the exception: it shows the name that message
+gave ([`chips.md`](chips.md) §"Trust").
+
+**A source's name for a person is not any one message's.** A chat
+source's record of a person is one row per document; `/people` merges
+them (`unified_document_index/src/people.rs::merge_and_rank`) and puts
+first the name the most was written under: each document's first name
+(its most used, as `chat-common::people::baseline_contacts` orders
+them) is credited with the items the person wrote there, at least one,
+and a tie goes to the name that sorts first. So one forged message in a
+spam folder cannot rename the sender on the rest of their mail. A name
+that spells out an address, a number, a handle's URI or its stored form
+(`datalib_handle::Handle::spelled_by`) that the record does not hold
+(`"picard@enterprise.org" <q@continuum.test>`) is no name for it
+(`NormalizedContact::is_anothers_handle`). The render drops it from
+every source's contacts as the document is handed over
+(`datalib_etl_render::names`), `/people` drops it from a store rendered
+before that, the search's `names` table takes no row author spelled
+that way (`search_terms::names_seen_under`), and the chip refuses one
+too (`contacts.ts::namesSomeoneElse`), showing the identifier instead.
 
 ## Searching for a person
 

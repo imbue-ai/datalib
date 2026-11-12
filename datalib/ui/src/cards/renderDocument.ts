@@ -53,8 +53,11 @@ export function renderDocument(body: string, options: RenderOptions = {}): Sanit
   return pieces ? renderPieces(pieces, signed) : renderWhole(body, signed);
 }
 
-function renderWhole(body: string, options: Signed): Sanitized {
-  return sanitizeRenderedHtml(md.render(body, { chipMark: options.chipMark }), options);
+function renderWhole(body: string, options: Signed, messageHeader = false): Sanitized {
+  return sanitizeRenderedHtml(
+    md.render(body, { chipMark: options.chipMark, messageHeader }),
+    options,
+  );
 }
 
 function cut(body: string, sections: readonly BodySection[]): Piece[] | null {
@@ -123,7 +126,7 @@ function renderMessage(
   if (parts) {
     const shell = sanitizeRenderedHtml(`${parts[1]}</div>`, options).html;
     if (DRAWN_WRAPPER.exec(shell)?.[1] === uuid) {
-      const inside = renderWhole(parts[2], { ...options, reservedSections: messages });
+      const inside = renderWhole(parts[2], { ...options, reservedSections: messages }, true);
       return {
         html: shell.slice(0, -"</div>".length) + inside.html + "</div>",
         remote: inside.remote,

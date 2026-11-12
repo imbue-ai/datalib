@@ -1,12 +1,19 @@
 //! The YAML front matter that opens every rendered document. Each
 //! renderer writes its own keys; a value from upstream goes through
-//! [`yaml_scalar`], so nothing in it can end its line or the block.
+//! [`yaml_scalar`], so nothing in it can end its line or the block; a
+//! title goes through [`yaml_name`].
 
 /// `s` as a YAML scalar, JSON-quoted: YAML reads a JSON string as a
 /// double-quoted scalar, and in one a line break, a quote or a `---` is
 /// an escape or plain text rather than structure.
 pub fn yaml_scalar(s: &str) -> String {
     serde_json::to_string(s).expect("a string serializes to JSON")
+}
+
+/// A title or a name as a YAML scalar: [`yaml_scalar`] without its bidi
+/// controls (`crate::html::without_bidi_controls`).
+pub fn yaml_name(s: &str) -> String {
+    yaml_scalar(&crate::html::without_bidi_controls(s))
 }
 
 #[cfg(test)]

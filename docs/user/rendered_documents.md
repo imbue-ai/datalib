@@ -102,6 +102,13 @@ names, never who the text claims**. A body that writes
 under the name your sources know that address by, and say that the
 document showed it as "Picard".
 
+The author link opening a message's header is the one place its text
+is the message's own word: it is what that message called its sender.
+Datalib's viewer shows it there, and only there, so a forged sender
+name stays on the forged message. A name that is itself an address or
+another handle (`"picard@enterprise.org" <q@continuum.test>`) is no
+name; show the href's identifier instead.
+
 Only an explicit link is a person. A bare address that a markdown
 viewer turns into a link by itself (`linkify`) is just an address in the
 text, such as a signature's.

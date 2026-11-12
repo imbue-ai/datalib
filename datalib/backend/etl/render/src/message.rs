@@ -7,7 +7,9 @@
 use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::html::{escape_attr, escape_md_inline, md_link_dest};
+use crate::html::{
+    escape_attr, escape_md_inline, escape_name_inline, md_link_dest, without_bidi_controls,
+};
 
 /// A chip: a markdown link naming a person, which datalib draws as a
 /// chip and every other viewer shows as a link with a tooltip
@@ -34,9 +36,9 @@ pub fn entity_link(text: &str, uri: &str, title: &str) -> String {
 fn link_with_title(text: &str, href: &str, title: &str) -> String {
     format!(
         "[{}]({} \"{}\")",
-        escape_md_inline(text),
+        escape_name_inline(text),
         md_link_dest(href),
-        md_link_title(title),
+        md_link_title(&without_bidi_controls(title)),
     )
 }
 
@@ -96,7 +98,7 @@ impl MessageHeader<'_> {
                 Some(h) => s.push_str(&chip_link(self.author, h)),
                 None => s.push_str(&format!(
                     "<span class=\"msg-author\">{}</span>",
-                    escape_md_inline(self.author),
+                    escape_name_inline(self.author),
                 )),
             }
             s.push(' ');

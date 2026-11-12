@@ -11,9 +11,9 @@ use anyhow::{Context, Result};
 
 use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{close_open_blocks, escape_md_inline};
+use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -245,7 +245,7 @@ fn render_one(
     body.push_str("---\n");
     body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
     body.push_str(&format!("blake3: {}\n", yaml_scalar(&t.blake3)));
-    body.push_str(&format!("title: {}\n", yaml_scalar(&title)));
+    body.push_str(&format!("title: {}\n", yaml_name(&title)));
     if let Some(a) = &t.author {
         body.push_str(&format!("author: {}\n", yaml_scalar(a)));
     }
@@ -296,7 +296,7 @@ fn render_one(
 
 *{FILE_CHANGED}*
 ",
-                escape_md_inline(&title)
+                escape_name_inline(&title)
             ));
             let problem = ProblemRow::new(
                 source_id,
@@ -361,7 +361,7 @@ fn pages_markdown(
     page_uuid: impl Fn(u32) -> String,
 ) -> (Vec<Section>, Vec<(u32, String)>) {
     let mut sections = Vec::new();
-    let mut body = format!("# {}\n\n", escape_md_inline(title));
+    let mut body = format!("# {}\n\n", escape_name_inline(title));
     let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
     for p in pages {
         if p.non_textual {

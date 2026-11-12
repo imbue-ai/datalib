@@ -23,6 +23,7 @@ use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
+    without_bidi_controls,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
@@ -509,7 +510,8 @@ fn build_chat(
                     byte_len: a.size.unwrap_or(0).max(0) as u64,
                     content_type: a.content_type.clone(),
                 };
-                render_bundle.add_part(a.blob_id.clone(), eml, part, a.name.clone());
+                let name = a.name.as_deref().map(without_bidi_controls);
+                render_bundle.add_part(a.blob_id.clone(), eml, part, name);
             }
         }
 
@@ -609,7 +611,8 @@ fn build_chat(
         if !trailing.is_empty() {
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
-                let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
+                let name = without_bidi_controls(a.name.as_deref().unwrap_or(&a.part_id));
+                let label = escape_md_inline(&name);
                 match linked.get(&a.blob_id) {
                     Some(href) => text.push_str(&format!("\n- [{label}]({href})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),

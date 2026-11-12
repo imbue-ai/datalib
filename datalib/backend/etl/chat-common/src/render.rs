@@ -53,7 +53,8 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// and in the row's `created_at`.
 /// v24: a `Markdown` body that leaves a fence or an HTML block open is
 /// closed at its end, so the messages after it are not swallowed.
-pub const LAYOUT_VERSION: u32 = 24;
+/// v25: titles, names, filenames and labels lose their bidi controls.
+pub const LAYOUT_VERSION: u32 = 25;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -87,11 +88,12 @@ use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
 use crate::types::{
-    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
+    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
 };
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::html::{
     close_open_blocks, escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
+    without_bidi_controls,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -230,10 +232,11 @@ impl<'a> ChatRenderer<'a> {
             key: chat.chat_uuid.clone(),
             inputs: chat.inputs.clone(),
         });
+        let shown = chat_names_shown(chat);
         for doc in &chat.buckets {
             let (items, reactions) = render_one(
                 self.profile,
-                chat,
+                &shown,
                 doc,
                 self.out_dir,
                 self.source_id,
@@ -265,6 +268,58 @@ impl<'a> ChatRenderer<'a> {
 /// WhatsApp user …0108").
 fn chat_heading(chat: &NormalizedChat) -> String {
     chat.title.clone().unwrap_or_else(|| chat.display.clone())
+}
+
+/// `chat` without its documents, its title and names without bidi
+/// controls ([`without_bidi_controls`]): every page and row reads them
+/// from here.
+fn chat_names_shown(chat: &NormalizedChat) -> NormalizedChat {
+    let shown = |s: &Option<String>| s.as_deref().map(without_bidi_controls);
+    NormalizedChat {
+        id: chat.id.clone(),
+        chat_uuid: chat.chat_uuid.clone(),
+        display: without_bidi_controls(&chat.display),
+        title: shown(&chat.title),
+        account: shown(&chat.account),
+        author: shown(&chat.author),
+        project: shown(&chat.project),
+        external_id: chat.external_id.clone(),
+        upstream_account: chat.upstream_account.clone(),
+        source_url: chat.source_url.clone(),
+        org_uuid: chat.org_uuid.clone(),
+        org_name: shown(&chat.org_name),
+        buckets: Vec::new(),
+        named_after: chat
+            .named_after
+            .iter()
+            .map(|p| NamedPerson {
+                shown: without_bidi_controls(&p.shown),
+                handle: p.handle.clone(),
+            })
+            .collect(),
+        contacts: chat.contacts.clone(),
+        inputs: chat.inputs.clone(),
+    }
+}
+
+/// The names in a document — authors, recipients, reactors, attachment
+/// filenames, labels — without bidi controls.
+fn doc_names_shown(doc: &mut NormalizedDoc) {
+    for item in &mut doc.items {
+        item.author_display = without_bidi_controls(&item.author_display);
+        for r in &mut item.recipients {
+            r.display = without_bidi_controls(&r.display);
+        }
+        for r in &mut item.reactions {
+            r.reactor_display = without_bidi_controls(&r.reactor_display);
+        }
+        for a in &mut item.attachments {
+            a.file_name = a.file_name.as_deref().map(without_bidi_controls);
+        }
+        for label in &mut item.labels {
+            *label = without_bidi_controls(label);
+        }
+    }
 }
 
 /// The account's own messages and reactions, under whatever stand-in
@@ -310,6 +365,7 @@ fn render_one(
     // the same chat may be re-rendered into another bucket later.
     let mut resolved_doc = link_attachments(doc, blobs);
     the_account_as_me(&mut resolved_doc);
+    doc_names_shown(&mut resolved_doc);
     let doc = &resolved_doc;
 
     let chat_title = chat_heading(chat);
@@ -432,7 +488,7 @@ fn render_markdown(
     };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_scalar(&title)));
+    s.push_str(&format!("title: {}\n", yaml_name(&title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
     s.push_str(&format!(
         "source_label: {}\n",
@@ -1763,6 +1819,74 @@ mod tests {
             ),
             "{md}"
         );
+    }
+
+    /// A right-to-left override showed `evil.exe` as `exe.live`. Every
+    /// chat source's titles, names, filenames and labels reach the page
+    /// and the rows without one.
+    #[test]
+    fn bidi_controls_are_dropped_from_every_name_a_chat_shows() {
+        const RLO: &str = "\u{202E}";
+        let mut chat = mk_chat();
+        chat.display = format!("Bridge {RLO}werC");
+        chat.title = Some(format!("Orders {RLO}exe.live"));
+        chat.named_after = vec![NamedPerson {
+            shown: format!("Q{RLO}"),
+            handle: None,
+        }];
+        let item = &mut chat.buckets[0].items[0];
+        item.author_display = format!("Pic{RLO}ard");
+        item.labels = vec!["\u{2067}Away\u{2069}".to_string()];
+        item.reactions[0].reactor_display = format!("Will {RLO}Riker");
+        item.recipients = vec![crate::types::Recipient {
+            role: crate::types::RecipientRole::To,
+            display: format!("Wo{RLO}rf"),
+            handle: None,
+            drawn: true,
+        }];
+        item.kind = ItemKind::Attachment;
+        item.attachments = vec![NormalizedAttachment {
+            href: None,
+            file_name: Some(format!("orders{RLO}fdp.exe")),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: None,
+        }];
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &test_profile(),
+            &[chat],
+            out.path(),
+            "test",
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |doc| {
+                docs.push(doc);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rows = serde_json::to_string(&docs[0].rows).unwrap();
+        let md = std::fs::read_to_string(out.path().join(&docs[0].md_path)).unwrap();
+        for text in [&md, &rows] {
+            assert!(
+                !text.contains(['\u{202E}', '\u{2067}', '\u{2069}']),
+                "{text:?}"
+            );
+        }
+        for shown in [
+            "Orders exe.live",
+            "Picard",
+            "Away",
+            "Will Riker",
+            "Worf",
+            "ordersfdp.exe",
+        ] {
+            assert!(md.contains(shown), "{shown:?} is missing: {md}");
+        }
+        assert!(rows.contains("Bridge werC"), "{rows}");
     }
 
     #[test]

@@ -23,8 +23,39 @@
 //! - a link destination: [`md_link_dest`];
 //! - inside a code span: [`md_code_span`].
 //!
+//! A subject, a name or a filename also goes through
+//! [`without_bidi_controls`] first, wherever it lands: on a markdown line
+//! [`escape_name_inline`], between tags [`escape_name_text`].
+//!
 //! Here rather than in `datalib_etl`: that crate sits upstream of ~130
 //! test targets, and only the render side writes markup.
+
+/// Upstream text with Unicode's bidi overrides, embeddings and isolates
+/// taken out, for a short field a person reads to decide what something
+/// is: a subject, a name, a filename. An override makes `evil.exe` show
+/// as `exe.live`, and an unclosed one reorders whatever follows it on the
+/// page. The marks (U+200E, U+200F, U+061C) stay: they reorder no letters,
+/// and right-to-left names carry them.
+pub fn without_bidi_controls(s: &str) -> String {
+    s.chars().filter(|c| !is_bidi_control(*c)).collect()
+}
+
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// A name, a filename or a label bound for one markdown line:
+/// [`without_bidi_controls`], then [`escape_md_inline`]. A body keeps
+/// its controls and takes [`escape_md_inline`] or [`escape_md_block`].
+pub fn escape_name_inline(s: &str) -> String {
+    escape_md_inline(&without_bidi_controls(s))
+}
+
+/// A name, a filename or a label between raw HTML tags:
+/// [`without_bidi_controls`], then [`escape_text`].
+pub fn escape_name_text(s: &str) -> String {
+    escape_text(&without_bidi_controls(s))
+}
 
 /// Escape text that lands between tags. A line break becomes a
 /// character reference: in an HTML block a blank line ends the block and
@@ -440,6 +471,20 @@ fn block_marker_at(body: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A right-to-left override showed `orders\u{202E}fdp.exe` as
+    /// `ordersexe.pdf`.
+    #[test]
+    fn bidi_controls_go_and_marks_stay() {
+        assert_eq!(
+            without_bidi_controls("orders\u{202E}fdp.exe \u{2067}Worf\u{2069} \u{202A}a\u{202C}"),
+            "ordersfdp.exe Worf a"
+        );
+        assert_eq!(
+            without_bidi_controls("Deanna\u{200F} \u{200E}x\u{061C}"),
+            "Deanna\u{200F} \u{200E}x\u{061C}"
+        );
+    }
 
     #[test]
     fn text_escapes_markup_without_double_escaping() {

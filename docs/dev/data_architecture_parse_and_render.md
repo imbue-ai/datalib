@@ -255,6 +255,33 @@ Content-Type: mail-parser's HTML body list follows RFC 8621 and holds a
 through htmd lost every `<…>` in a plain-text patch and ran its lines
 together.
 
+**A name a person reads to tell what something is — a title, an author
+or recipient, a reactor, a filename, a label — loses its Unicode bidi
+controls** (`datalib_etl_render::html::without_bidi_controls`: the
+overrides and embeddings U+202A–U+202E and the isolates U+2066–U+2069).
+A right-to-left override shows `evil.exe` as `exe.live`. The marks
+U+200E, U+200F and U+061C stay: they reorder no letters, and
+right-to-left names carry them. A message's body keeps them. The
+shared writers apply it for every source:
+
+- on the page: `Title` (every `<h1>`), `message::chip_link` and
+  `entity_link` (every chip, its text and its hover), `MessageHeader`'s
+  author, `front_matter::yaml_name` (the `title:` key), and
+  `html::escape_name_inline` / `escape_name_text` for a name with no
+  handle, a filename or a label, which each renderer calls where it
+  writes one (calendar-common, contact-common, forge-render-common,
+  Notion, Todoist, Google Drive, PDF, Lightroom; chat-common settles
+  its chat and items first);
+- in the store: `RenderCtx::emit_doc` hands every document through
+  `names::settle`, which strips the rows' author, contact, account,
+  project, org, channel and subject, and each source contact's names,
+  org, title, groups and members.
+
+A change to what these write bumps
+`datalib_etl_render::SHARED_RULES_VERSION`, which rides in every
+source's render params, so every source renders again; a provider
+bumps its own version only for its own change.
+
 Front matter is YAML, and a value from upstream goes through
 `datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
 so a line break, a quote or a `---` inside cannot end the line or the

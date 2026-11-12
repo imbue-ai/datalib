@@ -194,7 +194,14 @@ pub fn names_seen_under(
     let mut out: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
     let mut unread = 0usize;
     for (handle, name) in authors {
-        out.insert((handle, name.trim().to_string()));
+        // An author shown as another handle (a forged `From`) is not a
+        // name for this one; a source contact's names were settled at
+        // render (`crate::names`).
+        let anothers =
+            datalib_handle::Handle::spelled_by(&name).is_some_and(|h| h.as_str() != handle);
+        if !anothers {
+            out.insert((handle, name.trim().to_string()));
+        }
     }
     for (handle, json) in contacts {
         match serde_json::from_str::<datalib_contact_schema::NormalizedContact>(json) {
@@ -450,6 +457,29 @@ mod tests {
 
     fn hit(uuid: &str, kind: &str) -> (String, String) {
         (uuid.to_string(), kind.to_string())
+    }
+
+    /// A forged `From: "picard@enterprise.org" <q@continuum.test>` made
+    /// the row's author Picard's address, and the index then knew Q by
+    /// that name. The row still shows what the message said.
+    #[tokio::test]
+    async fn an_author_that_is_another_handle_names_nobody() {
+        let g = Grid::new().await;
+        let q = "email:q@continuum.test";
+        let mut forged = doc(&g.root, "c-f", q, "Orders");
+        forged.rows[0].author = Some("picard@enterprise.org".into());
+        let mut own = doc(&g.root, "c-q", q, "Orders");
+        own.rows[0].author = Some("Q".into());
+        let mut bare = doc(&g.root, "c-b", q, "Orders");
+        bare.rows[0].author = Some("q@continuum.test".into());
+        g.seal(&[forged, own, bare], &[]).await;
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM names WHERE handle = ? ORDER BY name")
+                .bind(q)
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        assert_eq!(names, ["Q", "q@continuum.test"]);
     }
 
     #[tokio::test]

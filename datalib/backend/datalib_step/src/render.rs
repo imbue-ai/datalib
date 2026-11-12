@@ -1362,11 +1362,16 @@ const HANDLE_RULES_PARAM: &str = "_handle_rules";
 /// documents are filed moved, so every source writes its files again.
 const DOC_LAYOUT_PARAM: &str = "_doc_layout";
 
+/// The key `datalib_etl_render::SHARED_RULES_VERSION` sits under: what
+/// the shared writers put on every source's pages changed.
+const SHARED_RULES_PARAM: &str = "_shared_render_rules";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, the handle rules and the document layout, so one source's
-/// cursor carries all of them and a change to any one — a processor's
-/// knob, the shape of the store, what a handle normalizes to, where a
-/// document is filed — re-renders the source.
+/// hash, the handle rules, the document layout and the shared render
+/// rules, so one source's cursor carries all of them and a change to any
+/// one — a processor's knob, the shape of the store, what a handle
+/// normalizes to, where a document is filed, what every page's shared
+/// parts say — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
@@ -1383,6 +1388,10 @@ pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) ->
             (
                 DOC_LAYOUT_PARAM.to_string(),
                 serde_json::Value::from(datalib_etl_render::grid_index::DOC_LAYOUT),
+            ),
+            (
+                SHARED_RULES_PARAM.to_string(),
+                serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION),
             ),
         ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
@@ -1886,7 +1895,7 @@ mod stale_tree_tests {
     use super::{
         declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
         tree_is_from_an_older_renderer, RenderCursorRow, RenderPlan, HANDLE_RULES_PARAM,
-        STORE_SCHEMA_PARAM,
+        SHARED_RULES_PARAM, STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -2119,7 +2128,7 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 4);
+        assert_eq!(params.as_object().unwrap().len(), 5);
     }
 
     /// A stored handle is only as current as the rules that minted it
@@ -2135,6 +2144,33 @@ mod stale_tree_tests {
         );
         let mut older = params.clone();
         older[HANDLE_RULES_PARAM] = serde_json::Value::from(datalib_handle::RULES_VERSION - 1);
+        let stored = RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: "commit-a".into(),
+            params: older.to_string(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &params, false),
+            RenderPlan::Everything("render params changed")
+        );
+    }
+
+    /// What the shared writers put on every page — a title, a chip, a
+    /// name without its bidi controls — changed for every source, and
+    /// only the chat sources' layout version moved, so the rest kept
+    /// their old pages. The shared rules ride in every source's params.
+    #[test]
+    fn a_shared_render_rules_change_renders_everything() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[SHARED_RULES_PARAM],
+            serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION)
+        );
+        let mut older = params.clone();
+        older.as_object_mut().unwrap().remove(SHARED_RULES_PARAM);
         let stored = RenderCursorRow {
             source_id: "src".into(),
             raw_commit: "commit-a".into(),

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
@@ -182,7 +182,7 @@ fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) ->
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_scalar(title));
+    let _ = writeln!(out, "title: {}", yaml_name(title));
     if let Some(ts) = created_at {
         let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
     }

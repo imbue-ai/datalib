@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_md_inline, escape_text, md_link_dest};
+use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
@@ -315,7 +315,7 @@ pub fn build(
             };
             out.sections.push(Section::unkeyed(format!(
                 "## {}{archived}\n\n",
-                escape_md_inline(name)
+                escape_name_inline(name)
             )));
         }
         let open: Vec<&Task> = group.iter().copied().filter(|t| !t.done).collect();
@@ -424,7 +424,7 @@ fn tree<'t, 'a>(tasks: &[&'t Task<'a>]) -> Vec<(&'t Task<'a>, usize)> {
 
 fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
     let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_scalar(&facts.name)));
+    s.push_str(&format!("title: {}\n", yaml_name(&facts.name)));
     s.push_str(&format!("provider: {}\n", Provider::Todoist));
     s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
     s.push_str(&format!("markdown_uuid: {}\n", facts.id.uuid));
@@ -621,7 +621,7 @@ impl Out<'_, '_, '_> {
             out.push(
                 labels
                     .iter()
-                    .map(|l| escape_md_inline(&format!("@{l}")))
+                    .map(|l| escape_name_inline(&format!("@{l}")))
                     .collect::<Vec<_>>()
                     .join(" "),
             );
@@ -671,10 +671,10 @@ impl Out<'_, '_, '_> {
             match str_of(a, "file_url") {
                 Some(url) => s.push_str(&format!(
                     "📎 [{}]({})\n\n",
-                    escape_md_inline(name),
+                    escape_name_inline(name),
                     md_link_dest(url)
                 )),
-                None => s.push_str(&format!("📎 {}\n\n", escape_md_inline(name))),
+                None => s.push_str(&format!("📎 {}\n\n", escape_name_inline(name))),
             }
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -738,6 +738,6 @@ fn labels(row: &Value) -> Vec<&str> {
 fn person_md(p: &Person) -> String {
     match &p.handle {
         Some(h) => chip_link(&p.name, h),
-        None => escape_md_inline(&p.name),
+        None => escape_name_inline(&p.name),
     }
 }
