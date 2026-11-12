@@ -360,6 +360,23 @@ fn routes(state: AppState) -> Router {
         ))
         // Outside the token gate, so a refused request is logged too.
         .layer(axum::middleware::from_fn(request_log::record))
+        .layer(axum::middleware::from_fn(send_no_referrer))
+}
+
+/// A link in a rendered message leads to its sender's site, and a
+/// `Referer` would tell that site the app's address and that the message
+/// was opened. Set on every response, so a page an applet answers or the
+/// desktop shell loads carries it too.
+async fn send_no_referrer(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    response
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
