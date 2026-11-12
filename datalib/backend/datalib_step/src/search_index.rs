@@ -33,6 +33,9 @@ pub(crate) struct Done {
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
     pub(crate) unsettled: usize,
+    /// Chunks longer than the model's context, cut to fit before they were
+    /// embedded: dense text, code or encoded data, whose tail is lost.
+    pub(crate) truncated: usize,
 }
 
 /// A document the search covers: one with a file, outside `unindexed/`.
@@ -262,9 +265,10 @@ async fn embed_into(
         while pending.len() >= CHUNK_BATCH || (!pending.is_empty() && stop.requested()) {
             let batch: Vec<_> = pending.drain(..pending.len().min(CHUNK_BATCH)).collect();
             match embed_batch(&mut embedder, batch).await {
-                Ok(vectors) => {
+                Ok((vectors, cut)) => {
                     cache.put(&model, &vectors).await?;
                     done.embedded += vectors.len();
+                    done.truncated += cut;
                     progress.inc(vectors.len() as u64);
                 }
                 Err(e) => {
@@ -281,10 +285,16 @@ async fn embed_into(
         }
     }
     if result.is_ok() && !pending.is_empty() && !stop.requested() {
-        let vectors = embed_batch(&mut embedder, std::mem::take(&mut pending)).await?;
-        cache.put(&model, &vectors).await?;
-        done.embedded += vectors.len();
-        progress.inc(vectors.len() as u64);
+        result = match embed_batch(&mut embedder, std::mem::take(&mut pending)).await {
+            Ok((vectors, cut)) => {
+                let put = cache.put(&model, &vectors).await;
+                done.embedded += vectors.len();
+                done.truncated += cut;
+                progress.inc(vectors.len() as u64);
+                put
+            }
+            Err(e) => Err(e),
+        };
     }
     // On Metal, ggml aborts at exit while a model is still loaded.
     drop(embedder.take());
@@ -310,17 +320,23 @@ fn prompts_for(
         .collect()
 }
 
+/// Each prompt's vector, and how many had to be cut to fit the context.
 async fn embed_batch(
     embedder: &mut Option<Embedder>,
     batch: Vec<(String, String)>,
-) -> Result<Vec<(String, Vec<f32>)>> {
+) -> Result<(Vec<(String, Vec<f32>)>, usize)> {
     let mut e = embedder.take().context("the embedder is gone")?;
     let (e, out) = tokio::task::spawn_blocking(move || {
+        let mut cut = 0;
         let out: Result<Vec<_>> = batch
             .into_iter()
-            .map(|(hash, prompt)| Ok((hash, e.embed(&prompt)?)))
+            .map(|(hash, prompt)| {
+                let (vector, truncated) = e.embed_fitted(&prompt)?;
+                cut += usize::from(truncated);
+                Ok((hash, vector))
+            })
             .collect();
-        (e, out)
+        (e, out.map(|v| (v, cut)))
     })
     .await
     .context("embedding panicked")?;

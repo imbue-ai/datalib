@@ -333,6 +333,7 @@ pub async fn run_embed(
         tracing::info!(
             embedded = done.embedded,
             unsettled = done.unsettled,
+            truncated = done.truncated,
             "the search index's embeddings are done"
         );
     }

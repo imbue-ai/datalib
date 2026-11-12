@@ -246,6 +246,23 @@ fn the_vectors_match_qmd_on_its_default_backend() {
 
 /// A mac's build has Metal, and the best device on one is its GPU.
 #[cfg(target_os = "macos")]
+/// A chunk of dense text (code, an encoded blob) can hold more tokens than
+/// the model's context though it is within the chunker's bytes; it failed
+/// a whole source's embed. It is cut to fit, and its vector is the one of
+/// the cut input.
+#[test]
+fn an_input_past_the_context_is_cut_to_fit() {
+    let mut e = open(Device::Cpu);
+    let dense: String = (0..1500).map(|i| format!("x{i:x}/")).collect();
+    let tokens = e.tokenize(&dense).unwrap();
+    assert!(tokens.len() > e.context(), "{} tokens", tokens.len());
+    assert!(e.embed(&dense).is_err(), "the uncut input does not fit");
+    let (vector, cut) = e.embed_fitted(&dense).unwrap();
+    assert!(cut);
+    let (fitted, _) = datalib_embedder::fit(tokens, e.context());
+    assert_eq!(vector, e.embed_tokens(&fitted).unwrap());
+}
+
 #[test]
 fn a_mac_runs_the_model_on_metal() {
     assert!(datalib_embedder::gpu_available());
