@@ -244,8 +244,6 @@ fn the_vectors_match_qmd_on_its_default_backend() {
     }
 }
 
-/// A mac's build has Metal, and the best device on one is its GPU.
-#[cfg(target_os = "macos")]
 /// A chunk of dense text (code, an encoded blob) can hold more tokens than
 /// the model's context though it is within the chunker's bytes; it failed
 /// a whole source's embed. It is cut to fit, and its vector is the one of
@@ -263,6 +261,8 @@ fn an_input_past_the_context_is_cut_to_fit() {
     assert_eq!(vector, e.embed_tokens(&fitted).unwrap());
 }
 
+/// A mac's build has Metal, and the best device on one is its GPU.
+#[cfg(target_os = "macos")]
 #[test]
 fn a_mac_runs_the_model_on_metal() {
     assert!(datalib_embedder::gpu_available());
