@@ -88,6 +88,7 @@ export function withBrowse<R extends ManageRow>(
   if (r.kind === "system") {
     return { ...r, browseSource: browseAction(r)?.enabled ? "logView()" : null, rawStore: null };
   }
+  if (r.kind === "section") return { ...r, browseSource: null, rawStore: null };
   if (r.kind === "group") {
     // Which step's path the group's button re-picks is settled on click.
     const actions = canReveal ? r.actions : r.actions.filter((a) => a.id !== CHOOSE_AGAIN);

@@ -1205,9 +1205,10 @@ export function fetchPipelineDisk(signal?: AbortSignal): Promise<DiskFree> {
   return getJson<DiskFree>("/api/pipeline/disk", signal);
 }
 
-// `system` is the one row the config never named: `system/`, the run
-// log and the app's own stores.
-export type ManageRowKind = "group" | "step" | "applet" | "system";
+// `system` and `section` are the rows the config never named: `system/`,
+// the run log and the app's own stores; and the Applets heading over the
+// applets filed under no group.
+export type ManageRowKind = "group" | "step" | "applet" | "system" | "section";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
 // ── The column-type vocabulary ─────────────────────────────────────
