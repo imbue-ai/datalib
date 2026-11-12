@@ -6,11 +6,15 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import type { SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
-import type { CardCtx, Teardown } from "./types";
+import type { CardCtx, CardRender, Teardown } from "./types";
 import { oneAtATime, subscribeLive } from "@/live";
 import { iconUrl } from "@/config/icons";
 import { formatRelative } from "@/config/timeFormat";
 import { documentPreview } from "./libs/documentView";
+import { compileCardSource } from "./cardSource";
+import { ensureFrontend } from "./frontendRegistry";
+import { photoCardSource, thumbnailUrl } from "./photos";
+import { parsePhoto } from "@/uri";
 import { markWords } from "./search";
 import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
@@ -173,11 +177,15 @@ watch(
   },
 );
 
-// ── The preview: the picked result's document, drawn by the document
-// card itself inside a shadow root of its own.
+// ── The preview: the picked result's card — a photo's from the applet
+// that serves photos, anything else's the document card — drawn inside a
+// shadow root of its own.
 const previewEl = useTemplateRef<HTMLDivElement>("previewEl");
 let previewRoot: ShadowRoot | null = null;
 let teardown: Teardown | null = null;
+/// Counts the picks, so a photo card that compiles after the next pick
+/// is never drawn.
+let previewing = 0;
 
 function docSource(row: SearchRow): string | null {
   if (!row.markdown_uuid) return null;
@@ -185,21 +193,36 @@ function docSource(row: SearchRow): string | null {
   return `documentView(${args.map((a) => JSON.stringify(a)).join(", ")})`;
 }
 
-function showPreview(row: SearchRow | null) {
-  teardown?.();
-  teardown = null;
-  if (!previewEl.value) return;
-  previewRoot ??= previewEl.value.attachShadow({ mode: "open" });
-  previewRoot.replaceChildren();
-  if (!row?.markdown_uuid) return;
+async function previewRender(row: SearchRow): Promise<[CardRender, string] | null> {
+  const photo = row.image ? parsePhoto(row.image) : null;
+  if (photo) {
+    await ensureFrontend();
+    const source = photoCardSource(photo);
+    if (source) return [(await compileCardSource(source)).render, source];
+  }
+  if (!row.markdown_uuid) return null;
   const render = documentPreview(
     row.markdown_uuid,
     row.is_document ? null : row.uuid,
     titlePeople(row),
   );
+  return [render, "documentView"];
+}
+
+async function showPreview(row: SearchRow | null) {
+  const pick = ++previewing;
+  teardown?.();
+  teardown = null;
+  if (!previewEl.value) return;
+  previewRoot ??= previewEl.value.attachShadow({ mode: "open" });
+  previewRoot.replaceChildren();
+  if (!row) return;
+  const card = await previewRender(row).catch(() => null);
+  if (!card || pick !== previewing || !previewRoot) return;
+  const [render, cardType] = card;
   teardown = render(previewRoot, {
     cardId: `${props.ctx.cardId}:preview`,
-    cardType: "documentView",
+    cardType,
     initialState: "",
     setTitle: () => {},
     setHelp: () => {},
@@ -207,11 +230,19 @@ function showPreview(row: SearchRow | null) {
     host: { ...props.ctx.host, setState: () => {}, setSource: () => {}, close: () => {} },
   });
 }
-watch(picked, (row) => showPreview(row), { flush: "post" });
+watch(picked, (row) => void showPreview(row), { flush: "post" });
 
 function openPicked() {
   const src = picked.value && docSource(picked.value);
   if (src) props.ctx.host.openCards(src);
+}
+
+/// A photo's row leads with its picture rather than its source's mark.
+function tileOf(row: SearchRow): { src: string; picture: boolean } | null {
+  const picture = row.image ? thumbnailUrl(row.image) : null;
+  if (picture) return { src: picture, picture: true };
+  const mark = iconUrl(row.source_ref?.icon);
+  return mark ? { src: mark, picture: false } : null;
 }
 
 // The list is one stop for Tab, on the picked result; the arrows move
@@ -311,6 +342,9 @@ const refresh = oneAtATime(async () => {
 });
 let stop: (() => void) | null = null;
 onMounted(() => {
+  // Which applet serves pictures is in the frontend manifest; a row's
+  // thumbnail waits for it.
+  void ensureFrontend();
   if (props.active) void run();
   stop = subscribeLive(
     {
@@ -355,9 +389,11 @@ onBeforeUnmount(() => {
             @dblclick="openPicked"
           >
             <img
-              v-if="iconUrl(r.source_ref?.icon)"
+              v-if="tileOf(r)"
               class="sc-tile"
-              :src="iconUrl(r.source_ref?.icon)!"
+              :class="{ 'is-picture': tileOf(r)!.picture }"
+              :src="tileOf(r)!.src"
+              loading="lazy"
               alt=""
             />
             <span class="sc-text">
@@ -494,6 +530,12 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
   width: calc(var(--datalib-icon-size) + 4px);
   height: calc(var(--datalib-icon-size) + 4px);
+}
+.sc-tile.is-picture {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: 3px;
 }
 .sc-text {
   flex: 1 1 auto;

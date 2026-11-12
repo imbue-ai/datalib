@@ -91,6 +91,7 @@ import { oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
+import { pictureRowHeight } from "@/grid/pictureRows";
 import {
   filterToken,
   keepExcludeEntries,
@@ -600,6 +601,22 @@ function applyColumns(cols: CurrentColumn[]) {
   restoring = true;
   vueGrid.gridStateService.applyColumnLayout([...cols, ...rest], false);
   restoring = false;
+  fitRowsToPictures();
+}
+
+/// Tall enough for two lines of clamped snippet text plus padding.
+const ROW_HEIGHT = 52;
+
+/// Rows as tall as the widest shown picture column, so a picture grows
+/// as its column is dragged wider.
+function fitRowsToPictures() {
+  if (!vueGrid) return;
+  const grid = vueGrid.slickGrid;
+  const pictures = new Set(columns.value.filter((c) => c.type === "image").map((c) => c.field));
+  const height = pictureRowHeight(grid.getColumns(), pictures, ROW_HEIGHT);
+  if (grid.getOptions().rowHeight === height) return;
+  grid.setOptions({ rowHeight: height });
+  grid.invalidate();
 }
 
 /// Hide or show columns by id, keeping their order and widths.
@@ -1344,6 +1361,8 @@ function applyAdaptiveVisibility() {
           rows.value.every((r) => r.image == null)
         : rows.value.every((r) => stringifyForCompare(r[field]) === first);
   }
+  // A photo's picture is what it says; its caption is in its card.
+  if (!presetColumns()) hidden.snippet = rows.value.every((r) => r.image != null);
   setHidden(hidden);
 }
 
@@ -1360,8 +1379,8 @@ function applyPresetColumns() {
     hidden: false,
     width: widths.get(columnId),
   }));
-  // …and hide everything else the grid offers. `snippet` is in every
-  // preset, so nothing here can hide the text column by accident.
+  // …and hide everything else the grid offers, the text column too
+  // when a preset leaves it out (a photo library's).
   const set = new Set(wanted);
   const rest: CurrentColumn[] = vueGrid.slickGrid
     .getColumns()
@@ -1971,8 +1990,7 @@ function gridOptions(): GridOption {
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
     ...followFrame(boxEl.value!, 200),
-    // Tall enough for two lines of clamped snippet text plus padding.
-    rowHeight: 52,
+    rowHeight: ROW_HEIGHT,
     enableTextSelectionOnCells: true,
     // Rows select on click, several with a modifier — so right-click
     // "Copy UUID(s)" can target several rows, like Lightroom. Selecting
@@ -2436,6 +2454,7 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
 // here, and only those — its own layout work (a fit to the card's
 // width, the adaptive visibility above) never does.
 function onGridStateChanged(change: GridStateChange) {
+  if (change.change?.type === "columns") fitRowsToPictures();
   if (restoring) return;
   const type = change.change?.type;
   if (type === "sorter" && vueGrid) {

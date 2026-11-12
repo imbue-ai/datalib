@@ -374,11 +374,18 @@
    right edge. */
 .slick-row.slick-group .slick-cell { text-align: left; }
 .slick-cell.tg-center { text-align: center; }
-/* A picture fills the row's height, whatever the density, and keeps its
-   shape. */
-.slick-cell.tg-thumb-cell { justify-content: center; padding-top: 2px; padding-bottom: 2px; }
+/* A picture fits its cell, keeps its shape and sits in the middle of it;
+   rows grow with the column's width (grid/pictureRows.ts). */
+.slick-cell.tg-thumb-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
 .slick-cell .tg-thumb {
   display: block;
+  min-width: 0;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
