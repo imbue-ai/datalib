@@ -172,6 +172,10 @@ cc_library(
     # default libraries, and ends in -Bdynamic, where a bare -l finds a
     # .so. So name the archives, after the C++ runtime what it calls:
     # libc, and libgcc's helpers (aarch64's outline atomics among them).
+    # The glibc link needs libgcc.a named too: rustc puts -lgcc_s before
+    # its last -lllama.pic, so with gcc 13 (ubuntu-24.04-arm) llama's
+    # `__aarch64_ldset4_relax` and its kin are wanted after libgcc was
+    # scanned, and the link fails.
     linkopts = select({
         ":musl": [
             "-l:libstdc++.a",
@@ -182,6 +186,7 @@ cc_library(
             "-lpthread",
             "-ldl",
             "-lm",
+            "-l:libgcc.a",
         ],
         "@platforms//os:macos": [
             "-framework",
