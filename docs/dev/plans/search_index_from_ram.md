@@ -428,5 +428,16 @@ that matched. Meaning search fills back in over the first day.
   buckets into memory). The `.md` files then stop being written, the
   index steps take their `IndexDoc` from that render, and `/chat` renders
   the document it is asked for.
-- **Photos in Meaning search.** Lightroom writes no file; its render
-  could hand the indexer a small `IndexDoc` per photo.
+- **Photos in Meaning search.** Lightroom writes no markdown, and now
+  needs none to be searched: its render can hand the indexer one
+  `IndexDoc` per photo, built from its `NormalizedPhoto`
+  (`photo_schema`). The title is the file name with its folder relative
+  to the catalog; the text lays out, one labelled line each, what a
+  person would search a photo by: its title, headline and caption, when
+  it was taken (with its offset), where (location, city, state,
+  country), the people tagged in it, its keywords with their hierarchy,
+  the albums it is in, and the camera. One photo is one section and,
+  short as it is, one chunk, so its inference hash covers exactly that
+  text: a photo re-embeds when a field in it changes, and every photo
+  re-embeds when the layout of the text does. The same text feeds the
+  keyword index, so "Lisbon 2019" finds a photo by its place and year.
