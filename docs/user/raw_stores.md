@@ -72,7 +72,16 @@ with Store("gmail/ingest/entities.doltlite_db") as store:
     rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
 ```
 
-`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. It has wheels for
+`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. **Select a payload as
+`json(payload)`**: a bare `payload` comes back as JSONB `bytes`, which
+`json.loads` refuses with a `UnicodeDecodeError` ([below](#payload-is-json-stored-as-jsonb)).
+
+```python
+import json
+payload = json.loads(store.query("SELECT json(payload) FROM emails LIMIT 1")[0][0])
+```
+
+It has wheels for
 Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
 has the rest, and says when to `import doltlite` instead, which makes the
@@ -121,7 +130,8 @@ fresh is the mirror?").
 
 Most tables keep the record as the service sent it in a `payload`
 column. It is stored as SQLite's binary JSON (JSONB), so selecting it
-bare prints bytes. Ask for `json(payload)` to see the text, and use
+bare prints bytes, and from Python returns `bytes` that `json.loads`
+cannot decode. Ask for `json(payload)` to get the text, and use
 SQLite's JSON functions on it directly:
 
 ```sql

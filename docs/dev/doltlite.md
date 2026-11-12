@@ -167,6 +167,9 @@ What to know about it:
 
 - **It only reads.** Both kinds of open refuse writes with `attempt to
   write a readonly database`, and the store comes out byte-identical.
+- **A JSONB column comes back as `bytes`**, which `json.loads` refuses
+  with a `UnicodeDecodeError`. Every `payload` is JSONB, so select
+  `json(payload)` to get text.
 - **A connection kept open sees later seals**, and the one opened on a
   commit stays on that commit. Give each thread its own `Store`.
 - **The `sqlite3` module stays as it was**, stock, beside it, whichever
