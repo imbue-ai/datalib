@@ -375,8 +375,9 @@
 .slick-row.slick-group .slick-cell { text-align: left; }
 .slick-cell.tg-center { text-align: center; }
 /* A picture fits its cell, keeps its shape and sits in the middle of it;
-   rows grow with the column's width (grid/pictureRows.ts). */
-.slick-cell.tg-thumb-cell {
+   rows grow with the column's width (grid/pictureRows.ts). A group row
+   borrows the class too, and keeps its title at the start. */
+.slick-row:not(.slick-group) .slick-cell.tg-thumb-cell {
   display: flex;
   align-items: center;
   justify-content: center;
