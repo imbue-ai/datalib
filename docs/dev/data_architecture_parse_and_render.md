@@ -213,7 +213,7 @@ block). **Markup a source authored goes in as written**, HTML
 included: a prompt, an assistant's reply or a project's instructions
 in Claude, ChatGPT, Codex or Claude Code; a GitHub or GitLab
 description, review or comment; a Todoist task, description or
-comment; an email's HTML part and Google Takeout's Gemini answers and
+comment; an email's `text/html` part and Google Takeout's Gemini answers and
 My Maps descriptions after htmd; a PDF's pages as pdf-inspector wrote
 them; a Notion page. Its formatting (`<details>`, `<img>`, `<br>`,
 `<kbd>`, a table) is what its author meant, and escaping it also
@@ -247,6 +247,13 @@ element of its own. It runs the escape helpers the same way over a few
 hundred generated strings. A provider's private text paths (Facebook
 posts, Claude's tool results, the time-series facts) are not reached
 by it and keep their own tests.
+
+**Text is HTML only when its declared type says so**, never because of
+where it came from. An email's parts are read by their own
+Content-Type: mail-parser's HTML body list follows RFC 8621 and holds a
+`text/plain` part that has no HTML alternative, and sending that
+through htmd lost every `<…>` in a plain-text patch and ran its lines
+together.
 
 Front matter is YAML, and a value from upstream goes through
 `datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
