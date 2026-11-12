@@ -64,7 +64,10 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v20: an email's stamp keeps the offset its `Date` was written in.
 /// v21: a quote's attribution line is plain text, and an HTML body's
 ///     `<pre>` and `&amp;lt;` read as the sender wrote them.
-pub const RENDER_VERSION: u32 = 21;
+/// v22: a body part is HTML only when its Content-Type says so: a
+///     plain-text email went through the HTML converter, losing every
+///     `<…>` and running its lines together.
+pub const RENDER_VERSION: u32 = 22;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -842,9 +845,31 @@ struct ParsedEml {
     from_display: String,
     from_handle: Option<Handle>,
     recipients: Vec<Recipient>,
-    text_body: String,
-    html_body: String,
+    text_body: Vec<BodyPart>,
+    html_body: Vec<BodyPart>,
     inline_parts: Vec<InlinePart>,
+}
+
+/// One text part of a body list, as its Content-Type says it is.
+/// mail-parser's lists follow RFC 8621, where a `text/plain` part with
+/// no HTML alternative is in the HTML list too: a list is not one kind.
+enum BodyPart {
+    Plain(String),
+    Html(String),
+}
+
+/// The text parts of a body list. An inline image in the list is not
+/// text: its bytes go to the blob CAS, not into the body string.
+fn body_parts<'m>(parts: impl Iterator<Item = MessagePart<'m>>) -> Vec<BodyPart> {
+    parts
+        .filter_map(|part| {
+            let text = part.text()?.into_owned();
+            match part.kind() {
+                PartKind::Html => Some(BodyPart::Html(text)),
+                _ => Some(BodyPart::Plain(text)),
+            }
+        })
+        .collect()
 }
 
 impl ParsedEml {
@@ -881,16 +906,8 @@ impl ParsedEml {
                 })
         })
         .collect();
-        let mut text_body = String::new();
-        for part in msg.text_body() {
-            text_body.push_str(&part_text(part));
-            text_body.push('\n');
-        }
-        let mut html_body = String::new();
-        for part in msg.html_body() {
-            html_body.push_str(&part_text(part));
-            html_body.push('\n');
-        }
+        let text_body = body_parts(msg.text_body());
+        let html_body = body_parts(msg.html_body());
         // RFC 8621 lists an image shown in the body there and not again
         // among the attachments, so all three lists are read.
         let mut seen = HashSet::new();
@@ -928,12 +945,6 @@ impl ParsedEml {
     }
 }
 
-/// Inline image bytes belong in the blob CAS, not lossy-decoded into the
-/// body string, so a part that is not text reads as nothing.
-fn part_text(part: MessagePart<'_>) -> String {
-    part.text().map(String::from).unwrap_or_default()
-}
-
 fn format_address(addr: Option<AddressList<'_>>) -> String {
     let Some(addr) = addr else {
         return "(unknown sender)".to_string();
@@ -959,9 +970,8 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
     a.disposition.as_deref() == Some("inline") || a.cid.is_some()
 }
 
-/// Render one email's body to markdown. Prefers the HTML part (htmd
-/// after rewriting `cid:` srcs to the parts' addresses); falls back to
-/// the plain-text part, escaped.
+/// Render one email's body to markdown. Prefers the HTML body list when
+/// it holds a real `text/html` part; falls back to the plain-text list.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
@@ -976,16 +986,32 @@ fn email_body_markdown(
         cid_to_blob.insert(cid.to_string(), href.clone());
     }
 
-    if !parsed.html_body.trim().is_empty() {
-        let md = html_markdown(&rewrite_cid_srcs(&parsed.html_body, &cid_to_blob));
+    let has_html = parsed
+        .html_body
+        .iter()
+        .any(|p| matches!(p, BodyPart::Html(_)));
+    if has_html {
+        let md = body_list_markdown(&parsed.html_body, &cid_to_blob);
         if !md.trim().is_empty() {
             return Some(md);
         }
     }
-    if parsed.text_body.trim().is_empty() {
-        return None;
-    }
-    Some(plain_body_markdown(&parsed.text_body))
+    let md = body_list_markdown(&parsed.text_body, &cid_to_blob);
+    (!md.trim().is_empty()).then_some(md)
+}
+
+/// Each part as markdown by its own kind: HTML through htmd after its
+/// `cid:` srcs point at the parts' addresses, plain text escaped.
+fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>) -> String {
+    parts
+        .iter()
+        .map(|part| match part {
+            BodyPart::Html(html) => html_markdown(&rewrite_cid_srcs(html, cid_to_blob)),
+            BodyPart::Plain(text) => plain_body_markdown(text),
+        })
+        .filter(|md| !md.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// An HTML body as markdown, its text reading as the sender wrote it.
