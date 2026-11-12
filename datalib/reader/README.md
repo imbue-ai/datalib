@@ -60,6 +60,9 @@ extended result code in `code`. Each kind has its own class:
 - **It works under any Python 3.9 or later**, the builds `uv` fetches included.
   It starts no process, replaces no module and leaves no temp file, and
   `sqlite3` stays stock beside it.
+- **Select a payload as `json(payload)`.** A datalib `payload` column is
+  SQLite's binary JSON (JSONB); selected bare it comes back as `bytes`, which
+  `json.loads` refuses with a `UnicodeDecodeError`.
 - **Give each thread its own `Store`.**
 - **Take the version of your datalib**, which `datalib-dag --version` prints.
   Each version carries the library that release's binaries were built from.
