@@ -12,7 +12,7 @@
 // with the reason as its tooltip. On a selection that mixes kinds, an
 // entry some of the rows take is disabled, naming a row that does not.
 
-export type MenuKind = "group" | "step" | "applet" | "system";
+export type MenuKind = "group" | "step" | "applet" | "system" | "section";
 
 /// The slice of a Manage row the menu reads.
 export type MenuTarget = {
@@ -186,7 +186,9 @@ function tidySeparators(entries: MenuEntry[]): MenuEntry[] {
   return out;
 }
 
-export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
+export function rowMenu(selected: MenuTarget[], opts: MenuOptions): MenuEntry[] {
+  // A heading holds rows and is nothing itself: no entry is about it.
+  const targets = selected.filter((t) => t.kind !== "section");
   if (targets.length === 0) return [];
   const one = targets.length === 1;
   const only = targets[0];
