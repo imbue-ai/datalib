@@ -130,6 +130,8 @@ rust_binary(
         "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
+        "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",

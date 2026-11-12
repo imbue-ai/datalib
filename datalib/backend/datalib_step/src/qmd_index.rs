@@ -176,7 +176,11 @@ fn update_progress_sink(progress: Progress) -> datalib_qmd_indexer::OnUpdateProg
 /// Put the embedding model in place, sha256-verified, and link the index
 /// to it: qmd then finds it already there and never fetches it itself. A
 /// no-op once it is.
-fn provision_embed_model(index: &Index, root: &Path, models_dir: Option<PathBuf>) -> Result<()> {
+fn provision_embed_model(
+    index: &Index,
+    root: &Path,
+    models_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
     let models = datalib_runtime::qmd::EMBED_MODELS;
     let models_dir = models_dir.unwrap_or_else(datalib_qmd_indexer::default_models_dir);
     let effective = datalib_qmd_models::effective_models_dir(
@@ -198,7 +202,8 @@ fn provision_embed_model(index: &Index, root: &Path, models_dir: Option<PathBuf>
             missing.join(", ")
         );
     }
-    index.link_models(&models_dir)
+    index.link_models(&models_dir)?;
+    Ok(effective)
 }
 
 /// `unified_document_index/qmd_aggregator`: leave the index's collections exactly
@@ -231,6 +236,8 @@ pub async fn run_aggregator(
         progress.metric("qmd_needs_embedding", &labels, c.needs_embedding as i64);
     }
     progress.set_message(&index_summary(&collections));
+    let (dropped, swept) = crate::search_index::sweep(data_root, &env_groups(env)).await?;
+    tracing::info!(dropped, swept, "the search index is swept");
     // The index rebuilds from the render_markdown trees, so cache-aware
     // backups (`restic --exclude-caches` etc.) may skip it. Tag the
     // whole `unified_document_index/` tree for the same reason the grid step
@@ -264,9 +271,9 @@ pub async fn run_keyword(
     let sink = update_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
-    let stop = stop.clone();
+    let stop_q = stop.clone();
     let ran = tokio::task::spawn_blocking(move || {
-        open_index(&root, &stop)?.keyword_index(&[group], sink.as_ref())
+        open_index(&root, &stop_q)?.keyword_index(&[group], sink.as_ref())
     })
     .await
     .context("qmd task panicked")??;
@@ -277,6 +284,14 @@ pub async fn run_keyword(
         files_ms = ran.phases.get("files_ms"),
         finish_ms = ran.phases.get("finish_ms"),
         "the keyword index is done"
+    );
+    let done = crate::search_index::update_keywords(data_root, &env.group, &progress, stop).await?;
+    report_unsettled(&progress, &env.group, done.unsettled);
+    tracing::info!(
+        put = done.put,
+        removed = done.removed,
+        unsettled = done.unsettled,
+        "the search index's keywords are done"
     );
     Ok(claim_reads(env))
 }
@@ -294,11 +309,11 @@ pub async fn run_embed(
     let sink = embed_progress_sink(progress.clone());
     let root = data_root.to_path_buf();
     let group = env.group.clone();
-    let stop = stop.clone();
-    let ran = tokio::task::spawn_blocking(move || {
-        let index = open_index(&root, &stop)?;
-        provision_embed_model(&index, &root, models_dir)?;
-        index.embed(&[group], sink.as_ref())
+    let stop_q = stop.clone();
+    let (ran, models) = tokio::task::spawn_blocking(move || {
+        let index = open_index(&root, &stop_q)?;
+        let models = provision_embed_model(&index, &root, models_dir)?;
+        anyhow::Ok((index.embed(&[group], sink.as_ref())?, models))
     })
     .await
     .context("qmd task panicked")??;
@@ -310,7 +325,32 @@ pub async fn run_embed(
         embed_ms = ran.phases.get("embed_ms"),
         "the embeddings are done"
     );
+    if crate::search_index::embedding_on() {
+        let model = crate::search_index::model_file(&models);
+        let done =
+            crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
+        report_unsettled(&progress, &env.group, done.unsettled);
+        tracing::info!(
+            embedded = done.embedded,
+            unsettled = done.unsettled,
+            "the search index's embeddings are done"
+        );
+    }
     Ok(claim_reads(env))
+}
+
+/// Documents left for the next pass, as a metric the Manage row shows: a
+/// document dropped from this pass leaves a trail.
+fn report_unsettled(progress: &Progress, group: &str, unsettled: usize) {
+    progress.metric(
+        "search_index_unsettled",
+        &[("source", group)],
+        unsettled as i64,
+    );
+}
+
+fn env_groups(env: &StepEnv) -> Vec<String> {
+    groups_from_inputs(&env.inputs)
 }
 
 /// A per-source step's version is what it read: qmd hashes the files

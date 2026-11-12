@@ -60,6 +60,16 @@ pub struct Index {
     pool: SqlitePool,
 }
 
+/// One chunk of an indexed document: its bytes in the document, and the
+/// hash of the prompt it is embedded as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkSpan {
+    pub markdown_uuid: String,
+    pub start: usize,
+    pub end: usize,
+    pub hash: String,
+}
+
 impl Index {
     /// Opens the index, creating it, or emptying one written in another
     /// shape: every row is derived from the render stores, so the steps
@@ -113,6 +123,57 @@ impl Index {
             .execute(&mut *tx)
             .await?;
         tx.commit().await.context("commit the removed documents")
+    }
+
+    /// Removes every document whose source is not one of `sources`: what
+    /// the aggregator does with a source taken out of the config. Returns
+    /// how many went.
+    pub async fn keep_sources(&self, sources: &[String]) -> Result<usize> {
+        let gone: Vec<String> = sqlx::query_scalar(
+            "SELECT markdown_uuid FROM documents \
+              WHERE source_id NOT IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(sources)?)
+        .fetch_all(&self.pool)
+        .await?;
+        if !gone.is_empty() {
+            self.remove(&gone).await?;
+        }
+        Ok(gone.len())
+    }
+
+    /// Every chunk hash the index names, each once: what the inference
+    /// cache keeps on a sweep.
+    pub async fn all_hashes(&self) -> Result<std::collections::HashSet<String>> {
+        let rows: Vec<String> = sqlx::query_scalar("SELECT DISTINCT hash FROM chunks")
+            .fetch_all(&self.pool)
+            .await
+            .context("read every chunk hash")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Every chunk of `source_id`'s documents with where it lies, in
+    /// document order: what the embed step cuts each chunk's text by.
+    pub async fn chunk_spans(&self, source_id: &str) -> Result<Vec<ChunkSpan>> {
+        let rows: Vec<(String, i64, i64, String)> = sqlx::query_as(
+            "SELECT d.markdown_uuid, c.start_byte, c.end_byte, c.hash FROM chunks c \
+               JOIN documents d ON d.doc_id = c.doc_id \
+              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
+        )
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("read the indexed chunks")?;
+        rows.into_iter()
+            .map(|(markdown_uuid, start, end, hash)| {
+                Ok(ChunkSpan {
+                    markdown_uuid,
+                    start: usize::try_from(start)?,
+                    end: usize::try_from(end)?,
+                    hash,
+                })
+            })
+            .collect()
     }
 
     /// Every chunk of `source_id`'s documents: `(markdown_uuid, seq, prompt
