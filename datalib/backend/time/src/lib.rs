@@ -32,9 +32,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+mod run_clock;
 mod spoken;
 mod window;
 mod zone;
+pub use run_clock::{closed_now, RunClock};
 pub use window::{widest_start, TimeBound, TimeWindow, WindowError};
 pub use zone::NamedZone;
 

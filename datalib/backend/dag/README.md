@@ -796,7 +796,11 @@ every step name one run. If
 they diverge nothing errors — the store describes a run nobody is
 displaying, `/api/dag` reports no progress on the id mismatch, and the
 UI silently shows none. `started_at` stays the pinned
-`DATALIB_DAG_NOW`.
+`DATALIB_DAG_NOW`, and `finished_at` is read off the same clock
+(`datalib_time::RunClock`: the start moved on by the time since), in
+the record and in the run store alike, so a run pinned to 2369 ends in
+2369. The runner's stamps for a step and its log lines stay on the
+wall clock.
 
 The record is the only channel to a reader who did not spawn the run, and the loop
 saves it before it closes a request, whether its work is done or it was
