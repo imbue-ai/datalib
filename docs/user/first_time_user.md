@@ -103,13 +103,16 @@ Three optional knobs:
   `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`. By default the
   script installs the release it names, which moves to each new release
   shortly after it publishes.
-- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
-  distros like Alpine get the fully-static musl build); set
-  `DATALIB_LIBC=musl` to force the static build on a glibc distro —
-  it runs on any Linux of the right architecture.
+- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected: musl
+  distros like Alpine, and glibc older than 2.39 (Ubuntu 24.04's), get
+  the fully-static musl build. If a binary fails with
+  ``version `GLIBC_2.xx' not found``, install again with
+  `DATALIB_LIBC=musl`: the static build runs on any Linux of the right
+  architecture.
 
 > The install script supports macOS on Apple Silicon and Linux
-> (x86_64 / arm64, glibc or musl); it auto-detects your platform and
+> (x86_64 / arm64; glibc 2.39 or newer, or any Linux through the static
+> musl build); it auto-detects your platform and
 > pulls the matching tarball. The rest of this guide is written
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.

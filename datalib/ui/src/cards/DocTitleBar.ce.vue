@@ -86,7 +86,7 @@ function pick(id: string) {
       class="doc-bar-btn"
       :href="link.target"
       target="_blank"
-      rel="noopener"
+      rel="noopener noreferrer"
       :aria-label="link.label"
       :title="link.label"
       @click.prevent="emit('act', 'open-url')"

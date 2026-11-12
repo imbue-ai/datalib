@@ -336,6 +336,64 @@ on its own runner before anything is published:
   and fails when it finds none. `//tools:check_binaries_test` (and its
   `_bash32` twin) runs it against stand-ins.
 - The musl binaries are fully static: inline in the workflow.
+- **`scripts/release/check_glibc_floor.sh <dir-or-.tar.gz>...`** and
+  **`scripts/release/smoke_linux_assets.sh`** hold every Linux asset to
+  the glibc floor; the next section says how.
+  `//tools:check_glibc_floor_test` (and its `_bash32` twin) runs the
+  first against stand-ins. The second runs only in the workflow, inside
+  a container.
+
+## The Linux floor
+
+The Linux gnu tarballs and the Node runtime assets, and so the Docker
+image's binaries, run on **glibc 2.39 and newer: Ubuntu 24.04, Debian
+13, and anything later**. On an older glibc the installer picks the
+musl build, which needs no libc from the host (below).
+
+A binary built on Linux asks for the glibc of the machine that linked
+it: each libc function it calls is tied to the glibc version that
+introduced the function's current form (`atan2f@GLIBC_2.43`), and the
+loader refuses to start a binary whose versions the host's glibc lacks
+("version `GLIBC_2.43' not found"). Bazel builds the gnu legs with the
+runner's own C toolchain and glibc, so **the runner's Ubuntu is the
+floor**. v0.52.0's x86_64 tarball was built on `ubuntu-latest`, by then
+Ubuntu 26.04 with glibc 2.43, and would not start on 24.04, while its
+arm64 sibling, on the pinned `ubuntu-24.04-arm`, needed 2.39.
+
+What holds it:
+
+- **Every job that builds or stages a shipped Linux file names a
+  pinned runner**, `ubuntu-24.04` or `ubuntu-24.04-arm`, never
+  `ubuntu-latest`: `runtime`, every Linux `build` leg (the musl ones
+  too, so their build scripts run where the gnu ones do),
+  `docker-image`, and `reader-wheels.yml`'s Linux legs. The wheels
+  compile inside manylinux and musllinux images, so their libc is the
+  image's, and `check_reader_wheels.sh` loads them on glibc 2.17
+  (§"The reader wheels").
+- **`check_glibc_floor.sh`** reads every ELF file in the tarball (the
+  `build` job) and in each runtime asset, the CUDA overlay included
+  (the `runtime` job), and fails on any glibc version above
+  `GLIBC_FLOOR`. Node and the npm prebuilds in the runtime were built by
+  someone else, so the runner pin does nothing for them; this is what
+  notices one that moved. The version names are whole strings in an ELF
+  file's dynamic string table, so the script reads them with `tr` and
+  `grep` rather than binutils, which a mac lacks.
+- **`smoke_linux_assets.sh`** runs in `ubuntu:24.04` (pinned by digest)
+  on every Linux `build` leg: `ldd` on every ELF file in the tarball and
+  its runtime, so a missing shared library fails as well as a missing
+  version, then `--version` from the binaries and from Node. The musl
+  prebuilds npm ships beside the glibc ones are left to musl hosts.
+- **`scripts/install.sh`** asks `getconf GNU_LIBC_VERSION` and, on a
+  glibc older than the floor, says so and installs the musl build; when
+  it cannot tell, it installs the gnu build and names
+  `DATALIB_LIBC=musl` as the way out. `DATALIB_LIBC` set by hand is
+  used as given. `//tools:install_test` checks the choice, and that its
+  `GLIBC_FLOOR` is `check_glibc_floor.sh`'s.
+
+To move the floor, change the runner labels, the smoke image and
+`GLIBC_FLOOR` in both scripts together, and this section's first
+paragraph. The image's digest comes from `crane digest
+mirror.gcr.io/library/ubuntu:<version>`.
 
 ## Before a tag: the Linux run from a mac
 

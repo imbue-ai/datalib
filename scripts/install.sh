@@ -25,7 +25,8 @@
 #                             `latest` also means that one). Any other tag is
 #                             checked only against the checksum beside it
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
-#                             auto-detected; see libc detection below)
+#                             auto-detected; see libc detection below).
+#                             Set, it is used as given
 #
 # Supported platforms (one published release tarball each):
 #   macOS arm64          -> aarch64-apple-darwin
@@ -70,9 +71,12 @@ err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 # can't run the gnu builds, so pick the fully-static musl tarball
 # there. Every musl system ships its dynamic loader at
 # /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
-# glibc hosts default to the gnu build (the long-standing default);
-# set DATALIB_LIBC=musl to force the static build anywhere — it
-# runs on any Linux of the right arch regardless of libc.
+# A glibc host gets the gnu build when its glibc is at least
+# GLIBC_FLOOR, the oldest the gnu builds run on (Ubuntu 24.04's;
+# docs/dev/release_steps.md §"The Linux floor"), and the musl build
+# below it. Set DATALIB_LIBC=musl to force the static build anywhere —
+# it runs on any Linux of the right arch regardless of libc.
+GLIBC_FLOOR="2.39"
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
@@ -91,6 +95,31 @@ case "${os}/${arch}" in
                     break
                 fi
             done
+        fi
+        if [ -z "${DATALIB_LIBC:-}" ] && [ "${libc}" = "gnu" ]; then
+            # `getconf GNU_LIBC_VERSION` prints `glibc 2.39`.
+            host_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+            host_glibc="${host_glibc#glibc }"
+            host_major="${host_glibc%%.*}"
+            host_minor="${host_glibc#*.}"
+            host_minor="${host_minor%%.*}"
+            case "${host_major}.${host_minor}" in
+                *[!0-9.]* | .* | *.)
+                    say "could not tell this host's glibc version; installing the glibc build,"
+                    say "which needs glibc ${GLIBC_FLOOR} or newer. If datalib-step then fails with"
+                    say "'GLIBC_2.xx not found', install again with DATALIB_LIBC=musl."
+                    ;;
+                *)
+                    if [ "${host_major}" -lt "${GLIBC_FLOOR%%.*}" ] || {
+                        [ "${host_major}" -eq "${GLIBC_FLOOR%%.*}" ] \
+                            && [ "${host_minor}" -lt "${GLIBC_FLOOR#*.}" ]
+                    }; then
+                        say "this host has glibc ${host_major}.${host_minor}, older than the ${GLIBC_FLOOR} the glibc build"
+                        say "needs; installing the fully-static musl build instead"
+                        libc="musl"
+                    fi
+                    ;;
+            esac
         fi
         case "${libc}" in
             gnu | musl) ;;

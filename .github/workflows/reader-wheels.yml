@@ -41,9 +41,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The wheels compile inside a manylinux or musllinux image, whose
+          # libc decides theirs; the runner is pinned anyway, as release.yml's
+          # are (release_steps.md §"The Linux floor").
           - leg: linux-x86_64
             target: linux
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
           - leg: linux-aarch64
             target: linux
             runs-on: ubuntu-24.04-arm

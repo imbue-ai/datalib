@@ -104,7 +104,7 @@ describe("openExternal", () => {
   it("falls back to a new tab in a plain browser", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     await openExternal("https://superhuman.com/");
-    expect(open).toHaveBeenCalledWith("https://superhuman.com/", "_blank", "noopener");
+    expect(open).toHaveBeenCalledWith("https://superhuman.com/", "_blank", "noopener,noreferrer");
   });
 
   it("does not throw when the IPC call rejects", async () => {
@@ -200,7 +200,11 @@ describe("installExternalLinkHandler", () => {
         'target="_blank" rel="noopener noreferrer">↗</a>',
     );
     expect(ev.defaultPrevented).toBe(true);
-    expect(open).toHaveBeenCalledWith("https://mail.superhuman.com/t/1", "_blank", "noopener");
+    expect(open).toHaveBeenCalledWith(
+      "https://mail.superhuman.com/t/1",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 
   it("opens a bare in-body link instead of navigating the app away", () => {
