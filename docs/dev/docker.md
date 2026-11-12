@@ -46,7 +46,9 @@ on every `v*` tag: each architecture builds on a runner of its own, with
 nothing emulated, and pushes by digest, then one job gives the two a tag.
 The image is not built from source: it consumes the
 Linux gnu tarballs the same release just produced, so what a user pulls
-is byte-for-byte what `curl | sh` installs on a glibc host. A failed mac
+is byte-for-byte what `curl | sh` installs on a glibc host at or above
+the floor ([`release_steps.md`](release_steps.md) §"The Linux floor";
+the image's own Ubuntu is newer, which costs nothing). A failed mac
 job does not stop the image, so `:latest` can be ahead of the release
 ([`release_steps.md`](release_steps.md) §"What one failed job costs").
 The user's page names the image by digest, not by a tag, and each release

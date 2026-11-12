@@ -12,10 +12,12 @@ exports_files([
     "scripts/install.sh",
     "scripts/release/pin_release.py",
     "scripts/release/publish_release.py",
-    # Run by //tools:stage_runtime_test, //tools:stage_tarball_test and
-    # //tools:check_binaries_test: release.yml's steps, as scripts.
+    # Run by //tools:stage_runtime_test, //tools:stage_tarball_test,
+    # //tools:check_binaries_test and //tools:check_glibc_floor_test:
+    # release.yml's steps, as scripts.
     "scripts/latchkey-wrapper.sh",
     "scripts/release/check_binaries.sh",
+    "scripts/release/check_glibc_floor.sh",
     "scripts/release/make_reader_wheel.py",
     "scripts/release/stage_runtime_asset.sh",
     "scripts/release/stage_tarball.sh",
