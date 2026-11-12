@@ -1198,7 +1198,7 @@ impl IndexedMarkdownStore {
                 // `users` / `channels`, whose rename shows up inside
                 // every rendered doc; by the time rows reach here that
                 // fan-out has already happened, on the render side.
-                global_fanout_tables: &[],
+                fanout_query: None,
                 bucket_query: "
                     SELECT DISTINCT markdown_uuid FROM (
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid

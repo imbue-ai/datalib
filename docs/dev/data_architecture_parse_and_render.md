@@ -885,9 +885,11 @@ and modified rows of its primary tables, or `changed_rows` mapped
 through the rows it loads anyway where the key lives inside the payload.
 `RawRange::narrow` joins the two; `narrow_by` also hands back the stale
 keys whose raw row no longer exists, for the processor to declare with
-nothing. `global_fanout_tables` — a table whose change re-renders the
-whole source — is empty everywhere but email under a label filter,
-where the mailbox tree decides which threads render at all.
+nothing. `fanout_query` — a change that re-renders the whole source —
+is unset everywhere but email under a label filter, where a mailbox
+added, removed, renamed or moved can change which threads render at
+all. It names those columns, not the table: a mailbox row that changed
+only in a key the filter does not read must not re-render every thread.
 
 **Every emitted document is written.** There is no fingerprint deciding
 whether a write is needed: a row identical to the stored one is no

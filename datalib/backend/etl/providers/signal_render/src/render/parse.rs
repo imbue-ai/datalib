@@ -420,7 +420,7 @@ async fn scan_diff(
         &datalib_etl::doltlite_raw::DiffScanSpec {
             // A recipient change reaches a chat through the inputs it
             // declared; nothing fans out.
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT chat_id FROM (
                     SELECT coalesce(to_id, from_id) AS chat_id

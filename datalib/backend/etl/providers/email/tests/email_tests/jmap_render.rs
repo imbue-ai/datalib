@@ -88,7 +88,6 @@ fn render(
         tmp.path(),
         source,
         Some(outlink),
-        &[],
         &Progress::noop(),
         &mut |doc| {
             docs.push(doc);

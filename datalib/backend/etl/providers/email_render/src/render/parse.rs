@@ -39,6 +39,62 @@ const THREAD_KEY: KeyColumn = KeyColumn {
     column: "thread_id",
 };
 
+/// Under a label filter, a mailbox added, removed, renamed or moved can
+/// change which threads the filter keeps, so it renders every thread.
+/// Any other change to a mailbox row (a key of the server's own that
+/// nothing reads) reaches only the threads that looked that mailbox up.
+const MAILBOX_TREE_MOVED: &str = "
+    SELECT 1 FROM dolt_diff_mailboxes
+     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+       AND (diff_type != 'modified'
+            OR from_name IS NOT to_name
+            OR from_parent_id IS NOT to_parent_id)
+     LIMIT 1";
+
+/// The threads with an email filed under one of the mailboxes in `?1`:
+/// the ones a label filter keeps, whole.
+const KEPT_THREADS: &str = "
+    SELECT DISTINCT e.account_id, e.thread_id
+      FROM email_mailboxes m JOIN emails e ON e.id = m.email_id
+     WHERE m.mailbox_id IN (SELECT value FROM json_each(?1))
+       AND e.account_id != '' AND e.thread_id != ''";
+
+/// [`KEPT_THREADS`] among the thread ids in `?2`.
+const KEPT_THREADS_AMONG: &str = "
+    SELECT DISTINCT e.account_id, e.thread_id
+      FROM email_mailboxes m JOIN emails e ON e.id = m.email_id
+     WHERE m.mailbox_id IN (SELECT value FROM json_each(?1))
+       AND e.thread_id IN (SELECT value FROM json_each(?2))
+       AND e.account_id != '' AND e.thread_id != ''";
+
+/// Every thread with an email.
+const ALL_THREADS: &str = "
+    SELECT DISTINCT account_id, thread_id FROM emails
+     WHERE account_id != '' AND thread_id != ''";
+
+/// The threads with an email among the thread ids in `?1`.
+const THREADS_AMONG: &str = "
+    SELECT DISTINCT account_id, thread_id FROM emails
+     WHERE thread_id IN (SELECT value FROM json_each(?1))
+       AND account_id != '' AND thread_id != ''";
+
+type Pair = (String, String);
+
+/// Which threads a run reads. The label filter is decided here, in SQL,
+/// so a thread it keeps out is never loaded.
+enum Selection {
+    /// Every thread: no filter, nothing narrowed.
+    Every,
+    /// Every thread the label filter keeps, by thread id.
+    Kept(BTreeMap<String, Vec<String>>),
+    /// The threads the diff and the driver found stale; `left_out` holds
+    /// those of them that have emails and that the label filter keeps out.
+    Stale {
+        pairs: HashSet<Pair>,
+        left_out: HashSet<Pair>,
+    },
+}
+
 /// Result of the dolt_diff scan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
@@ -78,9 +134,13 @@ pub struct EmailStore {
     cas: Option<blob_cas::BlobCas>,
     pub shared: Shared,
     pub scan: ScanResult,
-    /// Threads this run will look at: every one on a full walk, the
-    /// narrowed set otherwise.
+    selection: Selection,
+    /// Threads this run will look at: every one on a full walk (every one
+    /// the label filter keeps, under one), the narrowed set otherwise.
     pub threads: usize,
+    /// On a full walk under a label filter, the threads the filter keeps
+    /// out, by key alone: never loaded, declared so their documents go.
+    pub left_out: Vec<Pair>,
     /// Rows whose stored payload would not read as JSON, dropped —
     /// reported by the processor rather than skipped in silence.
     pub unparsed: Vec<Unparsed>,
@@ -97,14 +157,20 @@ pub struct Page {
     /// belongs to any more builds nothing. Empty on a full walk, whose
     /// threads all come from rows.
     pub looked_at: Vec<(String, String)>,
+    /// On a narrowed run, the stale threads on this page that the label
+    /// filter keeps out: not loaded.
+    pub left_out: Vec<(String, String)>,
 }
 
 impl EmailStore {
     /// The `thread_id`s to render, a page of `page` at a time.
     pub fn pages(&self, page: usize) -> BucketPages {
-        match &self.scan.render {
-            None => BucketPages::walk(THREAD_KEY, page),
-            Some(pairs) => BucketPages::listed(pairs.iter().map(|(_, t)| t.clone()), page),
+        match &self.selection {
+            Selection::Every => BucketPages::walk(THREAD_KEY, page),
+            Selection::Kept(kept) => BucketPages::listed(kept.keys().cloned(), page),
+            Selection::Stale { pairs, .. } => {
+                BucketPages::listed(pairs.iter().map(|(_, t)| t.clone()), page)
+            }
         }
     }
 
@@ -115,22 +181,52 @@ impl EmailStore {
             let Some(thread_ids) = pages.next(pool).await? else {
                 return Ok(None);
             };
-            let looked_at: Vec<(String, String)> = match &self.scan.render {
-                None => Vec::new(),
-                Some(pairs) => {
+            let (wanted, looked_at, left_out) = match &self.selection {
+                Selection::Every => (None, Vec::new(), Vec::new()),
+                Selection::Kept(kept) => {
+                    let wanted: Vec<Pair> = thread_ids
+                        .iter()
+                        .flat_map(|t| {
+                            kept.get(t)
+                                .into_iter()
+                                .flatten()
+                                .map(move |a| (a.clone(), t.clone()))
+                        })
+                        .collect();
+                    (Some(wanted), Vec::new(), Vec::new())
+                }
+                Selection::Stale { pairs, left_out } => {
                     let ids: HashSet<&str> = thread_ids.iter().map(String::as_str).collect();
-                    let mut v: Vec<_> = pairs
+                    let mut looked_at: Vec<Pair> = pairs
                         .iter()
                         .filter(|(_, t)| ids.contains(t.as_str()))
                         .cloned()
                         .collect();
-                    v.sort();
-                    v
+                    looked_at.sort();
+                    let (out, wanted): (Vec<Pair>, Vec<Pair>) = looked_at
+                        .iter()
+                        .cloned()
+                        .partition(|p| left_out.contains(p));
+                    (Some(wanted), looked_at, out)
                 }
             };
-            let wanted = self.scan.render.as_ref().map(|_| &looked_at[..]);
-            let docs = load_buckets(pool, &thread_ids, wanted, &self.marks).await?;
-            Ok(Some(Page { docs, looked_at }))
+            // Only the threads a page renders are read: one the filter
+            // keeps out is never loaded.
+            let load_ids: Vec<String> = match &wanted {
+                None => thread_ids,
+                Some(wanted) => wanted
+                    .iter()
+                    .map(|(_, t)| t.clone())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            };
+            let docs = load_buckets(pool, &load_ids, wanted.as_deref(), &self.marks).await?;
+            Ok(Some(Page {
+                docs,
+                looked_at,
+                left_out,
+            }))
         })
     }
 
@@ -202,28 +298,27 @@ impl EmailThreadBucket {
     }
 }
 
-/// `label_filter` says whether the render step filters threads by
-/// mailbox label: then which threads render depends on the whole
-/// mailbox tree, and a mailbox change renders everything. `None` when
-/// there is no store, or nothing committed in it, to read.
+/// `only_labels` is the render step's label filter, empty for none: a
+/// thread renders when any of its emails is filed under one of them.
+/// `None` when there is no store, or nothing committed in it, to read.
 pub fn open(
     input: &Path,
     source_id: &str,
     range: RawRange<'_>,
-    label_filter: bool,
+    only_labels: &[String],
 ) -> Result<Option<EmailStore>> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
         return Ok(None);
     }
-    block_on(open_async(&db_path, source_id, range, label_filter))
+    block_on(open_async(&db_path, source_id, range, only_labels))
 }
 
 async fn open_async(
     db_path: &Path,
     source_id: &str,
     range: RawRange<'_>,
-    label_filter: bool,
+    only_labels: &[String],
 ) -> Result<Option<EmailStore>> {
     // Opened at the driver's commit, else HEAD. No commit means nothing
     // has been committed here to render: emptiness, not a reason to read
@@ -240,11 +335,14 @@ async fn open_async(
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let accounts = load_accounts(&pool, &mut unparsed).await?;
     let mailboxes = load_payloads(&pool, "mailboxes", &mut unparsed).await?;
-    let scan = scan_diff(&pool, source_id, range, &pin, label_filter).await?;
+    let allowed = (!only_labels.is_empty()).then(|| resolve_labels(&mailboxes, only_labels).ids);
+    let scan = scan_diff(&pool, source_id, range, &pin, allowed.is_some()).await?;
     let marks = read_marks::load(&pool).await?;
-    let threads = match &scan.render {
-        None => thread_count(&pool).await?,
-        Some(set) => set.len(),
+    let (selection, left_out) = select(&pool, &scan, allowed.as_ref()).await?;
+    let threads = match &selection {
+        Selection::Every => thread_count(&pool).await?,
+        Selection::Kept(kept) => kept.values().map(Vec::len).sum(),
+        Selection::Stale { pairs, .. } => pairs.len(),
     };
     let cas = blob_cas::open_cas_for_render(db_path)
         .await
@@ -257,7 +355,9 @@ async fn open_async(
             mailboxes,
         },
         scan,
+        selection,
         threads,
+        left_out,
         unparsed,
         marks,
     }))
@@ -344,6 +444,96 @@ fn attachments_in(eml: &[u8]) -> Vec<datalib_etl_email::ingest::db::LoadedAttach
     }
 }
 
+/// The configured label paths against the mailbox tree. Resolution and
+/// exact-match semantics are shared with the download filter via
+/// [`datalib_etl_email::mailbox_labels`], so a given label means the
+/// same thing at both phases and across JMAP / mbox sources.
+pub(crate) fn resolve_labels(
+    mailboxes: &[Value],
+    only_labels: &[String],
+) -> datalib_etl_email::mailbox_labels::Resolved {
+    let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = mailboxes
+        .iter()
+        .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
+        .collect();
+    datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels)
+}
+
+/// What the run reads, and on a full walk under a label filter the
+/// threads that filter keeps out.
+async fn select(
+    pool: &SqlitePool,
+    scan: &ScanResult,
+    allowed: Option<&HashSet<String>>,
+) -> Result<(Selection, Vec<Pair>)> {
+    let Some(allowed) = allowed else {
+        return Ok(match &scan.render {
+            None => (Selection::Every, Vec::new()),
+            Some(pairs) => (
+                Selection::Stale {
+                    pairs: pairs.clone(),
+                    left_out: HashSet::new(),
+                },
+                Vec::new(),
+            ),
+        });
+    };
+    let allowed = serde_json::to_string(allowed)?;
+    match &scan.render {
+        None => {
+            let kept: HashSet<Pair> = sqlx::query_as(KEPT_THREADS)
+                .bind(&allowed)
+                .fetch_all(pool)
+                .await
+                .context("the threads the label filter keeps")?
+                .into_iter()
+                .collect();
+            let every: Vec<Pair> = sqlx::query_as(ALL_THREADS)
+                .fetch_all(pool)
+                .await
+                .context("every thread")?;
+            let left_out = every.into_iter().filter(|p| !kept.contains(p)).collect();
+            let mut by_thread: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (a, t) in kept {
+                by_thread.entry(t).or_default().push(a);
+            }
+            Ok((Selection::Kept(by_thread), left_out))
+        }
+        Some(pairs) => {
+            let ids: Vec<&str> = pairs
+                .iter()
+                .map(|(_, t)| t.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let ids = serde_json::to_string(&ids)?;
+            let kept: HashSet<Pair> = sqlx::query_as(KEPT_THREADS_AMONG)
+                .bind(&allowed)
+                .bind(&ids)
+                .fetch_all(pool)
+                .await
+                .context("the stale threads the label filter keeps")?
+                .into_iter()
+                .collect();
+            let left_out = sqlx::query_as::<_, Pair>(THREADS_AMONG)
+                .bind(&ids)
+                .fetch_all(pool)
+                .await
+                .context("the stale threads with an email")?
+                .into_iter()
+                .filter(|p| pairs.contains(p) && !kept.contains(p))
+                .collect();
+            Ok((
+                Selection::Stale {
+                    pairs: pairs.clone(),
+                    left_out,
+                },
+                Vec::new(),
+            ))
+        }
+    }
+}
+
 /// Per-bucket dolt_diff scan. Delegates to the shared
 /// [`datalib_etl::doltlite_raw::scan_buckets`] helper, which is
 /// the same primitive every other provider uses (slack / chatgpt /
@@ -351,9 +541,9 @@ fn attachments_in(eml: &[u8]) -> Vec<datalib_etl_email::ingest::db::LoadedAttach
 /// so it fits the helper's `HashSet<String>` API; we split it back
 /// into a `(String, String)` pair locally for the load step. An
 /// account or mailbox change reaches a thread through the inputs it
-/// declared — except under a label filter, where the mailbox tree
-/// decides which threads render at all, so any mailbox change renders
-/// everything. A read mark that moved renders the thread of its email.
+/// declared — except under a label filter, where a change to the
+/// mailbox tree ([`MAILBOX_TREE_MOVED`]) renders everything. A read
+/// mark that moved renders the thread of its email.
 async fn scan_diff(
     pool: &SqlitePool,
     source_id: &str,
@@ -366,7 +556,7 @@ async fn scan_diff(
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: if label_filter { &["mailboxes"] } else { &[] },
+            fanout_query: label_filter.then_some(MAILBOX_TREE_MOVED),
             bucket_query: "
                 SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
@@ -815,7 +1005,7 @@ mod tests {
                 // The driver found nothing stale by what the thread declared.
                 stale: Some(&HashSet::new()),
             },
-            false,
+            &[],
         )
         .unwrap()
         .unwrap();
@@ -825,6 +1015,148 @@ mod tests {
             render,
             Some(HashSet::from([("A1".to_string(), "TE1".to_string())]))
         );
+    }
+
+    /// A raw store holding mailboxes M1 "Inbox" and M2 "Spam", and one
+    /// email in each (E1 in thread TE1 under M1, E2 in TE2 under M2),
+    /// committed; `seen` emails carry `$seen`.
+    async fn two_mailbox_store(
+        db: &datalib_etl_email::ingest::db::RawDb,
+        spam: Value,
+        seen: &'static [&'static str],
+    ) -> String {
+        use datalib_etl::bulk::bulk_upsert_in_tx;
+        use datalib_etl::doltlite_raw::{commit_run, head_commit};
+        use datalib_etl_email::ingest::listed::{same_id, write_batch_in_tx};
+        use datalib_etl_email::ingest::schema_raw::{FetchedEmail, MailboxRow};
+
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        let mut tx = db.pool().begin().await.unwrap();
+        let mailboxes = [
+            MailboxRow::from_jmap_payload("A1", &serde_json::json!({"id": "M1", "name": "Inbox"}))
+                .unwrap(),
+            MailboxRow::from_jmap_payload("A1", &spam).unwrap(),
+        ];
+        bulk_upsert_in_tx(&mut tx, &mailboxes, &now).await.unwrap();
+        let got: Vec<FetchedEmail> = [("E1", "M1"), ("E2", "M2")]
+            .into_iter()
+            .map(|(id, mailbox)| {
+                let keywords: serde_json::Map<String, Value> = seen
+                    .contains(&id)
+                    .then(|| ("$seen".to_string(), Value::Bool(true)))
+                    .into_iter()
+                    .collect();
+                let envelope = serde_json::json!({
+                    "id": id, "blobId": format!("B{id}"), "threadId": format!("T{id}"),
+                    "keywords": keywords, "mailboxIds": {mailbox: true},
+                });
+                FetchedEmail::from_jmap_envelope("A1", &envelope).unwrap()
+            })
+            .collect();
+        write_batch_in_tx(&mut tx, &now, got, &[], same_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        commit_run(db.pool(), "sync").await.unwrap();
+        head_commit(db.pool()).await.unwrap().unwrap()
+    }
+
+    /// What a run under the "Inbox" filter from `cursor` would render:
+    /// `None` for every thread.
+    fn inbox_render_from(dir: &Path, cursor: &str) -> Option<HashSet<(String, String)>> {
+        let store = open(
+            dir,
+            "mail",
+            RawRange {
+                cursor: Some(cursor),
+                pin: None,
+                stale: Some(&HashSet::new()),
+            },
+            &["Inbox".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        let render = store.scan.render.clone();
+        store.close();
+        render
+    }
+
+    /// Fastmail dropped keys of its own (`autoLearn`, `hidden`, …) from one
+    /// mailbox between two syncs, and under a label filter the render
+    /// walked all 200k threads of the account to change 51 documents. Only
+    /// a change to which mailbox is which renders everything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_mailbox_key_the_filter_does_not_read_renders_no_thread() {
+        use datalib_etl::doltlite_raw::content_commit;
+        use datalib_etl_email::ingest::db::RawDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&db_path_for(dir.path())).await.unwrap();
+        let spam = serde_json::json!({"id": "M2", "name": "Spam", "hidden": false});
+        let first = two_mailbox_store(&db, spam, &[]).await;
+        let version = content_commit(db.pool()).await.unwrap();
+        two_mailbox_store(&db, serde_json::json!({"id": "M2", "name": "Spam"}), &[]).await;
+        assert_ne!(
+            content_commit(db.pool()).await.unwrap(),
+            version,
+            "the mailbox row changed"
+        );
+        db.close().await;
+
+        assert_eq!(inbox_render_from(dir.path(), &first), Some(HashSet::new()));
+    }
+
+    /// A mailbox renamed can move a thread into or out of the filter, so
+    /// every thread renders.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_renamed_mailbox_renders_every_thread_under_a_label_filter() {
+        use datalib_etl_email::ingest::db::RawDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&db_path_for(dir.path())).await.unwrap();
+        let spam = serde_json::json!({"id": "M2", "name": "Spam"});
+        let first = two_mailbox_store(&db, spam, &[]).await;
+        let renamed = serde_json::json!({"id": "M2", "name": "Inbox"});
+        two_mailbox_store(&db, renamed, &[]).await;
+        db.close().await;
+
+        assert_eq!(inbox_render_from(dir.path(), &first), None);
+    }
+
+    /// A narrowed run under a label filter names a stale thread the filter
+    /// keeps out, and never loads it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stale_thread_the_filter_keeps_out_is_named_and_not_loaded() {
+        use datalib_etl_email::ingest::db::RawDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&db_path_for(dir.path())).await.unwrap();
+        let spam = || serde_json::json!({"id": "M2", "name": "Spam"});
+        let first = two_mailbox_store(&db, spam(), &[]).await;
+        two_mailbox_store(&db, spam(), &["E1", "E2"]).await;
+        db.close().await;
+
+        let store = open(
+            dir.path(),
+            "mail",
+            RawRange {
+                cursor: Some(&first),
+                pin: None,
+                stale: Some(&HashSet::new()),
+            },
+            &["Inbox".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        let mut pages = store.pages(10);
+        let page = store.next_page(&mut pages).unwrap().unwrap();
+        assert!(store.next_page(&mut pages).unwrap().is_none());
+        store.close();
+        let pair = |t: &str| ("A1".to_string(), t.to_string());
+        assert_eq!(page.looked_at, vec![pair("TE1"), pair("TE2")]);
+        assert_eq!(page.left_out, vec![pair("TE2")]);
+        let loaded: Vec<&str> = page.docs.iter().map(|d| d.thread_id.as_str()).collect();
+        assert_eq!(loaded, vec!["TE1"]);
     }
 
     /// A narrowed page returns each wanted thread, one with no email
