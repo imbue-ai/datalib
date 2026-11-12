@@ -556,8 +556,9 @@ besides components:
   `grid/searchSort.ts`). The card keeps one order, its `sort` state,
   which the control and the table's headers both write and both views
   read: the list shows before the grid exists, and Size is a hidden
-  column with no header to hold it. The list loads a page at a time with
-  **Show more**, on the table's `grid/pagedWindow.ts`; when the index
+  column with no header to hold it. The list loads a page at a time as
+  its end scrolls near (an `IntersectionObserver` on the last item), on
+  the table's `grid/pagedWindow.ts`; when the index
   moves it reads again as many rows as it holds, through the picked one,
   so a sync costs nobody their place. Its table is the grid below, over the search: row click
   opens the row's document via `host.openCards`, as does a double-click
