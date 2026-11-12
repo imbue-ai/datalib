@@ -70,6 +70,19 @@ pub enum SearchTermKind {
     /// photo's. What `caption:` finds it by, since a photo has no page
     /// for free text to search.
     Caption = 17,
+    /// A keyword the row is tagged with, or one above it in its source's
+    /// keyword tree: a photo's. What `keyword:` finds it by.
+    Keyword = 18,
+    /// The name of someone shown in the row: a person a photo's face or
+    /// keyword tags. What `with:` and `pictured:` find a photo by.
+    Pictured = 19,
+    /// The row's star rating, `1` to `5`, where it has one. What
+    /// `rating:` finds a photo by.
+    Rating = 20,
+    /// A collection the row is in, by its name, the name of each set
+    /// above it, and its whole path: a photo's albums. What
+    /// `collection:` finds it by.
+    Collection = 21,
 }
 
 impl SearchTermKind {
@@ -112,8 +125,14 @@ impl SearchTermKind {
             | SearchTermKind::Subject
             | SearchTermKind::Label
             | SearchTermKind::Place
-            | SearchTermKind::Caption => 2,
-            SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
+            | SearchTermKind::Caption
+            | SearchTermKind::Keyword
+            | SearchTermKind::Pictured
+            | SearchTermKind::Collection => 2,
+            SearchTermKind::Author
+            | SearchTermKind::Name
+            | SearchTermKind::Participant
+            | SearchTermKind::Rating => 1,
         }
     }
 
@@ -136,7 +155,11 @@ impl SearchTermKind {
             | SearchTermKind::Subject
             | SearchTermKind::Label
             | SearchTermKind::Place
-            | SearchTermKind::Caption => false,
+            | SearchTermKind::Caption
+            | SearchTermKind::Keyword
+            | SearchTermKind::Pictured
+            | SearchTermKind::Rating
+            | SearchTermKind::Collection => false,
         }
     }
 }

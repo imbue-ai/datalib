@@ -897,5 +897,18 @@ and the crate's `src/read.rs`. Render reads only the mirror; the
 previews are read by the applet, live, from the `Previews.lrdata` beside
 the catalog, since their file names change on every edit.
 
+A photo's keywords are `keyword:` terms, the people tagged on its faces
+or by person keywords `pictured:` terms (which `with:` reads too), its
+stars a `rating:` term, and every collection it is a member of a
+`collection:` term. Lightroom keeps collections in two trees of the same
+shape: `AgLibraryCollection` (collections, their sets, the quick
+collection, which is the one `systemOnly` collection read, and saved
+books, slideshows, prints and web galleries) and
+`AgLibraryPublishedCollection` (each publish service's collections),
+each with its `…Image` table of members. A smart collection has no
+member rows (its rules are in `AgLibraryCollectionContent`), so it is
+not one. Keywords, people and collections are `label:` terms as well,
+which is how photos were searched before these keys existed.
+
 **`file_inventory` as a companion**, if you want to know whether the files the
 catalog points at are still there.

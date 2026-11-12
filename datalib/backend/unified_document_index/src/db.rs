@@ -162,6 +162,10 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
                 .map(|_| "value = ? COLLATE NOCASE".to_string())
                 .collect();
             let mut bound = values;
+            // `rating:>9` names no value, so matches no row.
+            if any.is_empty() && by_name.is_none() {
+                any.push("0".to_string());
+            }
             if let Some(name) = by_name {
                 any.push(
                     "value IN (SELECT handle FROM names WHERE name = ? COLLATE NOCASE)".to_string(),
@@ -431,6 +435,14 @@ mod tests {
 
         let (sql, params) = build_where(&parse_query("recipient:*"));
         assert!(sql.contains("t.kind IN (6, 7, 9))"), "{sql}");
+        assert!(params.is_empty());
+
+        let (sql, params) = build_where(&parse_query("rating:>=4"));
+        assert!(sql.contains("t.kind IN (20)"), "{sql}");
+        assert_eq!(params, ["4", "5"]);
+
+        let (sql, params) = build_where(&parse_query("rating:>5"));
+        assert!(sql.contains("FROM vals WHERE 0)"), "{sql}");
         assert!(params.is_empty());
     }
 
