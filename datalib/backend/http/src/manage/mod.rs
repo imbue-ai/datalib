@@ -57,7 +57,14 @@ pub enum RowKind {
     /// entry — nothing syncs, edits or removes it — but it takes disk
     /// and its log is browsable.
     System,
+    /// A heading the config never wrote: Applets, over the applets filed
+    /// under no group. It holds rows and does nothing itself.
+    Section,
 }
+
+/// The Applets heading's row key and id. Not a path-safe group id, so no
+/// group or entry can share it.
+const APPLETS_SECTION_KEY: &str = "section:applets";
 
 /// The built-in functions by what they do. Mirrors
 /// `datalib_step::function::Function`; a step outside any group has no
@@ -726,8 +733,19 @@ impl Snapshot<'_> {
                 }
             }
         }
+        let (mut applets, rest): (Vec<ManageRow>, Vec<ManageRow>) = entry_rows
+            .drain(..)
+            .map(|(_, r)| r)
+            .partition(|r| r.kind == RowKind::Applet && r.written_group.is_none());
         let mut rows = groups;
-        rows.extend(entry_rows.drain(..).map(|(_, r)| r));
+        rows.extend(rest);
+        if !applets.is_empty() {
+            for applet in &mut applets {
+                applet.path.insert(0, APPLETS_SECTION_KEY.to_string());
+            }
+            rows.push(applets_section_row());
+            rows.extend(applets);
+        }
         rows.extend(self.system_rows());
         rows
     }
@@ -854,6 +872,52 @@ impl Snapshot<'_> {
         );
         group.problems = problems::config_warning_chips(self.diagnostics);
         [group, logs]
+    }
+}
+
+/// The Applets heading: after every group, so an applet filed under none
+/// is not drawn as if it trailed the last one.
+fn applets_section_row() -> ManageRow {
+    let key = APPLETS_SECTION_KEY.to_string();
+    ManageRow {
+        id: key.clone(),
+        key: key.clone(),
+        path: vec![key],
+        kind: RowKind::Section,
+        group: None,
+        written_group: None,
+        inputs: vec![],
+        phase: Phase::Other,
+        function: None,
+        params: serde_json::Value::Object(Default::default()),
+        name: Identity {
+            id: APPLETS_SECTION_KEY.to_string(),
+            label: "Applets".into(),
+            icon: Some("applet".into()),
+            detail: Some("The applets the config files under no group".into()),
+            entity: None,
+        },
+        r#type: None,
+        dropped: None,
+        status: StatusView::default(),
+        status_from: None,
+        queue: Quantity::default(),
+        eta: Quantity::default(),
+        owed: Quantity::default(),
+        problems: vec![],
+        items: Timeseries::default(),
+        last_synced: None,
+        last_success: None,
+        disk: Timeseries::default(),
+        actions: vec![],
+        seeds: vec![],
+        reveal_blocked: Some("A heading, not a folder.".to_string()),
+        stop_request_ids: Vec::new(),
+        turned_off_by: None,
+        last_run_id: String::new(),
+        live_run_id: None,
+        reveal_path: None,
+        raw_store_path: None,
     }
 }
 

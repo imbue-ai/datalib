@@ -3,7 +3,7 @@
 //! reads the rows and emits what this returns.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{escape_md_block, escape_name_inline};
 use datalib_etl_render::section::Section;
 use datalib_id::{IdNamespace, Identity};
 use datalib_photo_schema::{
@@ -347,13 +347,13 @@ fn summary(photo: &NormalizedPhoto) -> String {
         .as_deref()
         .or(photo.headline.as_deref())
         .unwrap_or(&photo.file_name);
-    let mut out = format!("# {}\n\n", escape_md_inline(title));
+    let mut out = format!("# {}\n\n", escape_name_inline(title));
     if let Some(caption) = &photo.caption {
         out.push_str(&format!("{}\n\n", escape_md_block(caption)));
     }
     let mut line = |label: &str, value: String| {
         if !value.is_empty() {
-            out.push_str(&format!("- {label}: {}\n", escape_md_inline(&value)));
+            out.push_str(&format!("- {label}: {}\n", escape_name_inline(&value)));
         }
     };
     line("File", photo.file_name.clone());

@@ -294,7 +294,7 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
     let mut state = saved.clone();
     let closed_run = match state.current_run.as_mut() {
         Some(run) if run.finished_at.is_none() => {
-            run.finished_at = Some(crate::scheduler::now_stamp());
+            run.finished_at = Some(datalib_time::closed_now(&run.started_at).to_rfc3339_micros());
             Some(run.run_id.clone())
         }
         _ => None,

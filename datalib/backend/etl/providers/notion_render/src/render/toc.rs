@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{Bucket, Input};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
@@ -130,7 +130,7 @@ fn write_entries(
     for e in entries {
         out.push_str(&"  ".repeat(depth));
         out.push_str("- ");
-        let title = escape_md_inline(e.title);
+        let title = escape_name_inline(e.title);
         if is_held(e.row) {
             let uuid = ids::page(stanza, e.id, e.row.created_time.as_deref()).uuid;
             out.push_str(&format!("[{title}](/chat/{uuid})"));

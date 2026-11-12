@@ -104,9 +104,9 @@ impl PinnedModel {
 }
 
 /// Every model qmd can load at this pin: embedding (every embed and
-/// every query), query expansion (the applet's CLI fallback), reranker
-/// (nothing today; staged so enabling it is a code change, not a
-/// surprise download).
+/// every query), query expansion and reranker (neither loaded today).
+/// Only [`EMBED_MODELS`] is ever fetched or shipped; the other two stay
+/// pinned so that loading one is a code change, not a surprise download.
 pub const PINNED_MODELS: &[PinnedModel] = &[
     PinnedModel {
         repo: "ggml-org/embeddinggemma-300M-GGUF",

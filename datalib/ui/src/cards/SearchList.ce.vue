@@ -129,6 +129,9 @@ async function run(keepPick = false) {
       picked.value = results.value[0] ?? null;
     }
     report(q, "rows", { rows: page.rows.length, total: page.total });
+    // The observer speaks only when the end comes or goes; a first page
+    // too short to push it out of view would otherwise wait for a scroll.
+    void nextTick(readOnIfNearEnd);
   } catch (e) {
     if (!ctrl.signal.aborted) {
       notice.value = (e as Error).message;
@@ -139,10 +142,26 @@ async function run(keepPick = false) {
   }
 }
 
-async function more() {
+// The page on its way, so a second ask while it is out waits for it.
+let moreOut: Promise<void> | null = null;
+const loadingMore = ref(false);
+
+function more(): Promise<void> {
+  if (moreOut) return moreOut;
   const fetch = win && nextFetch(win, win.rows.length, PAGE);
-  if (!win || !fetch) return;
+  if (!win || !fetch) return Promise.resolve();
   win = asking(win, fetch);
+  loadingMore.value = true;
+  moreOut = fetchMore(fetch).finally(() => {
+    moreOut = null;
+    loadingMore.value = false;
+    // A list shorter than its box still shows its end: read on.
+    void nextTick(readOnIfNearEnd);
+  });
+  return moreOut;
+}
+
+async function fetchMore(fetch: { from: number; limit: number }) {
   const key = keyNow();
   try {
     const page = await api.fetchSearch(
@@ -302,6 +321,19 @@ function when(iso: string | null): string {
 
 const listEl = useTemplateRef<HTMLDivElement>("listEl");
 const rowsEl = useTemplateRef<HTMLUListElement>("rowsEl");
+
+// The next page is asked for as the end of the list nears the bottom of
+// its box, a few screens early so a steady scroll rarely waits on it.
+const endEl = useTemplateRef<HTMLLIElement>("endEl");
+const READ_AHEAD_PX = 600;
+let endObserver: IntersectionObserver | null = null;
+
+/// Measured, not the observer's last word, which lags rows just added.
+function readOnIfNearEnd() {
+  const el = rowsEl.value;
+  if (!el || !props.active || el.clientHeight === 0) return;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < READ_AHEAD_PX) void more();
+}
 const refresh = oneAtATime(async () => {
   if (props.active) await run(true);
   else {
@@ -312,6 +344,15 @@ const refresh = oneAtATime(async () => {
 let stop: (() => void) | null = null;
 onMounted(() => {
   if (props.active) void run();
+  if (rowsEl.value && endEl.value && typeof IntersectionObserver !== "undefined") {
+    endObserver = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting && props.active) void more();
+      },
+      { root: rowsEl.value, rootMargin: `0px 0px ${READ_AHEAD_PX}px 0px` },
+    );
+    endObserver.observe(endEl.value);
+  }
   stop = subscribeLive(
     {
       root: (e) => {
@@ -323,6 +364,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  endObserver?.disconnect();
   stop?.();
   stopPeople();
   inflight?.abort();
@@ -389,8 +431,8 @@ onBeforeUnmount(() => {
             </span>
           </button>
         </li>
-        <li v-if="nextOffset != null" class="sc-more">
-          <button class="sc-link" @click="more">Show more</button>
+        <li ref="endEl" class="sc-more" data-testid="search-list-end">
+          <template v-if="nextOffset != null && loadingMore">Loading more…</template>
         </li>
         <li v-if="!loading && results.length === 0 && !notice" class="sc-empty">
           Nothing matches. Try fewer words.
@@ -422,24 +464,6 @@ onBeforeUnmount(() => {
   padding: 4px var(--datalib-pad);
   color: var(--datalib-muted);
   border-bottom: 1px solid var(--datalib-border-soft);
-}
-.sc-link {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-weight: 600;
-  color: var(--datalib-accent);
-  cursor: pointer;
-  white-space: nowrap;
-  text-decoration: none;
-}
-.sc-link:hover:not(:disabled) {
-  text-decoration: underline;
-}
-.sc-link:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 .sc-notice {
   flex: 0 0 auto;
@@ -533,6 +557,9 @@ onBeforeUnmount(() => {
   color: inherit;
   border-radius: 3px;
   padding: 0 1px;
+}
+.sc-more:empty {
+  padding: 0;
 }
 .sc-more,
 .sc-empty {

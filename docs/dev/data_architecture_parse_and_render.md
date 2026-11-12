@@ -213,7 +213,7 @@ block). **Markup a source authored goes in as written**, HTML
 included: a prompt, an assistant's reply or a project's instructions
 in Claude, ChatGPT, Codex or Claude Code; a GitHub or GitLab
 description, review or comment; a Todoist task, description or
-comment; an email's HTML part and Google Takeout's Gemini answers and
+comment; an email's `text/html` part and Google Takeout's Gemini answers and
 My Maps descriptions after htmd; a PDF's pages as pdf-inspector wrote
 them; a Notion page. Its formatting (`<details>`, `<img>`, `<br>`,
 `<kbd>`, a table) is what its author meant, and escaping it also
@@ -247,6 +247,40 @@ element of its own. It runs the escape helpers the same way over a few
 hundred generated strings. A provider's private text paths (Facebook
 posts, Claude's tool results, the time-series facts) are not reached
 by it and keep their own tests.
+
+**Text is HTML only when its declared type says so**, never because of
+where it came from. An email's parts are read by their own
+Content-Type: mail-parser's HTML body list follows RFC 8621 and holds a
+`text/plain` part that has no HTML alternative, and sending that
+through htmd lost every `<…>` in a plain-text patch and ran its lines
+together.
+
+**A name a person reads to tell what something is — a title, an author
+or recipient, a reactor, a filename, a label — loses its Unicode bidi
+controls** (`datalib_etl_render::html::without_bidi_controls`: the
+overrides and embeddings U+202A–U+202E and the isolates U+2066–U+2069).
+A right-to-left override shows `evil.exe` as `exe.live`. The marks
+U+200E, U+200F and U+061C stay: they reorder no letters, and
+right-to-left names carry them. A message's body keeps them. The
+shared writers apply it for every source:
+
+- on the page: `Title` (every `<h1>`), `message::chip_link` and
+  `entity_link` (every chip, its text and its hover), `MessageHeader`'s
+  author, `front_matter::yaml_name` (the `title:` key), and
+  `html::escape_name_inline` / `escape_name_text` for a name with no
+  handle, a filename or a label, which each renderer calls where it
+  writes one (calendar-common, contact-common, forge-render-common,
+  Notion, Todoist, Google Drive, PDF, Lightroom; chat-common settles
+  its chat and items first);
+- in the store: `RenderCtx::emit_doc` hands every document through
+  `names::settle`, which strips the rows' author, contact, account,
+  project, org, channel and subject, and each source contact's names,
+  org, title, groups and members.
+
+A change to what these write bumps
+`datalib_etl_render::SHARED_RULES_VERSION`, which rides in every
+source's render params, so every source renders again; a provider
+bumps its own version only for its own change.
 
 Front matter is YAML, and a value from upstream goes through
 `datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
@@ -851,9 +885,11 @@ and modified rows of its primary tables, or `changed_rows` mapped
 through the rows it loads anyway where the key lives inside the payload.
 `RawRange::narrow` joins the two; `narrow_by` also hands back the stale
 keys whose raw row no longer exists, for the processor to declare with
-nothing. `global_fanout_tables` — a table whose change re-renders the
-whole source — is empty everywhere but email under a label filter,
-where the mailbox tree decides which threads render at all.
+nothing. `fanout_query` — a change that re-renders the whole source —
+is unset everywhere but email under a label filter, where a mailbox
+added, removed, renamed or moved can change which threads render at
+all. It names those columns, not the table: a mailbox row that changed
+only in a key the filter does not read must not re-render every thread.
 
 **Every emitted document is written.** There is no fingerprint deciding
 whether a write is needed: a row identical to the stored one is no

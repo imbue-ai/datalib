@@ -95,7 +95,9 @@ running if any step is, else waiting, failed, queued, off or stopped if any is, 
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+<p>Rows come in the order <code>config.toml</code> lists them, with <b>Applets</b> — the
+applets filed under no group, such as the Photos card — and then <b>System</b> after
+every group. Click a header to sort by
 that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
 at its left to move it: the move is written to <code>config.toml</code>, with everything
 under the group kept beside it. Groups move only while the table is in the config's
@@ -341,8 +343,8 @@ export function useSourcesCard(ctx: CardCtx) {
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
-    // `system/` is not a config entry: nothing to edit.
-    if (r.kind === "system") {
+    // `system/` and the Applets heading are not config entries: nothing to edit.
+    if (r.kind === "system" || r.kind === "section") {
       return { ...browsing, editBlocked: "Not a config entry.", editGroup: null };
     }
     if (r.kind === "group") {
@@ -556,7 +558,11 @@ export function useSourcesCard(ctx: CardCtx) {
     if (text === null) return;
     const name = (id: string) =>
       rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
-    const against = moveAgainstDataFlow(text, row.id, before?.id ?? null);
+    // Below the last group come rows no group can be put before — an
+    // entry outside any group, the Applets heading, System: dropping there
+    // is dropping at the bottom.
+    const beforeId = before?.kind === "group" ? before.id : null;
+    const against = moveAgainstDataFlow(text, row.id, beforeId);
     if (against) {
       say(
         false,
@@ -568,13 +574,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     let next: string;
     try {
-      next = moveGroup(text, row.id, before?.id ?? null);
+      next = moveGroup(text, row.id, beforeId);
     } catch (e) {
       say(false, (e as Error).message);
       return;
     }
     if (next === text) return;
-    const where = before ? `above ${before.name.label}` : "to the bottom";
+    const where = beforeId && before ? `above ${before.name.label}` : "to the bottom";
     await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 

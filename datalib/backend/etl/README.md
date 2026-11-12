@@ -109,6 +109,11 @@ the row's document, and the document's banner lists the problem. A
 provider without the hook leaves `item_uuid` empty, and `scope_key` is
 the only pointer.
 
+Every error and warning row counts toward the Dashboard's "Needs you",
+including ones nothing can be done about (a corrupt file, a file no
+feed reads). A person cannot yet mute one row they have seen; that is
+issue #1725.
+
 ## Volatile fields: split them out, don't diff them
 
 Some payloads carry per-fetch fields that describe the fetch rather than the

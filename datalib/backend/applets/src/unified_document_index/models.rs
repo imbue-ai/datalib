@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use datalib_qmd_indexer::{ModelsNotReady, VerifiedModels};
-use datalib_runtime::qmd::{EMBED_MODELS, PINNED_MODELS};
+use datalib_runtime::qmd::EMBED_MODELS;
 
 #[derive(Clone)]
 pub(super) struct ModelGate(Arc<Inner>);
@@ -38,13 +38,12 @@ impl ModelGate {
         }))
     }
 
-    /// Verifies, and on a cold cache fetches, every pinned model on a
-    /// thread of its own: a 2 GB download kept off the request path. A
-    /// search by meaning can start once the embedding model is in.
+    /// Verifies, and on a cold cache fetches, the embedding model on a
+    /// thread of its own: a 300 MB download kept off the request path.
     pub(super) fn warm(&self) {
         if self.claim() {
             let inner = self.0.clone();
-            std::thread::spawn(move || inner.provision(PINNED_MODELS));
+            std::thread::spawn(move || inner.provision());
         }
     }
 
@@ -64,7 +63,7 @@ impl ModelGate {
     /// for it here.
     pub(super) fn provision_now(&self) {
         if self.claim() {
-            self.0.provision(EMBED_MODELS);
+            self.0.provision();
         }
     }
 
@@ -92,7 +91,7 @@ impl VerifiedModels for ModelGate {
         // search reports while the next one sees how the new try went.
         if self.claim() {
             let inner = self.0.clone();
-            std::thread::spawn(move || inner.provision(EMBED_MODELS));
+            std::thread::spawn(move || inner.provision());
         }
         if let Some(e) = failed {
             return Err(ModelsNotReady(failed_because(&e)).into());
@@ -137,16 +136,13 @@ impl Inner {
         self.changed.notify_all();
     }
 
-    /// The embedding model first, since a search waits on it alone; then
-    /// the rest of `models`, which only the log hears about.
-    fn provision(&self, models: &[datalib_runtime::qmd::PinnedModel]) {
+    fn provision(&self) {
         let dir = match link_models(&self.root) {
             Ok(Some(dir)) => dir,
             Ok(None) => return self.set(State::Idle),
             Err(e) => return self.set(State::Failed(format!("{e:#}"))),
         };
-        let (embed, rest) = models.split_at(EMBED_MODELS.len().min(models.len()));
-        let embedded = ensure(&dir, embed).and_then(|missing| {
+        let embedded = ensure(&dir, EMBED_MODELS).and_then(|missing| {
             anyhow::ensure!(
                 missing.is_empty(),
                 "{} is not in {} and fetching is switched off ({})",
@@ -156,28 +152,16 @@ impl Inner {
             );
             Ok(())
         });
-        if let Err(e) = embedded {
-            tracing::error!(
-                dir = %dir.display(),
-                error = %format!("{e:#}"),
-                "could not provision qmd's embedding model; nothing searches by meaning until it is in place"
-            );
-            return self.set(State::Failed(format!("{e:#}")));
-        }
-        self.set(State::Verified(dir.clone()));
-        match ensure(&dir, rest) {
-            Ok(missing) if missing.is_empty() => {}
-            Ok(missing) => tracing::warn!(
-                missing = %missing.join(","),
-                dir = %dir.display(),
-                switch = datalib_qmd_models::NO_FETCH_ENV,
-                "not fetching qmd's other models because fetching is switched off"
-            ),
-            Err(e) => tracing::error!(
-                dir = %dir.display(),
-                error = %format!("{e:#}"),
-                "could not provision qmd's other models; `datalib-step pull-models` fetches them"
-            ),
+        match embedded {
+            Ok(()) => self.set(State::Verified(dir)),
+            Err(e) => {
+                tracing::error!(
+                    dir = %dir.display(),
+                    error = %format!("{e:#}"),
+                    "could not provision qmd's embedding model; nothing searches by meaning until it is in place"
+                );
+                self.set(State::Failed(format!("{e:#}")));
+            }
         }
     }
 }

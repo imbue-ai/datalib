@@ -18,7 +18,7 @@ This README is for working on the image itself.
 
 | File             | Purpose                                                                                          |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `Dockerfile`     | Multi-arch Ubuntu 26.04 image. Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball. |
+| `Dockerfile`     | Multi-arch Ubuntu 26.04 image, run as uid 1000 (`datalib`). Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball. |
 | `entrypoint.sh`  | Bootstraps `LATCHKEY_ENCRYPTION_KEY` from a per-bind-mount key file. PID 1 wrapper under tini.   |
 | `demo/config.toml` | The demo data library baked into the image at `/opt/datalib/demo`. |
 | `stage_demo.sh`  | Copies the demo's fixture inputs + config into a build context (`build_docker.sh` and release.yml both call it). |
@@ -87,10 +87,13 @@ scripts/build_docker.sh --load
 DATALIB_DOCKER_IMAGE=ghcr.io/imbue-ai/datalib:latest datalib/docker/doc_test.sh
 ```
 
-The entrypoint's `LATCHKEY_ENCRYPTION_KEY` bootstrap is the one thing
-that test does not cover (it needs no credential). Check it by hand
-when you touch `entrypoint.sh`: a credential set in one container must
-be listed by a fresh one reading the same bind mount.
+The entrypoint's `LATCHKEY_ENCRYPTION_KEY` bootstrap and its ownership
+checks are what that test does not cover. Check them by hand when you
+touch `entrypoint.sh`: a credential set in one container must be listed
+by a fresh one reading the same bind mount, and a folder written as root
+(`--user 0`) must get the warning, or for a key file the refusal, that
+names the `chown`. On Linux the temp folder below must belong to uid
+1000 first (docs/dev/docker.md § "Permissions and signals").
 
 ```sh
 IMG=ghcr.io/imbue-ai/datalib:latest
@@ -105,12 +108,11 @@ rm -rf "$tmp"
 
 ## Image size
 
-~2.7 GB, dominated by qmd's three GGUF models (~2.25 GB: embed, rerank,
-expand), which `datalib-step pull-models` fetches from their pins
-(`datalib_runtime::qmd::PINNED_MODELS`). That step runs from the
-unpacked tarball, so it comes after the binaries' layer and a new
-tarball re-runs it. The `-slim` tag (`QMD_PREFETCH_MODELS=false`) is
-the same image without the models.
+qmd's embedding model is about 330 MB of it, which `datalib-step
+pull-models` fetches from its pin (`datalib_runtime::qmd::EMBED_MODELS`;
+the other two pinned models are loaded by nothing and left out). That
+step runs from the unpacked tarball, so it comes after the binaries'
+layer and a new tarball re-runs it.
 
 ## When binaries fail to start with a missing-shared-library error
 

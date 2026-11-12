@@ -23,6 +23,7 @@ use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
+    without_bidi_controls,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
@@ -64,7 +65,10 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v20: an email's stamp keeps the offset its `Date` was written in.
 /// v21: a quote's attribution line is plain text, and an HTML body's
 ///     `<pre>` and `&amp;lt;` read as the sender wrote them.
-pub const RENDER_VERSION: u32 = 21;
+/// v22: a body part is HTML only when its Content-Type says so: a
+///     plain-text email went through the HTML converter, losing every
+///     `<…>` and running its lines together.
+pub const RENDER_VERSION: u32 = 22;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -185,29 +189,10 @@ pub struct PageEnd {
     pub rendered: Rendered,
 }
 
-/// What every thread's render looks up: mailbox and account names, and
-/// the mailboxes the label filter lets through.
+/// What every thread's render looks up: mailbox and account names.
 struct Lookups {
     mailbox_name: HashMap<String, String>,
     account_label: HashMap<String, String>,
-    /// `None` renders every thread.
-    label_allow: Option<HashSet<String>>,
-}
-
-/// The configured label paths against the mailbox tree the chips use.
-/// Resolution and exact-match semantics are shared with the download
-/// filter via [`datalib_etl_email::mailbox_labels`], so a given label
-/// means the same thing at both phases and across JMAP / mbox sources.
-fn resolve_labels(
-    shared: &Shared,
-    only_labels: &[String],
-) -> datalib_etl_email::mailbox_labels::Resolved {
-    let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
-        .mailboxes
-        .iter()
-        .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
-        .collect();
-    datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels)
 }
 
 /// Each configured label no mailbox has. It selects no thread, and if
@@ -221,7 +206,7 @@ pub fn unmatched_label_rows(
     only_labels: &[String],
     render_version: u32,
 ) -> Vec<ProblemRow> {
-    resolve_labels(shared, only_labels)
+    super::parse::resolve_labels(&shared.mailboxes, only_labels)
         .unmatched
         .iter()
         .map(|label| {
@@ -247,7 +232,7 @@ pub fn unmatched_label_rows(
 }
 
 impl Lookups {
-    fn new(shared: &Shared, only_labels: &[String]) -> Self {
+    fn new(shared: &Shared) -> Self {
         // mailbox id → the name its label chip shows, empty for none.
         let mailbox_name = shared
             .mailboxes
@@ -262,40 +247,23 @@ impl Lookups {
             .iter()
             .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
             .collect();
-        let label_allow =
-            (!only_labels.is_empty()).then(|| resolve_labels(shared, only_labels).ids);
         Lookups {
             mailbox_name,
             account_label,
-            label_allow,
         }
-    }
-
-    /// Thread-level inclusion: keep the whole thread if ANY of its
-    /// emails is filed under an allowed mailbox, so conversations
-    /// aren't fragmented across the filter boundary.
-    fn allows(&self, bucket: &EmailThreadBucket) -> bool {
-        self.label_allow.as_ref().is_none_or(|allow| {
-            bucket.emails.iter().any(|em| {
-                bucket
-                    .joins
-                    .mailboxes
-                    .get(&em.id)
-                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
-            })
-        })
     }
 }
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
-/// hears how each page ended before the next is read.
+/// hears how each page ended before the next is read. On a full walk
+/// under a label filter, a first page names the threads the filter
+/// keeps out, which were never loaded.
 #[allow(clippy::too_many_arguments)]
 pub fn render_store(
     store: &EmailStore,
     root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
     size: PageSize,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -309,7 +277,22 @@ pub fn render_store(
         cold_start = store.scan.render.is_none(),
         "[render] email dolt_diff scan"
     );
-    let lookups = Lookups::new(&store.shared, only_labels);
+    let uuids = |pairs: &[(String, String)]| -> Vec<String> {
+        pairs
+            .iter()
+            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
+            .collect()
+    };
+    if !store.left_out.is_empty() {
+        on_page(PageEnd {
+            looked_at: Vec::new(),
+            rendered: Rendered {
+                buckets: Vec::new(),
+                excluded: uuids(&store.left_out),
+            },
+        })?;
+    }
+    let lookups = Lookups::new(&store.shared);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -321,7 +304,7 @@ pub fn render_store(
     );
     let mut pages = store.pages(size.buckets);
     while let Some(page) = store.next_page(&mut pages)? {
-        let excluded = render_page(
+        render_page(
             &lookups,
             &page.docs,
             Some(store),
@@ -330,12 +313,9 @@ pub fn render_store(
             outlink,
             &mut renderer,
         )?;
+        let excluded = uuids(&page.left_out);
         progress.inc(excluded.len() as u64);
-        let looked_at = page
-            .looked_at
-            .iter()
-            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
-            .collect();
+        let looked_at = uuids(&page.looked_at);
         on_page(PageEnd {
             looked_at,
             rendered: Rendered {
@@ -355,11 +335,10 @@ pub fn render_all(
     root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Rendered> {
-    let lookups = Lookups::new(shared, only_labels);
+    let lookups = Lookups::new(shared);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -369,7 +348,7 @@ pub fn render_all(
         progress,
         on_doc_complete,
     );
-    let excluded = render_page(
+    render_page(
         &lookups,
         docs,
         None,
@@ -380,12 +359,11 @@ pub fn render_all(
     )?;
     Ok(Rendered {
         buckets: renderer.finish().buckets,
-        excluded,
+        excluded: Vec::new(),
     })
 }
 
-/// One document per thread the label filter lets through; the bucket
-/// keys of the ones it keeps out. Each thread's `.eml`s are read from
+/// One document per thread with an email. Each thread's `.eml`s are read from
 /// `emls` a batch of at most `eml_bytes` ahead of its render: reading,
 /// parsing and hashing them is most of the work.
 fn render_page(
@@ -396,14 +374,10 @@ fn render_page(
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     renderer: &mut ChatRenderer<'_>,
-) -> Result<Vec<String>> {
-    let (threads, filtered): (Vec<&EmailThreadBucket>, Vec<_>) = docs
+) -> Result<()> {
+    let threads: Vec<&EmailThreadBucket> = docs
         .iter()
         .filter(|bucket| !bucket.emails.is_empty())
-        .partition(|bucket| lookups.allows(bucket));
-    let excluded = filtered
-        .iter()
-        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
         .collect();
     let weights: Vec<u64> = threads.iter().map(|b| b.eml_bytes()).collect();
     for range in batches(&weights, eml_bytes) {
@@ -429,7 +403,7 @@ fn render_page(
                 .context("email chat-common render")?;
         }
     }
-    Ok(excluded)
+    Ok(())
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
@@ -506,7 +480,8 @@ fn build_chat(
                     byte_len: a.size.unwrap_or(0).max(0) as u64,
                     content_type: a.content_type.clone(),
                 };
-                render_bundle.add_part(a.blob_id.clone(), eml, part, a.name.clone());
+                let name = a.name.as_deref().map(without_bidi_controls);
+                render_bundle.add_part(a.blob_id.clone(), eml, part, name);
             }
         }
 
@@ -606,7 +581,8 @@ fn build_chat(
         if !trailing.is_empty() {
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
-                let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
+                let name = without_bidi_controls(a.name.as_deref().unwrap_or(&a.part_id));
+                let label = escape_md_inline(&name);
                 match linked.get(&a.blob_id) {
                     Some(href) => text.push_str(&format!("\n- [{label}]({href})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
@@ -842,9 +818,31 @@ struct ParsedEml {
     from_display: String,
     from_handle: Option<Handle>,
     recipients: Vec<Recipient>,
-    text_body: String,
-    html_body: String,
+    text_body: Vec<BodyPart>,
+    html_body: Vec<BodyPart>,
     inline_parts: Vec<InlinePart>,
+}
+
+/// One text part of a body list, as its Content-Type says it is.
+/// mail-parser's lists follow RFC 8621, where a `text/plain` part with
+/// no HTML alternative is in the HTML list too: a list is not one kind.
+enum BodyPart {
+    Plain(String),
+    Html(String),
+}
+
+/// The text parts of a body list. An inline image in the list is not
+/// text: its bytes go to the blob CAS, not into the body string.
+fn body_parts<'m>(parts: impl Iterator<Item = MessagePart<'m>>) -> Vec<BodyPart> {
+    parts
+        .filter_map(|part| {
+            let text = part.text()?.into_owned();
+            match part.kind() {
+                PartKind::Html => Some(BodyPart::Html(text)),
+                _ => Some(BodyPart::Plain(text)),
+            }
+        })
+        .collect()
 }
 
 impl ParsedEml {
@@ -881,16 +879,8 @@ impl ParsedEml {
                 })
         })
         .collect();
-        let mut text_body = String::new();
-        for part in msg.text_body() {
-            text_body.push_str(&part_text(part));
-            text_body.push('\n');
-        }
-        let mut html_body = String::new();
-        for part in msg.html_body() {
-            html_body.push_str(&part_text(part));
-            html_body.push('\n');
-        }
+        let text_body = body_parts(msg.text_body());
+        let html_body = body_parts(msg.html_body());
         // RFC 8621 lists an image shown in the body there and not again
         // among the attachments, so all three lists are read.
         let mut seen = HashSet::new();
@@ -928,12 +918,6 @@ impl ParsedEml {
     }
 }
 
-/// Inline image bytes belong in the blob CAS, not lossy-decoded into the
-/// body string, so a part that is not text reads as nothing.
-fn part_text(part: MessagePart<'_>) -> String {
-    part.text().map(String::from).unwrap_or_default()
-}
-
 fn format_address(addr: Option<AddressList<'_>>) -> String {
     let Some(addr) = addr else {
         return "(unknown sender)".to_string();
@@ -959,9 +943,8 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
     a.disposition.as_deref() == Some("inline") || a.cid.is_some()
 }
 
-/// Render one email's body to markdown. Prefers the HTML part (htmd
-/// after rewriting `cid:` srcs to the parts' addresses); falls back to
-/// the plain-text part, escaped.
+/// Render one email's body to markdown. Prefers the HTML body list when
+/// it holds a real `text/html` part; falls back to the plain-text list.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
@@ -976,16 +959,32 @@ fn email_body_markdown(
         cid_to_blob.insert(cid.to_string(), href.clone());
     }
 
-    if !parsed.html_body.trim().is_empty() {
-        let md = html_markdown(&rewrite_cid_srcs(&parsed.html_body, &cid_to_blob));
+    let has_html = parsed
+        .html_body
+        .iter()
+        .any(|p| matches!(p, BodyPart::Html(_)));
+    if has_html {
+        let md = body_list_markdown(&parsed.html_body, &cid_to_blob);
         if !md.trim().is_empty() {
             return Some(md);
         }
     }
-    if parsed.text_body.trim().is_empty() {
-        return None;
-    }
-    Some(plain_body_markdown(&parsed.text_body))
+    let md = body_list_markdown(&parsed.text_body, &cid_to_blob);
+    (!md.trim().is_empty()).then_some(md)
+}
+
+/// Each part as markdown by its own kind: HTML through htmd after its
+/// `cid:` srcs point at the parts' addresses, plain text escaped.
+fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>) -> String {
+    parts
+        .iter()
+        .map(|part| match part {
+            BodyPart::Html(html) => html_markdown(&rewrite_cid_srcs(html, cid_to_blob)),
+            BodyPart::Plain(text) => plain_body_markdown(text),
+        })
+        .filter(|md| !md.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// An HTML body as markdown, its text reading as the sender wrote it.

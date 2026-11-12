@@ -15,6 +15,8 @@ pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
+#[allow(dead_code)]
+mod names;
 pub mod not_read;
 pub mod pages;
 pub mod photo;
@@ -23,3 +25,10 @@ pub mod search_terms;
 pub mod section;
 pub mod sources;
 pub mod title;
+
+/// Bump when what this crate writes into every source's documents
+/// changes — a shared writer (`title`, `message`, `html`,
+/// `front_matter`) or what `names` settles — so every source renders
+/// again. It rides in every source's render params; a provider's own
+/// change bumps its own version.
+pub const SHARED_RULES_VERSION: u32 = 1;

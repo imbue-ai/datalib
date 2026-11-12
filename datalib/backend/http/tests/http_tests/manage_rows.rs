@@ -823,6 +823,47 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
 /// A config warning drops nothing, so no entry's row showed it, and it
 /// reached only `datalib-dag --check`. The System row carries the count,
 /// and every warning's words on hover, with nothing on any other row.
+/// An applet filed under no group sits under the Applets heading, after
+/// every group and before System — not at the top level, where it read
+/// as part of whichever group came last. One filed under a group stays
+/// there. (A root with no such applet has no heading: the fresh-root
+/// test counts its rows.)
+#[tokio::test]
+async fn an_applet_outside_any_group_is_filed_under_applets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config =
+        format!("{CONFIG}\n[[applets]]\nid = \"photos\"\ncommand = \"datalib-applet photos\"\n");
+    write_root(tmp.path(), &config, None).await;
+    let got = get_rows(tmp.path()).await;
+    let rows = by_key(&got);
+
+    let applets = &rows["section:applets"];
+    assert_eq!(applets["kind"], "section", "{got}");
+    assert_eq!(applets["path"], serde_json::json!(["section:applets"]));
+    assert_eq!(applets["name"]["label"], "Applets");
+    assert_eq!(applets["actions"], serde_json::json!([]));
+    assert_eq!(
+        rows["photos"]["path"],
+        serde_json::json!(["section:applets", "photos"])
+    );
+    assert_eq!(rows["photos"]["group"], serde_json::Value::Null);
+    assert_eq!(
+        rows["unified_document_index"]["path"],
+        serde_json::json!(["group:unified_document_index", "unified_document_index"])
+    );
+    let keys: Vec<&str> = got["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        &keys[keys.len() - 4..],
+        ["section:applets", "photos", "system", "system/runs"],
+        "{got}"
+    );
+}
+
 #[tokio::test]
 async fn config_warnings_reach_the_system_row() {
     let tmp = tempfile::tempdir().unwrap();

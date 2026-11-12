@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
@@ -371,7 +371,7 @@ fn render_markdown(
     let _ = writeln!(out, "markdown_uuid: {m_uuid}");
     let _ = writeln!(out, "source_id: {source_id}");
     let _ = writeln!(out, "provider: {}", profile.tag);
-    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
+    let _ = writeln!(out, "title: {}", yaml_name(&title));
     if let Some(ts) = earliest.and_then(iso) {
         let _ = writeln!(out, "created_at: {}", yaml_scalar(&ts));
     }

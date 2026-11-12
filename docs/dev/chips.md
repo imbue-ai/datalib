@@ -113,7 +113,11 @@ What goes into the look is each kind's own rule, pure and unit-tested:
 
 - **A person** — `chipLook` and `chipTooltip` in `contacts.ts`: the
   contact's name if a person linked one, else the best-ranked source's
-  name, else what the source showed; the kind's mark while it is not
+  name, else what the source showed. A message's own author, in its
+  header, shows the name that message gave instead of the source's
+  (see [Trust](#trust)). A name that spells out an address or another
+  handle the person does not hold is never shown; the chip shows its
+  own identifier instead. The kind's mark while it is not
   linked to a contact, and a quiet "+" when a contacts app is there to
   link it. A chip linked to one of your contacts is blue, and one that
   is not is grey (`chip.css`). [`contacts.md`](contacts.md)
@@ -146,6 +150,18 @@ for the phisher, under the name the sources know them by, with "Shown
 here as “Picard”" in its tooltip, and a link to `datalib:group/slack`
 shows that group's real name. Forging a link can only point at a real
 entity under its real name, which is what any link already does.
+
+**One exception: a message's own header shows the name that message
+gave its author**, as any mail client does, so a forged `From:` shows
+on the forged message and on no other. The source's name for the
+person is decided across everything they wrote, not by any one message
+([`contacts.md`](contacts.md) §"In the UI"). The viewer knows a header
+by its place: `renderDocument.ts` renders each message's inside alone
+once its wrapper checks out, and `chipLinks.js` marks a link opening
+that fragment's first line, an `h2`, with `data-chip-header`. Nothing a
+message carries comes before its header, and the sanitizer takes the
+attribute off any link the plugin did not sign. A body rendered whole,
+without its sections, has no header chips.
 
 ## Resolving
 

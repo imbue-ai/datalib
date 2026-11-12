@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use datalib_etl_render::html::{
-    code_span_parts, escape_md_inline, escape_md_syntax, md_code_block, md_link_dest,
+    code_span_parts, escape_md_inline, escape_md_syntax, escape_name_inline, md_code_block,
+    md_link_dest,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
@@ -115,7 +116,7 @@ fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
     let shown = format!("@{}", emojize(&user_label(caps, labels, str::to_string)));
     match Handle::slack(labels.team_id, &caps[1]) {
         Some(handle) => chip_link(&shown, &handle),
-        None => escape_md_inline(&shown),
+        None => escape_name_inline(&shown),
     }
 }
 

@@ -7,9 +7,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
+use datalib_etl_render::html::{
+    escape_md_block, escape_md_inline, escape_name_inline, md_code_span, md_link_dest,
+};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::section::{join, Section};
@@ -271,7 +273,7 @@ fn render_markdown(
         "calendar: {}\n",
         yaml_scalar(&event.calendar_label)
     ));
-    fm.push_str(&format!("title: {}\n", yaml_scalar(title_of(event))));
+    fm.push_str(&format!("title: {}\n", yaml_name(title_of(event))));
     fm.push_str(&format!(
         "external_id: {}\n",
         yaml_scalar(&event.upstream_id)
@@ -320,15 +322,15 @@ fn render_markdown(
             "Occurrence of",
             format!(
                 "{}, originally {}",
-                escape_md_inline(&of),
+                escape_name_inline(&of),
                 time_html(original_start, event.calendar_time_zone.as_deref())
             ),
         ));
     }
     if let Some(l) = &event.location {
-        facts.push(("Where", escape_md_inline(l)));
+        facts.push(("Where", escape_name_inline(l)));
     }
-    facts.push(("Calendar", escape_md_inline(&event.calendar_label)));
+    facts.push(("Calendar", escape_name_inline(&event.calendar_label)));
     if let Some(s) = event.status.as_deref().filter(|s| *s != "confirmed") {
         facts.push(("Status", escape_md_inline(&capitalize(s))));
     }
@@ -420,7 +422,7 @@ fn render_markdown(
                     .title
                     .as_deref()
                     .filter(|t| Some(*t) != event.title.as_deref())
-                    .map(|t| format!(" — {}", escape_md_inline(t)))
+                    .map(|t| format!(" — {}", escape_name_inline(t)))
                     .unwrap_or_default();
                 out.push_str(&format!(
                     "- {} → {now}{title}\n",
@@ -450,7 +452,7 @@ fn render_markdown(
         for l in &event.links {
             out.push_str(&format!(
                 "- [{}]({})\n",
-                escape_md_inline(&l.label),
+                escape_name_inline(&l.label),
                 md_link_dest(&l.url)
             ));
         }
@@ -586,7 +588,7 @@ fn edges(event: &NormalizedEvent) -> Vec<EdgeRow> {
 fn person_md(name: Option<&str>, email: Option<&str>) -> Option<String> {
     match email.and_then(Handle::email) {
         Some(h) => Some(chip_link(name.unwrap_or(""), &h)),
-        None => person_line(name, email).map(|s| escape_md_inline(&s)),
+        None => person_line(name, email).map(|s| escape_name_inline(&s)),
     }
 }
 
@@ -797,6 +799,73 @@ mod tests {
             )),
             "{body}"
         );
+    }
+
+    /// A right-to-left override in an invite's title, organizer, guest,
+    /// place, calendar or link label reordered the page around it
+    /// (`Orders exe.live` for `Orders evil.exe`). The page shows none of
+    /// them; the description, the invite's body, keeps its own.
+    #[test]
+    fn an_invites_names_lose_their_bidi_controls() {
+        const RLO: &str = "\u{202E}";
+        let mut event = series();
+        event.title = Some(format!("Orders {RLO}exe.live"));
+        event.calendar_label = format!("Bridge {RLO}werC");
+        event.location = Some(format!("Ten {RLO}Forward"));
+        event.description = Some(format!("Agenda {RLO}evil"));
+        event.organizer.as_mut().unwrap().name = Some(format!("Jean-Luc {RLO}Picard"));
+        event.attendees.push(Attendee {
+            person: Person {
+                name: Some(format!("Q{RLO}")),
+                email: None,
+            },
+            response: None,
+            optional: false,
+            resource: false,
+        });
+        event.links = vec![EventLink {
+            label: format!("Join {RLO}call"),
+            url: "https://e.invalid/join".into(),
+        }];
+        if let EventShape::Series { changed, .. } = &mut event.shape {
+            changed[0].title = Some(format!("moved {RLO}here"));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &profile(),
+            &[event],
+            dir.path(),
+            "tng_calendar",
+            &Progress::default(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        let description = format!("## Description\n\nAgenda {RLO}evil\n");
+        assert!(
+            body.contains(&description),
+            "the description is the invite's own: {body}"
+        );
+        let rest = body.replace(&description, "");
+        assert!(!rest.contains(RLO), "{rest}");
+        for shown in [
+            "Orders exe.live",
+            "Bridge werC",
+            "Ten Forward",
+            "[Jean-Luc Picard](mailto:picard@enterprise.test \"Jean-Luc Picard <picard@enterprise.test>\")",
+            "| Q |",
+            "[Join call]",
+            " — moved here",
+        ] {
+            assert!(body.contains(shown), "{shown:?} is missing: {body}");
+        }
     }
 
     #[test]
