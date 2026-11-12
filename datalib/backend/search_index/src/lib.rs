@@ -13,11 +13,10 @@ pub mod owed;
 pub mod prompt;
 pub mod read;
 mod store;
-pub mod words;
 
 pub use cache::InferenceCache;
 pub use owed::{owed, Owed};
-pub use read::{Held, HeldChunk, HeldDoc, Reader};
+pub use read::{Held, HeldChunk, HeldDoc, MessageHit, Reader};
 pub use store::{ChunkSpan, Index};
 
 /// What the inference cache files a vector under: the pinned embedding

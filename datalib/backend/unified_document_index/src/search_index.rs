@@ -13,7 +13,7 @@ use datalib_runtime::layout;
 use datalib_search_index::{Held, Reader};
 
 use crate::qmd::index_state::IndexStamp;
-use crate::qmd::lex::Fts5Terms;
+use crate::qmd::lex::Fts5Query;
 use crate::qmd::mapping::Place;
 use crate::qmd::vectors::{dot_and_norm, Freshness, Kept};
 use crate::qmd::QmdHit;
@@ -29,12 +29,12 @@ async fn open(root: &Path) -> Result<Option<Reader>> {
     .await
 }
 
-/// The documents holding every term of `terms`, of `sources` (all when
-/// `None`) and `among` (all when `None`), best first, at most `limit`.
-/// `None` when no step has written the index.
+/// The documents whose best message holds `query`, of `sources` (all when
+/// `None`) and `among` (all when `None`), best first, at most `limit`,
+/// each placed at that message. `None` when no step has written the index.
 pub async fn word_hits(
     root: &Path,
-    terms: &Fts5Terms,
+    query: &Fts5Query,
     sources: Option<&[String]>,
     among: Option<&HashSet<String>>,
     limit: usize,
@@ -42,16 +42,15 @@ pub async fn word_hits(
     let Some(reader) = open(root).await? else {
         return Ok(None);
     };
-    let found = reader
-        .words(&terms.required, &terms.excluded, sources, among, limit)
-        .await;
+    let found = reader.words(&query.expr, sources, among, limit).await;
     reader.close().await;
     Ok(Some(
         found?
             .into_iter()
             .map(|h| {
-                let place = Place::Words {
-                    first: terms.first.clone(),
+                let place = Place::Bytes {
+                    start: h.start,
+                    end: h.end,
                 };
                 (h.markdown_uuid, hit(h.score, place))
             })

@@ -70,45 +70,6 @@ pub fn fts5_query(s: &str) -> Option<Fts5Query> {
     })
 }
 
-/// Free text as one FTS5 query per word or quoted phrase, for the search
-/// index, which matches each against messages on its own and joins them by
-/// document.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fts5Terms {
-    pub required: Vec<String>,
-    pub excluded: Vec<String>,
-    /// The first word or phrase it requires, as typed: what the line a hit
-    /// lands on is looked for by.
-    pub first: String,
-}
-
-/// `None` when nothing is required, as for [`fts5_query`].
-pub fn fts5_terms(s: &str) -> Option<Fts5Terms> {
-    let term = |t: &str| {
-        format!(
-            "{{title body}} : (\"{}\")",
-            strip_outer_quotes(t).replace('"', "\"\"")
-        )
-    };
-    let mut required = Vec::new();
-    let mut excluded = Vec::new();
-    let mut first: Option<String> = None;
-    for token in tokenize(s) {
-        match token.strip_prefix('-').filter(|t| !t.is_empty()) {
-            Some(t) => excluded.push(term(t)),
-            None => {
-                first.get_or_insert_with(|| strip_outer_quotes(&token).to_string());
-                required.push(term(&token));
-            }
-        }
-    }
-    Some(Fts5Terms {
-        required,
-        excluded,
-        first: first?,
-    })
-}
-
 /// Several plain words as one phrase: the documents holding them in the
 /// order typed, which the Words tab ranks above those holding them
 /// anywhere. `None` for one word, or for text with its own phrases or
@@ -167,22 +128,5 @@ mod fts5_tests {
     fn only_exclusions_ask_nothing() {
         assert_eq!(fts5_query("-spam"), None);
         assert_eq!(fts5_query(""), None);
-        assert_eq!(fts5_terms("-spam"), None);
-    }
-
-    #[test]
-    fn each_word_and_phrase_is_a_term_of_its_own() {
-        assert_eq!(
-            fts5_terms("warp \"deck twelve\" -breach o\"brien"),
-            Some(Fts5Terms {
-                required: vec![
-                    r#"{title body} : ("warp")"#.into(),
-                    r#"{title body} : ("deck twelve")"#.into(),
-                    r#"{title body} : ("o""brien")"#.into(),
-                ],
-                excluded: vec![r#"{title body} : ("breach")"#.into()],
-                first: "warp".into(),
-            })
-        );
     }
 }

@@ -1394,7 +1394,7 @@ type DocumentHit = datalib_unified_document_index::search_index::DocumentHit;
 
 async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, SearchFailure> {
     use datalib_unified_document_index::qmd::lex;
-    let Some(terms) = lex::fts5_terms(&parsed.free_text) else {
+    let Some(query) = lex::fts5_query(&parsed.free_text) else {
         return Ok(Vec::new());
     };
     // Narrowed before the cut, as Meaning is: a common word's best
@@ -1402,75 +1402,52 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
     let keyed = keyed(s, parsed).await?;
     let among = keyed.as_deref().map(|k| &k.documents);
     let scope = search_scope(s, parsed).await?;
-    // The documents holding the words as typed come first: BM25 alone
-    // ranks a long thread that says the sentence below short ones that
-    // merely hold each word.
+    // The words as typed come first: BM25 alone ranks a place that says
+    // the sentence below short ones that merely hold each word.
     let phrase = lex::fts5_phrase_query(&parsed.free_text);
-    let (mut hits, all) = match s.reads {
-        SearchReads::Qmd => {
-            let Some(open) = s
-                .qmd_index
-                .open(&s.root)
-                .await
-                .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
-            else {
-                return Err(SearchFailure::NoIndex);
-            };
-            let reader = &open.reader;
-            let found = async {
-                let phrased = match &phrase {
-                    Some(phrase) => {
-                        reader
-                            .keyword_hits(phrase, scope.names(), among, QMD_DEPTH)
-                            .await?
-                    }
-                    None => Vec::new(),
-                };
-                let query = lex::fts5_query(&parsed.free_text)
-                    .expect("text with a required term is a query");
-                let all = reader
-                    .keyword_hits(&query, scope.names(), among, QMD_DEPTH)
-                    .await?;
-                Ok::<_, sqlx::Error>((qmd_documents(phrased), qmd_documents(all)))
-            }
-            .await;
-            found.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?
-        }
-        SearchReads::SearchIndex => {
-            let read = |terms: lex::Fts5Terms| {
-                let root = s.root.clone();
-                let sources = scope.names().map(<[String]>::to_vec);
-                async move {
-                    datalib_unified_document_index::search_index::word_hits(
-                        &root,
-                        &terms,
-                        sources.as_deref(),
-                        among,
-                        QMD_DEPTH,
-                    )
-                    .await
-                    .map_err(|e| SearchFailure::Qmd(format!("the search index's words: {e:#}")))?
-                    .ok_or(SearchFailure::NoIndex)
-                }
-            };
-            let phrased = match phrase {
-                Some(phrase) => {
-                    read(lex::Fts5Terms {
-                        required: vec![phrase.expr],
-                        excluded: Vec::new(),
-                        first: phrase.first,
-                    })
-                    .await?
-                }
-                None => Vec::new(),
-            };
-            (phrased, read(terms).await?)
-        }
-    };
-    let seen: std::collections::HashSet<String> = hits.iter().map(|(d, _)| d.clone()).collect();
-    hits.extend(all.into_iter().filter(|(d, _)| !seen.contains(d)));
+    let mut hits = Vec::new();
+    for query in phrase.iter().chain([&query]) {
+        let found = match s.reads {
+            SearchReads::Qmd => qmd_word_hits(s, query, scope.names(), among).await?,
+            SearchReads::SearchIndex => datalib_unified_document_index::search_index::word_hits(
+                &s.root,
+                query,
+                scope.names(),
+                among,
+                QMD_DEPTH,
+            )
+            .await
+            .map_err(|e| SearchFailure::Qmd(format!("the search index's words: {e:#}")))?
+            .ok_or(SearchFailure::NoIndex)?,
+        };
+        let seen: std::collections::HashSet<String> =
+            hits.iter().map(|(d, _): &DocumentHit| d.clone()).collect();
+        hits.extend(found.into_iter().filter(|(d, _)| !seen.contains(d)));
+    }
     hits.truncate(QMD_DEPTH);
     Ok(hits)
+}
+
+async fn qmd_word_hits(
+    s: &Index,
+    query: &datalib_unified_document_index::qmd::lex::Fts5Query,
+    collections: Option<&[String]>,
+    among: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<DocumentHit>, SearchFailure> {
+    let Some(open) = s
+        .qmd_index
+        .open(&s.root)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
+    else {
+        return Err(SearchFailure::NoIndex);
+    };
+    let hits = open
+        .reader
+        .keyword_hits(query, collections, among, QMD_DEPTH)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
+    Ok(qmd_documents(hits))
 }
 
 /// qmd's hits by their document's id, which their path names. A hit whose
@@ -2581,10 +2558,10 @@ mod tests {
         assert!(got.sections.is_none(), "a stale layout is not sent");
     }
 
-    /// Read from the search index, words said in different messages of a
-    /// thread find it, and the hit lands on the message holding them,
-    /// quoted from there: what qmd's whole-document hit did by reading the
-    /// file to rank. A word only one thread's title holds finds it too.
+    /// Read from the search index, a hit is the message holding the words,
+    /// and lands there, quoted from it. A word only the thread's title
+    /// holds finds it too, and an excluded word drops a message, not the
+    /// thread.
     #[tokio::test]
     async fn a_words_search_reads_the_search_index_and_lands_on_the_message() {
         use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
@@ -2675,8 +2652,9 @@ mod tests {
 
         let titled = search(&s, "engineering semantic:off", None, 10, None).await;
         assert_eq!(titled.rows.len(), 1, "{:?}", titled.query_echo);
-        let none = search(&s, "warp -coolant semantic:off", None, 10, None).await;
-        assert!(none.rows.is_empty(), "an excluded word drops the thread");
+        let without = search(&s, "warp -coolant semantic:off", None, 10, None).await;
+        assert_eq!(without.rows.len(), 1, "{:?}", without.query_echo);
+        assert_eq!(without.rows[0].uuid, m1, "the message without the word");
     }
 
     /// The switch reads the two spellings it knows and refuses any other,

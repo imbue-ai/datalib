@@ -101,26 +101,20 @@ opening an old index together empty it once.
 A document with no messages (a Notion page, a calendar event) is one
 section with no uuid.
 
-### Words: ranked per message, matched per document
+### Words: BM25 over messages
 
-A row per message ranks a document by the messages that matched. A
-search for words spread across a thread still has to find that thread,
-so a multi-word query matches each required word or phrase on its own,
-against messages, and joins on `doc_id`:
+A Words hit is a message: one FTS5 query (`warp AND core NOT breach`)
+over the message rows, ranked by `bm25()`, each document once at its best
+message, which is where the hit lands. A message is also what most of a
+search's other terms describe (`from:`, a date), so they narrow the row
+that matched rather than a document that merely holds one.
 
-- a document matches when every required term matches some message of
-  it, and no excluded term matches any;
-- its score is the sum, over terms, of the best `bm25()` any one of its
-  messages got for that term;
-- it lands on the message holding the most terms, which is what `land`
-  computes from the file today, and still does: the page reads the file
-  to quote the hit anyway (measured below, "Search moving over").
-
-A one-word query is a single `MATCH`. A phrase still has to sit inside
-one message, which a phrase across two messages never meant anyway.
-The ranking moves: BM25 over messages rather than whole threads favours
-a short message that says the word. `scripts/search_eval.py` measures
-it against qmd on the private eval set before qmd goes.
+What this gives up: words a thread says in different messages are not a
+Words hit. That is what Meaning is for: a long thread is embedded in
+chunks of its messages. Matching each term against messages and joining
+them per document, to find such a thread by its words too, was built and
+measured (below): it cost a join per term and several fixes to come near
+qmd's speed, for no gain on the eval, so it went.
 
 ### Meaning: chunks follow messages
 
@@ -320,9 +314,8 @@ against the CPU's vectors by the same tests.
 Built behind a switch, so both can be measured on one root: the search
 applet reads qmd's index unless its config entry sets
 `env = { DATALIB_SEARCH_READS = "search_index" }`
-(`unified_document_index/src/search_index.rs`). Words matches each term
-against messages and joins them per document (`search_index::read`,
-`search_index::words`).
+(`unified_document_index/src/search_index.rs`). Words is BM25 over
+messages (`search_index::read`).
 Meaning holds every chunk's vector from the inference cache in memory,
 read again once the index and the cache have sat still, and embeds the
 query in the applet's own process with the model the vectors were made
@@ -331,36 +324,42 @@ the document, so the other terms, fusion and landing are unchanged. The
 page that shows a hit still reads its file, once, to land it on a message
 and quote it; that read goes when rendering on demand does.
 
-**Words, measured against qmd** (2026-11-12, `stay_alive_1` cloned and
-re-rendered by this build: 176k documents, 913k messages; the private
-eval set's 357 queries with `semantic:off`, both runs back to back with
-one `-c opt` applet):
+**Measured against qmd** (2026-11-12). qmd on a clone of
+`stay_alive_1` as it is, its vectors whole; the search index on a clone
+re-rendered by this build (176k documents, 913k messages), with its
+smaller sources embedded (every source but the two calendars, both Slacks,
+Notion, Gmail and Claude Code). The private eval set; one `-c opt` applet
+for every run.
 
-| | found @10 | MRR | lands within 2 messages | p50 | p90 |
-|---|---|---|---|---|---|
-| qmd | 65% | 0.44 | 74% | 108 ms | 457 ms |
-| search index | 61% | 0.42 | 74% | 160 ms | 986 ms |
+Words alone (`semantic:off`), all 357 queries:
 
-Three things it took to get there, each a measurement first:
+| | @1 | @10 | MRR | lands within 2 messages | p50 | p90 |
+|---|---|---|---|---|---|---|
+| qmd | 37% | 66% | 0.47 | 74% | 125 ms | 453 ms |
+| search index | 32% | 59% | 0.42 | 86% | 104 ms | 988 ms |
 
-- **The rarest term first, the rest within its documents.** Each term
-  matched every message on its own and read each match out: a sentence of
-  common words took seconds (p50 752 ms). Now the rarest term is read in
-  full, and every other is scanned in SQLite against a temp table of the
-  standing documents' messages, its best score per document taken there.
-  The scan drives: `rowid IN (…)` on FTS5 seeks one row at a time and took
-  3.4 s for one word.
-- **A word in more than one message in twenty is left out** unless it is
-  the rarest: BM25 gives it next to nothing, and checking it costs the
-  most. A document holding a query's rarer words holds "the".
-- **A hit lands as qmd's does**, on the message holding the most of the
-  search's words, read from the file the page reads anyway. A Words hit
-  names its document only.
+The search, Meaning on, the 195 queries whose target is in an embedded
+source, each scoped to that source:
 
-What is left of the gap is mostly landing: per-message BM25 favours long
-documents (agent sessions of tens of thousands of rows), which take longer
-to land. Meaning has not been measured: it needs the clone embedded, about
-a day.
+| | @1 | @3 | @10 | MRR | lands within 2 messages | p50 | p90 |
+|---|---|---|---|---|---|---|---|
+| qmd | 75% | 92% | 97% | 0.84 | 73% | 50 ms | 184 ms |
+| search index | 83% | 95% | 97% | 0.89 | 80% | 44 ms | 188 ms |
+
+Words alone finds less, as expected: a thread whose words are in
+different messages is no hit. With Meaning on it ranks better and lands
+better than qmd, at the same speed; whole chunks embedded (qmd embedded
+one over 512 tokens from its last 512) and chunks that follow messages
+are the likely reasons. The Words tail is searches with `from:`, which
+narrow to every document a person wrote before ranking; it is qmd's slow
+case too. Measuring the whole set with Meaning on waits for the large
+sources to be embedded.
+
+Two things the eval found on the way: a chunk of dense text can run past
+the model's 2,048-token context within its 3,600 bytes (35 of 21k here),
+which failed a whole source until such a chunk was cut to fit as qmd
+does; and an eval of qmd on a re-rendered clone measures Words alone, as
+its vectors name the old text.
 
 **Not an ANN index, yet.** doltlite 0.51.3's amalgamation carries
 SQLite's `vec1` extension (an IVF index with product quantization,

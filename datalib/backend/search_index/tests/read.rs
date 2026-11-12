@@ -59,107 +59,100 @@ async fn fixture(docs: &[IndexDoc], vectors: &[(String, Vec<f32>)]) -> Fixture {
     Fixture { _dir: dir, reader }
 }
 
-fn words(terms: &[&str]) -> Vec<String> {
-    terms
-        .iter()
-        .map(|t| format!("{{title body}} : (\"{t}\")"))
-        .collect()
+/// Every word, each whole, in one message.
+fn all_of(words: &[&str]) -> String {
+    let terms: Vec<String> = words.iter().map(|w| format!("\"{w}\"")).collect();
+    format!("{{title body}} : ({})", terms.join(" AND "))
 }
 
-/// The plan's join: words said in two messages of one thread find it.
+fn ids(hits: &[datalib_search_index::MessageHit]) -> Vec<&str> {
+    hits.iter().map(|h| h.markdown_uuid.as_str()).collect()
+}
+
+/// A hit is a message holding every word, and lands on it by its bytes: a
+/// thread that says the words in different messages is not one.
 #[tokio::test]
-async fn words_in_different_messages_find_the_thread_and_land_on_a_message() {
-    let f = fixture(&[thread()], &[]).await;
-    let hits = f
+async fn a_hit_is_a_message_holding_every_word() {
+    let t = thread();
+    let text: String = t.sections.iter().map(|s| s.text.as_str()).collect();
+    let both = doc(
+        "mail",
+        "both",
+        &[
+            (Some("b0"), "tea\n"),
+            (Some("b1"), "the warp core coolant\n"),
+        ],
+    );
+    let f = fixture(&[t, both], &[]).await;
+    let spread = f
         .reader
-        .words(&words(&["warp", "coolant"]), &[], None, None, 10)
+        .words(&all_of(&["warp", "coolant"]), None, None, 10)
         .await
         .unwrap();
-    let found: Vec<&str> = hits.iter().map(|h| h.markdown_uuid.as_str()).collect();
-    assert_eq!(found, ["thread"]);
+    assert_eq!(ids(&spread), ["both"]);
+    let one = f
+        .reader
+        .words(&all_of(&["coolant"]), None, None, 10)
+        .await
+        .unwrap();
+    let thread_hit = one.iter().find(|h| h.markdown_uuid == "thread").unwrap();
+    assert_eq!(
+        &text[thread_hit.start as usize..thread_hit.end as usize],
+        "deck twelve reports a coolant leak\n"
+    );
     f.reader.close().await;
 }
 
-/// The rarest term is read first and the rest only within the documents
-/// it found; whichever order the terms come in, a document that lacks one
-/// is dropped, and so is one an excluded term names. A word in more than
-/// one message in twenty is left out: here, the filler every other
-/// document says.
+/// A document answers once, at its best message, and the cut counts
+/// documents; `among` and an excluded word narrow what is ranked.
 #[tokio::test]
-async fn every_term_must_match_whatever_the_order_and_an_excluded_one_drops() {
-    let ten = doc(
+async fn a_document_answers_once_at_its_best_message() {
+    let many = doc(
         "mail",
-        "ten",
+        "many",
         &[
-            (Some("a"), "warp core warp core\n"),
-            (Some("b"), "coolant\n"),
+            (Some("m1"), "warp\n"),
+            (Some("m2"), "warp warp warp\n"),
+            (Some("m3"), "warp and a breach\n"),
         ],
     );
-    let only_warp = doc("mail", "only", &[(Some("c"), "warp warp warp\n")]);
-    let vented = doc(
-        "mail",
-        "vented",
-        &[(Some("d"), "warp coolant\n"), (Some("e"), "venting\n")],
-    );
-    let dry = doc("mail", "dry", &[(Some("f"), "a coolant leak\n")]);
-    let mut docs = vec![ten, only_warp, vented, dry];
-    docs.extend((0..100).map(|n| {
-        let id = format!("filler-{n}");
-        doc(
-            "mail",
-            &id,
-            &[(Some(id.as_str()), "filler about the weather\n")],
-        )
-    }));
-    let f = fixture(&docs, &[]).await;
-    let ids = |hits: &[datalib_search_index::words::WordsHit]| {
-        let mut ids: Vec<String> = hits.iter().map(|h| h.markdown_uuid.clone()).collect();
-        ids.sort();
-        ids
-    };
-    for terms in [["warp", "coolant"], ["coolant", "warp"]] {
-        let hits = f
-            .reader
-            .words(&words(&terms), &[], None, None, 10)
-            .await
-            .unwrap();
-        assert_eq!(ids(&hits), ["ten", "vented"], "{terms:?}");
-    }
-    let kept = f
+    let other = doc("mail", "other", &[(Some("o1"), "warp drive\n")]);
+    let f = fixture(&[many.clone(), other], &[]).await;
+    let hits = f
         .reader
-        .words(
-            &words(&["warp", "coolant"]),
-            &words(&["venting"]),
-            None,
-            None,
-            10,
-        )
+        .words(&all_of(&["warp"]), None, None, 10)
         .await
         .unwrap();
-    assert_eq!(ids(&kept), ["ten"]);
-    let among = HashSet::from(["vented".to_string()]);
+    let mut found = ids(&hits);
+    found.sort();
+    assert_eq!(found, ["many", "other"]);
+    let best = hits.iter().find(|h| h.markdown_uuid == "many").unwrap();
+    let text: String = many.sections.iter().map(|s| s.text.as_str()).collect();
+    assert_eq!(
+        &text[best.start as usize..best.end as usize],
+        "warp warp warp\n"
+    );
+    assert_eq!(
+        f.reader
+            .words(&all_of(&["warp"]), None, None, 1)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let among = HashSet::from(["other".to_string()]);
     let narrowed = f
         .reader
-        .words(&words(&["warp", "coolant"]), &[], None, Some(&among), 10)
+        .words(&all_of(&["warp"]), None, Some(&among), 10)
         .await
         .unwrap();
-    assert_eq!(ids(&narrowed), ["vented"]);
-    let common = f
+    assert_eq!(ids(&narrowed), ["other"]);
+    let not_breach = f
         .reader
-        .words(&words(&["coolant", "filler"]), &[], None, None, 10)
+        .words("{title body} : (\"breach\" NOT \"warp\")", None, None, 10)
         .await
         .unwrap();
-    assert_eq!(
-        ids(&common),
-        ["dry", "ten", "vented"],
-        "the common word is left out"
-    );
-    let none = f
-        .reader
-        .words(&words(&["warp", "absent"]), &[], None, None, 10)
-        .await
-        .unwrap();
-    assert!(none.is_empty());
+    assert!(not_breach.is_empty(), "the breach is said with warp");
     f.reader.close().await;
 }
 
@@ -170,11 +163,10 @@ async fn a_source_left_out_is_not_matched() {
     let only_slack = ["slack".to_string()];
     let found = f
         .reader
-        .words(&words(&["warp"]), &[], Some(&only_slack), None, 10)
+        .words(&all_of(&["warp"]), Some(&only_slack), None, 10)
         .await
         .unwrap();
-    let docs: Vec<&str> = found.iter().map(|m| m.markdown_uuid.as_str()).collect();
-    assert_eq!(docs, ["chat"]);
+    assert_eq!(ids(&found), ["chat"]);
     f.reader.close().await;
 }
 
