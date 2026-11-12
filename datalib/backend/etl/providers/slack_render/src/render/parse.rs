@@ -356,7 +356,7 @@ async fn scan_diff(
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: &bucket_query,
         },
     )

@@ -191,7 +191,7 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
-        false,
+        &[],
     )
     .expect("open")
     .expect("a committed store");
@@ -199,7 +199,6 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
         pages.path(),
-        &[],
         PageSize {
             buckets: 3,
             bytes: 1 << 30,

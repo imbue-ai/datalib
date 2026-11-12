@@ -479,7 +479,7 @@ async fn scan_changed(db: &RawDb, range: RawRange<'_>) -> Result<PdfScan> {
         range.cursor,
         &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT blake3 FROM (
                     SELECT coalesce(to_blake3, from_blake3) AS blake3

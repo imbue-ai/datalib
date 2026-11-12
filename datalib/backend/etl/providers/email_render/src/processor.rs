@@ -69,13 +69,7 @@ impl SourceRender for EmailRender {
             return Ok("skipped (no raw db)".into());
         }
 
-        let Some(store) = open(
-            &db,
-            ctx.name,
-            ctx.raw_range(),
-            !self.only_render_labels.is_empty(),
-        )?
-        else {
+        let Some(store) = open(&db, ctx.name, ctx.raw_range(), &self.only_render_labels)? else {
             return Ok("rendered".into());
         };
         // `threads` is read by no render, so a stale parse problem on
@@ -112,7 +106,6 @@ impl SourceRender for EmailRender {
             ctx.root,
             ctx.name,
             self.outlink,
-            &self.only_render_labels,
             ctx.page_size,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),

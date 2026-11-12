@@ -511,28 +511,28 @@ every other provider's attachment edge. That keeps `emails` single-writer, so
 re-upserting a changed envelope (flag or move churn) never clobbers a stored
 hash.
 
-### A changed mailbox row re-renders every thread under a label filter
+### The render's label filter
 
-When the render step sets `only_render_labels`, the mailbox tree
-decides which threads render at all, so the render treats any change
-to the `mailboxes` table as touching every thread: it skips the
-incremental diff and walks the whole store
-(`global_fanout_tables` in `email_render/src/render/parse.rs`). Its
-log says `cold_start: true`, and the progress count is every thread
-in the account, not the threads the filter keeps.
+When the render step sets `only_render_labels`, a thread renders if any
+of its emails is filed under one of those mailboxes, and the whole
+thread renders. The filter is decided in SQL (`KEPT_THREADS` in
+`email_render/src/render/parse.rs`): a run loads the rows of the
+threads it keeps and nothing of the others. On a full walk the threads
+it keeps out are listed by key alone, so that any documents they still
+have go.
 
-Such a change does not have to be one the filter cares about. Only a
-mailbox's counts are kept out of `payload` (they go in the sidecar's
-`volatile_payload`); every other key the server returns is stored as
-it came. Fastmail adds keys of its own to a mailbox (`autoLearn`,
-`hidden`, `splits`, `purgeOlderThanDays` and others) and has been seen
-to drop them from one mailbox between two syncs, with its name,
-parent, role and sort order unchanged. On a 200k-thread account with
-a filter that keeps 7.5k of them, that turned a 7-second render into
-a 2-minute one that changed 51 documents.
-
-The narrower rule would fan out only when what the filter reads moves:
-a mailbox's id, name or parent.
+A run renders every thread the filter keeps, not just the changed ones,
+only when the mailbox tree changes in a way that can move a thread
+into or out of the filter: a mailbox added or removed, or its name or
+parent changed (`MAILBOX_TREE_MOVED`). Any other change to a mailbox
+row re-renders only the threads that looked that mailbox up. This
+matters because only a mailbox's counts are kept out of `payload`
+(they go in the sidecar's `volatile_payload`); every other key the
+server returns is stored as it came. Fastmail adds keys of its own to a
+mailbox (`autoLearn`, `hidden`, `splits`, `purgeOlderThanDays` and
+others), and it has been seen to drop them from one mailbox between two
+syncs; fanning out on that would re-render every thread the filter
+keeps for a change no document shows.
 
 ### Tables
 

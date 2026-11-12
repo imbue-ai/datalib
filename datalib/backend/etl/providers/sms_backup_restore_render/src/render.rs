@@ -170,7 +170,7 @@ async fn scan_diff(
         last_render_hash,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT bucket FROM (
                     SELECT 'sms:' || coalesce(to_conversation_key, from_conversation_key)

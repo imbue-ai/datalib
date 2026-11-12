@@ -2742,8 +2742,8 @@ pub async fn merge_volatile_payloads_in_tx(
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
     /// The buckets to load and render. `None` → every bucket: no cursor,
-    /// a cursor this store cannot resolve, a `global_fanout_tables` row
-    /// changed, or no doltlite extension.
+    /// a cursor this store cannot resolve, the `fanout_query` found a
+    /// change, or no doltlite extension.
     pub render: Option<std::collections::HashSet<String>>,
     /// The buckets the diff named as added, modified or removed since
     /// the cursor — the ones to probe for removal. `None` only when there
@@ -2758,11 +2758,12 @@ pub struct DiffScan {
 
 /// Spec for [`scan_buckets`].
 pub struct DiffScanSpec<'a> {
-    /// Bare entity-table names whose changes mean "render every bucket" —
-    /// typically tables that appear in every rendered doc's header
-    /// (`workspaces`, `users`, `channels`, `me`, …). Any non-`unchanged` row
-    /// in one of these short-circuits the scan.
-    pub global_fanout_tables: &'a [&'a str],
+    /// SQL that returns a row when the range changed something every
+    /// bucket depends on, so every bucket renders; refs bound as in
+    /// `bucket_query`. Name the columns that matter rather than a whole
+    /// table: a row that changed only in a key nothing reads would
+    /// otherwise re-render the whole source.
+    pub fanout_query: Option<&'a str>,
     /// SQL projecting bucket keys for changed rows, with `last_render_hash`
     /// bound at parameter index 1, the commit being scanned to at index 2,
     /// and the bucket key in column 0.
@@ -2780,8 +2781,8 @@ pub struct DiffScanSpec<'a> {
     pub bucket_query: &'a str,
 }
 
-/// Look up HEAD, short-circuit if any [`DiffScanSpec::global_fanout_tables`]
-/// changed, then project the per-bucket changed set.
+/// Look up HEAD, short-circuit if [`DiffScanSpec::fanout_query`] finds a
+/// change, then project the per-bucket changed set.
 ///
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
@@ -2806,26 +2807,6 @@ pub async fn scan_buckets(
             scan_elapsed: None,
         });
     };
-
-    let mut fanout_changed = false;
-    for table in spec.global_fanout_tables {
-        let sql = format!(
-            "SELECT 1 FROM dolt_diff_{table} \
-              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1"
-        );
-        // Audited: `table` comes from a static list; both refs are bound.
-        let any: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-            .bind(from_ref)
-            .bind(&to_ref)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-        if any.is_some() {
-            fanout_changed = true;
-            break;
-        }
-    }
 
     let started = std::time::Instant::now();
     // Audited: `bucket_query` is a fixed projection from provider source;
@@ -2878,6 +2859,21 @@ pub async fn scan_buckets(
             });
         }
     };
+    // After the bucket query, which has already cold-started on a cursor
+    // this store cannot resolve: an error here is a broken query.
+    let fanout_changed = match spec.fanout_query {
+        None => false,
+        // Audited: `fanout_query` is a fixed query from provider source;
+        // both refs are bound.
+        Some(sql) => sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+            .bind(from_ref)
+            .bind(&to_ref)
+            .fetch_optional(pool)
+            .await
+            .context("the fan-out query")?
+            .is_some(),
+    };
+
     use sqlx::Row;
     let set: std::collections::HashSet<String> =
         rows.iter().map(|r| r.get::<String, _>(0)).collect();
@@ -5460,7 +5456,10 @@ mod tests {
             .unwrap();
         let pin = crate::pin::Pin::at(&second).unwrap();
         let spec = DiffScanSpec {
-            global_fanout_tables: &["users"],
+            fanout_query: Some(
+                "SELECT 1 FROM dolt_diff_users \
+                  WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1",
+            ),
             bucket_query: "SELECT DISTINCT coalesce(to_bucket, from_bucket) FROM dolt_diff_notes \
                            WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
         };
@@ -5504,7 +5503,7 @@ mod tests {
         let pin = crate::pin::Pin::at(&commit).unwrap();
 
         let good = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_bucket IS NOT NULL",
         };
         // A cursor this store never had: a reset, a rebuild, a replaced store.
@@ -5518,7 +5517,7 @@ mod tests {
         );
 
         let broken = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
         };
         let err = scan_buckets(&pool, Some(&commit), &pin, &broken)

@@ -244,7 +244,7 @@ impl RenderProcessor for SynthRender {
             ctx.raw_cursor,
             &pin,
             &DiffScanSpec {
-                global_fanout_tables: &[],
+                fanout_query: None,
                 bucket_query: "
                     SELECT DISTINCT bucket FROM (
                         SELECT to_id AS bucket FROM dolt_diff_parents

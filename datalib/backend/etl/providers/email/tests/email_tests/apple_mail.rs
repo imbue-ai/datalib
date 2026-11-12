@@ -515,7 +515,7 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
-        false,
+        &[],
     )
     .expect("open")
     .expect("a committed store");
@@ -523,7 +523,6 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
         pages.path(),
-        &[],
         PageSize {
             buckets: 10,
             bytes: 1 << 30,
