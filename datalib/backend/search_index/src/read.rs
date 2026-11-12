@@ -2,13 +2,14 @@
 //! vector with the messages it covers. Read-only, from a file a step may
 //! be writing; each read is one snapshot of it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::{Connection, SqliteConnection};
 
-use crate::words::Matched;
+use crate::words::{self, Matched, WordsHit};
 
 /// How many hashes go into one statement's bound JSON array.
 const BATCH: usize = 10_000;
@@ -87,40 +88,157 @@ impl Reader {
         }
     }
 
-    /// Every message `term`, an FTS5 query, matches, of the documents in
-    /// `sources` (all when `None`).
-    pub async fn matching(&self, term: &str, sources: Option<&[String]>) -> Result<Vec<Matched>> {
-        let wanted = serde_json::to_string(&sources.unwrap_or_default())?;
-        let rows: Vec<(String, i64, i64, i64, f64)> = sqlx::query_as(
-            "SELECT d.markdown_uuid, s.seq, s.start_byte, s.end_byte, \
-                    -bm25(sections_fts, 2.0, 1.0) \
-               FROM sections_fts \
-               JOIN sections s ON s.section_id = sections_fts.rowid \
-               JOIN documents d ON d.doc_id = s.doc_id \
-              WHERE sections_fts MATCH ?1 \
-                AND (NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3)))",
+    /// The documents every one of `required` matched in some message and
+    /// none of `excluded` matched, of `sources` and `among` (all when
+    /// `None`), ranked by [`words::rank`]. Each term is an FTS5 query.
+    ///
+    /// The rarest term is read in full, and every other only within the
+    /// documents still standing, each document's best score taken in
+    /// SQLite: a common word matches most messages of a library, and
+    /// reading each of those out took seconds a word. A word in more than
+    /// [`COMMON`] of the messages is left out, unless it is the rarest
+    /// term: BM25 gives it next to no weight, and a document that holds a
+    /// query's rarer words holds it, while checking that costs the most.
+    pub async fn words(
+        &self,
+        required: &[String],
+        excluded: &[String],
+        sources: Option<&[String]>,
+        among: Option<&HashSet<String>>,
+        limit: usize,
+    ) -> Result<Vec<WordsHit>> {
+        if required.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.index.acquire().await?;
+        // One snapshot for every read, so a step's write between two terms
+        // cannot move a section under them.
+        let mut tx = conn.begin().await?;
+        let messages: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(section_id), 0) FROM sections")
+            .fetch_one(&mut *tx)
+            .await?;
+        // Counted only up to where a word is common: past it, how common
+        // no longer matters.
+        let common = (COMMON * messages as f64).ceil() as i64;
+        let mut order = Vec::with_capacity(required.len());
+        for term in required {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM \
+                   (SELECT 1 FROM sections_fts WHERE sections_fts MATCH ? LIMIT ?)",
+            )
+            .bind(term)
+            .bind(common + 1)
+            .fetch_one(&mut *tx)
+            .await
+            .with_context(|| format!("count {term:?} in the search index"))?;
+            if n == 0 {
+                return Ok(Vec::new());
+            }
+            order.push((n, term));
+        }
+        order.sort_unstable();
+        let terms: Vec<&String> = order
+            .iter()
+            .enumerate()
+            .filter(|(k, (n, _))| *k == 0 || *n <= common)
+            .map(|(_, (_, term))| *term)
+            .collect();
+
+        let mut matched: Vec<Vec<Matched>> = Vec::with_capacity(terms.len());
+        let rarest = terms[0];
+        let rows: Vec<TermRow> = sqlx::query_as(
+            "WITH m AS MATERIALIZED ( \
+                 SELECT s.doc_id, -bm25(sections_fts, 2.0, 1.0) AS score \
+                   FROM sections_fts JOIN sections s ON s.section_id = sections_fts.rowid \
+                  WHERE sections_fts MATCH ?1) \
+             SELECT d.doc_id, d.markdown_uuid, MAX(m.score) \
+               FROM m JOIN documents d ON d.doc_id = m.doc_id \
+              WHERE NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3)) \
+              GROUP BY d.doc_id",
         )
-        .bind(term)
+        .bind(rarest)
         .bind(sources.is_some())
-        .bind(wanted)
-        .fetch_all(&self.index)
+        .bind(serde_json::to_string(&sources.unwrap_or_default())?)
+        .fetch_all(&mut *tx)
         .await
-        .with_context(|| format!("match {term:?} in the search index"))?;
-        Ok(rows
+        .with_context(|| format!("match {rarest:?} in the search index"))?;
+        let rows: Vec<TermRow> = rows
             .into_iter()
-            .map(|(markdown_uuid, seq, start, end, score)| Matched {
-                markdown_uuid,
-                seq,
-                start,
-                end,
-                score,
-            })
-            .collect())
+            .filter(|r| among.is_none_or(|a| a.contains(&r.1)))
+            .collect();
+        let mut standing: HashSet<i64> = rows.iter().map(|r| r.0).collect();
+        matched.push(rows.into_iter().map(matched_row).collect());
+        if standing.is_empty() || (terms.len() == 1 && excluded.is_empty()) {
+            return Ok(words::rank(&matched, &HashSet::new(), None, limit));
+        }
+
+        sqlx::query(
+            "CREATE TEMP TABLE IF NOT EXISTS standing (\
+                section_id INTEGER PRIMARY KEY, doc_id INTEGER, markdown_uuid TEXT)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM temp.standing")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO temp.standing \
+             SELECT s.section_id, s.doc_id, d.markdown_uuid \
+               FROM sections s JOIN documents d ON d.doc_id = s.doc_id \
+              WHERE s.doc_id IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(&standing)?)
+        .execute(&mut *tx)
+        .await?;
+        for (k, term) in terms.iter().enumerate().skip(1) {
+            let rows = within_standing(&mut tx, term, true).await?;
+            let now: HashSet<i64> = rows.iter().map(|r| r.0).collect();
+            if now.is_empty() {
+                return Ok(Vec::new());
+            }
+            matched.push(rows.into_iter().map(matched_row).collect());
+            let last = k + 1 == terms.len() && excluded.is_empty();
+            if now.len() < standing.len() && !last {
+                sqlx::query(
+                    "DELETE FROM temp.standing \
+                      WHERE doc_id NOT IN (SELECT value FROM json_each(?))",
+                )
+                .bind(serde_json::to_string(&now)?)
+                .execute(&mut *tx)
+                .await?;
+            }
+            standing = now;
+        }
+        let mut gone = HashSet::new();
+        for term in excluded {
+            gone.extend(
+                within_standing(&mut tx, term, false)
+                    .await?
+                    .into_iter()
+                    .map(|r| r.1),
+            );
+        }
+        tx.rollback().await?;
+        Ok(words::rank(&matched, &gone, None, limit))
     }
 
     /// Every chunk `model` has a vector for, with its document. A chunk the
     /// cache has no vector for yet is left out: it has not been embedded.
     pub async fn held(&self, model: &str) -> Result<Held> {
+        // Nothing embedded yet is the usual state until a sync turns
+        // embedding on, and reading every section to find that out took
+        // seconds.
+        let any: Option<i64> = match &self.cache {
+            Some(cache) => sqlx::query_scalar("SELECT 1 FROM vectors WHERE model = ? LIMIT 1")
+                .bind(model)
+                .fetch_optional(cache)
+                .await
+                .context("look for a cached vector")?,
+            None => None,
+        };
+        if any.is_none() {
+            return Ok(Held::default());
+        }
         let mut tx = self.index.begin().await?;
         let docs: Vec<(i64, String, String)> = sqlx::query_as(
             "SELECT doc_id, markdown_uuid, source_id FROM documents ORDER BY doc_id",
@@ -253,6 +371,49 @@ fn unit(v: &mut [f32]) -> bool {
     }
     v.iter_mut().for_each(|x| *x /= norm);
     true
+}
+
+/// The share of all messages past which a word is left out of a search
+/// that has a rarer one.
+const COMMON: f64 = 0.05;
+
+/// A document, its id, and its best score for a term.
+type TermRow = (i64, String, f64);
+
+/// Every standing document `term` matches, with its best score when
+/// `scored`, else 0. The full-text scan drives and each match is looked up
+/// among the standing messages, never the other way round: FTS5 seeks one
+/// row id at a time. `bm25()` is read in a query of its own, which SQLite
+/// would otherwise fold into the grouping one, where it cannot be called.
+async fn within_standing(
+    conn: &mut SqliteConnection,
+    term: &str,
+    scored: bool,
+) -> Result<Vec<TermRow>> {
+    let sql = if scored {
+        "WITH m AS MATERIALIZED ( \
+             SELECT c.doc_id, c.markdown_uuid, -bm25(sections_fts, 2.0, 1.0) AS score \
+               FROM sections_fts CROSS JOIN temp.standing c \
+                 ON c.section_id = sections_fts.rowid \
+              WHERE sections_fts MATCH ?) \
+         SELECT doc_id, markdown_uuid, MAX(score) FROM m GROUP BY doc_id"
+    } else {
+        "SELECT c.doc_id, c.markdown_uuid, 0.0 \
+           FROM sections_fts CROSS JOIN temp.standing c ON c.section_id = sections_fts.rowid \
+          WHERE sections_fts MATCH ? GROUP BY c.doc_id"
+    };
+    sqlx::query_as(sql)
+        .bind(term)
+        .fetch_all(conn)
+        .await
+        .with_context(|| format!("match {term:?} in the search index"))
+}
+
+fn matched_row((_, markdown_uuid, score): TermRow) -> Matched {
+    Matched {
+        markdown_uuid,
+        score,
+    }
 }
 
 async fn connect(path: &Path) -> Result<SqlitePool> {

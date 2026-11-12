@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use datalib_runtime::layout;
-use datalib_search_index::{words, Held, Reader};
+use datalib_search_index::{Held, Reader};
 
 use crate::qmd::index_state::IndexStamp;
 use crate::qmd::lex::Fts5Terms;
@@ -42,32 +42,16 @@ pub async fn word_hits(
     let Some(reader) = open(root).await? else {
         return Ok(None);
     };
-    let found = async {
-        let mut required = Vec::with_capacity(terms.required.len());
-        for term in &terms.required {
-            required.push(reader.matching(term, sources).await?);
-        }
-        let mut excluded = HashSet::new();
-        for term in &terms.excluded {
-            excluded.extend(
-                reader
-                    .matching(term, sources)
-                    .await?
-                    .into_iter()
-                    .map(|m| m.markdown_uuid),
-            );
-        }
-        anyhow::Ok(words::rank(&required, &excluded, among, limit))
-    }
-    .await;
+    let found = reader
+        .words(&terms.required, &terms.excluded, sources, among, limit)
+        .await;
     reader.close().await;
     Ok(Some(
         found?
             .into_iter()
             .map(|h| {
-                let place = Place::Bytes {
-                    start: h.start,
-                    end: h.end,
+                let place = Place::Words {
+                    first: terms.first.clone(),
                 };
                 (h.markdown_uuid, hit(h.score, place))
             })

@@ -1458,6 +1458,7 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
                     read(lex::Fts5Terms {
                         required: vec![phrase.expr],
                         excluded: Vec::new(),
+                        first: phrase.first,
                     })
                     .await?
                 }

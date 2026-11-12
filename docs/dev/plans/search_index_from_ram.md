@@ -1,8 +1,9 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 to 5 and 7 of "Order of work" are
-built (`//datalib/backend/search_index`), and step 3
-(`//datalib/backend/embedder`); the rest is not.** Numbers were
+**Status: proposal (2026-11-11). Steps 1 to 5, 7 and 8 of "Order of work"
+are built (`//datalib/backend/search_index`, `//datalib/backend/embedder`);
+search reads the new index only where the search applet's entry sets
+`DATALIB_SEARCH_READS = "search_index"`. Steps 6 and 9 are not built.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
@@ -102,17 +103,18 @@ section with no uuid.
 
 ### Words: ranked per message, matched per document
 
-A row per message lands a hit on the message that matched, with no file
-read. A search for words spread across a thread still has to find that
-thread, so a multi-word query matches each required word or phrase on
-its own, against messages, and joins on `doc_id`:
+A row per message ranks a document by the messages that matched. A
+search for words spread across a thread still has to find that thread,
+so a multi-word query matches each required word or phrase on its own,
+against messages, and joins on `doc_id`:
 
 - a document matches when every required term matches some message of
   it, and no excluded term matches any;
 - its score is the sum, over terms, of the best `bm25()` any one of its
   messages got for that term;
 - it lands on the message holding the most terms, which is what `land`
-  computes from the file today.
+  computes from the file today, and still does: the page reads the file
+  to quote the hit anyway (measured below, "Search moving over").
 
 A one-word query is a single `MATCH`. A phrase still has to sit inside
 one message, which a phrase across two messages never meant anyway.
@@ -126,8 +128,8 @@ A chunk is whole messages packed up to 3,600 bytes, qmd's 900 tokens at
 its four characters a token; only a message longer than that is cut
 inside itself, at the last paragraph, line, sentence or word break, and
 its pieces overlap by 540 bytes (qmd's 15%). Whole messages need no
-overlap. A hit then names its messages from `chunks`, and `land` reads
-no file.
+overlap. A hit then names its messages from `chunks`; `land` still reads
+the file, to quote the hit, and lands it within the chunk's bytes.
 
 **A heading starts a chunk.** Packing never carries a chunk across a
 heading of level one or two, inside a message or between them, so an
@@ -315,10 +317,50 @@ against the CPU's vectors by the same tests.
 
 ### Search moving over
 
-`keyword_hits` becomes the per-term query above. `VectorCache` reads
-`vectors` blobs, with no sqlite-vec layout to decode, and still ranks
-every vector held in memory. A hit carries its section, and
-`GridIndex::land` stops reading files.
+Built behind a switch, so both can be measured on one root: the search
+applet reads qmd's index unless its config entry sets
+`env = { DATALIB_SEARCH_READS = "search_index" }`
+(`unified_document_index/src/search_index.rs`). Words matches each term
+against messages and joins them per document (`search_index::read`,
+`search_index::words`).
+Meaning holds every chunk's vector from the inference cache in memory,
+read again once the index and the cache have sat still, and embeds the
+query in the applet's own process with the model the vectors were made
+with. Both hand on the same hits as qmd's, each placed by its bytes in
+the document, so the other terms, fusion and landing are unchanged. The
+page that shows a hit still reads its file, once, to land it on a message
+and quote it; that read goes when rendering on demand does.
+
+**Words, measured against qmd** (2026-11-12, `stay_alive_1` cloned and
+re-rendered by this build: 176k documents, 913k messages; the private
+eval set's 357 queries with `semantic:off`, both runs back to back with
+one `-c opt` applet):
+
+| | found @10 | MRR | lands within 2 messages | p50 | p90 |
+|---|---|---|---|---|---|
+| qmd | 65% | 0.44 | 74% | 108 ms | 457 ms |
+| search index | 61% | 0.42 | 74% | 160 ms | 986 ms |
+
+Three things it took to get there, each a measurement first:
+
+- **The rarest term first, the rest within its documents.** Each term
+  matched every message on its own and read each match out: a sentence of
+  common words took seconds (p50 752 ms). Now the rarest term is read in
+  full, and every other is scanned in SQLite against a temp table of the
+  standing documents' messages, its best score per document taken there.
+  The scan drives: `rowid IN (…)` on FTS5 seeks one row at a time and took
+  3.4 s for one word.
+- **A word in more than one message in twenty is left out** unless it is
+  the rarest: BM25 gives it next to nothing, and checking it costs the
+  most. A document holding a query's rarer words holds "the".
+- **A hit lands as qmd's does**, on the message holding the most of the
+  search's words, read from the file the page reads anyway. A Words hit
+  names its document only.
+
+What is left of the gap is mostly landing: per-message BM25 favours long
+documents (agent sessions of tens of thousands of rows), which take longer
+to land. Meaning has not been measured: it needs the clone embedded, about
+a day.
 
 **Not an ANN index, yet.** doltlite 0.51.3's amalgamation carries
 SQLite's `vec1` extension (an IVF index with product quantization,
@@ -414,8 +456,9 @@ that matched. Meaning search fills back in over the first day.
    where the config sets `embed_search_index` (off by default, since
    search does not read it yet); the aggregator drops a source it no
    longer reads and sweeps the cache (`datalib_step/src/search_index.rs`).
-8. Search reads the new index and embeds a query in process;
-   `search_eval.py` against qmd.
+8. Built: search reads the new index and embeds a query in process,
+   where the applet's entry sets `DATALIB_SEARCH_READS`;
+   `search_eval.py` against qmd (below).
 9. Retire qmd's update and embed, `qmd_sdk.mjs`, its tables and the
    `qmd_keyword` lock.
 
