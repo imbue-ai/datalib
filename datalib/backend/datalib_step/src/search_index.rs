@@ -88,20 +88,35 @@ pub(crate) fn index_doc(source_id: &str, row: &MarkdownRow, text: &str) -> Optio
 }
 
 /// This source's searchable `markdowns` rows at its render store's head,
-/// by id. Empty when the store has nothing committed.
-async fn rendered(root: &Path, group: &str) -> Result<BTreeMap<String, MarkdownRow>> {
+/// by id. Empty when the store has nothing committed; `None` when an older
+/// build wrote it, which its next render rewrites in this build's shape.
+async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, MarkdownRow>>> {
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
+    let group = group.to_string();
     tokio::task::spawn_blocking(move || {
         let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
-            return Ok(BTreeMap::new());
+            return Ok(Some(BTreeMap::new()));
         };
-        let rows = store.markdown_rows();
+        let rows = match store.in_this_shape() {
+            Ok(true) => store.markdown_rows().map(Some),
+            Ok(false) => Ok(None),
+            Err(e) => Err(e),
+        };
         store.close();
-        Ok(rows?
-            .into_iter()
-            .filter(searchable)
-            .map(|r| (r.markdown_uuid.clone(), r))
-            .collect())
+        let Some(rows) = rows? else {
+            tracing::warn!(
+                group = %group,
+                "the render store was written by an older build; the search index takes \
+                 this source once its render has rewritten it"
+            );
+            return Ok(None);
+        };
+        Ok(Some(
+            rows.into_iter()
+                .filter(searchable)
+                .map(|r| (r.markdown_uuid.clone(), r))
+                .collect(),
+        ))
     })
     .await
     .context("render store read panicked")?
@@ -119,7 +134,9 @@ pub(crate) async fn update_keywords(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    let rows = rendered(root, group).await?;
+    let Some(rows) = rendered(root, group).await? else {
+        return Ok(Done::default());
+    };
     let index = Index::open(&layout::search_index_db(root)).await?;
     let out = update_keywords_in(&index, root, group, &rows, progress, stop).await;
     index.close().await;
@@ -208,7 +225,9 @@ async fn embed_into(
     if missing.is_empty() {
         return Ok(done);
     }
-    let rows = rendered(root, group).await?;
+    let Some(rows) = rendered(root, group).await? else {
+        return Ok(done);
+    };
     let mut by_doc: BTreeMap<&str, Vec<&ChunkSpan>> = BTreeMap::new();
     let mut queued = HashSet::new();
     for span in &spans {
@@ -488,6 +507,47 @@ mod tests {
                 ..Done::default()
             }
         );
+        assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
+    }
+
+    /// A render store an older build wrote has neither a document's hash
+    /// nor its layout, and its next render rewrites it. Until then the
+    /// keyword pass leaves the source as indexed: it neither fails the step
+    /// on the missing columns nor reads the store as empty and removes it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_render_store_in_an_older_shape_is_left_until_it_is_rendered_again() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let rr = render_root(root);
+        let tea = rendered_doc(
+            root,
+            "d-tea",
+            thread("Tea, Earl Grey"),
+            doc_md_path(&rr, "d-tea"),
+        );
+        commit(root, &[tea], &[]);
+        assert_eq!(update(root).await.put, 1);
+
+        let writer = datalib_etl::doltlite_raw::open_derived(
+            &datalib_etl_render::indexed_markdown::path_for(&rr),
+            &[],
+            datalib_etl::doltlite_raw::StoreKind::Render,
+        )
+        .await
+        .unwrap();
+        for sql in [
+            "ALTER TABLE markdowns DROP COLUMN content_hash",
+            "ALTER TABLE markdowns DROP COLUMN section_layout",
+            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+        ] {
+            sqlx::query(sql).execute(&writer).await.unwrap();
+        }
+        datalib_etl::doltlite_raw::commit_run(&writer, "an older build's shape")
+            .await
+            .unwrap();
+        writer.close().await;
+
+        assert_eq!(update(root).await, Done::default());
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
     }
 
