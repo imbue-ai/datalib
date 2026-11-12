@@ -11,11 +11,22 @@ pub mod chunk;
 mod file;
 pub mod owed;
 pub mod prompt;
+pub mod read;
 mod store;
+pub mod words;
 
 pub use cache::InferenceCache;
 pub use owed::{owed, Owed};
+pub use read::{Held, HeldChunk, HeldDoc, Reader};
 pub use store::{ChunkSpan, Index};
+
+/// What the inference cache files a vector under: the pinned embedding
+/// model's file and its sha256, so another model's vectors are never read
+/// as this one's.
+pub fn model_key() -> String {
+    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
+    format!("{}@{}", model.file, model.sha256)
+}
 
 /// A rendered document, its sections in order. Laid end to end, the
 /// sections' texts are the document; every offset the index stores is a

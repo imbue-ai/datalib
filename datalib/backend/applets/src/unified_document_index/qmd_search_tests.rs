@@ -173,10 +173,7 @@ async fn a_search_reads_only_the_sources_the_grid_holds() {
 
     let hits = word_hits(&s, &plain).await.unwrap();
     assert!(!hits.is_empty(), "the other sources still answer");
-    let documents: Vec<String> = hits
-        .iter()
-        .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
-        .collect();
+    let documents: Vec<String> = hits.iter().map(|(d, _)| d.clone()).collect();
     let with_rows = s
         .repo
         .documents_kept(&parse_query(""), &documents)

@@ -24,13 +24,6 @@ pub(crate) fn embedding_on() -> bool {
     std::env::var(datalib_dag::subprocess::ENV_EMBED_SEARCH_INDEX).as_deref() == Ok("1")
 }
 
-/// The pinned model's name in the inference cache: its file and the sha256
-/// it was verified against, so another build of the model misses.
-pub(crate) fn model_key() -> String {
-    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
-    format!("{}@{}", model.file, model.sha256)
-}
-
 /// What a keyword pass or an embed did, for its log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Done {
@@ -209,7 +202,7 @@ async fn embed_into(
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
-    let model = model_key();
+    let model = datalib_search_index::model_key();
     let hashes: Vec<String> = spans.iter().map(|s| s.hash.clone()).collect();
     let missing: HashSet<String> = cache.missing(&model, &hashes).await?.into_iter().collect();
     if missing.is_empty() {
@@ -333,7 +326,9 @@ pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)
         return Ok((removed, 0));
     }
     let cache = InferenceCache::open(&cache_path).await?;
-    let gone = cache.keep_only(&model_key(), &hashes).await;
+    let gone = cache
+        .keep_only(&datalib_search_index::model_key(), &hashes)
+        .await;
     cache.close().await;
     Ok((removed, gone?))
 }
