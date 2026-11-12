@@ -511,6 +511,29 @@ every other provider's attachment edge. That keeps `emails` single-writer, so
 re-upserting a changed envelope (flag or move churn) never clobbers a stored
 hash.
 
+### A changed mailbox row re-renders every thread under a label filter
+
+When the render step sets `only_render_labels`, the mailbox tree
+decides which threads render at all, so the render treats any change
+to the `mailboxes` table as touching every thread: it skips the
+incremental diff and walks the whole store
+(`global_fanout_tables` in `email_render/src/render/parse.rs`). Its
+log says `cold_start: true`, and the progress count is every thread
+in the account, not the threads the filter keeps.
+
+Such a change does not have to be one the filter cares about. Only a
+mailbox's counts are kept out of `payload` (they go in the sidecar's
+`volatile_payload`); every other key the server returns is stored as
+it came. Fastmail adds keys of its own to a mailbox (`autoLearn`,
+`hidden`, `splits`, `purgeOlderThanDays` and others) and has been seen
+to drop them from one mailbox between two syncs, with its name,
+parent, role and sort order unchanged. On a 200k-thread account with
+a filter that keeps 7.5k of them, that turned a 7-second render into
+a 2-minute one that changed 51 documents.
+
+The narrower rule would fan out only when what the filter reads moves:
+a mailbox's id, name or parent.
+
 ### Tables
 
 | table | shape |
