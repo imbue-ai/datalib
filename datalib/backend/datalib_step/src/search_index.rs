@@ -24,13 +24,6 @@ pub(crate) fn embedding_on() -> bool {
     std::env::var(datalib_dag::subprocess::ENV_EMBED_SEARCH_INDEX).as_deref() == Ok("1")
 }
 
-/// The pinned model's name in the inference cache: its file and the sha256
-/// it was verified against, so another build of the model misses.
-pub(crate) fn model_key() -> String {
-    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
-    format!("{}@{}", model.file, model.sha256)
-}
-
 /// What a keyword pass or an embed did, for its log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Done {
@@ -40,6 +33,9 @@ pub(crate) struct Done {
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
     pub(crate) unsettled: usize,
+    /// Chunks longer than the model's context, cut to fit before they were
+    /// embedded: dense text, code or encoded data, whose tail is lost.
+    pub(crate) truncated: usize,
 }
 
 /// A document the search covers: one with a file, outside `unindexed/`.
@@ -95,20 +91,35 @@ pub(crate) fn index_doc(source_id: &str, row: &MarkdownRow, text: &str) -> Optio
 }
 
 /// This source's searchable `markdowns` rows at its render store's head,
-/// by id. Empty when the store has nothing committed.
-async fn rendered(root: &Path, group: &str) -> Result<BTreeMap<String, MarkdownRow>> {
+/// by id. Empty when the store has nothing committed; `None` when an older
+/// build wrote it, which its next render rewrites in this build's shape.
+async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, MarkdownRow>>> {
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
+    let group = group.to_string();
     tokio::task::spawn_blocking(move || {
         let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
-            return Ok(BTreeMap::new());
+            return Ok(Some(BTreeMap::new()));
         };
-        let rows = store.markdown_rows();
+        let rows = match store.in_this_shape() {
+            Ok(true) => store.markdown_rows().map(Some),
+            Ok(false) => Ok(None),
+            Err(e) => Err(e),
+        };
         store.close();
-        Ok(rows?
-            .into_iter()
-            .filter(searchable)
-            .map(|r| (r.markdown_uuid.clone(), r))
-            .collect())
+        let Some(rows) = rows? else {
+            tracing::warn!(
+                group = %group,
+                "the render store was written by an older build; the search index takes \
+                 this source once its render has rewritten it"
+            );
+            return Ok(None);
+        };
+        Ok(Some(
+            rows.into_iter()
+                .filter(searchable)
+                .map(|r| (r.markdown_uuid.clone(), r))
+                .collect(),
+        ))
     })
     .await
     .context("render store read panicked")?
@@ -126,7 +137,9 @@ pub(crate) async fn update_keywords(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    let rows = rendered(root, group).await?;
+    let Some(rows) = rendered(root, group).await? else {
+        return Ok(Done::default());
+    };
     let index = Index::open(&layout::search_index_db(root)).await?;
     let out = update_keywords_in(&index, root, group, &rows, progress, stop).await;
     index.close().await;
@@ -209,13 +222,15 @@ async fn embed_into(
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
-    let model = model_key();
+    let model = datalib_search_index::model_key();
     let hashes: Vec<String> = spans.iter().map(|s| s.hash.clone()).collect();
     let missing: HashSet<String> = cache.missing(&model, &hashes).await?.into_iter().collect();
     if missing.is_empty() {
         return Ok(done);
     }
-    let rows = rendered(root, group).await?;
+    let Some(rows) = rendered(root, group).await? else {
+        return Ok(done);
+    };
     let mut by_doc: BTreeMap<&str, Vec<&ChunkSpan>> = BTreeMap::new();
     let mut queued = HashSet::new();
     for span in &spans {
@@ -250,9 +265,10 @@ async fn embed_into(
         while pending.len() >= CHUNK_BATCH || (!pending.is_empty() && stop.requested()) {
             let batch: Vec<_> = pending.drain(..pending.len().min(CHUNK_BATCH)).collect();
             match embed_batch(&mut embedder, batch).await {
-                Ok(vectors) => {
+                Ok((vectors, cut)) => {
                     cache.put(&model, &vectors).await?;
                     done.embedded += vectors.len();
+                    done.truncated += cut;
                     progress.inc(vectors.len() as u64);
                 }
                 Err(e) => {
@@ -269,10 +285,16 @@ async fn embed_into(
         }
     }
     if result.is_ok() && !pending.is_empty() && !stop.requested() {
-        let vectors = embed_batch(&mut embedder, std::mem::take(&mut pending)).await?;
-        cache.put(&model, &vectors).await?;
-        done.embedded += vectors.len();
-        progress.inc(vectors.len() as u64);
+        result = match embed_batch(&mut embedder, std::mem::take(&mut pending)).await {
+            Ok((vectors, cut)) => {
+                let put = cache.put(&model, &vectors).await;
+                done.embedded += vectors.len();
+                done.truncated += cut;
+                progress.inc(vectors.len() as u64);
+                put
+            }
+            Err(e) => Err(e),
+        };
     }
     // On Metal, ggml aborts at exit while a model is still loaded.
     drop(embedder.take());
@@ -298,17 +320,23 @@ fn prompts_for(
         .collect()
 }
 
+/// Each prompt's vector, and how many had to be cut to fit the context.
 async fn embed_batch(
     embedder: &mut Option<Embedder>,
     batch: Vec<(String, String)>,
-) -> Result<Vec<(String, Vec<f32>)>> {
+) -> Result<(Vec<(String, Vec<f32>)>, usize)> {
     let mut e = embedder.take().context("the embedder is gone")?;
     let (e, out) = tokio::task::spawn_blocking(move || {
+        let mut cut = 0;
         let out: Result<Vec<_>> = batch
             .into_iter()
-            .map(|(hash, prompt)| Ok((hash, e.embed(&prompt)?)))
+            .map(|(hash, prompt)| {
+                let (vector, truncated) = e.embed_fitted(&prompt)?;
+                cut += usize::from(truncated);
+                Ok((hash, vector))
+            })
             .collect();
-        (e, out)
+        (e, out.map(|v| (v, cut)))
     })
     .await
     .context("embedding panicked")?;
@@ -333,7 +361,9 @@ pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)
         return Ok((removed, 0));
     }
     let cache = InferenceCache::open(&cache_path).await?;
-    let gone = cache.keep_only(&model_key(), &hashes).await;
+    let gone = cache
+        .keep_only(&datalib_search_index::model_key(), &hashes)
+        .await;
     cache.close().await;
     Ok((removed, gone?))
 }
@@ -493,6 +523,47 @@ mod tests {
                 ..Done::default()
             }
         );
+        assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
+    }
+
+    /// A render store an older build wrote has neither a document's hash
+    /// nor its layout, and its next render rewrites it. Until then the
+    /// keyword pass leaves the source as indexed: it neither fails the step
+    /// on the missing columns nor reads the store as empty and removes it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_render_store_in_an_older_shape_is_left_until_it_is_rendered_again() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let rr = render_root(root);
+        let tea = rendered_doc(
+            root,
+            "d-tea",
+            thread("Tea, Earl Grey"),
+            doc_md_path(&rr, "d-tea"),
+        );
+        commit(root, &[tea], &[]);
+        assert_eq!(update(root).await.put, 1);
+
+        let writer = datalib_etl::doltlite_raw::open_derived(
+            &datalib_etl_render::indexed_markdown::path_for(&rr),
+            &[],
+            datalib_etl::doltlite_raw::StoreKind::Render,
+        )
+        .await
+        .unwrap();
+        for sql in [
+            "ALTER TABLE markdowns DROP COLUMN content_hash",
+            "ALTER TABLE markdowns DROP COLUMN section_layout",
+            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+        ] {
+            sqlx::query(sql).execute(&writer).await.unwrap();
+        }
+        datalib_etl::doltlite_raw::commit_run(&writer, "an older build's shape")
+            .await
+            .unwrap();
+        writer.close().await;
+
+        assert_eq!(update(root).await, Done::default());
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
     }
 

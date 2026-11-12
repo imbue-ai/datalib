@@ -156,12 +156,12 @@ impl WithoutVectors {
 /// grid does. A person repeats one search far more than they change it.
 #[derive(Default)]
 pub struct VectorCoverage {
-    pub with_vectors: Option<(IndexStamp, Arc<HashSet<String>>)>,
+    pub with_vectors: Option<(Vec<IndexStamp>, Arc<HashSet<String>>)>,
     pub last: Option<(CoverageKey, WithoutVectors)>,
 }
 
 /// A search's cache key, the grid's commit and how the qmd index looks.
-pub type CoverageKey = (String, Option<String>, IndexStamp);
+pub type CoverageKey = (String, Option<String>, Vec<IndexStamp>);
 
 /// A search's terms, written out, and the commit they were read at.
 pub type KeyedKey = (String, Option<String>);

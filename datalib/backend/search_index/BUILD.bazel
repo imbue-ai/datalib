@@ -45,3 +45,15 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+rust_test(
+    name = "read_test",
+    size = "small",
+    srcs = ["tests/read.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_search_index",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

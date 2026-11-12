@@ -157,6 +157,14 @@ impl Embedder {
         self.embed_tokens(&tokens)
     }
 
+    /// [`Self::embed`], with a text longer than the context cut to fit
+    /// first, as qmd does; and whether it was cut.
+    pub fn embed_fitted(&mut self, text: &str) -> Result<(Vec<f32>, bool)> {
+        let tokens = self.tokenize(text)?;
+        let (tokens, cut) = fit(tokens, self.context);
+        Ok((self.embed_tokens(&tokens)?, cut))
+    }
+
     pub fn embed_tokens(&mut self, tokens: &[i32]) -> Result<Vec<f32>> {
         self.embed_in_batches(tokens, 0)
     }
@@ -198,4 +206,33 @@ fn message(err: &[c_char]) -> String {
         .map(|&c| c as u8)
         .collect();
     String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// `tokens` cut to `context`, its last token (the end of input) kept last,
+/// and whether anything was cut.
+pub fn fit(mut tokens: Vec<i32>, context: usize) -> (Vec<i32>, bool) {
+    if tokens.len() <= context || context == 0 {
+        return (tokens, false);
+    }
+    let last = tokens[tokens.len() - 1];
+    tokens.truncate(context - 1);
+    tokens.push(last);
+    (tokens, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fit;
+
+    #[test]
+    fn a_long_input_is_cut_to_the_context_keeping_its_end() {
+        assert_eq!(
+            fit(vec![2, 10, 11, 12, 1], 5),
+            (vec![2, 10, 11, 12, 1], false)
+        );
+        assert_eq!(
+            fit(vec![2, 10, 11, 12, 13, 1], 4),
+            (vec![2, 10, 11, 1], true)
+        );
+    }
 }
