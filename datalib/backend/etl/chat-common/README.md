@@ -296,7 +296,10 @@ LinkedIn message), `Markdown` for markdown the provider built itself,
 having escaped the plain text it put inside (Facebook's posts, Beeper's
 reply line), or markdown someone else wrote, which goes in as written,
 HTML included (an assistant's reply and the prompt before it, an
-email's HTML part after htmd). Each item is a section of its own, so
+email's `text/html` part after htmd). The chat's title and names, and
+each item's author, recipients, reactors, attachment filenames and
+labels, lose their bidi controls first (`without_bidi_controls`). Each
+item is a section of its own, so
 the page renders it alone. The grid's search
 text is `text` as given either way. Front-matter values go through
 `yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a

@@ -405,7 +405,8 @@ impl<'a> RenderCtx<'a> {
         Ok(())
     }
 
-    pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
+    pub fn emit_doc(&self, mut md: RenderedMarkdown) -> Result<()> {
+        crate::names::settle(&mut md);
         let mut cb = self.emit.cb.lock().unwrap();
         (cb)(md)
     }

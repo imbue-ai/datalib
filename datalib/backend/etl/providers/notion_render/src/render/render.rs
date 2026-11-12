@@ -15,9 +15,9 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::title::Title;
@@ -102,7 +102,7 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
 /// the link back to Notion.
 fn head(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> String {
     let mut fm = String::from("---\n");
-    fm.push_str(&format!("title: {}\n", yaml_scalar(title)));
+    fm.push_str(&format!("title: {}\n", yaml_name(title)));
     fm.push_str(&format!("provider: {}\n", Provider::Notion));
     fm.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
     fm.push_str(&format!("page_id: {}\n", yaml_scalar(page_id)));
@@ -157,7 +157,7 @@ fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza:
                 }
                 _ => toc::entry_href(stanza, &id),
             };
-            crumbs.push(format!("[{}]({href})", escape_md_inline(title)));
+            crumbs.push(format!("[{}]({href})", escape_name_inline(title)));
         }
         next = parent_of(row);
     }
@@ -353,7 +353,7 @@ fn thread_markdown(
         ));
         let who = match author_of(c) {
             Some(h) => chip_link(author, &h),
-            None => format!("**{}**", escape_md_inline(author)),
+            None => format!("**{}**", escape_name_inline(author)),
         };
         out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));

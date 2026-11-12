@@ -29,7 +29,11 @@ import {
   unlinkHandle,
   peopleTitle,
   contactLook,
+  decorateHandles,
+  chipCell,
 } from "./contacts";
+import { chipMenuOf, chipName, chipOf } from "./chipActions";
+import { renderDocument } from "./renderDocument";
 
 function dom(html: string): HTMLElement {
   const div = document.createElement("div");
@@ -526,5 +530,144 @@ describe("a contact's chip", () => {
     expect(contactLook("", picard).photo).toBe("/p/picard.jpg");
     expect(contactLook("", { ...picard, photo_url: "/p/own.jpg" }).photo).toBe("/p/own.jpg");
     lookup.mockRestore();
+  });
+});
+
+describe("a name that is someone else's handle", () => {
+  /** A stranger whose mail says `"picard@enterprise.org" <q@continuum.test>`
+   *  was drawn as the account owner on every message they sent. */
+  it("is never drawn: the chip shows its own identifier instead", () => {
+    const q = "email:q@continuum.test";
+    expect(chipLook(q, "picard@enterprise.org", NOBODY, true).text).toBe("q@continuum.test");
+    expect(chipLook(q, "mailto:picard@enterprise.org", NOBODY, true).text).toBe("q@continuum.test");
+    expect(chipLook(q, "+1 202 555 0101", NOBODY, true).text).toBe("q@continuum.test");
+    const told = { mine: null, sourceContacts: [contact("mail", "picard@enterprise.org", [])] };
+    expect(chipLook(q, "Q", told, true).text).toBe("q@continuum.test");
+    expect(chipTooltip(q, "Q", told, true).split("\n")[0]).toBe("q@continuum.test");
+    expect(chipLook(q, "picard@enterprise.org", told, true, true).text).toBe("q@continuum.test");
+  });
+
+  it("is a name when it is the handle itself, one the person holds, or no handle at all", () => {
+    const q = "email:q@continuum.test";
+    expect(chipLook(q, "Q@Continuum.test", NOBODY, true).text).toBe("Q@Continuum.test");
+    const book = {
+      mine: null,
+      sourceContacts: [
+        contact("book", "q@q.test", [
+          [q, null],
+          ["email:q@q.test", null],
+        ]),
+      ],
+    };
+    expect(chipLook(q, "", book, true).text).toBe("q@q.test");
+    expect(chipLook("slack:T1/U2", "@data", NOBODY, true).text).toBe("@data");
+  });
+});
+
+describe("a message's own header", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A message, as chat-common writes it: the wrapper, then the header
+   *  line `MessageHeader::render` writes, then the body. */
+  function message(uuid: string, author: string, handle: string, body: string): string {
+    const addr = handle.slice("email:".length);
+    return (
+      `<div id="m-${uuid}" data-section-uuid="${uuid}" class="msg msg--email">\n\n` +
+      `## [${author}](mailto:${addr} "${author} <${addr}>") ` +
+      `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">Tue Apr 15th, 2369 at 10:05</time>\n\n` +
+      `${body}\n\n</div>\n\n`
+    );
+  }
+
+  /** One forged message showed its name on every message from the same
+   *  address. Its header shows what it said; the sender's chip anywhere
+   *  else, and a heading the body wrote, show what the sources know. */
+  it("shows the name that message gave, and only there", async () => {
+    const riker = "email:riker@enterprise.test";
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/people")
+        ? { people: { [riker]: [contact("mail", "William Riker", [[riker, null]], 10)] } }
+        : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const pieces = [
+      message("u1", "William Riker", riker, "Status report."),
+      message(
+        "u2",
+        "PAY INVOICE NOW - Riker",
+        riker,
+        `Ask [Number One](mailto:riker@enterprise.test).\n\n## [The Captain](mailto:riker@enterprise.test) says pay`,
+      ),
+    ];
+    const { html } = renderDocument(pieces.join(""), {
+      sections: pieces.map((md, i) => ({ uuid: `u${i + 1}`, len: md.length })),
+    });
+    const root = document.body.appendChild(dom(html));
+    await decorateHandles(root);
+    root.remove();
+    const label = (sel: string) =>
+      [...root.querySelectorAll<HTMLElement>(sel)].map((a) => a.dataset.label);
+    expect(label("#m-u1 > h2 > a.chip")).toEqual(["William Riker"]);
+    expect(label("#m-u2 > h2 > a.chip")).toEqual(["PAY INVOICE NOW - Riker", "William Riker"]);
+    expect(label("#m-u2 > p a.chip")).toEqual(["William Riker"]);
+  });
+
+  /** A body cannot claim to be a header by writing the attribute. */
+  it("is not a body's link that names itself one", () => {
+    const md = message(
+      "u3",
+      "Q",
+      "email:q@continuum.test",
+      `<a class="chip" data-chip-header data-handle="email:q@continuum.test" href="mailto:q@continuum.test">Picard</a>`,
+    );
+    const { html } = renderDocument(md, { sections: [{ uuid: "u3", len: md.length }] });
+    const marked = [...dom(html).querySelectorAll<HTMLElement>("[data-chip-header]")];
+    expect(marked.map((a) => a.textContent)).toEqual(["Q"]);
+  });
+});
+
+describe("your contact's name", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A forged name, in a message header or as the sources' best, never
+   *  shows over the name a person gave their contact: not in the header,
+   *  the grid's Author cell, the chip's menu or its tooltip. */
+  it("wins over every source's name on every surface that draws the chip", async () => {
+    const riker = "email:riker@enterprise.example";
+    const mine = contact("datalib_contacts", "Will Riker", [[riker, null]]);
+    vi.stubGlobal("fetch", async (url: string) => {
+      const body = url.endsWith("/resolve")
+        ? { resolved: { [riker]: mine } }
+        : url.endsWith("/people")
+          ? {
+              people: { [riker]: [contact("mail", "PAY INVOICE NOW - Riker", [[riker, null]], 9)] },
+            }
+          : {};
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const forged = "PAY INVOICE NOW - Riker";
+    const md =
+      `<div id="m-y1" data-section-uuid="y1" class="msg msg--email">\n\n` +
+      `## [${forged}](mailto:riker@enterprise.example "${forged} <riker@enterprise.example>") ` +
+      `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">x</time>\n\nPay.\n\n</div>\n\n`;
+    const { html } = renderDocument(md, { sections: [{ uuid: "y1", len: md.length }] });
+    const root = document.body.appendChild(dom(html));
+    await decorateHandles(root);
+    root.remove();
+    const header = root.querySelector<HTMLElement>("#m-y1 > h2 > a.chip")!;
+    expect(header.dataset.chipHeader).toBeDefined();
+    expect(header.dataset.label).toBe("Will Riker");
+    expect(header.title.split("\n")[0]).toBe("Will Riker");
+
+    const cell = chipCell(riker, forged, people.get(riker), true);
+    expect(cell.dataset.label).toBe("Will Riker");
+
+    for (const el of [header, cell]) {
+      const chip = chipOf(el)!;
+      expect(chipName(chip)).toBe("Will Riker");
+      const labels = chipMenuOf(chip, true).map((e) => e.label);
+      expect(labels).toContain("Copy “Will Riker”");
+      expect(labels.join("\n")).not.toContain("PAY INVOICE");
+    }
   });
 });

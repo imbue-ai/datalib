@@ -10,8 +10,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::{escape_md_inline, md_code_span};
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
 use datalib_etl_render::message::{chip_link, source_link, stamp_text_html};
 use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
@@ -43,7 +43,7 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
     let front: [(&str, String); 12] = [
         (profile.container_key, yaml_scalar(&cr.container)),
         (profile.number_key, cr.number.to_string()),
-        ("title", yaml_scalar(&cr.title)),
+        ("title", yaml_name(&cr.title)),
         ("state", yaml_opt(cr.state.as_deref())),
         ("author", yaml_opt(cr.author.as_deref())),
         ("created_at", yaml_opt(cr.created_at.as_deref())),
@@ -169,7 +169,7 @@ fn person(author: Option<&str>, handle: Option<&Handle>) -> String {
     let shown = author.unwrap_or("unknown");
     match handle {
         Some(h) => chip_link(shown, h),
-        None => format!("@{}", escape_md_inline(shown)),
+        None => format!("@{}", escape_name_inline(shown)),
     }
 }
 

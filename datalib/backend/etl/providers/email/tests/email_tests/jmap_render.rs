@@ -595,3 +595,40 @@ Content-Type: text/html; charset=utf-8\r\n\
     assert!(md.contains("**html alternative**"), "{md}");
     assert!(!md.contains("plain alternative"), "{md}");
 }
+
+/// A right-to-left override in a subject showed `evil.exe` as
+/// `exe.live`. Bidi overrides, embeddings and isolates are taken out of
+/// the subject, the names and an attachment's filename; the marks
+/// (U+200E, U+200F, U+061C), which reorder nothing, stay.
+#[test]
+fn bidi_controls_are_dropped_from_subjects_names_and_filenames() {
+    let eml = "From: Q \u{202E}Continuum <q@continuum.example>\r\n\
+To: \u{2067}Worf\u{2069} <worf@enterprise.example>, Deanna\u{200F} <troi@enterprise.example>\r\n\
+Subject: Orders \u{202E}exe.live\r\n\
+Date: Mon, 5 Jan 2026 00:00:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+See attached.\r\n";
+    let att = LoadedAttachment {
+        part_id: "2".into(),
+        blob_id: blake3_hex(PDF),
+        name: Some("orders\u{202E}fdp.exe".into()),
+        content_type: Some("application/pdf".into()),
+        size: Some(PDF.len() as i64),
+        disposition: Some("attachment".into()),
+        cid: None,
+    };
+    let (md, docs) = rendered_page(&one_email(eml, "Orders \u{202E}exe.live", vec![att]));
+    let rows = serde_json::to_string(&docs[0].rows).unwrap();
+    for (what, text) in [("page", &md), ("rows", &rows)] {
+        assert!(
+            !text.contains(['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}'])
+                && !text.contains(['\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}']),
+            "a bidi control is left in the {what}: {text:?}"
+        );
+    }
+    for shown in ["Orders exe.live", "Q Continuum", "Worf", "ordersfdp.exe"] {
+        assert!(md.contains(shown), "{shown:?} is missing: {md}");
+    }
+    assert!(md.contains("Deanna\u{200F}"), "a mark stays: {md}");
+}

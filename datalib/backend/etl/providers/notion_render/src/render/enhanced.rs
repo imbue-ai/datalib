@@ -18,7 +18,8 @@ use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::format_uuid;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::html::{
-    code_span_parts, escape_attr, escape_md_inline, escape_text, md_link_dest,
+    code_span_parts, escape_attr, escape_md_inline, escape_name_inline, escape_name_text,
+    escape_text, md_link_dest,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::{chip_link, stamp_text_html};
@@ -61,7 +62,7 @@ impl Context<'_> {
         let name = self.users.get(uid).map(String::as_str).unwrap_or("");
         match user_handle(uid, self.emails) {
             Some(h) => chip_link(name, &h),
-            None => format!("@{}", escape_text(name)),
+            None => format!("@{}", escape_name_text(name)),
         }
     }
 }
@@ -331,7 +332,7 @@ fn leaf(text: &str, cx: &Context<'_>) -> Option<String> {
             let (href, title) = cx.target(&url);
             let text = if inner.is_empty() {
                 title
-                    .map(|t| escape_md_inline(&t))
+                    .map(|t| escape_name_inline(&t))
                     .unwrap_or_else(|| "Untitled".into())
             } else {
                 inline(inner, cx)

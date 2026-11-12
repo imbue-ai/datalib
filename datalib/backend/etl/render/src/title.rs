@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::html::{escape_attr, escape_text};
+use crate::html::{escape_attr, escape_text, without_bidi_controls};
 
 /// One title block. Pushed onto the rendered markdown body by every
 /// provider in lieu of an open-coded `# {title}` line.
@@ -64,7 +64,8 @@ impl<'a> Title<'a> {
     /// straight into the body without worrying about blank-line
     /// terminators.
     pub fn render(&self) -> String {
-        let (shown, full) = clamp(self.text);
+        let text = without_bidi_controls(self.text);
+        let (shown, full) = clamp(&text);
         let mut out = String::new();
         out.push_str("<h1 class=\"page-title\"");
         if let Some(uuid) = self.markdown_uuid {
@@ -100,6 +101,22 @@ impl<'a> Title<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A right-to-left override in a title showed `evil.exe` as
+    /// `exe.live`, and reordered the `↗` link after it.
+    #[test]
+    fn a_title_drops_its_bidi_controls() {
+        let t = Title {
+            text: "Orders \u{202E}exe.live",
+            markdown_uuid: None,
+            suffix: None,
+            source_url: None,
+        };
+        assert_eq!(
+            t.render(),
+            "<h1 class=\"page-title\">Orders exe.live</h1>\n\n"
+        );
+    }
 
     #[test]
     fn title_only() {

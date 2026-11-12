@@ -86,7 +86,7 @@ let chipMark: string | null = null;
 let reserved: ReadonlySet<string> = new Set();
 
 const CHIP_MARK = "data-chip-mark";
-const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact"];
+const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact", "data-chip-header"];
 
 // A presentation attribute of SVG's (`fill`, `filter`, `mask`, …) reads
 // as CSS, so a `url(…)` in one is a fetch. One naming a part of the

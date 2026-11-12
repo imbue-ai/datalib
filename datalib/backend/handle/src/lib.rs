@@ -436,6 +436,21 @@ impl Handle {
         Self::slack(team?, user?)
     }
 
+    /// The handle a display name spells out, when it is one rather than
+    /// a name: an address, a number in international form, a handle's
+    /// URI or its stored form. A name that spells someone's identifier
+    /// draws whoever it labels as that someone (`"picard@enterprise.org"
+    /// <q@continuum.test>`).
+    pub fn spelled_by(name: &str) -> Option<Self> {
+        let name = name.trim();
+        // The stored form first: `email:x@y` is an address too, of the
+        // local part `email:x`.
+        Self::parse(name)
+            .or_else(|| Self::from_uri(name))
+            .or_else(|| Self::email(name))
+            .or_else(|| Self::tel(name))
+    }
+
     /// The handle beside the name a source showed, as a person writes
     /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
     /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
@@ -604,6 +619,34 @@ impl fmt::Display for Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_spells_a_handle_only_when_it_is_one() {
+        let email = Handle::email("picard@enterprise.org");
+        for spelled in [
+            " picard@enterprise.org ",
+            "mailto:picard@enterprise.org",
+            "email:picard@enterprise.org",
+        ] {
+            assert_eq!(Handle::spelled_by(spelled), email, "{spelled:?}");
+        }
+        assert_eq!(
+            Handle::spelled_by("+1 202 555 0101"),
+            Handle::tel("+12025550101")
+        );
+        assert_eq!(
+            Handle::spelled_by("slack:T01/U02"),
+            Handle::slack("T01", "U02")
+        );
+        for name in [
+            "Jean-Luc Picard",
+            "Q",
+            "2025550101",
+            "Picard <picard@enterprise.org>",
+        ] {
+            assert_eq!(Handle::spelled_by(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn email_is_lowercased_and_trimmed() {

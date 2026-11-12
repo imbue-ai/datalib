@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
@@ -275,7 +275,7 @@ impl FileFacts {
 
     fn head(&self) -> String {
         let mut s = String::from("---\n");
-        s.push_str(&format!("title: {}\n", yaml_scalar(&self.title)));
+        s.push_str(&format!("title: {}\n", yaml_name(&self.title)));
         s.push_str(&format!("provider: {}\n", Provider::GoogleDrive));
         s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
         s.push_str(&format!("markdown_uuid: {}\n", self.id.uuid));
