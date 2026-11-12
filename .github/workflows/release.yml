@@ -753,37 +753,6 @@ jobs:
           jq --exit-status --raw-output '."containerimage.digest"' "${RUNNER_TEMP}/metadata.json" \
               > "${RUNNER_TEMP}/digests/${ARCH}"
 
-      # The same image without qmd's 2.2 GB of GGUFs, for the
-      # devcontainer to build on. Only CI pulls the
-      # devcontainer image, and CI's one consumer of those models
-      # (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit
-      # on almost every run, so it was downloading them for nothing:
-      # measured 6.45 GB -> 3.78 GB, cold pull 80s -> 37s, and the
-      # whole CI job 218s -> 133s.
-      #
-      # Deliberately NOT tagged `:latest` and deliberately amd64
-      # only: this is a build input for the devcontainer, not a
-      # product image, and the only thing that consumes it runs on
-      # x86_64 runners. Every layer up to the qmd step is identical
-      # to the build above, and this job's builder still holds them,
-      # so this costs one extra qmd/npm layer, not a second image.
-      - name: Build and push the slim image
-        if: ${{ matrix.arch == 'amd64' }}
-        env:
-          BUILDKIT_PROGRESS: plain
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${REF_NAME#v}"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker buildx build \
-              --platform linux/amd64 \
-              --build-arg QMD_PREFETCH_MODELS=false \
-              --tag "${image}:${version}-slim" \
-              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --push \
-              ctx
-
       # `overwrite`, as on the tarball: a re-run after any failed `build` leg
       # repeats this upload, and one tag must not join two attempts' images.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

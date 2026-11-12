@@ -25,7 +25,9 @@
 # docker-image job in `release.yml` stages its architecture's assets from
 # that run's artifacts and the demo from the checkout.
 #
-# Bind mounts at runtime (see docs/user/docker.md):
+# Everything runs as `datalib`, uid and gid 1000, whose home is /root
+# (see the user step below). Bind mounts at runtime (see
+# docs/user/docker.md), which uid 1000 must be able to write:
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
 #                                  may be RO for `datalib-dag`).
@@ -76,9 +78,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-create the bind-mount targets so empty-dir mounts behave predictably
-# and so an unmounted run still has somewhere to write.
-RUN mkdir -p /root/.latchkey /data
+# The app parses whatever a person's mail and files hold, so nothing in
+# the container runs as root: everything runs as `datalib`, uid and gid
+# 1000, the id the first user on most Linux desktops has, so a folder
+# such a user mounts is already writable. Ubuntu's stock `ubuntu` user
+# holds that id and goes.
+#
+# Its home stays /root, a path and nothing more: every `docker run` a
+# person has written mounts `/root/.latchkey`, and every data root an
+# earlier image wrote links its qmd models at `/root/.cache/qmd/models`
+# (a link the indexer never repoints).
+#
+# The bind-mount targets are made here so empty-dir mounts behave
+# predictably and an unmounted run still has somewhere to write.
+RUN set -eux; \
+    if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi; \
+    if getent group ubuntu >/dev/null; then groupdel ubuntu; fi; \
+    groupadd --gid 1000 datalib; \
+    useradd --uid 1000 --gid 1000 --home-dir /root --no-create-home \
+        --shell /bin/bash datalib; \
+    mkdir -p /root/.latchkey /root/.cache /data; \
+    chown datalib:datalib /root /root/.latchkey /root/.cache /data; \
+    chmod 0755 /root
+ENV HOME=/root
 
 # Everything below is the release tarball and the entrypoint. A
 # contributor in the devcontainer builds the binaries from source with
@@ -107,13 +129,13 @@ RUN mkdir -p /root/.latchkey /data
 ARG TARGETARCH
 COPY dist/${TARGETARCH}/ /tmp/release/
 RUN set -eux; \
-    tar -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
+    tar --no-same-owner -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' -print -quit)"; \
     test -n "$staged"; \
     mv "$staged" /opt/datalib; \
     (cd /tmp/release && sha256sum -c runtime-*-linux-gnu.tar.gz.sha256); \
     mkdir /opt/datalib/runtime; \
-    tar -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
+    tar --no-same-owner -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
     rm -rf /tmp/release; \
     for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
                datalib-http latchkey-curl-router curl-impersonate \
@@ -135,34 +157,31 @@ RUN set -eux; \
     # anything else, so we can't use it the same way here.
     datalib-dag --version; \
     doltlite --version; \
-    /opt/datalib/runtime/node/bin/node --version
+    /opt/datalib/runtime/node/bin/node --version; \
+    # The demo library is the one place under /opt the app writes.
+    install -d -o datalib -g datalib /opt/datalib/demo
 
-# Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
-# + reranker, ~2.25 GB) into qmd's cache (`~/.cache/qmd/models`), each
-# from its pinned HuggingFace revision and sha256-verified — the same
-# table the `embed` step and the search applet check, so a rebuilt image
-# with the same pins lands the same bytes.
-#
-# `QMD_PREFETCH_MODELS=false` skips it, which is what makes the
-# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of the image.
-# Prod keeps them (default `true`): a first sync would otherwise stall
-# on a multi-GB download. The `else` branch still creates the empty
-# directory so a container that runs the app writes models to a path
-# the image owns.
-ARG QMD_PREFETCH_MODELS=true
-RUN set -eux; \
-    if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
-        datalib-step pull-models && ls -lh /root/.cache/qmd/models; \
-    else \
-        echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
-        mkdir -p /root/.cache/qmd/models; \
-    fi
+# The binaries and the runtime above stay root's and read-only to the
+# app; from here on, everything runs as the app's user.
+USER datalib
+
+# qmd's embedding model (about 330 MB), the one model search loads,
+# from its pinned HuggingFace revision and sha256-verified into qmd's
+# cache (`/root/.cache/qmd/models`) — the same table the `embed` step and
+# the search applet check, so a rebuilt image with the same pins lands
+# the same bytes, and search by meaning works with nothing fetched.
+RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
+
+# Nothing is fetched at run time: what the image ships is all it runs.
+# Every first-use fetch datalib makes (qmd's model, the Node runtime, a
+# package) is refused under this switch, naming what was missing.
+# `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
+ENV DATALIB_NO_FETCH=1
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
 # per-bind-mount key file before exec'ing the user's command. See the
 # script header and docs/docker.md for the security model.
-COPY entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
 
 # --- The demo data library ------------------------------------------
 #
@@ -173,25 +192,19 @@ RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
-# Each source's keyword (BM25) index is built here too, so free-text
-# search works the moment the demo starts. The embed steps and the
-# aggregator sit below a BUILD-TIME CUT marker and are dropped for this
-# run (the slim build has no models to embed with); the shipped config
-# keeps them, so the first sync in a container adds the embeddings.
-# `--now` is pinned to the fixture's own era so the bookkeeping reads
-# in fixture time rather than in build time, like the test fixture.
+# Every step runs, the search index's keyword index and embeddings
+# included, so search by words and by meaning both work the moment the
+# demo starts and every step on the Manage screen has run.
+# No `--now`: the run record is stamped at build time, so the
+# Dashboard's "Synced …" reads as a real past time.
 #
 # This layer is also the one smoke test that runs the shipped
 # pipeline end to end: a tarball whose datalib-dag or datalib-step
 # cannot ingest the fixtures fails the image build here.
-COPY demo/ /opt/datalib/demo-sources/
+COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
 RUN set -eux; \
-    mkdir -p /opt/datalib/demo; \
-    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.full.toml; \
-    sed '/^# === BUILD-TIME CUT ===/,$d' /opt/datalib/demo/config.full.toml \
-        > /opt/datalib/demo/config.toml; \
-    datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
-    mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
+    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
+    datalib-dag /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
     test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
