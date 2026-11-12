@@ -69,17 +69,26 @@ pub struct ChildStatus {
 
 /// The status a group row shows, and which child it is read from.
 /// Running if any child is running; then waiting, failed, queued,
-/// stopped, in that order; otherwise the last step in pipeline order —
-/// the one whose state says how far the group's data got. A child
-/// turned off is passed over (an embed step turned off says nothing
-/// about the source), so the group reads Off only when every child is.
-/// A group with only applets reads its last applet. `children` must
-/// already be in pipeline order.
+/// stopped, in that order; otherwise the last step in pipeline order
+/// that has run — the one whose state says how far the group's data got.
+/// A child turned off is passed over (an embed step turned off says
+/// nothing about the source), so the group reads Off only when every
+/// child is; so is one that has never run while a sibling has (an embed
+/// step added after the source synced does not unsay that sync), so the
+/// group reads Never run only when nothing under it has run. A group
+/// with only applets reads its last applet. `children` must already be
+/// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
     let on: Vec<&ChildStatus> = children.iter().filter(|c| c.status.key != "off").collect();
     if on.is_empty() {
         return children.first().map(read);
     }
+    let ran: Vec<&ChildStatus> = on
+        .iter()
+        .copied()
+        .filter(|c| c.status.key != "never_run")
+        .collect();
+    let on = if ran.is_empty() { on } else { ran };
     for key in ["running", "waiting", "failed", "queued", "stopped"] {
         if let Some(child) = on.iter().find(|c| c.status.key == key) {
             return Some(read(child));
@@ -343,6 +352,30 @@ mod tests {
         .unwrap();
         assert_eq!(got.0.key, "queued");
         assert_eq!(got.1, "s/ingest");
+    }
+
+    /// The demo, baked without its embed steps, read "Never run" on every
+    /// source beside "Synced seconds ago": a step that has never run
+    /// unsaid the sync its siblings had finished.
+    #[test]
+    fn group_status_passes_over_a_child_that_has_never_run() {
+        let got = group_status(&[
+            child("s/ingest", "succeeded", Step, None),
+            child("s/render_markdown", "succeeded", Step, None),
+            child("s/keyword_index", "succeeded", Step, None),
+            child("s/embed", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "succeeded");
+        assert_eq!(got.1, "s/keyword_index");
+
+        let nothing_yet = group_status(&[
+            child("s/ingest", "never_run", Step, None),
+            child("s/embed", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(nothing_yet.0.key, "never_run");
+        assert_eq!(nothing_yet.1, "s/embed");
     }
 
     /// A source at rest with its embed step turned off read "Off", as

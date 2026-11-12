@@ -234,6 +234,10 @@ impl Runner {
             .get(crate::subprocess::ENV_NOW)
             .cloned()
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+        let clock = datalib_time::RunClock::starting_at(
+            datalib_time::parse_strict(&started_at)
+                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
+        );
         let run_id = self
             .child_env
             .get(crate::subprocess::ENV_RUN_ID)
@@ -760,7 +764,7 @@ impl Runner {
         );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(now_stamp());
+            run.finished_at = Some(clock.now().to_rfc3339_micros());
         }
         record.save(&state).await?;
 
@@ -2747,5 +2751,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
+    }
+
+    /// A round pinned with `--now` ends on that clock. The demo's bake,
+    /// pinned to 2369, recorded its run as ending in the present, three
+    /// centuries before it began.
+    #[tokio::test]
+    async fn a_pinned_round_ends_after_it_began() {
+        let f = fixture();
+        f.go.store(true, Ordering::SeqCst);
+        let store = Store::open(f.root.path()).await.unwrap();
+        store.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let pinned = "2369-04-15T00:00:00+00:00";
+        let env = BTreeMap::from([(crate::subprocess::ENV_NOW.to_string(), pinned.to_string())]);
+        Runner::new(f.root.path())
+            .child_env(env)
+            .serve(&f.graph, &store)
+            .await
+            .unwrap();
+
+        let run = store.load_record().await.unwrap().current_run.unwrap();
+        store.close().await;
+        assert_eq!(run.started_at, pinned);
+        let finished = run.finished_at.expect("the round closed its run");
+        assert!(
+            finished.as_str() >= pinned && finished.starts_with("2369-04-15T00:0"),
+            "began {pinned}, ended {finished}"
+        );
     }
 }
