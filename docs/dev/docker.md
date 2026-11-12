@@ -22,19 +22,30 @@ security model the walkthrough's bind-mount rules rest on.
   resolve beside themselves, checked against its published sha256 at
   build time. There is no Node, npm or npx on the image's `PATH`;
   nothing is fetched from a registry at build or run time, and the first-use fetch
-  a tarball install does (`runtime_fetch.md`) never fires here;
+  a tarball install does (`runtime_fetch.md`) never fires here.
+  `DATALIB_NO_FETCH=1` is set, so nothing datalib would otherwise fetch
+  for itself (the runtime, qmd's models, a package) is fetched at run
+  time: a missing piece is a failed step naming it
+  ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
+  fetched");
 - qmd's three models pre-fetched into `/root/.cache/qmd/models` by
-  `datalib-step pull-models`, each from its pinned HuggingFace revision
-  and sha256-verified, so a first sync never stalls on a multi-gigabyte
-  download;
+  `datalib-step pull-models` at build time, each from its pinned
+  HuggingFace revision and sha256-verified, so a first sync never stalls
+  on a multi-gigabyte download;
 - the demo data library at `/opt/datalib/demo`, ingested and rendered
   at image build time from the TNG fixtures under
   `/opt/datalib/demo-sources` (see below);
 - `tini` as PID 1 and [`entrypoint.sh`](../../datalib/docker/entrypoint.sh),
-  which provisions latchkey's encryption key.
+  which provisions latchkey's encryption key;
+- a user, `datalib` (uid and gid 1000), that everything runs as
+  (§ "Permissions and signals").
 
 The `:<version>-slim` variant is the same image without the qmd
-models. It is amd64 only and not tagged `latest`. The devcontainer CI
+models. It is amd64 only and not tagged `latest`. It still fetches
+nothing: its keyword search works, while its `embed` steps and its
+search by meaning fail naming the model they lack. `-e
+DATALIB_NO_FETCH=0` lets it fetch the models (pinned, about 2.2 GB) on
+first use instead. The devcontainer CI
 runs in is a separate image (`.devcontainer/Dockerfile`, published by
 `devcontainer.yml`) and does not build on either.
 
@@ -71,7 +82,13 @@ demo) runs at image time, so a free-text search answers the moment the
 container starts. Its `embed` steps and `qmd_aggregator` sit below a
 `BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
 in the shipped file, so the first sync in a container adds the
-embeddings. The slim build has no models to embed with.
+embeddings. The slim build has no models to embed with, so in a slim
+container those steps fail until the models are let in (above).
+
+The demo config is in the shape `datalib-http` leaves as written, so a
+container start does not rewrite it and leave a `config.toml.bak`:
+`config_examples_test.rs` in `datalib-step` holds it, and every other
+config the repo ships or documents, to that.
 
 ## Checking the walkthrough against an image
 
@@ -125,9 +142,12 @@ start:
 
 - if `LATCHKEY_ENCRYPTION_KEY` is already in the environment, use it
   (for ephemeral, no-persistence runs);
-- else read `/root/.latchkey/encryption_key` from the bind mount,
+- else read `/root/.latchkey/encryption_key` from the bind mount
+  (`$LATCHKEY_DIRECTORY` when that is set),
   generating it (`openssl rand -base64 32`, mode `0600`) on the first
   run against that folder;
+- if the key is there but this user cannot read it (an earlier image
+  wrote it as root), stop and print the `chown` that fixes it;
 - if the folder is read-only and has no key, warn and use an ephemeral
   key, so credentials written that run are unreadable next run.
 
@@ -148,12 +168,36 @@ which has no browser.
 
 ## Permissions and signals
 
-The container runs as root so that `/root/.latchkey` and `/data` have
-a predictable owner. On a Linux host, files written into bind mounts
-are therefore owned by `uid 0`; Docker Desktop on macOS maps them to
-your user. `--user "$(id -u):$(id -g)"` is possible but moves `HOME`,
-and with it the pre-baked model cache and latchkey's store, so prefer a
-`chown` afterwards.
+Nothing in the container runs as root. The image's `USER` is
+`datalib`, uid and gid 1000, so the parsers that read a stranger's mail
+and PDFs hold no more than the folders it owns: the data root, the
+credential store, the demo library and its own home. The binaries and
+the runtime under `/opt/datalib` are root's and read-only to it.
+
+Its home stays `/root`, which is only a path: every `docker run` a
+person has written mounts `/root/.latchkey`, and every data root an
+earlier image wrote links its qmd models at `/root/.cache/qmd/models`, a
+link the indexer never repoints.
+
+uid 1000 is the first user on most Linux desktops, so a folder such a
+user mounts is already writable. Docker Desktop on macOS maps ownership
+to the Mac user, and nothing needs doing there. Otherwise the mounted
+folders must be writable by uid 1000, which is one command with no
+`sudo`, since it runs in the image:
+
+```sh
+docker run --rm --user 0 --entrypoint chown -v "$DATA_ROOT:/data" "$IMG" -R 1000:1000 /data
+```
+
+The same command brings forward a data root or a credential store an
+earlier image wrote as root. The entrypoint looks for that on every
+start: it warns when the top three levels of `/data` hold anything it
+cannot write (a read-only mount is left alone), and it refuses to start
+when the latchkey key is there but unreadable, since going on would mean
+a new key that cannot open what is stored. Each message prints that
+command. Running the image with `--user "$(id -u):$(id -g)"` instead is
+not supported: that user cannot write the image's home, where the file
+fingerprint cache lives.
 
 PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
 delivers SIGTERM cleanly to `datalib-dag`, which forwards it to its

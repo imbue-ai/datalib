@@ -140,6 +140,24 @@ suggests `pull-runtime`; an offline first sync fails the `qmd` and `latchkey` st
 with the fetch error named and succeeds at everything else, the same as
 the models.
 
+## When anything may be fetched
+
+One rule covers every download datalib makes for itself (the runtime
+here, qmd's models, the perseus embedder's model files, a package): it
+is pinned by sha256 before it is fetched, it is fetched on first use
+only because the install did not ship it, and a miss fails loudly. All
+of them go through `datalib_fetch` (`download_verified`, and
+`get_unpinned` for a package's manifest), and that is where the rule is
+enforced. An install that ships what it runs says so by setting
+`DATALIB_NO_FETCH=1`; every fetch is then refused with an error naming
+the URL it wanted and the switch, so a missing piece shows up as a
+failed step rather than as a download. The docker image sets it (both
+the full image and `-slim`, which leaves qmd's models out), and every
+child process is handed it (`datalib_env`). `DATALIB_QMD_MODELS_NO_FETCH`
+is the older, narrower switch: qmd's models only, reported as missing
+rather than refused, for a test root that stages the one model it
+loads.
+
 ## Who still bundles
 
 - **The docker image** unpacks the CPU asset into `/opt/datalib/runtime`

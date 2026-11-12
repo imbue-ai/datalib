@@ -24,12 +24,14 @@ type = "claude"
 [[steps]]
 group = "claude-export"
 function = "ingest"
+command = "datalib-step"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/claude-export"
 
 [[steps]]
 group = "claude-export"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["claude-export/ingest"]
 
 # Google Takeout Gmail: the `mbox` table selects the file-backed method;
@@ -42,6 +44,7 @@ type = "email"
 [[steps]]
 group = "gmail-takeout"
 function = "ingest"
+command = "datalib-step"
 [steps.params.mbox]
 path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
 account_id = "picard@enterprise.starfleet"
@@ -52,6 +55,7 @@ is_personal = true
 [[steps]]
 group = "gmail-takeout"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gmail-takeout/ingest"]
 [steps.params]
 outlink_format = "gmail"
@@ -64,6 +68,7 @@ type = "google_takeout"
 [[steps]]
 group = "google-takeout"
 function = "ingest"
+command = "datalib-step"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/google-takeout/Takeout"
 google_chat = true
@@ -73,6 +78,7 @@ google_voice_include_spam = true
 [[steps]]
 group = "google-takeout"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["google-takeout/ingest"]
 
 [[groups]]
@@ -83,12 +89,14 @@ type = "sms_backup_restore"
 [[steps]]
 group = "sms-backup-restore"
 function = "ingest"
+command = "datalib-step"
 [steps.params.backup]
 path = "/opt/datalib/demo-sources/sms-backup-restore"
 
 [[steps]]
 group = "sms-backup-restore"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["sms-backup-restore/ingest"]
 
 [[groups]]
@@ -99,12 +107,14 @@ type = "linkedin"
 [[steps]]
 group = "linkedin"
 function = "ingest"
+command = "datalib-step"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/linkedin"
 
 [[steps]]
 group = "linkedin"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["linkedin/ingest"]
 
 # The `vcf` table selects the file-backed method: `.vcf` files under `path`.
@@ -116,12 +126,14 @@ type = "contacts"
 [[steps]]
 group = "contacts"
 function = "ingest"
+command = "datalib-step"
 [steps.params.vcf]
 path = "/opt/datalib/demo-sources/contacts"
 
 [[steps]]
 group = "contacts"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["contacts/ingest"]
 
 [[groups]]
@@ -132,12 +144,14 @@ type = "pdf"
 [[steps]]
 group = "pdfs"
 function = "ingest"
+command = "datalib-step"
 [steps.params.fswalk]
 path = "/opt/datalib/demo-sources/pdfs"
 
 [[steps]]
 group = "pdfs"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
@@ -146,6 +160,7 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = [
   "claude-export/render_markdown",
   "gmail-takeout/render_markdown",
@@ -168,36 +183,43 @@ command = "datalib-applet unified_document_index"
 [[steps]]
 group = "claude-export"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["claude-export/render_markdown"]
 
 [[steps]]
 group = "gmail-takeout"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
 group = "google-takeout"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["google-takeout/render_markdown"]
 
 [[steps]]
 group = "sms-backup-restore"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["sms-backup-restore/render_markdown"]
 
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["linkedin/render_markdown"]
 
 [[steps]]
 group = "contacts"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["contacts/render_markdown"]
 
 [[steps]]
 group = "pdfs"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["pdfs/render_markdown"]
 
 # === BUILD-TIME CUT === (the Dockerfile drops everything below this line
@@ -205,6 +227,7 @@ inputs = ["pdfs/render_markdown"]
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = [
   "claude-export/keyword_index",
   "claude-export/embed",
@@ -227,34 +250,41 @@ inputs = [
 [[steps]]
 group = "claude-export"
 function = "embed"
+command = "datalib-step"
 inputs = ["claude-export/keyword_index"]
 
 [[steps]]
 group = "gmail-takeout"
 function = "embed"
+command = "datalib-step"
 inputs = ["gmail-takeout/keyword_index"]
 
 [[steps]]
 group = "google-takeout"
 function = "embed"
+command = "datalib-step"
 inputs = ["google-takeout/keyword_index"]
 
 [[steps]]
 group = "sms-backup-restore"
 function = "embed"
+command = "datalib-step"
 inputs = ["sms-backup-restore/keyword_index"]
 
 [[steps]]
 group = "linkedin"
 function = "embed"
+command = "datalib-step"
 inputs = ["linkedin/keyword_index"]
 
 [[steps]]
 group = "contacts"
 function = "embed"
+command = "datalib-step"
 inputs = ["contacts/keyword_index"]
 
 [[steps]]
 group = "pdfs"
 function = "embed"
+command = "datalib-step"
 inputs = ["pdfs/keyword_index"]

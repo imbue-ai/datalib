@@ -13,8 +13,9 @@
 //! datalib's own that does not name `datalib-step` as its `command`
 //! (`datalib_migrate_config::upgrade_step_commands`), and a Todoist
 //! ingest whose window is still named `completed_since`
-//! (`datalib_migrate_config::upgrade_todoist_since`). The text they
-//! replaced is kept as `config.toml.bak`.
+//! (`datalib_migrate_config::upgrade_todoist_since`), all listed once in
+//! `datalib_migrate_config::UNATTENDED`. The text they replaced is kept
+//! as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the document index's tree
 //! and the loop's record of its steps over to the new name, and
@@ -27,54 +28,6 @@ use std::sync::{Mutex, MutexGuard};
 use tokio::sync::broadcast;
 
 use crate::watch::{RootEvent, RootFrame};
-
-type Rewrite = fn(&str) -> anyhow::Result<Option<String>>;
-
-/// Each unattended rewrite: what it is for, in the log, and what it does.
-const REWRITES: [(&str, &str, Rewrite); 7] = [
-    (
-        "has an id with capitals in it",
-        "every group, step and applet id, and every function, is lower case, \
-         since each names a folder and a Mac's disk ignores letter case",
-        datalib_migrate_config::upgrade_lowercase_ids,
-    ),
-    (
-        "still has a `qmd_index` step",
-        "`qmd_index` is now `qmd_aggregator`, reading each source's own \
-         keyword_index and embed steps",
-        datalib_migrate_config::upgrade_qmd_steps,
-    ),
-    (
-        "still names its index group `unified_index`",
-        "the `unified_index` group, its steps and its applet are now \
-         `unified_document_index`",
-        datalib_migrate_config::upgrade_document_index,
-    ),
-    (
-        "has a source with time series and no time-series index",
-        "each source with time series has a `render_time_series` step, read by \
-         the new `unified_time_series_index` group's `time_series_index`",
-        datalib_migrate_config::upgrade_time_series_steps,
-    ),
-    (
-        "has a time-series source with an `embed` step",
-        "a time-series source's markdown is summaries of numbers, which its \
-         keyword index already finds; its `embed` step is taken out",
-        datalib_migrate_config::upgrade_time_series_embeds,
-    ),
-    (
-        "has a step that does not name its program",
-        "every step names its program in `command`; datalib's own steps run \
-         `datalib-step`",
-        datalib_migrate_config::upgrade_step_commands,
-    ),
-    (
-        "has a Todoist source whose window is `completed_since`",
-        "Todoist's window is `since`, which takes the grammar every source's \
-         `since` does",
-        datalib_migrate_config::upgrade_todoist_since,
-    ),
-];
 
 /// A rewrite reads the file and writes it back, so a save landing between
 /// the two would be lost: this process's writers of the config take turns.
@@ -103,22 +56,18 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
 fn upgrade_in_turn(root: &Path) -> Option<PathBuf> {
     let path = datalib_dag::config::root_config_path(root);
     let text = std::fs::read_to_string(&path).ok()?;
-    let mut upgraded = text.clone();
-    let mut done = Vec::new();
-    for (why, what, rewrite) in REWRITES {
-        match rewrite(&upgraded) {
-            Ok(Some(next)) => {
-                upgraded = next;
-                done.push(what);
-            }
-            Ok(None) => {}
-            Err(e) => tracing::error!(
-                "config: {} {why}, and was left as it is: {e:#}. \
-                 `datalib-migrate-config {} --force` shows the rewrite.",
-                path.display(),
-                root.display()
-            ),
-        }
+    let datalib_migrate_config::Unattended {
+        text: upgraded,
+        done,
+        refused,
+    } = datalib_migrate_config::upgrade_unattended(&text);
+    for (why, e) in refused {
+        tracing::error!(
+            "config: {} {why}, and was left as it is: {e:#}. \
+             `datalib-migrate-config {} --force` shows the rewrite.",
+            path.display(),
+            root.display()
+        );
     }
     if done.is_empty() {
         return None;

@@ -5,6 +5,8 @@
 //! Node runtime a release tarball names in its manifest ([`runtime`]),
 //! and packages (`datalib_packages`), whose manifest is the one document
 //! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
+//! An install that ships what it runs sets [`NO_FETCH_ENV`], and every
+//! fetch here then fails instead of going to the network.
 
 pub mod runtime;
 
@@ -23,6 +25,31 @@ const ATTEMPTS: u32 = 6;
 const MAX_REDIRECTS: usize = 10;
 
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
+
+/// Set, to anything but empty or `0`, by an install that ships everything
+/// it runs (the docker image): every fetch here is then refused, naming
+/// what it wanted, so a missing piece is an error rather than a download
+/// nobody asked for.
+pub const NO_FETCH_ENV: &str = "DATALIB_NO_FETCH";
+
+/// The refusal [`NO_FETCH_ENV`]'s value calls for, if any, for `url`.
+fn refusal(switch: Option<&str>, url: &str) -> Option<anyhow::Error> {
+    let on = switch.is_some_and(|v| !v.is_empty() && v != "0");
+    on.then(|| {
+        anyhow::anyhow!(
+            "{url} is not here and this install fetches nothing ({NO_FETCH_ENV} is set): \
+             it ships what it runs, so this one is missing from it. Set {NO_FETCH_ENV}=0 \
+             to let it be fetched"
+        )
+    })
+}
+
+fn allowed(url: &str) -> Result<()> {
+    match refusal(std::env::var(NO_FETCH_ENV).ok().as_deref(), url) {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
 
 /// The TLS every HTTP client here is built with
 /// (`ClientBuilder::tls_backend_preconfigured`): rustls on ring, trusting
@@ -90,6 +117,7 @@ pub struct Unpinned {
 /// being looked up — refusing one over `limit` bytes. A caller that goes
 /// on to trust the bytes pins the hash this returns.
 pub fn get_unpinned(url: &str, limit: u64) -> Result<Unpinned> {
+    allowed(url)?;
     let hops = Arc::new(Mutex::new(Vec::new()));
     let seen = hops.clone();
     let policy = reqwest::redirect::Policy::custom(move |attempt| {
@@ -140,6 +168,7 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 /// with 429 before, so a retryable status backs off and tries again
 /// rather than failing the sync on the first refusal.
 pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
+    allowed(url)?;
     let client = client()?;
     let mut delay = Duration::from_secs(2);
     for attempt in 1..=ATTEMPTS {
@@ -250,6 +279,20 @@ mod tests {
     use super::*;
 
     const HELLO_SHA: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+    /// The docker image sets the switch so its slim build, which leaves
+    /// qmd's models out, refuses to download them at its first start.
+    #[test]
+    fn the_no_fetch_switch_refuses_unless_it_is_empty_or_zero() {
+        let url = "https://huggingface.co/x/resolve/abc/model.gguf";
+        for off in [None, Some(""), Some("0")] {
+            assert!(refusal(off, url).is_none(), "{off:?}");
+        }
+        for on in ["1", "true", "yes"] {
+            let e = refusal(Some(on), url).expect(on).to_string();
+            assert!(e.contains(url) && e.contains(NO_FETCH_ENV), "{e}");
+        }
+    }
 
     #[test]
     fn sha256_of_known_bytes() {

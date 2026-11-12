@@ -175,6 +175,18 @@ PRESEEDED_RAW = {"yolink"}
 TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
 
 
+def _with_step_commands(text: str) -> str:
+    """Names `datalib-step` as every step's program, as the wizard writes
+    it. A step without one is a shape `datalib-http` rewrites on sight,
+    leaving a `config.toml.bak` in the materialized root."""
+    return re.sub(
+        r'^(function = "[^"]*")$',
+        r'\1\ncommand = "datalib-step"',
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 @dataclass
 class Prepared:
     """A workspace ready to sync, and what a driver needs to sync it."""
@@ -480,9 +492,9 @@ def prepare(argv: list[str]) -> Prepared:
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
         # One group per source; each step is `group` + `function`, and its
-        # id — the tree it writes — is composed from the two. No
-        # `command`: a built-in step is `datalib-step`, which reads the
-        # function and the group's type from the environment.
+        # id — the tree it writes — is composed from the two. Every step
+        # gets `command = "datalib-step"` in `config_texts`
+        # (`_with_step_commands`).
         group_block = f"""[[groups]]
 id = "{name}"
 type = "{type_str}"
@@ -621,7 +633,8 @@ inputs = [{qmd_list}]"""
                 f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
                 f'inputs = ["{group}/keyword_index"]'
             )
-        return dag_text, "\n\n".join(root_blocks) + "\n"
+        root_text = "\n\n".join(root_blocks) + "\n"
+        return _with_step_commands(dag_text), _with_step_commands(root_text)
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
