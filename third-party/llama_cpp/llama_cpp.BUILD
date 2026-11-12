@@ -14,6 +14,15 @@ GGML_VERSION = "0.19.0"
 
 LLAMA_RELEASE = "b10361"
 
+# The fully-static release builds (//platforms:musl).
+config_setting(
+    name = "musl",
+    constraint_values = [
+        "@@//platforms:musl",
+        "@platforms//os:linux",
+    ],
+)
+
 COMMON_COPTS = [
     # Numeric loops; at fastbuild's -O0 an embedding takes many times as long.
     "-O3",
@@ -158,7 +167,17 @@ cc_library(
         "ggml/src",
         "ggml/src/ggml-cpu",
     ],
+    # rustc drives the final link. The host toolchains add the C++ runtime
+    # to it; the musl one does not, and its link is static, takes no
+    # default libraries, and ends in -Bdynamic, where a bare -l finds a
+    # .so. So name the archives, after the C++ runtime what it calls:
+    # libc, and libgcc's helpers (aarch64's outline atomics among them).
     linkopts = select({
+        ":musl": [
+            "-l:libstdc++.a",
+            "-l:libc.a",
+            "-l:libgcc.a",
+        ],
         "@platforms//os:linux": [
             "-lpthread",
             "-ldl",
