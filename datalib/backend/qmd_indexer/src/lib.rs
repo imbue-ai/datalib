@@ -162,8 +162,8 @@ fn models_dir_under(xdg_cache_home: Option<OsString>, home: Option<OsString>) ->
 
 /// The pinned models `qmd embed` needs, by the on-disk names
 /// node-llama-cpp looks for. Just the embedding model: the fixture's
-/// embed action stages only that one, and query expansion / reranking
-/// are the applet's concern.
+/// embed action stages only that one, and nothing loads query
+/// expansion or reranking.
 pub fn embed_model_names() -> Vec<String> {
     datalib_runtime::qmd::EMBED_MODELS
         .iter()

@@ -3,18 +3,11 @@
 # Seven file-backed sources over the Star Trek: TNG fixtures the test
 # suite already uses, staged into the image at /opt/datalib/demo-sources
 # by stage_demo.sh. Nothing here needs a credential or the network, so
-# the ingest, render and grid_index steps run at image build time and
-# the demo is browsable the moment the container starts.
+# every step, the search index's embeddings included, runs at image
+# build time and the demo is searchable the moment the container starts.
 #
 # No `data_root`: it defaults to this file's directory, so the root can
 # be copied anywhere (a bind mount, say) and still work.
-#
-# The search index's embeddings are the one thing NOT built into the
-# image — see the BUILD-TIME CUT marker at the bottom. Everything after
-# that line is dropped for the build-time run and present in the shipped
-# file, so the first `Sync all` (or `datalib-dag` run) in a container
-# builds them. The reason is the slim build, which has no models to embed
-# with. The keyword (BM25) part is cheap and is built with the image.
 
 [[groups]]
 id = "claude-export"
@@ -222,8 +215,6 @@ function = "keyword_index"
 command = "datalib-step"
 inputs = ["pdfs/render_markdown"]
 
-# === BUILD-TIME CUT === (the Dockerfile drops everything below this line
-# for the build-time run; keep the aggregator and the embed steps last)
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"

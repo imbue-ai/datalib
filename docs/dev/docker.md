@@ -28,10 +28,12 @@ security model the walkthrough's bind-mount rules rest on.
   time: a missing piece is a failed step naming it
   ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
   fetched");
-- qmd's three models pre-fetched into `/root/.cache/qmd/models` by
-  `datalib-step pull-models` at build time, each from its pinned
-  HuggingFace revision and sha256-verified, so a first sync never stalls
-  on a multi-gigabyte download;
+- qmd's embedding model (about 330 MB), the one model search loads,
+  put in `/root/.cache/qmd/models` by `datalib-step pull-models` at
+  build time from its pinned HuggingFace revision and sha256-verified,
+  so search by meaning works with nothing fetched. The query-expansion
+  and reranker models are pinned too but nothing loads them, so nothing
+  fetches or ships them;
 - the demo data library at `/opt/datalib/demo`, ingested and rendered
   at image build time from the TNG fixtures under
   `/opt/datalib/demo-sources` (see below);
@@ -40,14 +42,10 @@ security model the walkthrough's bind-mount rules rest on.
 - a user, `datalib` (uid and gid 1000), that everything runs as
   (§ "Permissions and signals").
 
-The `:<version>-slim` variant is the same image without the qmd
-models. It is amd64 only and not tagged `latest`. It still fetches
-nothing: its keyword search works, while its `embed` steps and its
-search by meaning fail naming the model they lack. `-e
-DATALIB_NO_FETCH=0` lets it fetch the models (pinned, about 2.2 GB) on
-first use instead. The devcontainer CI
-runs in is a separate image (`.devcontainer/Dockerfile`, published by
-`devcontainer.yml`) and does not build on either.
+There is one variant. The devcontainer CI runs in is a separate image
+(`.devcontainer/Dockerfile`, published by `devcontainer.yml`) and does
+not build on it. Releases up to v0.53.0 also published a
+`:<version>-slim` tag without the models; later releases do not.
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
@@ -78,14 +76,10 @@ and grid-indexes them. That run is also the one end-to-end smoke test
 of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
-The image carries half of the search index. Each source's
-`keyword_index` (qmd's BM25 index, a couple of seconds for the whole
-demo) runs at image time, so a free-text search answers the moment the
-container starts. Its `embed` steps and `qmd_aggregator` sit below a
-`BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
-in the shipped file, so the first sync in a container adds the
-embeddings. The slim build has no models to embed with, so in a slim
-container those steps fail until the models are let in (above).
+The image carries the whole search index: every step in the demo
+config runs at image time, each source's `keyword_index` and `embed`
+and the `qmd_aggregator` included, so search by words and by meaning
+both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a
 container start does not rewrite it and leave a `config.toml.bak`:

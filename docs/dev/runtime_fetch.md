@@ -151,8 +151,7 @@ of them go through `datalib_fetch` (`download_verified`, and
 enforced. An install that ships what it runs says so by setting
 `DATALIB_NO_FETCH=1`; every fetch is then refused with an error naming
 the URL it wanted and the switch, so a missing piece shows up as a
-failed step rather than as a download. The docker image sets it (both
-the full image and `-slim`, which leaves qmd's models out), and every
+failed step rather than as a download. The docker image sets it, and every
 child process is handed it (`datalib_env`). `DATALIB_QMD_MODELS_NO_FETCH`
 is the older, narrower switch: qmd's models only, reported as missing
 rather than refused, for a test root that stages the one model it

@@ -108,14 +108,11 @@ rm -rf "$tmp"
 
 ## Image size
 
-~2.7 GB, dominated by qmd's three GGUF models (~2.25 GB: embed, rerank,
-expand), which `datalib-step pull-models` fetches from their pins
-(`datalib_runtime::qmd::PINNED_MODELS`). That step runs from the
-unpacked tarball, so it comes after the binaries' layer and a new
-tarball re-runs it. The `-slim` tag (`QMD_PREFETCH_MODELS=false`) is
-the same image without the models; since the image sets
-`DATALIB_NO_FETCH=1`, it searches by keyword only and its `embed` steps
-fail naming the model, unless run with `-e DATALIB_NO_FETCH=0`.
+qmd's embedding model is about 330 MB of it, which `datalib-step
+pull-models` fetches from its pin (`datalib_runtime::qmd::EMBED_MODELS`;
+the other two pinned models are loaded by nothing and left out). That
+step runs from the unpacked tarball, so it comes after the binaries'
+layer and a new tarball re-runs it.
 
 ## When binaries fail to start with a missing-shared-library error
 

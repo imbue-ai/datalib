@@ -165,32 +165,17 @@ RUN set -eux; \
 # app; from here on, everything runs as the app's user.
 USER datalib
 
-# Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
-# + reranker, ~2.25 GB) into qmd's cache (`/root/.cache/qmd/models`), each
-# from its pinned HuggingFace revision and sha256-verified — the same
-# table the `embed` step and the search applet check, so a rebuilt image
-# with the same pins lands the same bytes.
-#
-# `QMD_PREFETCH_MODELS=false` skips it, which is what makes the
-# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of the image.
-# Prod keeps them (default `true`): a first sync would otherwise stall
-# on a multi-GB download. The `else` branch still creates the empty
-# directory, so the slim image's semantic search fails naming the models
-# it lacks rather than on a missing path.
-ARG QMD_PREFETCH_MODELS=true
-RUN set -eux; \
-    if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
-        datalib-step pull-models && ls -lh /root/.cache/qmd/models; \
-    else \
-        echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
-        mkdir -p /root/.cache/qmd/models; \
-    fi
+# qmd's embedding model (about 330 MB), the one model search loads,
+# from its pinned HuggingFace revision and sha256-verified into qmd's
+# cache (`/root/.cache/qmd/models`) — the same table the `embed` step and
+# the search applet check, so a rebuilt image with the same pins lands
+# the same bytes, and search by meaning works with nothing fetched.
+RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
 
 # Nothing is fetched at run time: what the image ships is all it runs.
-# Every first-use fetch datalib makes (qmd's models, the Node runtime, a
-# package) is refused under this switch, naming what was missing, so the
-# slim image's first start does not pull 2 GB of models nobody asked
-# for. `-e DATALIB_NO_FETCH=0` lets it fetch them (docs/dev/docker.md).
+# Every first-use fetch datalib makes (qmd's model, the Node runtime, a
+# package) is refused under this switch, naming what was missing.
+# `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
 ENV DATALIB_NO_FETCH=1
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
@@ -207,12 +192,9 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
-# Each source's keyword (BM25) index is built here too, so free-text
-# search works the moment the demo starts. The embed steps and the
-# aggregator sit below a BUILD-TIME CUT marker and are dropped for this
-# run (the slim build has no models to embed with); the shipped config
-# keeps them, so the first sync in a container adds the embeddings, or,
-# in a slim one that fetches nothing, fails them naming the model.
+# Every step runs, the search index's keyword index and embeddings
+# included, so search by words and by meaning both work the moment the
+# demo starts and every step on the Manage screen has run.
 # No `--now`: the run record is stamped at build time, so the
 # Dashboard's "Synced …" reads as a real past time.
 #
@@ -221,11 +203,8 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
 # cannot ingest the fixtures fails the image build here.
 COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
 RUN set -eux; \
-    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.full.toml; \
-    sed '/^# === BUILD-TIME CUT ===/,$d' /opt/datalib/demo/config.full.toml \
-        > /opt/datalib/demo/config.toml; \
+    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
     datalib-dag /opt/datalib/demo/config.toml; \
-    mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
     test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \

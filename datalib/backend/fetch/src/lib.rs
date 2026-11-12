@@ -280,8 +280,8 @@ mod tests {
 
     const HELLO_SHA: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
-    /// The docker image sets the switch so its slim build, which leaves
-    /// qmd's models out, refuses to download them at its first start.
+    /// The docker image sets the switch, so anything it lacks is refused
+    /// by name rather than downloaded at its first start.
     #[test]
     fn the_no_fetch_switch_refuses_unless_it_is_empty_or_zero() {
         let url = "https://huggingface.co/x/resolve/abc/model.gguf";

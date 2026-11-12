@@ -332,9 +332,7 @@ Nothing else. In particular, don't mount your home directory, and don't
 run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
-The image bundles the three qmd models, so semantic search never
-downloads anything. The image fetches nothing at run time at all. The
-`-slim` tag leaves the models out and then searches by keyword only;
-`-e DATALIB_NO_FETCH=0` lets it download them (about 2.2 GB) the first
-time they are needed. Building the image yourself, and what is in it, is
-in [`docs/dev/docker.md`](../dev/docker.md).
+The image bundles the search model, so search by meaning never
+downloads anything; the image fetches nothing at run time at all.
+Building the image yourself, and what is in it, is in
+[`docs/dev/docker.md`](../dev/docker.md).

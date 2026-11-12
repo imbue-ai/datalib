@@ -429,7 +429,7 @@ async fn main() {
             tokio::task::spawn_blocking(move || {
                 datalib_qmd_models::ensure_models(
                     &dir,
-                    datalib_qmd_models::PINNED_MODELS,
+                    datalib_runtime::qmd::EMBED_MODELS,
                     datalib_qmd_models::Fetch::from_env(),
                 )
             })
@@ -438,7 +438,7 @@ async fn main() {
         };
         match ensure {
             Ok(outcomes) => {
-                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(&outcomes) {
+                for (model, outcome) in datalib_runtime::qmd::EMBED_MODELS.iter().zip(&outcomes) {
                     datalib_obs::status_line!(
                         "{:?}: {}",
                         outcome,
