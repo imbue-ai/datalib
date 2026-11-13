@@ -201,7 +201,8 @@ other than one fails the render (`document_row` in
 inferred. A Browse of a source opens on these rows (`is:document`).
 Several sources have more than one document kind: Claude's `Chat` and
 `Project`, Notion's `Notion Page`, `Notion Comment Thread` and `Notion
-Table of Contents`, LinkedIn's `Contact` and `LinkedIn Chat`.
+Table of Contents`, LinkedIn's `Contact`, `LinkedIn Chat`, `LinkedIn
+Post` and `LinkedIn Skills`.
 
 ### `created_at`, `modified_at` and `touched_at`
 
