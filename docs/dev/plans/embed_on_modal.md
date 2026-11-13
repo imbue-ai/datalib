@@ -77,19 +77,29 @@ x86_64, as a module the one gnu build loads when it can:
   shared library, `libggml-base.so`, that the binary and the module
   both link; it ships in the gnu tarball's `lib/` beside `libdoltlite`.
   The CUDA backend is `libggml-cuda.so`. The embedder loads it when it
-  is there and `libcuda.so.1`, the driver, is on the loader path, and
-  otherwise runs on the CPU as today, saying which it chose. So the
-  same `datalib-step` runs on a laptop, a CPU container and a GPU one.
-- **The module is fetched, like the runtime's CUDA overlay.**
-  `libggml-cuda.so`, with the CUDA runtime and cuBLAS linked into it
-  statically, is hundreds of MB, more than everyone else should carry.
-  It ships as one more release asset, fetched on first use under the
-  probe `datalib_fetch::runtime` already makes for node-llama-cpp's CUDA
-  overlay (`QMD_LLAMA_GPU=cuda` or `libcuda.so.1` on the loader path;
-  `docs/dev/runtime_fetch.md`). The image does not change; on Modal the
-  module is fetched once into a Modal volume, or baked into a layer the
-  Modal side adds, so a container does not fetch it each start (which,
-  _to check_).
+  is there and the module loads, and otherwise runs on the CPU as today,
+  saying which it chose and, when the module would not load, why. So
+  the same `datalib-step` runs on a laptop, a CPU container and a GPU
+  one.
+- **cuBLAS comes from the host.** Whoever runs CUDA has NVIDIA's
+  libraries installed, so the module links `libcublas.so.12` and
+  `libcublasLt.so.12` from the host (from the toolkit, or NVIDIA's
+  `nvidia-cublas-cu12` package), as node-llama-cpp's CUDA build does;
+  besides those it needs only the driver's `libcuda.so.1`, and the
+  small CUDA runtime is linked in. Linked in statically, cuBLAS made the
+  module 939 MB, and `nvprune` only took it to 737 MB (#1750). On Modal,
+  the image our Modal side runs adds cuBLAS to our image as a layer
+  (which way, _to check_).
+- **The module is fetched, like the runtime's CUDA overlay.** Without
+  cuBLAS it is about llama.cpp's GPU code alone (node-llama-cpp's is
+  156 MB for more GPU models; ours is measured in #1750), still more than
+  everyone else should carry. It ships as one more release asset,
+  fetched on first use under the probe `datalib_fetch::runtime` already
+  makes for node-llama-cpp's CUDA overlay (`QMD_LLAMA_GPU=cuda` or
+  `libcuda.so.1` on the loader path; `docs/dev/runtime_fetch.md`). The
+  image does not change; on Modal the module is fetched once into a
+  Modal volume, or baked into the layer above, so a container does not
+  fetch it each start.
 - **musl stays CPU-only.** A fully static musl binary cannot `dlopen` a
   glibc library, and NVIDIA's libraries are glibc builds.
 - NVIDIA's toolkit as a pinned, sha256-checked download (NVIDIA publishes
@@ -97,17 +107,17 @@ x86_64, as a module the one gnu build loads when it can:
   hashes), and its rules (likely `rules_cuda`), so the build stays
   hermetic and CI can build it with no GPU. It cannot be built on a Mac:
   `nvcc` does not run there, so the loop is CI or a Linux box.
-- The kernels compiled for the GPU generations Modal rents (which ones
-  is _to check_).
+- The kernels compiled for the GPU generations Modal rents: 7.5 (T4),
+  8.0 (A100), 8.6 (A10G), 8.9 (L4, L40S) and 9.0 (H100, H200), with
+  9.0's PTX for newer ones, which the driver compiles on first load.
 - The parity test gains a CUDA case, its vectors against the CPU's by
   cosine as Metal's are today, run on a Modal GPU, since CI has none.
 
-NVIDIA's runtime libraries are not open source; what their license lets
-us ship inside the module, and what the release's notices must say, is
-_to check_ before the module is published (`AGENTS.md` § "License: MIT,
-and what may come in"). The runtime's CUDA overlay already ships
-node-llama-cpp's CUDA build; what that one carries of NVIDIA's is the
-first thing to read.
+NVIDIA's libraries are not open source. With cuBLAS on the host, the
+module carries only the CUDA runtime, which NVIDIA's license lists as
+redistributable; what the release's notices must say for it is _to
+check_ before the module is published (`AGENTS.md` § "License: MIT, and
+what may come in").
 
 ## How the step drives Modal
 
