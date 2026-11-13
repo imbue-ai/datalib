@@ -191,9 +191,9 @@ cc_library(
             "-lm",
             "-l:libgcc.a",
             # For libggml-cuda.so, which takes ggml from the program
-            # that loads it (below).
-            "-Wl,--export-dynamic-symbol=ggml_*",
-            "-Wl,--export-dynamic-symbol=gguf_*",
+            # that loads it (below). A list, not --export-dynamic-symbol:
+            # gold, which links the gnu builds, takes no glob there.
+            "-Wl,--dynamic-list=$(execpath @@//third-party/llama_cpp:ggml_exports.dynlist)",
         ],
         "@platforms//os:macos": [
             "-framework",
@@ -205,6 +205,7 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+    additional_linker_inputs = ["@@//third-party/llama_cpp:ggml_exports.dynlist"],
     visibility = ["//visibility:public"],
     # Whole, so a part of ggml that only libggml-cuda.so calls is still
     # there to export.

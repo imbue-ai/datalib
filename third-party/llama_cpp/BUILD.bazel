@@ -1,5 +1,6 @@
 # Built by llama_cpp.BUILD; see README.md.
 exports_files([
     "embed_metal.py",
+    "ggml_exports.dynlist",
     "llama_cpp.BUILD",
 ])
