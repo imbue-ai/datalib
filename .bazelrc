@@ -322,6 +322,11 @@ build:remote --jobs=80
 build:musl-x86_64 --platforms=//platforms:linux_x86_64_musl
 build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
 
+# llama.cpp's CUDA backend (`@llama_cpp//:ggml_cuda_so`, Linux x86_64):
+# the CUDA runtime linked into the module statically, so the module asks
+# the host for the driver alone. `.github/workflows/cuda.yml` builds it.
+build:cuda --@rules_cuda//cuda:runtime=@cuda//:cuda_runtime_static
+
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
 # BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an
 # `import %workspace%/.bazelrc` line followed by `build --config=buildbuddy`

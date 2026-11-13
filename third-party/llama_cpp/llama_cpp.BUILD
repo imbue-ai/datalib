@@ -9,6 +9,8 @@
 # second download), and the tools under common/ and tools/.
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 
 GGML_VERSION = "0.19.0"
 
@@ -222,6 +224,179 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [":ggml"],
+)
+
+# The CUDA backend, as upstream's GGML_BACKEND_DL build makes it: ggml's
+# core as a shared library, libggml-base.so, and the backend as a module,
+# libggml-cuda.so, that links it and that a program loads with
+# ggml_backend_load when there is a GPU (docs/dev/plans/embed_on_modal.md).
+# The CUDA runtime and cuBLAS are linked into the module statically, so it
+# needs only the driver's libcuda.so.1 from the host. Linux x86_64 only;
+# nothing outside this file depends on these yet.
+
+GGML_BASE_SRCS = [
+    "ggml/src/ggml.c",
+    "ggml/src/ggml.cpp",
+    "ggml/src/ggml-alloc.c",
+    "ggml/src/ggml-backend.cpp",
+    "ggml/src/ggml-backend-meta.cpp",
+    "ggml/src/ggml-opt.cpp",
+    "ggml/src/ggml-threading.cpp",
+    "ggml/src/ggml-quants.c",
+    "ggml/src/gguf.cpp",
+]
+
+LINUX_X86_64 = [
+    "@platforms//os:linux",
+    "@platforms//cpu:x86_64",
+]
+
+cc_library(
+    name = "ggml_base_objs",
+    # ggml-quants.c includes ggml-cpu/ggml-cpu-impl.h.
+    srcs = GGML_BASE_SRCS + glob([
+        "ggml/src/*.h",
+        "ggml/src/ggml-cpu/*.h",
+    ]),
+    hdrs = glob(["ggml/include/*.h"]),
+    conlyopts = ["-std=gnu11"],
+    copts = COMMON_COPTS + [
+        "-DGGML_VERSION=\\\"" + GGML_VERSION + "\\\"",
+        "-DGGML_COMMIT=\\\"" + LLAMA_RELEASE + "\\\"",
+        "-DGGML_BUILD",
+        "-DGGML_SHARED",
+    ],
+    cxxopts = ["-std=c++17"],
+    defines = ["GGML_BACKEND_DL"],
+    includes = [
+        "ggml/include",
+        "ggml/src",
+    ],
+    linkopts = [
+        "-lpthread",
+        "-lm",
+    ],
+    target_compatible_with = LINUX_X86_64,
+    alwayslink = True,
+)
+
+cc_shared_library(
+    name = "ggml_base_so",
+    shared_lib_name = "libggml-base.so",
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+    deps = [":ggml_base_objs"],
+)
+
+# The four fattn-vec instances upstream builds without GGML_CUDA_FA_ALL_QUANTS.
+GGML_CUDA_SRCS = glob(
+    [
+        "ggml/src/ggml-cuda/*.cu",
+        "ggml/src/ggml-cuda/template-instances/fattn-tile*.cu",
+        "ggml/src/ggml-cuda/template-instances/fattn-mma*.cu",
+        "ggml/src/ggml-cuda/template-instances/mmq*.cu",
+        "ggml/src/ggml-cuda/template-instances/mmf*.cu",
+    ],
+) + [
+    "ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-f16.cu",
+    "ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q4_0-q4_0.cu",
+    "ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-q8_0.cu",
+    "ggml/src/ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu",
+]
+
+cuda_library(
+    name = "ggml_cuda_objs",
+    srcs = GGML_CUDA_SRCS,
+    hdrs = glob([
+        "ggml/src/ggml-cuda/**/*.cuh",
+        "ggml/src/ggml-cuda/vendors/*.h",
+        "ggml/src/*.h",
+        "ggml/include/*.h",
+    ]),
+    # The GPUs Modal rents: T4 (7.5), A100 (8.0), A10G (8.6), L4 and L40S
+    # (8.9), H100 and H200 (9.0); 9.0's PTX too, which a newer GPU (B200)
+    # compiles when it loads the module.
+    archs = [
+        "compute_75:sm_75",
+        "compute_80:sm_80,sm_86,sm_89",
+        "compute_90:compute_90,sm_90",
+    ],
+    copts = [
+        "-use_fast_math",
+        "-extended-lambda",
+        "-compress-mode=size",
+    ],
+    host_copts = [
+        "-O3",
+        "-fPIC",
+        "-w",
+    ],
+    includes = [
+        "ggml/include",
+        "ggml/src",
+        "ggml/src/ggml-cuda",
+    ],
+    local_defines = [
+        "NDEBUG",
+        "GGML_BACKEND_DL",
+        "GGML_BACKEND_BUILD",
+        "GGML_BACKEND_SHARED",
+        "GGML_SHARED",
+        "GGML_CUDA_PEER_MAX_BATCH_SIZE=128",
+        "GGML_CUDA_USE_GRAPHS",
+    ],
+    target_compatible_with = LINUX_X86_64,
+    alwayslink = True,
+    deps = [
+        ":cublas_static",
+        "@cuda//:cuda",
+    ],
+)
+
+# cuBLAS's static archives, picked by name out of the component's files.
+genrule(
+    name = "cublas_static_archives",
+    srcs = ["@cuda//:cublas_all_files"],
+    outs = [
+        "libcublas_static.a",
+        "libcublasLt_static.a",
+    ],
+    cmd = """
+for f in $(SRCS); do
+  case "$$f" in
+    */libcublas_static.a) cp "$$f" $(location libcublas_static.a) ;;
+    */libcublasLt_static.a) cp "$$f" $(location libcublasLt_static.a) ;;
+  esac
+done
+""",
+    target_compatible_with = LINUX_X86_64,
+)
+
+cc_library(
+    name = "cublas_static",
+    srcs = [
+        "libcublas_static.a",
+        "libcublasLt_static.a",
+    ],
+    linkopts = [
+        "-ldl",
+        "-lpthread",
+        "-lrt",
+    ],
+    target_compatible_with = LINUX_X86_64,
+    deps = [
+        "@cuda//:cublas_headers",
+        "@cuda//:culibos_a",
+    ],
+)
+
+cc_shared_library(
+    name = "ggml_cuda_so",
+    dynamic_deps = [":ggml_base_so"],
+    shared_lib_name = "libggml-cuda.so",
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+    deps = [":ggml_cuda_objs"],
 )
 
 exports_files([

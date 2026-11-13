@@ -83,6 +83,28 @@ http_archive(
     build_file = "//third-party/llama_cpp:llama_cpp.BUILD",
 )
 
+# NVIDIA's CUDA toolkit for llama.cpp's CUDA backend on Linux x86_64
+# (docs/dev/plans/embed_on_modal.md). NVIDIA's redistributable manifest,
+# pinned by its sha256, names every component's archive and hash; only
+# the four ggml-cuda needs are fetched, and only when a CUDA target builds.
+bazel_dep(name = "rules_cuda", version = "0.4.0")
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+cuda.redist_json(
+    name = "cuda_redist",
+    components = [
+        "cccl",
+        "cublas",
+        "cudart",
+        "nvcc",
+    ],
+    platforms = ["linux-x86_64"],
+    sha256 = "8335301010b0023ee1ff61eb11e2600ca62002d76780de4089011ad77e0c7630",
+    version = "12.9.1",
+)
+cuda.toolkit(name = "cuda")
+use_repo(cuda, "cuda")
+
 # The autoconf source tarball, for its pre-generated `shell.c` — the
 # sqlite3-shell entry point that `//third-party/doltlite:doltlite`
 # links against the amalgamation to get a CLI for tests.
