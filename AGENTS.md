@@ -276,7 +276,8 @@ datalib/
                    so qmd never fetches one itself. Linked by the step
                    and the applet.
     search_index/  the search index that replaces qmd's storage: keyword
-                   rows per message, chunks keyed by their prompt's hash,
+                   rows per message and chunks keyed by their prompt's
+                   hash, in `search_*` tables of the grid index's file,
                    and the inference cache of vectors, holding no text
                    (docs/dev/plans/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp

@@ -63,13 +63,30 @@ impl Held {
 }
 
 impl Reader {
-    /// `None` when no step has written the index yet. A missing cache reads
-    /// as one holding no vectors.
+    /// `None` when no step has written the index yet: no file, or a grid
+    /// index's file without the index's tables. A missing cache reads as
+    /// one holding no vectors.
     pub async fn open(index: &Path, cache: &Path) -> Result<Option<Reader>> {
         if !index.exists() {
             return Ok(None);
         }
         let index = connect(index).await?;
+        let written: Result<Option<i64>, sqlx::Error> = sqlx::query_scalar(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_state'",
+        )
+        .fetch_optional(&index)
+        .await;
+        match written {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                index.close().await;
+                return Ok(None);
+            }
+            Err(e) => {
+                index.close().await;
+                return Err(e).context("look for the search index's tables");
+            }
+        }
         let cache = if cache.exists() {
             Some(connect(cache).await?)
         } else {
@@ -85,6 +102,14 @@ impl Reader {
         }
     }
 
+    /// Raised by every write that changes what the index holds.
+    pub async fn generation(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT generation FROM search_state WHERE id = 1")
+            .fetch_one(&self.index)
+            .await
+            .context("read the search index's generation")
+    }
+
     /// The documents whose best message holds `query`, an FTS5 query, of
     /// `sources` and `among` (all when `None`), best first by that
     /// message's BM25, at most `limit`, each with that message.
@@ -97,11 +122,11 @@ impl Reader {
     ) -> Result<Vec<MessageHit>> {
         let rows: Vec<(String, i64, i64, f64)> = sqlx::query_as(
             "WITH m AS MATERIALIZED ( \
-                 SELECT rowid AS section_id, -bm25(sections_fts, 2.0, 1.0) AS score \
-                   FROM sections_fts WHERE sections_fts MATCH ?1) \
+                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
+                   FROM search_fts WHERE search_fts MATCH ?1) \
              SELECT d.markdown_uuid, s.start_byte, s.end_byte, m.score \
-               FROM m JOIN sections s ON s.section_id = m.section_id \
-               JOIN documents d ON d.doc_id = s.doc_id \
+               FROM m JOIN search_sections s ON s.section_id = m.section_id \
+               JOIN search_documents d ON d.doc_id = s.doc_id \
               WHERE (NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3))) \
                 AND (NOT ?4 OR d.markdown_uuid IN (SELECT value FROM json_each(?5))) \
               ORDER BY m.score DESC LIMIT ?6",
@@ -139,19 +164,19 @@ impl Reader {
         }
         let mut tx = self.index.begin().await?;
         let docs: Vec<(i64, String, String)> = sqlx::query_as(
-            "SELECT doc_id, markdown_uuid, source_id FROM documents ORDER BY doc_id",
+            "SELECT doc_id, markdown_uuid, source_id FROM search_documents ORDER BY doc_id",
         )
         .fetch_all(&mut *tx)
         .await
         .context("read the indexed documents")?;
         let sections: Vec<(i64, i64, Option<String>)> =
-            sqlx::query_as("SELECT doc_id, seq, uuid FROM sections ORDER BY doc_id, seq")
+            sqlx::query_as("SELECT doc_id, seq, uuid FROM search_sections ORDER BY doc_id, seq")
                 .fetch_all(&mut *tx)
                 .await
                 .context("read the indexed sections")?;
         let chunks: Vec<(i64, i64, i64, i64, i64, String)> = sqlx::query_as(
             "SELECT doc_id, start_byte, end_byte, first_section, last_section, hash \
-               FROM chunks ORDER BY doc_id, seq",
+               FROM search_chunks ORDER BY doc_id, seq",
         )
         .fetch_all(&mut *tx)
         .await

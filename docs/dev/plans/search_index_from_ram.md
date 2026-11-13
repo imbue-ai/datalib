@@ -1,9 +1,10 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 to 5, 7 and 8 of "Order of work"
-are built (`//datalib/backend/search_index`, `//datalib/backend/embedder`);
-search reads the new index only where the search applet's entry sets
-`DATALIB_SEARCH_READS = "search_index"`. Steps 6 and 9 are not built.** Numbers were
+**Status: proposal (2026-11-11). Steps 1 to 8 of "Order of work" are
+built (`//datalib/backend/search_index`, `//datalib/backend/embedder`);
+the index's tables are in the grid index's file, and search reads them
+only where the search applet's entry sets
+`DATALIB_SEARCH_READS = "search_index"`. Step 9 is not built.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
@@ -57,10 +58,10 @@ the `data-section-uuid` the hit falls in.
 
 ## The index
 
-A new crate, `search_index`, owns its tables in one plain SQLite file in
-WAL mode: built in a file of its own, and moving into the grid index's
-("One file with the grid index", below). Not doltlite; rebuilt from the
-render stores whenever it is lost.
+A new crate, `search_index`, owns its tables in the grid index's file,
+plain SQLite in WAL mode ("One file with the grid index", below), each
+named `search_…`. Not doltlite; rebuilt from the render stores whenever
+it is lost.
 Its input is a value, never a path:
 
 ```rust
@@ -79,23 +80,26 @@ pub struct IndexSection {
 
 Tables (no document text anywhere):
 
-- `documents(doc_id INTEGER PRIMARY KEY, source_id, markdown_uuid UNIQUE,
-  content_hash)`.
-- `sections(section_id INTEGER PRIMARY KEY, doc_id, seq, uuid, start_byte,
-  end_byte)`: each message's place in its document. The title is indexed
-  once, on the first section's row.
-- `sections_fts`: FTS5 with `content=''` and `contentless_delete=1`,
+- `search_documents(doc_id INTEGER PRIMARY KEY, source_id, markdown_uuid
+  UNIQUE, content_hash)`.
+- `search_sections(section_id INTEGER PRIMARY KEY, doc_id, seq, uuid,
+  start_byte, end_byte)`: each message's place in its document. The
+  title is indexed once, on the first section's row.
+- `search_fts`: FTS5 with `content=''` and `contentless_delete=1`,
   columns `title, body`, rowid = `section_id`, one row per message. A
   contentless table keeps the inverted index and drops the stored copy;
   `bm25()` still works on it, `snippet()` and `highlight()` do not, and we
   use neither. `fts_facts_test` holds each fact on the SQLite we link,
   doltlite 0.51.3's.
-- `chunks(doc_id, seq, start_byte, end_byte, first_section,
-  last_section, hash)`: what each embedded chunk covers.
-- `chunks.hash`: the hash of the prompt each chunk is embedded as. The
-  vectors are in the inference cache, below.
+- `search_chunks(doc_id, seq, start_byte, end_byte, first_section,
+  last_section, hash)`: what each embedded chunk covers; `hash` is the
+  hash of the prompt it is embedded as. The vectors are in the inference
+  cache, below.
+- `search_state(generation)`: raised by every write that changes what
+  the index holds, so search knows to read its vectors again without
+  watching a file the grid index writes far more often.
 
-A file in another shape is emptied under the write lock, so two steps
+Tables in another shape are emptied under the write lock, so two steps
 opening an old index together empty it once.
 
 A document with no messages (a Notion page, a calendar event) is one
@@ -122,7 +126,7 @@ A chunk is whole messages packed up to 3,600 bytes, qmd's 900 tokens at
 its four characters a token; only a message longer than that is cut
 inside itself, at the last paragraph, line, sentence or word break, and
 its pieces overlap by 540 bytes (qmd's 15%). Whole messages need no
-overlap. A hit then names its messages from `chunks`; `land` still reads
+overlap. A hit then names its messages from `search_chunks`; `land` still reads
 the file, to quote the hit, and lands it within the chunk's bytes.
 
 **A heading starts a chunk.** Packing never carries a chunk across a
@@ -134,7 +138,7 @@ every cut after it.
 ### The inference cache
 
 A vector is the model's answer to one exact string, so it is cached
-under that: `chunks.hash` is the blake3 of the prompt the chunk is
+under that: `search_chunks.hash` is the blake3 of the prompt the chunk is
 embedded as (`prompt::document`: qmd's frame, the title, the chunk's
 text), and the vector is kept in the **inference cache** under
 `(model, hash)` (`cache.rs`, its own file). Embedding a source asks the
@@ -145,7 +149,7 @@ different model, or a change to the prompt, misses the cache rather than
 reading a vector made another way, and needs no invalidation. A sweep,
 once the index names every chunk it holds, deletes what no chunk names
 and every other model's entries. The cache joins nothing; search joins
-from `chunks` to it. Kept in a file of its own, it survives the index
+from `search_chunks` to it. Kept in a file of its own, it survives the index
 being emptied for a change of shape, and the grid index being rebuilt.
 
 What that saves:
@@ -173,7 +177,7 @@ from a render in memory instead.
 
 **What is owed is a query.** The step compares `(markdown_uuid,
 content_hash)` from the source's render store with the index's
-`documents`: new or changed documents are indexed, gone ones deleted.
+`search_documents`: new or changed documents are indexed, gone ones deleted.
 `markdowns` gains a `content_hash` column, computed in render where the
 text already is; a re-render fills it.
 
@@ -262,52 +266,6 @@ on a mac), and `a_mac_runs_the_model_on_metal` holds it there.
 exit that no model is still loaded and aborts the process if one is, so
 an embedder must never live in a static, including the search applet's
 long-lived query embedder.
-
-**Each piece is tested against qmd itself**, from the vendored source
-(`third-party/qmd`) and the pinned runtime, driven by a script in the
-test:
-
-- the prompt format, query and document, string for string with qmd's
-  `formatQueryForEmbedding` and `formatDocForEmbedding`;
-- the tokenizer's token count for a set of texts, against
-  node-llama-cpp's;
-- the vectors: on the fixture's chunks, every one within cosine 0.999 of
-  what qmd's `embed` writes for the same text;
-- the long-section cut, against `chunkDocument` on the same text with
-  the same budget, where the break rules are meant to agree.
-
-**Built: `datalib/backend/embedder`**, a C shim over
-`llama.h` (`csrc/embedder.cpp`) and a Rust crate over it, with llama.cpp
-built by `third-party/llama_cpp/llama_cpp.BUILD`. `parity_test` runs
-qmd's own `formatDocForEmbedding`, `formatQueryForEmbedding`, tokenizer
-and `embed` through the pinned node and package, on made-up texts, and
-finds the prompts equal string for string, the tokens equal (ours add
-BOS and EOS where node-llama-cpp adds them after tokenizing), and the
-vectors equal to a cosine above 0.9999 on the CPU and above 0.999
-between our Metal and qmd's.
-
-**qmd embedded every input over 512 tokens wrongly**, a known defect
-upstream (tobi/qmd#897, with the fix in tobi/qmd#993, both open). node-llama-cpp
-gives an embedding context a batch of at most 512 tokens unless told
-otherwise (`getDefaultContextBatchSize`), qmd does not tell it, and
-llama.cpp then evaluates a longer input in 512-token pieces and pools
-only the last piece. embeddinggemma attends both ways, so the earlier
-tokens never see the later ones and the vector stands for the input's
-tail. qmd's chunks are up to 900 tokens, so most of its long chunks were
-embedded so. Ours takes the whole input in one batch; on a 761-token
-input the two agree to a cosine of 0.84, and evaluated in qmd's pieces
-ours reproduces qmd's to 0.9999
-(`qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only`). The
-re-embed the upgrade does anyway fixes them. One commenter on #897
-checked the whole-input vector against Google's own sentence-transformers
-reference and found them equal to a cosine of 1.0000.
-
-**Rate on the CPU is too low; Metal is next.** 761-token inputs embed at
-2.5 a second on an M4's 10 cores (`measure_rate`, an ignored test),
-against qmd's ~12 a second with Metal. ggml's Metal backend
-(`ggml/src/ggml-metal`, with its shader library embedded in the binary)
-goes into the same build, used where the machine has it and checked
-against the CPU's vectors by the same tests.
 
 ### Search moving over
 
@@ -401,24 +359,33 @@ through the exact path, a join to `grid_rows` and `vec1_l2_distance`
 over what it keeps.
 
 The keyword rows key on the message: the section's uuid is its
-`grid_rows.uuid`, so `sections_fts` joins straight to the row it lands
+`grid_rows.uuid`, so `search_fts` joins straight to the row it lands
 on.
 
-Two things in the grid index change to make room:
+Built, with two changes to the grid index to make room:
 
-- **A change of shape drops the grid's own tables, not the file.**
-  Today an index written in another shape is deleted and rebuilt, which
-  costs one local read of the render stores, and would now also cost
-  every source's keyword index. Each owner checks its own schema hash
-  (`_datalib_meta` per owner, or one row per owner) and empties only its
-  tables, as `search_index` already does under the write lock. The
-  vectors are not at risk either way: they are in the cache's file.
+- **A change of shape drops the owner's own tables, not the file.** An
+  index written in another shape used to be deleted and rebuilt, which
+  would now also cost every source's keyword index. The grid records its
+  shape in the file's `_datalib_meta` as before; the search index under
+  its own key there (`search_index_schema_hash`,
+  `datalib_store_meta::part_schema_hash_in`). Each empties only its own
+  tables: the search index the `search_…` ones, the grid every other.
+  The vectors are not at risk either way: they are in the cache's file.
 - **Several writers share it.** `grid_index` writes it in one
-  transaction per source; each source's `keyword_index` and `embed`
-  steps write their own batches. WAL serializes them, so a batch of
-  keyword rows waits while `grid_index` loads a large source. Measure
-  that wait on a real root before relying on it; the embed step's writes
-  go to the cache's file and wait on nothing.
+  transaction per source; each source's `keyword_index` writes batches
+  of 200 documents, and removes in batches of 500. Every write
+  transaction begins `IMMEDIATE`, so each waits for the other's lock
+  rather than failing when the other commits between its read and its
+  write. Measured on `stay_alive_1`'s run store (2026-11-13), an
+  ordinary sync's `grid_index` holds the file at most 35 s for one
+  source; one that loads a large source whole holds it many minutes, so
+  the search index waits up to an hour and the grid five minutes. The
+  embed step's writes go to the cache's file and wait on nothing.
+- **The old file goes.** A `keyword_index` or the aggregator deletes
+  `search_index/index.sqlite` where an earlier build left it, and the
+  first `keyword_index` of each source fills the new tables; the cache
+  stays where it was.
 
 ## Forward path for existing data
 
@@ -448,8 +415,8 @@ that matched. Meaning search fills back in over the first day.
 4. Built: `markdowns.content_hash` in the render store.
 5. Built: the inference cache, chunks keyed by their prompt's hash, and
    a heading starts a chunk.
-6. The search tables move into the grid index's file; each owner empties
-   only its own tables on a change of shape.
+6. Built: the search tables move into the grid index's file; each owner
+   empties only its own tables on a change of shape.
 7. Built, beside qmd's: `keyword_index` writes the new index after qmd's
    update; `embed` fills the inference cache after qmd's embed, only
    where the config sets `embed_search_index` (off by default, since

@@ -29,9 +29,14 @@ pub struct InferenceCache {
 
 impl InferenceCache {
     pub async fn open(path: &Path) -> Result<InferenceCache> {
-        let pool = crate::file::open(path, &DDL, StoreKind::InferenceCache)
-            .await
-            .with_context(|| format!("open the inference cache at {}", path.display()))?;
+        let pool = crate::file::open(
+            path,
+            &DDL,
+            crate::file::Owns::File(StoreKind::InferenceCache),
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .with_context(|| format!("open the inference cache at {}", path.display()))?;
         Ok(InferenceCache { pool })
     }
 

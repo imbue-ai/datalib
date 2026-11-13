@@ -337,7 +337,9 @@ impl QmdIndexReader {
 /// What the qmd index files look like on disk: the size and modification
 /// time of `index.sqlite` and of its write-ahead log. qmd writes in WAL
 /// mode, so a commit grows the log and a checkpoint rewrites the main
-/// file; either moves this. A missing file reads as `None`.
+/// file; either moves this. A missing file reads as `None`, and so does
+/// an empty log: it holds nothing, and a reader that opens the file makes
+/// one, which would otherwise read as the index moving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexStamp([Option<(u64, std::time::SystemTime)>; 2]);
 
@@ -349,7 +351,8 @@ impl IndexStamp {
         };
         let mut wal = index.as_os_str().to_owned();
         wal.push("-wal");
-        Self([stamp(index), stamp(Path::new(&wal))])
+        let log = stamp(Path::new(&wal)).filter(|(len, _)| *len > 0);
+        Self([stamp(index), log])
     }
 
     /// When the index or its write-ahead log last changed; `None` when

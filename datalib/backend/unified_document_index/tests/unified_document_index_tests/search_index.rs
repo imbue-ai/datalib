@@ -29,7 +29,7 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
 
 /// Indexes `docs` and caches `vector` for each one's single chunk.
 async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
-    let index = Index::open(&layout::search_index_db(root)).await.unwrap();
+    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     let only: Vec<IndexDoc> = docs.iter().map(|(d, _)| d.clone()).collect();
     index.put(&only).await.unwrap();
     index.close().await;
@@ -144,4 +144,45 @@ async fn held_vectors_are_read_again_when_the_index_moves() {
     .await;
     assert_eq!(ask(Freshness::AsHeld).await.unwrap().unwrap().len(), 1);
     assert_eq!(ask(Freshness::Current).await.unwrap().unwrap().len(), 2);
+}
+
+/// The index shares the grid index's file, which the grid writes far more
+/// often than the index moves, and reading every vector again takes
+/// seconds on a real root. What is held follows the index's generation:
+/// a write to the file that leaves the generation alone, as the grid's
+/// do, is not read.
+#[tokio::test]
+async fn held_vectors_follow_the_index_not_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        root,
+        &[(doc("mail", "first", &[("a", "one")]), [1.0, 0.0, 0.0])],
+    )
+    .await;
+    let held = HeldVectors::default();
+    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10, Freshness::Current);
+    assert_eq!(ask().await.unwrap().unwrap().len(), 1);
+
+    let grid = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(layout::grid_index_db(root)),
+        )
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE grid_rows (uuid TEXT)",
+        "DELETE FROM search_chunks",
+    ] {
+        sqlx::query(sql).execute(&grid).await.unwrap();
+    }
+    grid.close().await;
+    assert_eq!(
+        ask().await.unwrap().unwrap().len(),
+        1,
+        "read again though the generation did not move"
+    );
 }
