@@ -105,17 +105,8 @@ cuda.redist_json(
 cuda.toolkit(name = "cuda")
 use_repo(cuda, "cuda")
 
-# Two more tools from the same manifest, which rules_cuda does not know:
-# nvprune cuts cuBLAS's archives down to the GPUs the module is built for,
-# and cuobjdump reports what GPU code the module holds.
-http_archive(
-    name = "cuda_nvprune",
-    build_file_content = 'exports_files(["bin/nvprune"])',
-    sha256 = "a06f0e2959a4dd3dbb62a984dbe77b813397022596f5c62d74ddd83b238571f2",
-    strip_prefix = "cuda_nvprune-linux-x86_64-12.9.82-archive",
-    urls = ["https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvprune/linux-x86_64/cuda_nvprune-linux-x86_64-12.9.82-archive.tar.xz"],
-)
-
+# cuobjdump, from the same manifest but unknown to rules_cuda, reports
+# what GPU code the module holds (.github/workflows/cuda.yml).
 http_archive(
     name = "cuda_cuobjdump",
     build_file_content = 'exports_files(["bin/cuobjdump"])',
