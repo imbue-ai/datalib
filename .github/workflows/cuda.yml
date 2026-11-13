@@ -42,6 +42,25 @@ jobs:
           ls -la "$RUNNER_TEMP/cuda"
           readelf -d "$RUNNER_TEMP/cuda/libggml-cuda.so" | grep NEEDED
 
+      # What the module's bytes are: each ELF section, the GPU code per GPU
+      # model (uncompressed, so it sums past the file), and the file
+      # stripped of host symbols.
+      - name: measure
+        run: |
+          so="$RUNNER_TEMP/cuda/libggml-cuda.so"
+          size -A -d "$so" | sort -k2 -n -r | head -n 12
+          bazelisk build --config=cuda @cuda_cuobjdump//:bin/cuobjdump
+          cuobjdump="$(bazelisk info output_base)/external/+http_archive+cuda_cuobjdump/bin/cuobjdump"
+          mkdir -p "$RUNNER_TEMP/elf" && cd "$RUNNER_TEMP/elf"
+          "$cuobjdump" -xelf all "$so" > /dev/null
+          "$cuobjdump" -xptx all "$so" > /dev/null || true
+          for f in *; do
+            arch=$(printf '%s\n' "$f" | grep -oE 'sm_[0-9]+|compute_[0-9]+' | head -n 1 || true)
+            echo "${arch:-unknown} $(wc -c < "$f")"
+          done | awk '{n[$1]++; b[$1]+=$2} END {for (a in b) printf "%-12s %5d files %8.1f MB\n", a, n[a], b[a]/1e6}' | sort
+          strip --strip-unneeded -o "$RUNNER_TEMP/stripped.so" "$so"
+          ls -la "$so" "$RUNNER_TEMP/stripped.so"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ggml-cuda-linux-x86_64

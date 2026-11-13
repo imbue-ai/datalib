@@ -353,7 +353,9 @@ cuda_library(
     ],
 )
 
-# cuBLAS's static archives, picked by name out of the component's files.
+# cuBLAS's static archives, picked by name out of the component's files
+# and cut by nvprune to the GPUs `ggml_cuda_objs` is built for. NVIDIA
+# ships code for every GPU it supports, which left the module at 939 MB.
 genrule(
     name = "cublas_static_archives",
     srcs = ["@cuda//:cublas_all_files"],
@@ -362,14 +364,26 @@ genrule(
         "libcublasLt_static.a",
     ],
     cmd = """
+prune() {
+  $(execpath @cuda_nvprune//:bin/nvprune) \
+    -gencode arch=compute_75,code=sm_75 \
+    -gencode arch=compute_80,code=sm_80 \
+    -gencode arch=compute_86,code=sm_86 \
+    -gencode arch=compute_89,code=sm_89 \
+    -gencode arch=compute_90,code=sm_90 \
+    -gencode arch=compute_90,code=compute_90 \
+    -o "$$2" "$$1"
+  echo "nvprune $$(basename "$$1"): $$(wc -c < "$$1") -> $$(wc -c < "$$2") bytes" >&2
+}
 for f in $(SRCS); do
   case "$$f" in
-    */libcublas_static.a) cp "$$f" $(location libcublas_static.a) ;;
-    */libcublasLt_static.a) cp "$$f" $(location libcublasLt_static.a) ;;
+    */libcublas_static.a) prune "$$f" $(location libcublas_static.a) ;;
+    */libcublasLt_static.a) prune "$$f" $(location libcublasLt_static.a) ;;
   esac
 done
 """,
     target_compatible_with = LINUX_X86_64,
+    tools = ["@cuda_nvprune//:bin/nvprune"],
 )
 
 cc_library(
