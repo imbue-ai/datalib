@@ -3,17 +3,23 @@
 //! record, with the document it belongs to as a link. The Manage
 //! screen's errors/warnings cell opens this, filtered to one source. It
 //! reads the way `/search` does: a page at a time, in any order, and
-//! grouped on the server (`/problems/groups`).
+//! grouped on the server (`/problems/groups`). A row a person muted is
+//! still listed, marked, and `muted:` keeps or leaves out those
+//! (`mutes.rs`).
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use std::collections::HashMap;
+
 use datalib_columns::{
-    Chip, ChipKind, ColumnSpec, ColumnType, DocumentLink, Identity, RowsSpec, ValueSuggestion,
+    Chip, ChipKind, ColumnSearch, ColumnSpec, ColumnType, DocumentLink, Identity, KeyValues,
+    RowsSpec, SearchKeySpec, ValueSuggestion,
 };
+use datalib_problem_mutes::MuteRow;
 use datalib_problems::{Outcome, ProblemRow, ProblemRowColumn, ScopeKind, Severity};
 use datalib_unified_document_index::group::Within;
-use datalib_unified_document_index::problems::{ProblemColumn, ProblemsQuery};
+use datalib_unified_document_index::problems::{Ids, ProblemColumn, ProblemsQuery};
 use datalib_unified_document_index::repo::LocatedProblem;
 use datalib_unified_document_index::sort::Sort;
 use datalib_unified_document_index::view;
@@ -23,6 +29,7 @@ use super::columns::{
     counted, document_identity, free_text_of, keys_of, searchable, value_source, words_holding,
     Sources, ValueSource, ValuesParams,
 };
+use super::mutes::{self, MutedFilter};
 use super::{grouping, results, Index};
 
 /// As `/search` takes them.
@@ -74,10 +81,14 @@ pub struct ProblemView {
     pub first_seen_at_utc: String,
     pub changed_at_utc: String,
     pub render_version: Option<i64>,
+    /// `yes` or `no`, the value `muted:` names.
+    pub muted: &'static str,
+    /// A muted row's chip, who muted it and when on hover; empty for the rest.
+    pub muted_chip: Vec<Chip>,
 }
 
 impl ProblemView {
-    fn of(located: LocatedProblem, sources: &Sources) -> Self {
+    fn of(located: LocatedProblem, sources: &Sources, mutes: &HashMap<String, MuteRow>) -> Self {
         let LocatedProblem {
             row,
             markdown_uuid,
@@ -112,7 +123,10 @@ impl ProblemView {
         let document_ref = markdown_uuid
             .as_deref()
             .map(|doc| document_identity(doc, document_title.as_deref(), &source_ref));
+        let mute = mutes.get(&row.problem_uuid);
         ProblemView {
+            muted: if mute.is_some() { "yes" } else { "no" },
+            muted_chip: mute.map(mutes::chip).into_iter().collect(),
             problem_uuid: row.problem_uuid,
             severity: row.severity.as_str(),
             severity_chip: vec![chip],
@@ -180,11 +194,14 @@ pub struct DocProblem {
     /// as a row; a dropped record has no section to jump to.
     pub item_uuid: Option<String>,
     pub first_seen_at_utc: String,
+    /// A person muted it: still listed, and counted nowhere.
+    pub muted: bool,
 }
 
 impl DocProblem {
-    pub fn of(row: ProblemRow) -> Self {
+    pub fn of(row: ProblemRow, muted: bool) -> Self {
         DocProblem {
+            muted,
             problem_uuid: row.problem_uuid,
             severity: row.severity.as_str(),
             stage: row.stage.as_str(),
@@ -226,7 +243,7 @@ pub fn rows_spec() -> RowsSpec {
 }
 
 pub fn columns() -> Vec<ColumnSpec> {
-    searchable::<ProblemColumn>(vec![
+    let mut columns = searchable::<ProblemColumn>(vec![
         ColumnSpec::new("severity_chip", "Severity", ColumnType::Chips)
             .describe(
                 "ERROR: something failed. WARN: something is missing or degraded for a reason \
@@ -288,7 +305,30 @@ pub fn columns() -> Vec<ColumnSpec> {
             .hidden(),
         ColumnSpec::new("render_version", "Render version", ColumnType::Count).hidden(),
         ColumnSpec::new("problem_uuid", "Problem id", ColumnType::Text).hidden(),
-    ])
+    ]);
+    // Third, beside what went wrong: a muted row is one a person has
+    // already seen. Not a column of the index, so its term is read in
+    // `mutes::split_muted` and the rows cannot be ordered by it.
+    columns.insert(
+        2,
+        ColumnSpec {
+            search: Some(ColumnSearch {
+                key: mutes::KEY.into(),
+                field: "muted".into(),
+                partial: false,
+            }),
+            ..ColumnSpec::new("muted_chip", "Muted", ColumnType::Chips)
+                .describe(
+                    "MUTED: someone has seen this and asked not to be told again. It stays here \
+                     and counts toward nothing (not the Dashboard's Needs you, not a source's \
+                     count) until it changes or is unmuted. Right-click rows to mute or unmute \
+                     them; muted:no leaves the muted ones out.",
+                )
+                .width(80)
+                .unsorted()
+        },
+    );
+    columns
 }
 
 #[derive(Debug, Serialize)]
@@ -297,6 +337,8 @@ pub struct Response {
     #[serde(flatten)]
     pub rows_spec: RowsSpec,
     pub rows: Vec<ProblemView>,
+    /// The rows can be muted: `POST /problems/mute`.
+    pub mutes: bool,
     /// How many problems the query matches, across every page.
     pub total: usize,
     /// Where the next page starts; `None` on the last.
@@ -314,18 +356,26 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
         columns: columns(),
         rows_spec: rows_spec(),
         rows: Vec::new(),
+        mutes: true,
         total: 0,
         next_offset: None,
         at: None,
         errors: Vec::new(),
     };
-    let query = ProblemsQuery::parse(p.q.as_deref().unwrap_or(""));
     // A term the search cannot read is the answer, not dropped: the rest
     // of the query alone would match more than was asked for.
-    if let Some(why) = query.refusal() {
-        out.errors.push(why);
-        return Json(out);
-    }
+    let (query, muted) = match read_query(p.q.as_deref().unwrap_or("")) {
+        Ok(read) => read,
+        Err(why) => {
+            out.errors.push(why);
+            return Json(out);
+        }
+    };
+    let mutes = match read_mutes(&s, muted, &mut out.errors).await {
+        Some(mutes) => mutes,
+        None => return Json(out),
+    };
+    let ids = mutes::ids_for(muted, &mutes);
     let sort = match p
         .sort
         .as_deref()
@@ -351,6 +401,7 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
         }
     };
     let spec = PageSpec {
+        ids: &ids,
         sort: &sort,
         within: &within,
         offset: p.offset.unwrap_or(0),
@@ -363,7 +414,7 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
             out.rows = page
                 .rows
                 .into_iter()
-                .map(|r| ProblemView::of(r, &sources))
+                .map(|r| ProblemView::of(r, &sources, &mutes))
                 .collect();
             out.total = page.total;
             out.next_offset = page.next_offset;
@@ -379,6 +430,7 @@ pub async fn handler(State(s): State<Index>, Query(p): Query<Params>) -> Json<Re
 }
 
 struct PageSpec<'a> {
+    ids: &'a Ids,
     sort: &'a [Sort<ProblemRowColumn>],
     within: &'a [Within<ProblemRowColumn>],
     offset: usize,
@@ -399,7 +451,7 @@ struct Page {
 async fn page(s: &Index, query: &ProblemsQuery, spec: PageSpec<'_>) -> Result<Page, String> {
     let listing = s
         .repo
-        .problem_keys(query, spec.sort, spec.within)
+        .problem_keys(query, spec.ids, spec.sort, spec.within)
         .await
         .map_err(|e| e.to_string())?;
     let list: Vec<results::Entry> = listing
@@ -450,8 +502,45 @@ pub struct GroupOut {
 }
 
 /// The keys the problems grid's search bar offers as a person types.
-pub async fn keys_handler() -> Json<Vec<datalib_columns::SearchKeySpec>> {
-    Json(keys_of::<ProblemRow>())
+pub async fn keys_handler() -> Json<Vec<SearchKeySpec>> {
+    let mut keys = keys_of::<ProblemRow>();
+    keys.push(SearchKeySpec {
+        key: mutes::KEY,
+        aliases: &[],
+        values: KeyValues::Words {
+            words: mutes::WORDS.to_vec(),
+        },
+        partial: false,
+    });
+    Json(keys)
+}
+
+/// The query with its `muted:` terms read out, or why it cannot be read.
+fn read_query(q: &str) -> Result<(ProblemsQuery, Option<MutedFilter>), String> {
+    let (rest, muted) = mutes::split_muted(q)?;
+    let query = ProblemsQuery::parse(&rest);
+    match query.refusal() {
+        Some(why) => Err(why),
+        None => Ok((query, muted)),
+    }
+}
+
+/// What is muted, or `None` when that could not be read and the answer
+/// depends on it. When only the marks do, the rows go out unmarked and
+/// `errors` says why.
+async fn read_mutes(
+    s: &Index,
+    muted: Option<MutedFilter>,
+    errors: &mut Vec<String>,
+) -> Option<HashMap<String, MuteRow>> {
+    match s.mutes.all().await {
+        Ok(mutes) => Some(mutes),
+        Err(e) => {
+            tracing::error!(error = %format!("{e:#}"), "could not read the mutes");
+            errors.push(format!("could not read which problems are muted: {e:#}"));
+            muted.is_none().then(HashMap::new)
+        }
+    }
 }
 
 /// `GET /problems/values?key=…&typed=…&q=…`: what the search bar
@@ -460,11 +549,15 @@ pub async fn values_handler(
     State(s): State<Index>,
     Query(p): Query<ValuesParams>,
 ) -> Result<Json<Vec<ValueSuggestion>>, (StatusCode, String)> {
+    if p.key == mutes::KEY {
+        return Ok(Json(words_holding(mutes::WORDS, &p.typed)));
+    }
+    let rest = mutes::split_muted(&p.q).map_or_else(|_| p.q.clone(), |(rest, _)| rest);
     let suggested = match value_source::<ProblemRow>(&p.key) {
         ValueSource::Words(words) => Ok(words_holding(&words, &p.typed)),
         ValueSource::Column(column) => s
             .repo
-            .problem_value_counts(&ProblemsQuery::parse(&p.q), column, &p.typed)
+            .problem_value_counts(&ProblemsQuery::parse(&rest), column, &p.typed)
             .await
             .map(counted),
         ValueSource::Nothing => Ok(Vec::new()),
@@ -484,11 +577,16 @@ pub async fn groups_handler(
     Query(p): Query<GroupParams>,
 ) -> Json<GroupsResponse> {
     let mut out = GroupsResponse::default();
-    let query = ProblemsQuery::parse(p.q.as_deref().unwrap_or(""));
-    if let Some(why) = query.refusal() {
-        out.errors.push(why);
+    let (query, muted) = match read_query(p.q.as_deref().unwrap_or("")) {
+        Ok(read) => read,
+        Err(why) => {
+            out.errors.push(why);
+            return Json(out);
+        }
+    };
+    let Some(mutes) = read_mutes(&s, muted, &mut out.errors).await else {
         return Json(out);
-    }
+    };
     let by = match grouping::parse_by::<ProblemColumn>(&p.by) {
         Ok(by) => by,
         Err(e) => {
@@ -496,7 +594,11 @@ pub async fn groups_handler(
             return Json(out);
         }
     };
-    match s.repo.problem_groups(&query, &by).await {
+    match s
+        .repo
+        .problem_groups(&query, &mutes::ids_for(muted, &mutes), &by)
+        .await
+    {
         Ok(grouping) => {
             let sources = Sources::read(&s.root);
             out.truncated = grouping.truncated;
@@ -507,7 +609,7 @@ pub async fn groups_handler(
                 .map(|g| GroupOut {
                     values: g.values,
                     count: g.count,
-                    sample: ProblemView::of(g.sample, &sources),
+                    sample: ProblemView::of(g.sample, &sources, &mutes),
                 })
                 .collect();
         }
@@ -745,6 +847,118 @@ mod tests {
         assert_eq!((groups[1].0.as_deref(), groups[1].1), (Some("warning"), 1));
     }
 
+    /// A muted row stays in the table, marked with who muted it, and
+    /// `muted:` keeps or leaves out the muted ones in the rows and in the
+    /// groups alike. Unmuted, it is a row like the rest again; a root
+    /// nobody muted anything in never gets the store.
+    #[tokio::test]
+    async fn a_muted_row_stays_marked_and_muted_terms_keep_or_leave_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let [warning, parse, worf] = three();
+        index_problems(tmp.path(), &[warning.clone(), parse.clone(), worf.clone()]).await;
+        let s = super::super::tests::index_over(tmp.path()).await;
+        let store = datalib_problem_mutes::store_path(tmp.path());
+
+        let all = ask(&s, q("")).await;
+        assert!(all.mutes);
+        assert!(all
+            .rows
+            .iter()
+            .all(|r| r.muted == "no" && r.muted_chip.is_empty()));
+        assert!(!store.exists(), "reading made the store");
+
+        let body = |ids: &[&ProblemRow], muted| mutes::MuteBody {
+            problem_uuids: ids.iter().map(|r| r.problem_uuid.clone()).collect(),
+            muted,
+            agent: None,
+        };
+        let _ = mutes::handler(State(s.clone()), Json(body(&[&parse, &worf], true)))
+            .await
+            .unwrap();
+        assert!(store.exists());
+
+        let all = ask(&s, q("")).await;
+        assert_eq!(all.total, 3, "a muted row is still a row");
+        let marked: Vec<&str> = all
+            .rows
+            .iter()
+            .filter(|r| r.muted == "yes")
+            .map(|r| r.problem_uuid.as_str())
+            .collect();
+        let mut want = [parse.problem_uuid.as_str(), worf.problem_uuid.as_str()];
+        want.sort();
+        let mut got = marked.clone();
+        got.sort();
+        assert_eq!(got, want);
+        let chip = &all
+            .rows
+            .iter()
+            .find(|r| r.muted == "yes")
+            .unwrap()
+            .muted_chip[0];
+        assert_eq!(chip.text, "MUTED");
+        assert!(chip.title.starts_with("Muted by you at "), "{}", chip.title);
+
+        assert_eq!(
+            ids(&ask(&s, q("muted:no")).await),
+            [warning.problem_uuid.as_str()]
+        );
+        assert_eq!(
+            ids(&ask(&s, q("-muted:yes")).await),
+            [warning.problem_uuid.as_str()]
+        );
+        assert_eq!(
+            ids(&ask(&s, q("muted:yes source:defiant")).await),
+            [worf.problem_uuid.as_str()]
+        );
+        let refused = ask(&s, q("muted:sometimes")).await;
+        assert!(refused.rows.is_empty() && refused.errors.len() == 1);
+
+        let groups = groups_handler(
+            State(s.clone()),
+            Query(GroupParams {
+                q: Some("muted:no".into()),
+                by: "severity_chip".into(),
+            }),
+        )
+        .await
+        .0;
+        assert!(groups.errors.is_empty(), "{:?}", groups.errors);
+        let counted: Vec<(Option<String>, u64)> = groups
+            .groups
+            .iter()
+            .map(|g| (g.values[0].clone(), g.count))
+            .collect();
+        assert_eq!(counted, [(Some("warning".to_string()), 1)]);
+
+        let _ = mutes::handler(State(s.clone()), Json(body(&[&parse], false)))
+            .await
+            .unwrap();
+        let mut left = ids(&ask(&s, q("muted:no")).await)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        left.sort();
+        let mut want = vec![warning.problem_uuid.clone(), parse.problem_uuid.clone()];
+        want.sort();
+        assert_eq!(left, want);
+
+        let empty = mutes::handler(State(s.clone()), Json(body(&[], true))).await;
+        assert_eq!(empty.unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn the_search_bar_offers_muted_with_its_two_words() {
+        let keys = keys_handler().await.0;
+        let muted = keys.iter().find(|k| k.key == "muted").unwrap();
+        assert_eq!(
+            muted.values,
+            KeyValues::Words {
+                words: vec!["yes", "no"]
+            }
+        );
+    }
+
     #[test]
     fn a_column_offers_the_key_that_filters_it() {
         let search = |id: &str| {
@@ -801,7 +1015,7 @@ mod tests {
             Problem::field("uuid", Reason::NoIdentity, ""),
             Some(3),
         );
-        assert_eq!(DocProblem::of(dropped).item_uuid, None);
+        assert_eq!(DocProblem::of(dropped, false).item_uuid, None);
         let nulled = ProblemRow::new(
             "slack",
             Stage::GridRow,
@@ -811,7 +1025,10 @@ mod tests {
             Problem::field("created_at", Reason::CoercionFailed, "x"),
             Some(3),
         );
-        assert_eq!(DocProblem::of(nulled).item_uuid.as_deref(), Some("u-1"));
+        assert_eq!(
+            DocProblem::of(nulled, false).item_uuid.as_deref(),
+            Some("u-1")
+        );
     }
 
     #[test]
@@ -830,7 +1047,7 @@ mod tests {
             markdown_uuid: Some("md-1".into()),
             document_title: Some("Captain's log".into()),
         };
-        let view = ProblemView::of(located, &Sources::default());
+        let view = ProblemView::of(located, &Sources::default(), &HashMap::new());
         let json = serde_json::to_value(&view).unwrap();
         let keys: std::collections::BTreeSet<&str> = json
             .as_object()

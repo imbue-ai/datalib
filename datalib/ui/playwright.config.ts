@@ -222,6 +222,8 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // Freeing disk runs `datalib-step` on every step, so this root's
   // server has to find it.
   "free-disk-space": { DATALIB_BINARY_DIR: binDir },
+  // Syncs a render, which reports the counts the mutes come off.
+  "problem-mutes": { DATALIB_BINARY_DIR: binDir },
   // Its stand-in for a sender's host is on this machine.
   "remote-images-load": { DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE: "1" },
 };

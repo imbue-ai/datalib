@@ -465,7 +465,7 @@ export function typedColumns<T extends Record<string, unknown>>(
       toolTip: spec.description,
       width: spec.width ?? WIDTH[spec.type],
       hidden: !spec.default_visible,
-      sortable: true,
+      sortable: !spec.unsorted,
       resizable: true,
       reorderable: true,
       // The tests, and anyone reading the DOM, find a cell by the

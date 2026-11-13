@@ -413,6 +413,12 @@
   background-color: rgba(234, 179, 8, 0.3);
 }
 
+/* ── a muted problem (GridCard's item metadata) ────────────────── */
+/* Still a row, faded: a person has seen it, and it counts toward nothing. */
+.slick-row.datalib-muted .slick-cell {
+  opacity: 0.55;
+}
+
 /* ── the selected rows ─────────────────────────────────────────── */
 /* The theme's selected grey is close to its hover grey, and in the dark
    scheme close to the rows themselves. A selected row is tinted with

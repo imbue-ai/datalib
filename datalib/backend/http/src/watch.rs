@@ -123,8 +123,8 @@ pub enum Table {
     #[strum(serialize = "disk")]
     Disk,
     /// What a person curated: a store under `datalib_curated/` (the
-    /// contacts app's) published a new commit. A draft's autosave is no
-    /// commit, so it sends none.
+    /// contacts app's, the problem mutes) published a new commit. A
+    /// draft's autosave is no commit, so it sends none.
     #[serde(rename = "curated")]
     #[strum(serialize = "curated")]
     Curated,
@@ -562,6 +562,9 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 Ok(head) if head != seen.index_head => {
                     seen.index_head = head;
                     out.insert(RootEvent::IndexChanged);
+                    // A row's count leaves out the muted problems the
+                    // index holds, which this may have changed.
+                    out.insert(table(Table::ManageRows));
                 }
                 Ok(_) => {}
                 Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
@@ -579,6 +582,8 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
             Moved::Curated => {
                 if curated_moved(curated_heads(root).await, &mut seen.curated_heads) {
                     out.insert(table(Table::Curated));
+                    // The mutes store is curated, and a mute moves a count.
+                    out.insert(table(Table::ManageRows));
                 }
             }
             Moved::Ready => {}

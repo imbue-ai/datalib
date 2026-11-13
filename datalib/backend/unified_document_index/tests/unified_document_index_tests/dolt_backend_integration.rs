@@ -10,7 +10,7 @@ use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_document_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_document_index::grid_columns::GridColumn;
-use datalib_unified_document_index::problems::ProblemsQuery;
+use datalib_unified_document_index::problems::{Ids, ProblemsQuery};
 use datalib_unified_document_index::query::parse_query;
 use datalib_unified_document_index::repo::{IndexRepo, LocatedProblem};
 use datalib_unified_document_index::sort::Sort;
@@ -936,7 +936,7 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     commit(&writer, "problems").await;
 
     let listing = repo
-        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
+        .problem_keys(&ProblemsQuery::parse(""), &Ids::Any, &[], &[])
         .await
         .unwrap();
     let all = repo.problems_by_keys(&listing.uuids).await.unwrap();

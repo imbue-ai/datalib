@@ -1479,10 +1479,18 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
     let run_progress = started.elapsed() - loop_record;
 
-    let problems = manage::counts_by_step(
+    let mut problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
         &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
     );
+    // What a person muted, of what the index holds now: read from the
+    // mutes store and the index, both read-only (problem_mutes/README.md).
+    match datalib_problem_mutes::live_mutes(root).await {
+        Ok(live) => manage::take_off_mutes(&mut problems, &datalib_problem_mutes::tally(&live)),
+        Err(e) => {
+            tracing::warn!("could not read which problems are muted, so every one counts: {e:#}")
+        }
+    }
     let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();

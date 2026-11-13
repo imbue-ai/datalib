@@ -111,8 +111,10 @@ the only pointer.
 
 Every error and warning row counts toward the Dashboard's "Needs you",
 including ones nothing can be done about (a corrupt file, a file no
-feed reads). A person cannot yet mute one row they have seen; that is
-issue #1725.
+feed reads), until a person mutes it in the problems grid. A mute is
+kept apart, by the row's id, in a store nothing rebuilds, and taken off
+the count of the step that found the row as the Manage rows are drawn;
+no step knows of it ([`problem_mutes/README.md`](../problem_mutes/README.md)).
 
 ## Volatile fields: split them out, don't diff them
 

@@ -21,6 +21,7 @@ mod grouping;
 mod local_embedder;
 mod map;
 mod models;
+mod mutes;
 mod problems;
 #[cfg(test)]
 mod qmd_search_tests;
@@ -87,6 +88,9 @@ struct Index {
     grid_sources: Arc<tokio::sync::Mutex<Option<GridSources>>>,
     /// Turns for `/sql`'s queries, [`sql::AT_ONCE`] at a time.
     sql_slots: Arc<tokio::sync::Semaphore>,
+    /// The problem rows a person muted: this applet is the store's one
+    /// writer (`problem_mutes/README.md`).
+    mutes: mutes::Mutes,
 }
 
 type GridSources = (Option<String>, Arc<Vec<String>>);
@@ -156,6 +160,7 @@ impl Index {
             coverage: Arc::default(),
             grid_sources: Arc::default(),
             sql_slots: Arc::new(tokio::sync::Semaphore::new(sql::AT_ONCE)),
+            mutes: mutes::Mutes::new(&root),
             repo: Arc::new(repo),
             root,
         })
@@ -266,6 +271,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/groups", get(problems::groups_handler))
             .route("/problems/keys", get(problems::keys_handler))
             .route("/problems/values", get(problems::values_handler))
+            .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))
@@ -2236,9 +2242,23 @@ async fn chat(
     let (problems, errors) = match s.repo.document_problems(&markdown_uuid).await {
         Ok(mut rows) => {
             problems::sort_for_banner(&mut rows);
+            // A muted line stays, marked; a store that will not read
+            // leaves every line unmarked and says so.
+            let (mutes, errors) = match s.mutes.all().await {
+                Ok(mutes) => (mutes, Vec::new()),
+                Err(e) => (
+                    Default::default(),
+                    vec![format!("could not read which problems are muted: {e:#}")],
+                ),
+            };
             (
-                rows.into_iter().map(problems::DocProblem::of).collect(),
-                Vec::new(),
+                rows.into_iter()
+                    .map(|row| {
+                        let muted = mutes.contains_key(&row.problem_uuid);
+                        problems::DocProblem::of(row, muted)
+                    })
+                    .collect(),
+                errors,
             )
         }
         Err(e) => (

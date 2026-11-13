@@ -619,7 +619,9 @@ serves the same rows a page at a time, in the search bar's grammar:
 `source:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
 and `field:` too. Each step's counts are its `problems` series in the
 run store's `metrics`, one per `severity=` label; they are the
-errors and warnings cell on the Manage screen. The copies lag the
+errors and warnings cell on the Manage screen, less the problems a
+person muted there (`muted:yes` lists those; `POST /problems/mute`,
+[applets.md](applets.md)). A muted problem is still in the table. The copies lag the
 download by a render and an index run. The raw store's own `problems`
 table is current at every seal.
 

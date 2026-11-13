@@ -196,6 +196,9 @@ export type RowsResponse<Row> = RowsSpec & {
   // The search's alone: which of the ids the request named in `among` are
   // among its rows. Absent when it named none.
   among?: string[];
+  // The problems' alone: each row carries `muted` (`yes` or `no`), and
+  // `POST <url>/mute` mutes or unmutes rows (`muteProblems`).
+  mutes?: boolean;
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -260,6 +263,8 @@ export type DocProblem = {
   /// dropped record has no section to jump to.
   item_uuid: string | null;
   first_seen_at_utc: string;
+  /// A person muted it: still listed, and counted nowhere.
+  muted: boolean;
 };
 
 /// One section of a document's body: the `data-section-uuid` it wraps,
@@ -707,6 +712,18 @@ export async function fetchRows<Row>(
     for (const e of r.errors) pushToast(e);
   }
   return r;
+}
+
+/// Mutes or unmutes problem rows, by id, at a problems table's `url`
+/// (`RowsResponse.mutes`). A muted row stays in the table and counts
+/// toward nothing: not a Manage row's count, not the Dashboard's Needs you.
+export async function muteProblems(url: string, ids: string[], muted: boolean): Promise<void> {
+  const r = await fetch(`${url}/mute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ problem_uuids: ids, muted }),
+  });
+  if (!r.ok) throw new Error(`POST ${url}/mute → ${r.status}: ${await r.text()}`);
 }
 
 /// One group of a table's rows: its value in each grouped column, how
@@ -1235,6 +1252,8 @@ export type ColumnSpec = {
   width?: number;
   // Hidden while every row holds the same value in it.
   hide_when_uniform?: boolean;
+  // The producer cannot order its rows by it, so it offers no sort.
+  unsorted?: boolean;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,

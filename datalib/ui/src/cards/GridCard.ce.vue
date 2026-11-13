@@ -17,7 +17,8 @@
 // A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
 // or the row menu opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus —
-// and the menu can open it in a new tab instead.
+// and the menu can open it in a new tab instead. On the problems, the
+// menu also mutes or unmutes the rows it is about (`RowsResponse.mutes`).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
@@ -87,7 +88,7 @@ import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { isWebUrl, openExternal } from "@/externalLinks";
-import { oneAtATime, subscribeLive } from "@/live";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
@@ -155,7 +156,7 @@ import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchV
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
-const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows } = useApi();
+const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows, muteProblems } = useApi();
 
 /// A row of whichever table the card pages: a search row's fields where
 /// it is one, and nothing is assumed of any of them.
@@ -288,6 +289,8 @@ const columns = ref<ColumnSpec[]>([]);
 let rowsSpec: RowsSpec | null = null;
 /// qmd ranks this table's free text, and indexes its documents.
 const qmd = () => rowsSpec?.free_text === "qmd";
+/// The rows can be muted (the problems): each says whether it is.
+let mutable = false;
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
@@ -947,6 +950,7 @@ async function runSearch(q: string, refresh = false) {
     unfinished.value = r.refused?.[0] ?? null;
     if (unfinished.value !== null) return answered(q, "refused");
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
+    mutable = !!r.mutes;
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
@@ -1478,8 +1482,8 @@ onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
       root: (e) => {
-        if (e.kind !== "index_changed") return;
-        refreshRows();
+        // A mute is in a store of its own, which says when it publishes.
+        if (e.kind === "index_changed" || (mutable && changed(e, "curated"))) refreshRows();
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -1819,6 +1823,24 @@ const scopeOf = (args: unknown) => scopes.read(args as MenuFromCellCallbackArgs)
 const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
 
+/// The rows a right-click aims at that are muted, or that are not.
+const mutedAmong = (m: MenuScope, muted: boolean) =>
+  mutable ? m.targets.filter((r) => (r.muted === "yes") === muted) : [];
+
+/// Mute the rows aimed at that are not muted yet, or unmute those that
+/// are. The table then reads again, since the store says so only once
+/// the gateway hears it.
+async function setMuted(m: MenuScope, mute: boolean) {
+  const ids = mutedAmong(m, !mute).map(rowKey);
+  try {
+    await muteProblems(url, ids, mute);
+  } catch (e) {
+    pushToast((e as Error).message);
+    return;
+  }
+  refreshRows();
+}
+
 function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
   const rowUuids = m.targets.map(rowKey);
   const anchor = m.cell?.el ?? null;
@@ -1880,6 +1902,23 @@ const menuItems: (MenuCommandItem | "divider")[] = [
     (m) => openInNewTab(m.anchor!),
   ),
   dividerAfter((m) => m.anchor !== null && documentOf(m.anchor) !== null),
+  entry(
+    "mute",
+    (m) => {
+      const n = mutedAmong(m, false).length;
+      return n ? `Mute${countSuffix(n)}` : null;
+    },
+    (m) => void setMuted(m, true),
+  ),
+  entry(
+    "unmute",
+    (m) => {
+      const n = mutedAmong(m, true).length;
+      return n ? `Unmute${countSuffix(n)}` : null;
+    },
+    (m) => void setMuted(m, false),
+  ),
+  dividerAfter((m) => mutedAmong(m, true).length + mutedAmong(m, false).length > 0),
   ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
   entry(
@@ -2088,9 +2127,17 @@ const PLACEHOLDER_META = {
 function installRowMetadata(dataView: Grid["dataView"]) {
   const inner = dataView.getItemMetadata.bind(dataView);
   dataView.getItemMetadata = (row: number) => {
-    const meta = inner(row);
     const item = dataView.getItem(row) as Row | undefined;
     if (item && MORE in item) return PLACEHOLDER_META;
+    const own = inner(row);
+    // A muted problem stays, faded: seen, and counted nowhere.
+    const meta =
+      item?.muted === "yes"
+        ? {
+            ...(own ?? {}),
+            cssClasses: [own?.cssClasses, "datalib-muted"].filter(Boolean).join(" "),
+          }
+        : own;
     const status = item?.diff_status;
     if (!status || status === "unchanged") return meta;
     const columns: Record<string, { cssClass: string }> = {};

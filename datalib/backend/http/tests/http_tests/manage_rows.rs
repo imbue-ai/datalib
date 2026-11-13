@@ -507,6 +507,171 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
     assert_eq!(chips("group:unified_document_index"), vec![]);
 }
 
+/// A problem a person muted comes off the count of the step that found
+/// it, so a source whose every problem is muted draws no count and drops
+/// off the Dashboard's Needs you. A mute whose problem the index no longer
+/// holds takes nothing off: the store and the index are read as they are
+/// now, the store through what its writer published.
+#[tokio::test]
+async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
+    use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+    use datalib_table::BulkUpsertable;
+
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let metric = |step: &str, labels: &str, value: i64| datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: step.into(),
+            name: datalib_problems::METRIC.into(),
+            labels: labels.into(),
+            value,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        };
+        w.metric(metric("slack/render_markdown", "severity=error", 1));
+        w.metric(metric("slack/render_markdown", "severity=warning", 0));
+        w.metric(metric("slack/ingest", "severity=error", 0));
+        w.metric(metric("slack/ingest", "severity=warning", 2));
+    }
+    let problem = |stage, key: &str, reason, outcome| {
+        ProblemRow::new(
+            "slack",
+            stage,
+            Scope::Entity(key),
+            None,
+            outcome,
+            Problem::record(reason, "the bridge is not answering"),
+            None,
+        )
+    };
+    let render_error = problem(
+        Stage::Parse,
+        "messages:1",
+        Reason::Undeserializable,
+        Outcome::Dropped,
+    );
+    let fetch_warning = problem(
+        Stage::Fetch,
+        "messages:2",
+        Reason::OverSizeLimit,
+        Outcome::Nulled,
+    );
+    let other_fetch_warning = problem(
+        Stage::Fetch,
+        "messages:3",
+        Reason::OverSizeLimit,
+        Outcome::Nulled,
+    );
+    {
+        let index = datalib_etl_render::grid_index::open_index(
+            &datalib_core::layout::grid_index_db(tmp.path()),
+        )
+        .await
+        .unwrap();
+        let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
+            .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+            .collect();
+        let sql = format!(
+            "INSERT INTO problems ({}) VALUES ({})",
+            columns.join(", "),
+            vec!["?"; columns.len()].join(", ")
+        );
+        for row in [&render_error, &fetch_warning, &other_fetch_warning] {
+            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+                .execute(&index)
+                .await
+                .unwrap();
+        }
+        datalib_etl_render::grid_index::seal(
+            &datalib_etl_render::grid_index::WriteLock::for_index(index.clone()),
+        )
+        .await
+        .unwrap();
+        index.close().await;
+    }
+    let store = datalib_problem_mutes::store_path(tmp.path());
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    let mutes = datalib_etl::doltlite_raw::open_curated(
+        &store,
+        datalib_problem_mutes::DDL,
+        datalib_store_meta::StoreKind::ProblemMutes,
+        &[],
+    )
+    .await
+    .unwrap();
+    datalib_problem_mutes::mute(
+        &mutes,
+        &[
+            render_error.problem_uuid.clone(),
+            fetch_warning.problem_uuid.clone(),
+            "a-problem-fixed-since".to_string(),
+        ],
+        datalib_problem_mutes::MutedHow::Manual,
+        None,
+        &datalib_time::split_stamp("2026-08-31T10:00:00+01:00"),
+    )
+    .await
+    .unwrap();
+    datalib_etl::doltlite_raw::commit_run(&mutes, "mute three")
+        .await
+        .unwrap();
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    let chips = |key: &str| -> Vec<(String, String)> {
+        rows[key]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                (
+                    c["kind"].as_str().unwrap().to_string(),
+                    c["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        chips("slack/render_markdown"),
+        vec![],
+        "its one error is muted"
+    );
+    assert_eq!(
+        chips("slack/ingest"),
+        vec![("warning".to_string(), "1".to_string())],
+        "one of its two warnings is muted; the fixed one takes nothing off"
+    );
+    let title = rows["slack/ingest"]["problems"][0]["title"]
+        .as_str()
+        .unwrap();
+    assert!(title.contains("and 1 more you muted"), "{title}");
+    assert_eq!(
+        chips("group:slack"),
+        vec![("warning".to_string(), "1".to_string())]
+    );
+
+    datalib_problem_mutes::unmute(&mutes, std::slice::from_ref(&render_error.problem_uuid))
+        .await
+        .unwrap();
+    datalib_etl::doltlite_raw::commit_run(&mutes, "unmute one")
+        .await
+        .unwrap();
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(
+        rows["slack/render_markdown"]["problems"][0]["text"], "1",
+        "unmuted, it counts again"
+    );
+    mutes.close().await;
+}
+
 /// A stopped sync's queue is emptied as it ends, and nothing on the row
 /// said what it had not got to. The `owed` its run left reaches the row
 /// of a step at rest, with the run it is from, and the group shows it by

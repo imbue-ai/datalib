@@ -13,6 +13,41 @@ use crate::view::View;
 
 pub type ProblemsQuery = ParsedQuery<ProblemRowColumn>;
 
+/// Which problems a list keeps by id, beside what its query says: every
+/// one, only those named, or all but those. What `muted:` comes to, since
+/// a mute is kept apart from the index (`problem_mutes/README.md`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Ids {
+    #[default]
+    Any,
+    Only(Vec<String>),
+    Except(Vec<String>),
+}
+
+impl Ids {
+    /// `where_sql` narrowed to the ids kept, bound as one JSON array.
+    pub fn narrow(&self, (where_sql, mut params): (String, Vec<String>)) -> (String, Vec<String>) {
+        let (ids, how) = match self {
+            Ids::Any => return (where_sql, params),
+            Ids::Only(ids) => (ids, "IN"),
+            Ids::Except(ids) => (ids, "NOT IN"),
+        };
+        let joiner = if where_sql.is_empty() {
+            " WHERE "
+        } else {
+            " AND "
+        };
+        params.push(serde_json::to_string(ids).unwrap_or_else(|_| "[]".into()));
+        (
+            format!(
+                "{where_sql}{joiner}{} {how} (SELECT value FROM json_each(?))",
+                ProblemRowColumn::ProblemUuid.as_str()
+            ),
+            params,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum ProblemColumn {
@@ -153,6 +188,23 @@ mod tests {
         assert_eq!(sql, " WHERE changed_at_utc > ?");
         assert!(parse("is:document").refusal().is_some());
         assert!(parse("qmd:tea").refusal().is_some());
+    }
+
+    #[test]
+    fn ids_narrow_the_query_by_one_bound_array() {
+        let base = build_where(&parse("source:slack"));
+        assert_eq!(Ids::Any.narrow(base.clone()), base);
+        let (sql, params) = Ids::Except(vec!["a".into(), "b".into()]).narrow(base);
+        assert_eq!(
+            sql,
+            " WHERE source_id = ? AND problem_uuid NOT IN (SELECT value FROM json_each(?))"
+        );
+        assert_eq!(params, ["slack", r#"["a","b"]"#]);
+        let (sql, _) = Ids::Only(vec![]).narrow((String::new(), vec![]));
+        assert_eq!(
+            sql,
+            " WHERE problem_uuid IN (SELECT value FROM json_each(?))"
+        );
     }
 
     #[test]

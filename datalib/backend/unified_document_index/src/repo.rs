@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use crate::db::ChatMeta;
 use crate::group::{Grouping, Within};
-use crate::problems::ProblemsQuery;
+use crate::problems::{Ids, ProblemsQuery};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
@@ -254,6 +254,7 @@ pub trait IndexRepo: Send + Sync {
     async fn problem_keys(
         &self,
         _query: &ProblemsQuery,
+        _ids: &Ids,
         _sort: &[Sort<ProblemRowColumn>],
         _within: &[Within<ProblemRowColumn>],
     ) -> Result<Listing, RepoError> {
@@ -270,6 +271,7 @@ pub trait IndexRepo: Send + Sync {
     async fn problem_groups(
         &self,
         _query: &ProblemsQuery,
+        _ids: &Ids,
         _by: &[ProblemRowColumn],
     ) -> Result<Grouping<LocatedProblem>, RepoError> {
         Ok(Grouping::default())
