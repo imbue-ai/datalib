@@ -163,8 +163,8 @@ The request:
   `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,
   `system/disk_stats.sqlite` and `system/usage.doltlite_db`. Nothing
   else under `system/` is a store here. `GET /sql/stores` lists them,
-  with each one's `kind` and `bytes`, the qmd index
-  (`unified_document_index/qmd_aggregator/qmd/index.sqlite`) among them.
+  with each one's `kind` and `bytes`, the search index's vectors
+  (`unified_document_index/search_index/inference_cache.sqlite`) among them.
   Any other store deeper than `<group>/<step>/<file>` reads by name but
   is not listed.
 - **`sql`** is one statement that returns rows: a `SELECT`, a `WITH …

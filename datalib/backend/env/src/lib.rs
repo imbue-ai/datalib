@@ -61,11 +61,6 @@ names! { BUILT_IN_SOURCE_KEYS:
 /// are not handed it.
 pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
 
-/// Which index the search applet reads Words and Meaning from: `qmd`, the
-/// default, or `search_index`, while the two are compared
-/// (`docs/dev/plans/search_index_from_ram.md`). Set in the applet's entry.
-pub const DATALIB_SEARCH_READS: &str = "DATALIB_SEARCH_READS";
-
 /// Names of more variables every child is handed, comma-separated: for a
 /// custom step or applet that reads one of its own, or a test harness.
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";

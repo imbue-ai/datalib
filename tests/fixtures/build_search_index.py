@@ -14,9 +14,9 @@ Usage: build_search_index.py <datalib-step> <search_prompts> <qmd.tar>
 
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
-import sqlite3
 import tempfile
 from pathlib import Path
 

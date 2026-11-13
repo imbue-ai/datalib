@@ -110,13 +110,12 @@ pub struct Listed {
     pub bytes: u64,
 }
 
-/// The stores in each step's tree (`<group>/<step>/<file>`), the ones
-/// under `system/` this reads, and the qmd index. A store deeper in a
+/// The stores in each step's tree (`<group>/<step>/<file>`) and the ones
+/// under `system/` this reads. A store deeper in a
 /// step's tree reads by name but is not listed: a render tree can hold a
 /// directory per document, and listing would walk them all.
 pub fn list(root: &Path) -> Vec<Listed> {
     let mut names: Vec<String> = system_stores().to_vec();
-    names.push(datalib_runtime::qmd::QMD_INDEX_REL.to_string());
     for group in entries(root) {
         if group == layout::SYSTEM_DIR {
             continue;
@@ -162,7 +161,7 @@ mod tests {
                 StoreKind::Sqlite,
             ),
             (
-                "unified_document_index/qmd_aggregator/qmd/index.sqlite",
+                "unified_document_index/search_index/inference_cache.sqlite",
                 StoreKind::Sqlite,
             ),
             ("system/runs/runs.sqlite", StoreKind::Sqlite),
@@ -237,7 +236,7 @@ mod tests {
             "slack/render_markdown/2026/01/deep.sqlite",
             "system/runs/runs.sqlite",
             "system/tmp/decrypted.sqlite",
-            "unified_document_index/qmd_aggregator/qmd/index.sqlite",
+            "unified_document_index/search_index/inference_cache.sqlite",
         ] {
             std::fs::create_dir_all(r.join(file).parent().unwrap()).unwrap();
             std::fs::write(r.join(file), b"x").unwrap();
@@ -249,7 +248,7 @@ mod tests {
                 "slack/ingest/blobs.sqlite",
                 "slack/ingest/entities.doltlite_db",
                 "system/runs/runs.sqlite",
-                "unified_document_index/qmd_aggregator/qmd/index.sqlite",
+                "unified_document_index/search_index/inference_cache.sqlite",
             ]
         );
     }

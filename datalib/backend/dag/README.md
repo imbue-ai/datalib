@@ -287,7 +287,7 @@ if so. A sync that does not reach such a step leaves it alone; the grid
 index reads a render store in another shape as the index had it, with a
 warning. A rebuild of the index has nothing to keep, so a source whose
 render step stays turned off then has no rows until it re-renders. Its
-collection stays in the qmd index with its embeddings, and a search reads
+documents stay in the search index with their vectors, and a search reads
 only the sources the grid holds, so it leaves search too and costs a
 search nothing. A step that fails to answer costs that source only. The pass
 writes only raw stores, each in place, so the app stays usable while it
@@ -333,10 +333,12 @@ follows from it:
   no inputs, `cpu` for a step with inputs under a group with a `type`,
   `index` for any other step with inputs; so a download waiting out a
   rate limit never keeps a render from starting. The other two,
-  `qmd_keyword` and `qmd_embed` (1 slot each), are held by the built-in
-  qmd steps that name no locks: `keyword_index` and `qmd_aggregator`
-  take `qmd_keyword`, `embed` takes `qmd_embed`, because they all write
-  one qmd index file the runner cannot see as shared. A `[[locks]]`
+  `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
+  they once guarded), are held by the built-in search steps that name no
+  locks: `keyword_index` and `qmd_aggregator` take `qmd_keyword`, because
+  they all write the search index's tables in one file the runner cannot
+  see as shared; `embed` takes `qmd_embed`, so one embedding model is
+  loaded at a time. A `[[locks]]`
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.
 
@@ -344,13 +346,14 @@ None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only them
 is still taken on mid-sync, like any other. The built-in steps that read
 files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
-`keyword_index`, which globs its render tree's `.md` files; `embed` and
-`embedding_map`, which read qmd's own SQLite file; and perseus's render,
+`keyword_index` and `embed`, which read their render tree's `.md` files;
+`embedding_map`, which reads the search index and its inference cache;
+and perseus's render,
 which reads its TEI files); any step may say `reads` itself.
 
 ## What a sink owes its consumers
 
-A step's sink is whatever it writes: a doltlite store, the qmd index, a
+A step's sink is whatever it writes: a doltlite store, the search index, a
 directory of markdown. A consumer relies on two separate properties, and
 conflating them produces a contract that is false for half the sinks.
 
