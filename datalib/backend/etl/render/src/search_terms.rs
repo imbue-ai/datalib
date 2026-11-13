@@ -1,6 +1,6 @@
 //! The search terms in the grid index: every term each `grid_rows` row
 //! answers to (`datalib_schema::search_terms`), in the `rows`, `vals`,
-//! `vals_fts` and `terms` tables. It is the grid's rows melted, one
+//! `vals_fts`, `vals_tri` and `terms` tables. It is the grid's rows melted, one
 //! indexed row per term: what each row's columns say (`search_terms_of`)
 //! and what its render supplied (`supplied_terms`). The index's writer
 //! rewrites a row's terms in the transaction that writes the row, so the
@@ -93,12 +93,12 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
-    sqlx::query(
+    for sql in [
         "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
-    )
-    .bind(floor)
-    .execute(&mut *conn)
-    .await?;
+        "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
+    ] {
+        sqlx::query(sql).bind(floor).execute(&mut *conn).await?;
+    }
     for sql in [
         "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
              SELECT v.val_id, i.kind, r.row_id FROM temp.incoming i \
@@ -107,6 +107,7 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
         "DELETE FROM temp.dropped WHERE EXISTS \
              (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)",
         "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)",
+        "DELETE FROM vals_tri WHERE rowid IN (SELECT val_id FROM temp.dropped)",
         "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)",
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;

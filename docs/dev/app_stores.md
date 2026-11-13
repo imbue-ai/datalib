@@ -14,9 +14,10 @@
 <data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
-                                                  label and name each row answers to, full-text
-                                                  indexed, and the names each handle went by
-                                                  (`etl/render/src/search_terms.rs`); plain
+                                                  label and name each row answers to, indexed
+                                                  by word and by every three characters (so
+                                                  `from:ike` is a lookup), and the names each
+                                                  handle went by (`etl/render/src/search_terms.rs`); plain
                                                   SQLite in WAL mode, its version the
                                                   `store_generation` row. Beside them the
                                                   search index's `search_*` tables: each

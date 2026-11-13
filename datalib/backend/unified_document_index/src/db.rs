@@ -205,26 +205,20 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
             )
         }
         TermsValue::Partial { text, by_name } => {
-            let pattern = like_pattern(&text);
+            let (held, needle) = vals_holding("t.val_id", &text);
             let names = if by_name {
-                " OR value IN (SELECT handle FROM names \
-                     WHERE LOWER(name) LIKE ? ESCAPE '\\')"
+                " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
+                     (SELECT handle FROM names WHERE LOWER(name) LIKE ? ESCAPE '\\'))"
                     .to_string()
             } else {
                 String::new()
             };
             let bound = if by_name {
-                vec![pattern.clone(), pattern]
+                vec![needle, like_pattern(&text)]
             } else {
-                vec![pattern]
+                vec![needle]
             };
-            (
-                format!(
-                    " AND t.val_id IN (SELECT val_id FROM vals \
-                     WHERE LOWER(value) LIKE ? ESCAPE '\\'{names})"
-                ),
-                bound,
-            )
+            (format!(" AND ({held}{names})"), bound)
         }
         // A contact, or the owner, is its handles, read before the query
         // runs; none read is no row (an empty array), and the applet refuses
@@ -248,6 +242,23 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
         ),
         bound,
     )
+}
+
+/// The values in `vals` holding `typed`, case-blind, as a clause over
+/// `val_id` and the one value it binds. `vals_tri` looks up a run of
+/// three characters or more; anything shorter reads every value.
+pub(crate) fn vals_holding(val_id: &str, typed: &str) -> (String, String) {
+    if typed.chars().count() >= 3 {
+        (
+            format!("{val_id} IN (SELECT rowid FROM vals_tri WHERE vals_tri MATCH ?)"),
+            format!("\"{}\"", typed.replace('"', "\"\"")),
+        )
+    } else {
+        (
+            format!("{val_id} IN (SELECT val_id FROM vals WHERE LOWER(value) LIKE ? ESCAPE '\\')"),
+            like_pattern(typed),
+        )
+    }
 }
 
 /// A value that names an H3 cell, on a key that reads cells: the rows
@@ -429,9 +440,15 @@ mod tests {
 
         let (sql, params) = build_where(&parse_query("-author:riker"));
         assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
-        assert!(sql.contains("LOWER(value) LIKE ?"), "{sql}");
+        assert!(sql.contains("vals_tri MATCH ?"), "{sql}");
         assert!(sql.contains("names WHERE LOWER(name) LIKE ?"), "{sql}");
-        assert_eq!(params, ["%riker%", "%riker%"]);
+        assert_eq!(params, ["\"riker\"", "%riker%"]);
+
+        // Too short for a trigram: every value is read.
+        let (sql, params) = build_where(&parse_query("from:ri"));
+        assert!(sql.contains("LOWER(value) LIKE ?"), "{sql}");
+        assert!(!sql.contains("vals_tri"), "{sql}");
+        assert_eq!(params, ["%ri%", "%ri%"]);
 
         let (sql, params) = build_where(&parse_query("recipient:*"));
         assert!(sql.contains("t.kind IN (6, 7, 9))"), "{sql}");

@@ -290,13 +290,15 @@ fn is_dashed_uuid(s: &str) -> bool {
 /// is part of the grid index's shape, and an index in another shape is
 /// built again, so change it whenever either changes. A kind a render
 /// starts to supply needs no change: it arrives as its rows are written.
-pub const TERMS_SHAPE: &str = "9";
+pub const TERMS_SHAPE: &str = "10";
 
 /// The search terms' tables in the grid index, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
-/// integers. The FTS5 index covers `vals` alone, linked by rowid, and
-/// keeps `@ . - _ + : /` inside a token so an id or a handle is one
-/// token (`docs/dev/doltlite.md` § "Full-text search (FTS5)").
+/// integers. The two FTS5 indexes cover `vals` alone, linked by rowid:
+/// `vals_fts` by word, keeping `@ . - _ + : /` inside a token so an id or
+/// a handle is one token (`docs/dev/doltlite.md` § "Full-text search
+/// (FTS5)"), and `vals_tri` by every run of three characters, so a value
+/// holding a bare word is looked up rather than read from every value.
 pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS rows (row_id INTEGER PRIMARY KEY, \
      uuid TEXT NOT NULL UNIQUE, touched_at_utc TEXT)",
@@ -309,6 +311,8 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS vals_nocase ON vals (value COLLATE NOCASE)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
      contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS vals_tri USING fts5(value, content='', \
+     contentless_delete=1, tokenize='trigram')",
     // Each handle with every name it was seen under, so a name finds the
     // handles of whoever went by it (`datalib_etl_render::search_terms`).
     "CREATE TABLE IF NOT EXISTS names (handle TEXT NOT NULL, name TEXT NOT NULL, \
