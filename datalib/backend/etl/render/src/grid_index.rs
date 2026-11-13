@@ -69,6 +69,10 @@ pub struct WriteLock {
     /// search terms last followed them; `None` in a render store, which
     /// holds no terms.
     changed: Option<std::sync::Mutex<Vec<String>>>,
+    /// How a batch starts. The grid index's file has other writers (the
+    /// search index's steps), and a batch that read before its first write
+    /// would fail rather than wait if one of them committed meanwhile.
+    begin: &'static str,
 }
 
 struct WriteLockInner {
@@ -111,6 +115,7 @@ impl WriteLock {
             acquisitions: AtomicU64::new(0),
             written: std::sync::Mutex::new(std::collections::HashSet::new()),
             changed: None,
+            begin: "BEGIN",
         }
     }
 
@@ -119,6 +124,7 @@ impl WriteLock {
     pub fn for_index(pool: SqlitePool) -> Self {
         Self {
             changed: Some(std::sync::Mutex::new(Vec::new())),
+            begin: "BEGIN IMMEDIATE",
             ..Self::new(pool)
         }
     }
@@ -165,7 +171,7 @@ impl WriteLock {
             .acquire()
             .await
             .context("WriteLock: acquire conn for BEGIN")?;
-        sqlx::query("BEGIN")
+        sqlx::query(sqlx::AssertSqlSafe(self.begin))
             .execute(&mut *conn)
             .await
             .context("WriteLock: BEGIN")?;
@@ -661,39 +667,83 @@ fn index_name(ddl: &str) -> Option<&str> {
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
 ///
-/// An index written in another shape is deleted and made new: every row
-/// in it is a function of a render store, so a rebuild costs one local
-/// read of them, where altering it in place would leave a new column
-/// empty in the rows the cursors never revisit.
+/// An index written in another shape loses its tables and is made new:
+/// every row in it is a function of a render store, so a rebuild costs
+/// one local read of them, where altering it in place would leave a new
+/// column empty in the rows the cursors never revisit. The search index's
+/// tables share the file and are its own to keep or empty
+/// (`datalib_search_index`), so they stay.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     retire_old_files(db_path)?;
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut pool = connect(db_path).await?;
-    match datalib_store_meta::read(&pool).await {
-        Ok(Some(meta)) if meta.schema_hash != schema_hash() => {
-            pool.close().await;
-            tracing::info!(
-                path = %db_path.display(),
-                "the grid index was written in another shape; building it again"
-            );
-            remove_index_files(db_path)?;
-            pool = connect(db_path).await?;
-        }
-        Ok(_) => {}
-        Err(e) => {
-            pool.close().await;
-            return Err(e).context("read the grid index's shape");
-        }
-    }
-    match set_up(&pool).await {
+    let pool = connect(db_path).await?;
+    let ready = match empty_if_another_shape(&pool).await {
+        Ok(()) => set_up(&pool).await,
+        Err(e) => Err(e),
+    };
+    match ready {
         Ok(()) => Ok(pool),
         Err(e) => {
             pool.close().await;
             Err(e)
         }
     }
+}
+
+/// Drops the grid's own tables when they were written in another shape,
+/// under the write lock: a source's `keyword_index` may be writing the
+/// search index's tables in the same file meanwhile.
+async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let have = datalib_store_meta::schema_hash_in(&mut tx)
+        .await
+        .context("read the grid index's shape")?;
+    if have.is_some_and(|h| h != schema_hash()) {
+        tracing::info!("the grid index was written in another shape; building it again");
+        drop_own_tables(&mut tx).await?;
+    }
+    tx.commit().await?;
+    // Hands the dropped pages back to the disk where the file was made
+    // with incremental auto-vacuum; a no-op where it was not.
+    sqlx::query("PRAGMA incremental_vacuum")
+        .execute(pool)
+        .await
+        .context("give the grid index's dropped pages back")?;
+    Ok(())
+}
+
+/// Every table in the file but `_datalib_meta` and the search index's,
+/// virtual tables first so their shadow tables go with them. Includes any
+/// an older shape had that this one does not.
+async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let theirs = format!(
+        "{}%",
+        datalib_search_index::TABLE_PREFIX.replace('_', "\\_")
+    );
+    for virtual_only in [true, false] {
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' \
+               AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
+               AND name NOT LIKE ? ESCAPE '\\' \
+               AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
+        )
+        .bind(&theirs)
+        .bind(virtual_only)
+        .fetch_all(&mut *conn)
+        .await
+        .context("list the grid index's tables")?;
+        for name in names {
+            // A name read from this file's own schema, quoted as an identifier.
+            let sql = format!("DROP TABLE IF EXISTS \"{}\"", name.replace('"', "\"\""));
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *conn)
+                .await
+                .with_context(|| format!("drop the grid index's {name}"))?;
+        }
+    }
+    Ok(())
 }
 
 async fn connect(db_path: &Path) -> Result<SqlitePool> {
@@ -711,7 +761,9 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
         // upsert, a delete of several rows — so it can undo that one
         // statement; in a temp file that was most of a load's time.
         .pragma("temp_store", "memory")
-        .busy_timeout(Duration::from_secs(30));
+        // Each source's `keyword_index` writes the search index's tables in
+        // this file too, a batch of documents at a time.
+        .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -739,19 +791,6 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("start the grid index's generation")?;
-    Ok(())
-}
-
-/// The index file and its log. A `-wal` left beside a new file would be
-/// read into it.
-fn remove_index_files(db_path: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm"] {
-        let path = PathBuf::from(format!("{}{suffix}", db_path.display()));
-        match fs::remove_file(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            other => other.with_context(|| format!("remove {}", path.display()))?,
-        }
-    }
     Ok(())
 }
 
@@ -2791,6 +2830,89 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 0);
+    }
+
+    fn search_doc(uuid: &str) -> datalib_search_index::IndexDoc {
+        datalib_search_index::IndexDoc {
+            source_id: "claude_web".into(),
+            markdown_uuid: uuid.into(),
+            content_hash: format!("hash-{uuid}"),
+            title: "Ten Forward".into(),
+            sections: vec![datalib_search_index::IndexSection {
+                uuid: Some("m1".into()),
+                text: "the warp core is stable".into(),
+            }],
+        }
+    }
+
+    /// The search index shares the file: a change of the grid's shape
+    /// makes the grid's tables new and leaves the search index's rows,
+    /// which cost a re-index of every source to make again.
+    #[tokio::test]
+    async fn a_change_of_the_grids_shape_keeps_the_search_index() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        search.put(&[search_doc("md-1")]).await.unwrap();
+        search.close().await;
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0);
+        crate::grid_index::close_index(pool).await.unwrap();
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        search.close().await;
+    }
+
+    /// A grid batch takes the file's write lock when it starts. One that
+    /// took it at its first write would fail outright, not wait, when the
+    /// search index committed a batch after the grid's batch first read.
+    #[tokio::test]
+    async fn a_grid_batch_holds_the_file_from_its_start() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        let lock = crate::grid_index::WriteLock::for_index(pool.clone());
+        lock.begin_transaction().await.unwrap();
+        {
+            let mut guard = lock.acquire().await.unwrap();
+            let n: i64 = sqlx::query_scalar("SELECT count(*) FROM markdowns")
+                .fetch_one(&mut **guard.conn())
+                .await
+                .unwrap();
+            assert_eq!(n, 1);
+        }
+        {
+            let docs = [search_doc("md-2")];
+            let put = search.put(&docs);
+            tokio::pin!(put);
+            let waited =
+                tokio::time::timeout(std::time::Duration::from_millis(500), &mut put).await;
+            assert!(
+                waited.is_err(),
+                "the search index wrote inside the grid's batch"
+            );
+            {
+                let mut guard = lock.acquire().await.unwrap();
+                sqlx::query("DELETE FROM markdowns")
+                    .execute(&mut **guard.conn())
+                    .await
+                    .unwrap();
+            }
+            lock.commit_transaction().await.unwrap();
+            put.await.unwrap();
+        }
+        assert_eq!(documents(&pool).await, 0);
+        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        search.close().await;
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 
     #[tokio::test]

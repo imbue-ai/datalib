@@ -1,6 +1,7 @@
 //! The search index: each document's messages in a keyword index, its
 //! chunks' embeddings, and where each falls in the document, keyed by
-//! `markdown_uuid` and holding none of the text. A document comes in as a
+//! `markdown_uuid` and holding none of the text. Its tables live in the
+//! grid index's file; the vectors in a file of their own. A document comes in as a
 //! value, so whoever has it in memory can index it; nothing here reads a
 //! file. The plan: docs/dev/plans/search_index_from_ram.md.
 
@@ -18,6 +19,11 @@ pub use cache::InferenceCache;
 pub use owed::{owed, Owed};
 pub use read::{Held, HeldChunk, HeldDoc, MessageHit, Reader};
 pub use store::{ChunkSpan, Index};
+
+/// What every table of the index starts with. The index shares the grid
+/// index's file, and each of the two empties only its own tables when its
+/// shape moves.
+pub const TABLE_PREFIX: &str = "search_";
 
 /// What the inference cache files a vector under: the pinned embedding
 /// model's file and its sha256, so another model's vectors are never read

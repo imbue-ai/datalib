@@ -205,3 +205,30 @@ async fn no_index_reads_as_none() {
         .unwrap();
     assert!(reader.is_none());
 }
+
+/// The grid index's file is there before any `keyword_index` has run: the
+/// reader takes it as no index yet, not as an error.
+#[tokio::test]
+async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let grid = dir.path().join("db.sqlite");
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&grid)
+        .create_if_missing(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE grid_rows (uuid TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let reader = Reader::open(&grid, &dir.path().join("cache.sqlite"))
+        .await
+        .unwrap();
+    assert!(reader.is_none());
+}

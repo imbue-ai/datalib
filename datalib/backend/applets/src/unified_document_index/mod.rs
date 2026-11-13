@@ -867,7 +867,7 @@ async fn without_vectors(
             vec![IndexStamp::of(&index)]
         }
         SearchReads::SearchIndex => {
-            if !datalib_runtime::layout::search_index_db(&s.root).exists() {
+            if !datalib_runtime::layout::grid_index_db(&s.root).exists() {
                 return Ok(None);
             }
             let (index, cache) = datalib_unified_document_index::search_index::stamps(&s.root);
@@ -2317,7 +2317,7 @@ mod tests {
 
         let mut wal = index.clone().into_os_string();
         wal.push("-wal");
-        std::fs::write(&wal, b"").unwrap();
+        std::fs::write(&wal, b"a frame").unwrap();
         let later = std::fs::File::options().write(true).open(&wal).unwrap();
         later.set_modified(at + INDEX_SETTLE * 2).unwrap();
         assert!(
@@ -2618,7 +2618,7 @@ mod tests {
         pool.close().await;
 
         let index =
-            datalib_search_index::Index::open(&datalib_runtime::layout::search_index_db(root))
+            datalib_search_index::Index::open(&datalib_runtime::layout::grid_index_db(root))
                 .await
                 .unwrap();
         index

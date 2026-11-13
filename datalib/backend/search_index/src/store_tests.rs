@@ -44,10 +44,10 @@ async fn open() -> (tempfile::TempDir, Index) {
 /// Each matching section as (document, message), in document order.
 async fn hits(index: &Index, query: &str) -> Vec<(String, Option<String>)> {
     sqlx::query_as(
-        "SELECT d.markdown_uuid, s.uuid FROM sections_fts f \
-           JOIN sections s ON s.section_id = f.rowid \
-           JOIN documents d ON d.doc_id = s.doc_id \
-          WHERE sections_fts MATCH ? ORDER BY d.markdown_uuid, s.seq",
+        "SELECT d.markdown_uuid, s.uuid FROM search_fts f \
+           JOIN search_sections s ON s.section_id = f.rowid \
+           JOIN search_documents d ON d.doc_id = s.doc_id \
+          WHERE search_fts MATCH ? ORDER BY d.markdown_uuid, s.seq",
     )
     .bind(query)
     .fetch_all(index.pool())
@@ -59,7 +59,7 @@ async fn hits(index: &Index, query: &str) -> Vec<(String, Option<String>)> {
 /// still names them: a posting left behind would be found again by a
 /// section that reuses its rowid.
 async fn postings(index: &Index, query: &str) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM sections_fts WHERE sections_fts MATCH ?")
+    sqlx::query_scalar("SELECT count(*) FROM search_fts WHERE search_fts MATCH ?")
         .bind(query)
         .fetch_one(index.pool())
         .await
@@ -95,7 +95,7 @@ async fn sections_and_chunks_are_byte_spans_of_the_document() {
     let (_dir, index) = open().await;
     index.put(&[thread("h1")]).await.unwrap();
     let sections: Vec<(Option<String>, i64, i64)> =
-        sqlx::query_as("SELECT uuid, start_byte, end_byte FROM sections ORDER BY seq")
+        sqlx::query_as("SELECT uuid, start_byte, end_byte FROM search_sections ORDER BY seq")
             .fetch_all(index.pool())
             .await
             .unwrap();
@@ -109,7 +109,7 @@ async fn sections_and_chunks_are_byte_spans_of_the_document() {
         ]
     );
     let chunks: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT start_byte, end_byte, first_section, last_section FROM chunks ORDER BY seq",
+        "SELECT start_byte, end_byte, first_section, last_section FROM search_chunks ORDER BY seq",
     )
     .fetch_all(index.pool())
     .await
@@ -125,7 +125,7 @@ async fn a_document_with_no_text_is_found_by_its_title() {
         .await
         .unwrap();
     assert_eq!(hits(&index, "offsite").await, [hit("d2", None)]);
-    assert_eq!(count(&index, "chunks").await, 0);
+    assert_eq!(count(&index, "search_chunks").await, 0);
 }
 
 /// A changed document drops its old words and sections; each chunk
@@ -141,7 +141,7 @@ async fn a_changed_hash_replaces_a_document() {
         &[(Some("m3"), "dinner on saturday")],
     );
     index.put(&[changed]).await.unwrap();
-    assert_eq!(count(&index, "sections").await, 1);
+    assert_eq!(count(&index, "search_sections").await, 1);
     assert_eq!(postings(&index, "thursday").await, 0);
     assert_eq!(hits(&index, "dinner").await, [hit("d1", Some("m3"))]);
     assert_eq!(
@@ -191,9 +191,9 @@ async fn a_removed_document_leaves_nothing_behind() {
     index.remove(&["d1".to_string()]).await.unwrap();
     assert_eq!(hits(&index, "budget").await, [hit("d2", Some("m9"))]);
     assert_eq!(postings(&index, "lunch").await, 0);
-    assert_eq!(count(&index, "documents").await, 1);
-    assert_eq!(count(&index, "sections").await, 1);
-    assert_eq!(count(&index, "chunks").await, 1);
+    assert_eq!(count(&index, "search_documents").await, 1);
+    assert_eq!(count(&index, "search_sections").await, 1);
+    assert_eq!(count(&index, "search_chunks").await, 1);
 }
 
 #[tokio::test]
@@ -226,34 +226,73 @@ async fn the_files_hold_no_copy_of_the_text() {
     }
 }
 
+/// The index shares the grid index's file: a change of the index's shape
+/// empties its own tables and leaves every other table in the file as it
+/// was, and the file's own shape and kind are the grid's to write.
 #[tokio::test]
-async fn an_index_in_another_shape_is_emptied_and_one_in_this_shape_kept() {
+async fn an_index_in_another_shape_empties_only_its_own_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("index.sqlite");
+    let path = dir.path().join("db.sqlite");
     let index = Index::open(&path).await.unwrap();
     index.put(&[thread("h1")]).await.unwrap();
+    for sql in [
+        "CREATE TABLE grid_rows (uuid TEXT)",
+        "INSERT INTO grid_rows VALUES ('m1')",
+    ] {
+        sqlx::query(sql).execute(index.pool()).await.unwrap();
+    }
     index.close().await;
 
     let index = Index::open(&path).await.unwrap();
     assert_eq!(index.indexed("mail").await.unwrap().len(), 1);
-    sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
-        .execute(index.pool())
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE _datalib_meta SET value = 'an older shape' \
+          WHERE key = 'search_index_schema_hash'",
+    )
+    .execute(index.pool())
+    .await
+    .unwrap();
     index.close().await;
 
     let index = Index::open(&path).await.unwrap();
     assert!(index.indexed("mail").await.unwrap().is_empty());
     assert!(hits(&index, "lunch").await.is_empty());
-    let meta = datalib_store_meta::read(index.pool())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(meta.schema_hash, schema_hash());
+    assert_eq!(count(&index, "grid_rows").await, 1);
+    let mut conn = index.pool().acquire().await.unwrap();
+    let recorded = datalib_store_meta::part_schema_hash_in(
+        &mut conn,
+        datalib_store_meta::StoreKind::SearchIndex,
+    )
+    .await
+    .unwrap();
+    assert_eq!(recorded, Some(schema_hash()));
+    drop(conn);
+    let file = datalib_store_meta::read(index.pool()).await.unwrap();
     assert_eq!(
-        meta.store_kind,
-        Some(datalib_store_meta::StoreKind::SearchIndex)
+        file, None,
+        "the file's own shape is the grid index's to write"
     );
+}
+
+/// A write that changes what the index holds raises its generation; a put
+/// of what it already holds does not, so a reader keeps what it read.
+#[tokio::test]
+async fn only_a_change_raises_the_generation() {
+    let (_dir, index) = open().await;
+    let generation = || async {
+        sqlx::query_scalar::<_, i64>("SELECT generation FROM search_state")
+            .fetch_one(index.pool())
+            .await
+            .unwrap()
+    };
+    let start = generation().await;
+    index.put(&[thread("h1")]).await.unwrap();
+    let put = generation().await;
+    assert!(put > start);
+    index.put(&[thread("h1")]).await.unwrap();
+    assert_eq!(generation().await, put);
+    index.remove(&["d1".to_string()]).await.unwrap();
+    assert!(generation().await > put);
 }
 
 /// A source taken out of the config leaves the index, and the hashes

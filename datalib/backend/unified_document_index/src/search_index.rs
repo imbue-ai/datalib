@@ -1,5 +1,6 @@
 //! Words and Meaning read from our own search index
-//! (`datalib_search_index`) rather than qmd's: the same hits, each placed by
+//! (`datalib_search_index`, its tables in the grid index's file) rather
+//! than qmd's: the same hits, each placed by
 //! its bytes in the document, so landing, the other terms and fusion treat
 //! them as they treat qmd's. A hit names its document; its path is left
 //! for the page that shows it to look up.
@@ -23,7 +24,7 @@ pub type DocumentHit = (String, QmdHit);
 
 async fn open(root: &Path) -> Result<Option<Reader>> {
     Reader::open(
-        &layout::search_index_db(root),
+        &layout::grid_index_db(root),
         &layout::inference_cache_db(root),
     )
     .await
@@ -58,6 +59,24 @@ pub async fn word_hits(
     ))
 }
 
+/// The vectors as they are now, or `None` when `held` was read at the same
+/// generation and cache.
+async fn read_unless_held(
+    reader: &Reader,
+    root: &Path,
+    held: Option<&(ReadAt, Arc<Held>)>,
+) -> Result<Option<(ReadAt, Arc<Held>)>> {
+    let now = (
+        reader.generation().await?,
+        IndexStamp::of(&layout::inference_cache_db(root)),
+    );
+    if held.is_some_and(|(at, _)| *at == now) {
+        return Ok(None);
+    }
+    let vectors = reader.held(&datalib_search_index::model_key()).await?;
+    Ok(Some((now, Arc::new(vectors))))
+}
+
 fn hit(score: f64, place: Place) -> QmdHit {
     QmdHit {
         path: String::new(),
@@ -71,19 +90,24 @@ fn hit(score: f64, place: Place) -> QmdHit {
 }
 
 /// Every embedded chunk, read once and kept across searches: read again
-/// when the index or the cache has changed, unless a search asks for what
-/// is held while a sync writes them.
+/// when the index's generation or the cache has moved, unless a search
+/// asks for what is held while a sync writes them.
 #[derive(Default)]
 pub struct HeldVectors {
-    held: tokio::sync::Mutex<Option<(Stamps, Arc<Held>)>>,
+    held: tokio::sync::Mutex<Option<(ReadAt, Arc<Held>)>>,
 }
+
+/// What held vectors were read at: the index's generation, and the
+/// cache's file. The grid index's own writes move neither.
+type ReadAt = (i64, IndexStamp);
 
 type Stamps = (IndexStamp, IndexStamp);
 
-/// When the index and the cache last changed on disk.
+/// When the file the index is in and the cache last changed on disk: what
+/// says a sync is writing them. The grid index's own writes count too.
 pub fn stamps(root: &Path) -> Stamps {
     (
-        IndexStamp::of(&layout::search_index_db(root)),
+        IndexStamp::of(&layout::grid_index_db(root)),
         IndexStamp::of(&layout::inference_cache_db(root)),
     )
 }
@@ -100,23 +124,20 @@ impl HeldVectors {
 
     async fn current(&self, root: &Path, fresh: Freshness) -> Result<Option<Arc<Held>>> {
         let mut held = self.held.lock().await;
-        let now = stamps(root);
-        if let Some((at, vectors)) = held.as_ref() {
-            if *at == now || fresh == Freshness::AsHeld {
-                return Ok(Some(vectors.clone()));
-            }
+        if let Some((_, vectors)) = held.as_ref().filter(|_| fresh == Freshness::AsHeld) {
+            return Ok(Some(vectors.clone()));
         }
         let Some(reader) = open(root).await? else {
             *held = None;
             return Ok(None);
         };
-        let read = reader.held(&datalib_search_index::model_key()).await;
+        let read = read_unless_held(&reader, root, held.as_ref()).await;
         reader.close().await;
-        let vectors = Arc::new(read?);
-        *held = Some((now, vectors.clone()));
-        Ok(Some(vectors))
+        if let Some(read) = read? {
+            *held = Some(read);
+        }
+        Ok(held.as_ref().map(|(_, vectors)| vectors.clone()))
     }
-
     /// The documents with at least one chunk embedded. `None` when no step
     /// has written the index.
     pub async fn documents(

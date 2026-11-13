@@ -137,10 +137,11 @@ pub(crate) async fn update_keywords(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
+    retire_separate_file(root)?;
     let Some(rows) = rendered(root, group).await? else {
         return Ok(Done::default());
     };
-    let index = Index::open(&layout::search_index_db(root)).await?;
+    let index = Index::open(&layout::grid_index_db(root)).await?;
     let out = update_keywords_in(&index, root, group, &rows, progress, stop).await;
     index.close().await;
     out
@@ -202,7 +203,7 @@ pub(crate) async fn embed(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    let index = Index::open(&layout::search_index_db(root)).await?;
+    let index = Index::open(&layout::grid_index_db(root)).await?;
     let spans = index.chunk_spans(group).await;
     index.close().await;
     let spans = spans?;
@@ -348,7 +349,8 @@ async fn embed_batch(
 /// the cache keep only what the index still names. Touches nothing that
 /// does not exist yet.
 pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)> {
-    let index_path = layout::search_index_db(root);
+    retire_separate_file(root)?;
+    let index_path = layout::grid_index_db(root);
     if !index_path.exists() {
         return Ok((0, 0));
     }
@@ -371,6 +373,24 @@ pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)
 async fn sweep_index(index: &Index, groups: &[String]) -> Result<(usize, HashSet<String>)> {
     let removed = index.keep_sources(groups).await?;
     Ok((removed, index.all_hashes().await?))
+}
+
+/// Deletes the file the search index was before its tables moved into the
+/// grid index's: what it held is made again in the grid index's file.
+fn retire_separate_file(root: &Path) -> Result<()> {
+    let old = layout::retired_search_index_db(root);
+    for suffix in ["", "-wal", "-shm"] {
+        let path = PathBuf::from(format!("{}{suffix}", old.display()));
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                "removed the search index's old file; its tables are in the grid index's now"
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
+        }
+    }
+    Ok(())
 }
 
 /// Where the pinned embedding model is, once provisioned.
@@ -464,7 +484,7 @@ mod tests {
     }
 
     async fn indexed(root: &Path) -> BTreeMap<String, String> {
-        let index = Index::open(&layout::search_index_db(root)).await.unwrap();
+        let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
         let out = index.indexed(GROUP).await.unwrap();
         index.close().await;
         out
@@ -524,6 +544,28 @@ mod tests {
             }
         );
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
+    }
+
+    /// A root upgraded from a build that kept the search index in a file
+    /// of its own: the keyword pass deletes that file and writes the index
+    /// into the grid index's.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_search_indexs_old_file_goes_and_its_tables_are_in_the_grid_index() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let old = layout::retired_search_index_db(root);
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"an older build's index").unwrap();
+        std::fs::write(format!("{}-wal", old.display()), b"its log").unwrap();
+        let rr = render_root(root);
+        let tea = rendered_doc(root, "d-tea", thread("Tea"), doc_md_path(&rr, "d-tea"));
+        commit(root, &[tea], &[]);
+
+        update(root).await;
+        assert!(!old.exists());
+        assert!(!std::path::Path::new(&format!("{}-wal", old.display())).exists());
+        assert_eq!(indexed(root).await.len(), 1);
+        assert!(layout::grid_index_db(root).exists());
     }
 
     /// A render store an older build wrote has neither a document's hash
