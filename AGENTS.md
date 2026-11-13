@@ -378,8 +378,8 @@ such store without copying its points (`docs/dev/time_series.md`). The document 
 queried by the `unified_document_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`), and the muted problems still in
-the index, which come off the Manage counts
+(`datalib/backend/blob_store/README.md`), and the index's problem rows,
+which it counts, less the muted ones, for the Manage counts
 (`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its

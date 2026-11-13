@@ -377,14 +377,17 @@ mod tests {
                 .execute(&mut conn)
                 .await
                 .unwrap();
-            sqlx::query(
-                "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals \
-                 WHERE value = ? AND val_id NOT IN (SELECT rowid FROM vals_fts)",
-            )
-            .bind(value)
-            .execute(&mut conn)
-            .await
-            .unwrap();
+            for index in ["vals_fts", "vals_tri"] {
+                // Audited: the table names are literals.
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "INSERT INTO {index} (rowid, value) SELECT val_id, value FROM vals \
+                     WHERE value = ? AND val_id NOT IN (SELECT rowid FROM {index})"
+                )))
+                .bind(value)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            }
             sqlx::query(
                 "INSERT INTO terms (val_id, kind, row_id) SELECT v.val_id, ?, r.row_id \
                  FROM vals v, rows r WHERE v.value = ? AND r.uuid = ?",

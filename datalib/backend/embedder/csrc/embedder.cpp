@@ -5,6 +5,8 @@
 
 #include "embedder.h"
 
+#include <dlfcn.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -49,6 +51,25 @@ extern "C" {
 ggml_backend_dev_t gpu() {
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
     return dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+}
+
+int32_t dl_embedder_load_module(const char *path, char *err, size_t err_len) {
+    // ggml_backend_load logs a failure without saying why; the loader does.
+    // Asked first, a module that will not load never starts ggml.
+    void *probe = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!probe) {
+        const char *why = dlerror();
+        set_err(err, err_len, why ? why : "dlopen failed");
+        return -1;
+    }
+    dlclose(probe);
+    init_once();
+    ggml_backend_reg_t reg = ggml_backend_load(path);
+    if (!reg) {
+        set_err(err, err_len, "loaded, but ggml did not take it as a backend");
+        return -1;
+    }
+    return (int32_t)ggml_backend_reg_dev_count(reg);
 }
 
 int32_t dl_embedder_gpu_available(void) {

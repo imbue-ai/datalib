@@ -405,8 +405,16 @@ onUnmounted(() => {
           <span
             v-if="groupRow.problems.length"
             v-cell="renderBadges('problems', groupRow.problems)"
-            title="Double-click the counts for the problems"
-            @dblclick="actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)"
+            :title="
+              groupRow.problems_query
+                ? 'Double-click the counts for the problems'
+                : 'Double-click the counts for the log'
+            "
+            @dblclick="
+              groupRow.problems_query
+                ? actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)
+                : actions.openStepLog(groupRow)
+            "
           />
         </span>
         <span v-cell="renderStatus(groupRow.status)" class="sd-status" />

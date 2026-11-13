@@ -307,10 +307,15 @@ Words alone finds less, as expected: a thread whose words are in
 different messages is no hit. With Meaning on it ranks better and lands
 better than qmd, at the same speed; whole chunks embedded (qmd embedded
 one over 512 tokens from its last 512) and chunks that follow messages
-are the likely reasons. The Words tail is searches with `from:`, which
-narrow to every document a person wrote before ranking; it is qmd's slow
-case too. Measuring the whole set with Meaning on waits for the large
-sources to be embedded.
+are the likely reasons. The Words tail is searches with `from:`, and
+it was the grid's, not either index's: on one clone with one build, the
+93 `from:` searches took 71 s on this index and 92 s on qmd (43 s and
+51 s again warm), and the one statement over a second in both was the
+grid's lookup of who `from:x` names, which read all 1.09M search-term
+values for a bare word (1.5–2 s each under load). The values now have a
+trigram index (`vals_tri`, 142 MB, under 10 ms a lookup); the p90 in
+the table above predates it. Measuring the whole set with Meaning on
+waits for the large sources to be embedded.
 
 Two things the eval found on the way: a chunk of dense text can run past
 the model's 2,048-token context within its 3,600 bytes (35 of 21k here),

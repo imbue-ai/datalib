@@ -33,6 +33,7 @@ rust_test(
     size = "small",
     crate = ":datalib_embedder",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
 
 # The embedder against qmd itself: the pinned qmd package run by the

@@ -1365,10 +1365,14 @@ export type ManageRow = {
   /// ended: work the next sync starts on. A group's is its first step
   /// that owes.
   owed: Quantity;
-  /// Errors and warnings the step's store holds, as of its last run:
-  /// a red and a yellow chip, each only when above zero. A group shows
-  /// its last counting step's.
+  /// The error and warning rows of the problems list the step found,
+  /// less the muted ones: a red and a yellow chip, each only when above
+  /// zero; and a grey one for what only its log holds. A group sums its
+  /// steps'.
   problems: Chip[];
+  /// The problems grid's query for exactly the rows the red and yellow
+  /// chips count; null when they count none.
+  problems_query: string | null;
   /// The items the step's store holds, as of the run it last counted
   /// in, with the series behind them. No value — drawn blank — for
   /// every row but a render step and the group above it.

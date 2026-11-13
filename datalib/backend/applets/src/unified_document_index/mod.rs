@@ -2908,6 +2908,16 @@ mod tests {
             values("to", "", "from:bo@example.com").await,
             ["email:ann@example.com"]
         );
+        // Any part of a value, case-blind, by trigram or, shorter, by
+        // reading every value.
+        assert_eq!(
+            values("from", "XAMPLE.c", "").await,
+            ["email:ann@example.com", "email:bo@example.com"]
+        );
+        assert_eq!(
+            values("from", "nn", "").await,
+            ["Ann", "email:ann@example.com"]
+        );
     }
 
     /// Picard writes as "Jean-Luc" by email and Slack; Riker, as "Will",

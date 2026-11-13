@@ -14,9 +14,10 @@
 <data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
-                                                  label and name each row answers to, full-text
-                                                  indexed, and the names each handle went by
-                                                  (`etl/render/src/search_terms.rs`); plain
+                                                  label and name each row answers to, indexed
+                                                  by word and by every three characters (so
+                                                  `from:ike` is a lookup), and the names each
+                                                  handle went by (`etl/render/src/search_terms.rs`); plain
                                                   SQLite in WAL mode, its version the
                                                   `store_generation` row. Beside them the
                                                   search index's `search_*` tables: each
@@ -46,8 +47,8 @@
 <data_root>/datalib_curated/datalib_problem_mutes/mutes.doltlite_db
                                                   the problem rows a person muted; written
                                                   only by the `unified_document_index`
-                                                  applet, read by `datalib-http` for the
-                                                  Manage counts
+                                                  applet, read by `datalib-http`, which
+                                                  leaves them out of the Manage counts
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
                                                   the disk, over time (plain SQLite;

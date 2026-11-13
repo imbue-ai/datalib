@@ -18,6 +18,11 @@ typedef struct dl_embedder dl_embedder;
 dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
                               int32_t use_gpu, char *err, size_t err_len);
 
+// Loads a ggml backend module (libggml-cuda.so) from exactly path, before
+// any embedder opens. The count of devices it offers, or -1 with the reason
+// (the loader's own message) in err.
+int32_t dl_embedder_load_module(const char *path, char *err, size_t err_len);
+
 // Whether this build and machine offer a GPU at all.
 int32_t dl_embedder_gpu_available(void);
 void dl_embedder_close(dl_embedder *e);
