@@ -126,6 +126,10 @@ pub struct ColumnSpec {
     /// source's own problems.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hide_when_uniform: bool,
+    /// The producer cannot order its rows by this column, so the viewer
+    /// offers no sort on it: a value kept beside the table, not in it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsorted: bool,
 }
 
 /// The key a term on this column starts with (`author:`), and the row
@@ -239,6 +243,7 @@ impl ColumnSpec {
             badges: None,
             width: None,
             hide_when_uniform: false,
+            unsorted: false,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -263,6 +268,10 @@ impl ColumnSpec {
     }
     pub fn hide_when_uniform(mut self) -> Self {
         self.hide_when_uniform = true;
+        self
+    }
+    pub fn unsorted(mut self) -> Self {
+        self.unsorted = true;
         self
     }
 }

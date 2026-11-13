@@ -306,10 +306,7 @@ pub struct GridIndexSummary {
     pub sources_failed: Vec<(String, String)>,
 }
 
-/// The scope key of the one problem the index records itself: a
-/// source's render store it could not read. Every other row in the
-/// index is a copy of a source's.
-pub const UNREADABLE_STORE_KEY: &str = "render_store";
+pub use datalib_schema::problems::INDEX_OWN_SCOPE_KEY as UNREADABLE_STORE_KEY;
 
 /// What a row the index recorded itself is about, in words; `None` for
 /// any other key.

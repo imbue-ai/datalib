@@ -308,6 +308,9 @@ datalib/
                    Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
+    problem_mutes/ the problem rows a person muted, under
+                   `datalib_curated/`; the `unified_document_index`
+                   applet is its one writer, `datalib-http` reads it.
     unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
@@ -371,7 +374,9 @@ such store without copying its points (`docs/dev/time_series.md`). The document 
 queried by the `unified_document_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`). A render
+(`datalib/backend/blob_store/README.md`), and the muted problems still in
+the index, which come off the Manage counts
+(`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -797,6 +802,7 @@ upstream (block types, MIME types), free-form display text
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| who muted a problem row: a person, or an agent | `MutedHow` | `problem_mutes/src/lib.rs` (`datalib_problem_mutes`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side gets the ones the UI switches on as string-literal

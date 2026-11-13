@@ -73,6 +73,9 @@ pub enum StoreKind {
     /// `datalib_curated/datalib_contacts/contacts.doltlite_db`: contacts a person
     /// made and the handles they linked to them.
     Contacts,
+    /// `datalib_curated/datalib_problem_mutes/mutes.doltlite_db`: the
+    /// problem rows a person muted.
+    ProblemMutes,
 }
 
 impl StoreKind {

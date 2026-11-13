@@ -663,7 +663,7 @@ watch(
           <li
             v-for="p in problems"
             :key="p.problem_uuid"
-            :class="['problem', `problem-${p.severity}`]"
+            :class="['problem', `problem-${p.severity}`, { 'problem-muted': p.muted }]"
             :data-problem-uuid="p.problem_uuid"
             :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
           >
@@ -679,6 +679,9 @@ watch(
               <template v-else>{{ problemLabel(p) }}</template>
               <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
             </span>
+            <span v-if="p.muted" class="problem-muted-tag" title="Muted: it counts toward nothing"
+              >muted</span
+            >
           </li>
         </ul>
         <div
@@ -931,6 +934,15 @@ watch(
 .problem-text {
   flex: 1 1 auto;
   min-width: 0;
+}
+/* Muted from the problems grid: still listed, faded. */
+.problem-muted {
+  opacity: 0.6;
+}
+.problem-muted-tag {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--datalib-muted);
 }
 .problem-jump {
   color: inherit;

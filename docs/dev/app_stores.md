@@ -33,6 +33,11 @@
                                                   linked to them and the photo they put
                                                   on one; written only by the
                                                   `datalib_contacts` applet
+<data_root>/datalib_curated/datalib_problem_mutes/mutes.doltlite_db
+                                                  the problem rows a person muted; written
+                                                  only by the `unified_document_index`
+                                                  applet, read by `datalib-http` for the
+                                                  Manage counts
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
                                                   the disk, over time (plain SQLite;

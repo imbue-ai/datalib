@@ -247,7 +247,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
       url: problemsUrl,
       q,
       name,
-      placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
+      placeholder: "search problems…  (try: severity:error, -stage:fetch, muted:no)",
     };
     h.host.openCards(`gridView(${JSON.stringify(opts)})`);
   }

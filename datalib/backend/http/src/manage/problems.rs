@@ -5,12 +5,15 @@
 //! warnings. A red and a yellow number when there are any; nothing when
 //! there are none, or when the step has never counted. A group's is the
 //! sum of its steps', since each step counts only what it found itself.
+//! A problem a person muted that the index still holds is taken off the
+//! count of the step that found it (`problem_mutes/README.md`).
 //! The System row's count is the config's own warnings.
 
 use std::collections::HashMap;
 
 use datalib_columns::{Chip, ChipKind};
-use datalib_problems::{Severity, METRIC};
+use datalib_problem_mutes::Muted;
+use datalib_problems::{CountedBy, Severity, METRIC};
 use datalib_runs::MetricRow;
 
 /// What one step last counted, and what the runner counted of it.
@@ -25,6 +28,8 @@ pub struct ProblemCounts {
     pub failed_passes: i64,
     /// The run that count comes from.
     pub failed_passes_run_id: String,
+    /// Taken off `errors` and `warnings`: problems found and muted.
+    pub muted: Muted,
 }
 
 /// `step id → counts`, from the newest [`METRIC`] samples per step and
@@ -61,6 +66,39 @@ pub fn counts_by_step(
     out
 }
 
+/// Whose count a step keeps, by its function: a source's download and
+/// render count its problems, the grid index its own; any other step
+/// counts what nothing can mute.
+fn counter_of(step: &str) -> Option<(Option<String>, CountedBy)> {
+    let (group, function) = step.rsplit_once('/')?;
+    match function {
+        "ingest" => Some((Some(group.to_string()), CountedBy::Download)),
+        "render_markdown" => Some((Some(group.to_string()), CountedBy::Render)),
+        "grid_index" => Some((None, CountedBy::Index)),
+        _ => None,
+    }
+}
+
+/// Each step's count with the problems muted in it taken off. A step's
+/// count and the index are read at different moments, so a mute can
+/// outnumber what the step last counted; the count stops at zero.
+pub fn take_off_mutes(
+    counts: &mut HashMap<String, ProblemCounts>,
+    muted: &HashMap<(Option<String>, CountedBy), Muted>,
+) {
+    for (step, c) in counts.iter_mut() {
+        let Some(m) = counter_of(step).and_then(|key| muted.get(&key)) else {
+            continue;
+        };
+        c.muted = Muted {
+            errors: m.errors.min(c.errors),
+            warnings: m.warnings.min(c.warnings),
+        };
+        c.errors -= c.muted.errors;
+        c.warnings -= c.muted.warnings;
+    }
+}
+
 /// A step's chips: bare numbers, the words on hover.
 pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
     let Some(c) = counts else {
@@ -69,6 +107,7 @@ pub fn chips(counts: Option<&ProblemCounts>) -> Vec<Chip> {
     draw(
         c.errors,
         c.warnings,
+        c.muted,
         c.failed_passes,
         &format!("this step found, as of run {}", c.run_id),
         &format!("as of run {}", c.failed_passes_run_id),
@@ -81,6 +120,10 @@ pub fn group_chips(steps: &[Option<&ProblemCounts>]) -> Vec<Chip> {
     draw(
         counted.iter().map(|c| c.errors).sum(),
         counted.iter().map(|c| c.warnings).sum(),
+        Muted {
+            errors: counted.iter().map(|c| c.muted.errors).sum(),
+            warnings: counted.iter().map(|c| c.muted.warnings).sum(),
+        },
         counted.iter().map(|c| c.failed_passes).sum(),
         "its steps found, as of each one's last run",
         "as of each step's last run",
@@ -88,17 +131,33 @@ pub fn group_chips(steps: &[Option<&ProblemCounts>]) -> Vec<Chip> {
 }
 
 /// `found` says whose the errors and warnings are; `ran`, when the
-/// failed passes were counted.
-fn draw(errors: i64, warnings: i64, failed_passes: i64, found: &str, ran: &str) -> Vec<Chip> {
+/// failed passes were counted. A muted problem draws nothing; the hover
+/// says how many there are beside the ones counted.
+fn draw(
+    errors: i64,
+    warnings: i64,
+    muted: Muted,
+    failed_passes: i64,
+    found: &str,
+    ran: &str,
+) -> Vec<Chip> {
     let plural = |n: i64| if n == 1 { "" } else { "s" };
+    let besides = |n: i64| {
+        if n > 0 {
+            format!(", and {n} more you muted")
+        } else {
+            String::new()
+        }
+    };
     let mut out = Vec::new();
     if errors > 0 {
         out.push(Chip {
             kind: ChipKind::Error,
             text: errors.to_string(),
             title: format!(
-                "{errors} error{s} {found} \u{2014} double-click to see them",
-                s = plural(errors)
+                "{errors} error{s} {found}{more} \u{2014} double-click to see them",
+                s = plural(errors),
+                more = besides(muted.errors)
             ),
         });
     }
@@ -107,8 +166,9 @@ fn draw(errors: i64, warnings: i64, failed_passes: i64, found: &str, ran: &str) 
     let mut said = Vec::new();
     if warnings > 0 {
         said.push(format!(
-            "{warnings} warning{s} {found} \u{2014} double-click to see them",
-            s = plural(warnings)
+            "{warnings} warning{s} {found}{more} \u{2014} double-click to see them",
+            s = plural(warnings),
+            more = besides(muted.warnings)
         ));
     }
     match failed_passes {
@@ -270,6 +330,82 @@ mod tests {
             vec![(ChipKind::Error, "2"), (ChipKind::Warning, "2")]
         );
         assert!(group_chips(&[None, None]).is_empty());
+    }
+
+    /// A muted problem took the source off the Dashboard's Needs you
+    /// only if it comes off the count the Needs you reads: the count of
+    /// the step that found it, and no other.
+    #[test]
+    fn a_mute_comes_off_the_count_of_the_step_that_found_it() {
+        let count = |errors, warnings| ProblemCounts {
+            errors,
+            warnings,
+            run_id: "r1".into(),
+            ..Default::default()
+        };
+        let mut counts: HashMap<String, ProblemCounts> = [
+            ("enterprise/ingest", count(0, 1)),
+            ("enterprise/render_markdown", count(2, 3)),
+            ("defiant/render_markdown", count(1, 0)),
+            ("unified_document_index/grid_index", count(1, 0)),
+            ("enterprise/keyword_index", count(4, 0)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let muted: HashMap<(Option<String>, CountedBy), Muted> = [
+            (
+                (Some("enterprise".to_string()), CountedBy::Download),
+                Muted {
+                    errors: 0,
+                    warnings: 1,
+                },
+            ),
+            (
+                (Some("enterprise".to_string()), CountedBy::Render),
+                Muted {
+                    errors: 2,
+                    warnings: 5,
+                },
+            ),
+            (
+                (None, CountedBy::Index),
+                Muted {
+                    errors: 1,
+                    warnings: 0,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        take_off_mutes(&mut counts, &muted);
+        let left = |step: &str| (counts[step].errors, counts[step].warnings);
+        assert_eq!(left("enterprise/ingest"), (0, 0));
+        assert_eq!(left("enterprise/render_markdown"), (0, 0), "stops at zero");
+        assert_eq!(left("defiant/render_markdown"), (1, 0), "another source's");
+        assert_eq!(left("unified_document_index/grid_index"), (0, 0));
+        assert_eq!(
+            left("enterprise/keyword_index"),
+            (4, 0),
+            "counts nothing muted"
+        );
+        assert!(chips(counts.get("enterprise/render_markdown")).is_empty());
+        assert!(group_chips(&[
+            counts.get("enterprise/ingest"),
+            counts.get("enterprise/render_markdown")
+        ])
+        .is_empty());
+
+        let mut one_muted: HashMap<String, ProblemCounts> =
+            [("enterprise/render_markdown".to_string(), count(3, 0))].into();
+        take_off_mutes(&mut one_muted, &muted);
+        let drawn = chips(one_muted.get("enterprise/render_markdown"));
+        assert_eq!(drawn[0].text, "1");
+        assert!(
+            drawn[0].title.contains("and 2 more you muted"),
+            "{}",
+            drawn[0].title
+        );
     }
 
     /// A pass that failed and was run again left the row clean: the run

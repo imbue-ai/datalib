@@ -160,6 +160,33 @@ closed_vocabulary! {
     }
 }
 
+/// The scope key of a row the grid index records itself: a source's
+/// render store it could not read. Every other row in the index is a copy.
+pub const INDEX_OWN_SCOPE_KEY: &str = "render_store";
+
+/// Which step's [`METRIC`] count a row in the grid index is in: each step
+/// counts only the rows it found itself (`etl/README.md` §"Problems flow
+/// downstream with the data").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CountedBy {
+    /// The source's download: a fetch-stage row.
+    Download,
+    /// The source's render: every other row of the source.
+    Render,
+    /// The grid index, about a render store it could not read.
+    Index,
+}
+
+impl CountedBy {
+    pub fn of(stage: Stage, scope_kind: ScopeKind, scope_key: &str) -> Self {
+        match (stage, scope_kind) {
+            (_, ScopeKind::Entity) if scope_key == INDEX_OWN_SCOPE_KEY => CountedBy::Index,
+            (Stage::Fetch, _) => CountedBy::Download,
+            _ => CountedBy::Render,
+        }
+    }
+}
+
 /// The metric series a step reports its whole-store problem counts on,
 /// one sample per severity under the [`METRIC_LABEL`] label, every run
 /// and zero included: the Manage screen reads a missing series as
@@ -707,6 +734,32 @@ mod tests {
             .severity,
             Severity::Warning,
             "a writer that says a severity keeps it"
+        );
+    }
+
+    /// A mute takes a row off the count of the step that found it, so a
+    /// fetch row the render copied must still be the download's.
+    #[test]
+    fn each_row_is_counted_by_the_step_that_found_it() {
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Entity, "emails:1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Markdown, "md-1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::GridRow, ScopeKind::Markdown, "md-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Parse, ScopeKind::Entity, "e-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Render, ScopeKind::Entity, INDEX_OWN_SCOPE_KEY),
+            CountedBy::Index
         );
     }
 

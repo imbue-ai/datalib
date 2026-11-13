@@ -1,0 +1,39 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Problem rows a person muted (`datalib_curated/datalib_problem_mutes/`):
+# the store's shape, its reads and writes over a pool the caller opened,
+# and what of it is still in the grid index. No ingest machinery, so
+# `datalib-http` reads it; the `unified_document_index` applet is its one
+# writer. See README.md.
+rust_library(
+    name = "datalib_problem_mutes",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_problem_mutes",
+    edition = "2021",
+    proc_macro_deps = ["//datalib/backend/etl/macros:datalib_etl_macros"],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runtime:datalib_runtime",
+        # For the `BulkUpsertable` impl `PortableTable` generates.
+        "//datalib/backend/table:datalib_table",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "problem_mutes_unittests",
+    size = "small",
+    crate = ":datalib_problem_mutes",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

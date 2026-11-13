@@ -86,8 +86,9 @@ has the parameters.
 | `GET /docs` | the documents |
 | `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
-| `GET /problems?q=` | what a step could not fully do to a record |
+| `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
+| `POST /problems/mute` | `{"problem_uuids": […], "muted": true}` mutes those rows, `false` unmutes them; add `"agent": "<name>"` when an agent mutes for a person. A muted row stays listed and counts toward nothing until it changes |
 | `GET /embedding_map` | the documents' embeddings laid out on a plane; `/embedding_map/matches` the ones a search finds |
 | `POST /sql` | one `SELECT` over any store under the data root, a page of rows at a time (below) |
 | `GET /sql/stores` | the stores `/sql` reads |

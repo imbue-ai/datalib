@@ -43,7 +43,7 @@ use status::{StatusView, StepEdges};
 
 pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
-pub use problems::{counts_by_step, ProblemCounts};
+pub use problems::{counts_by_step, take_off_mutes, ProblemCounts};
 pub use queue::{owed_by_step, queue_drain, Owed, QueueDrain};
 pub use status::dropped_detail;
 

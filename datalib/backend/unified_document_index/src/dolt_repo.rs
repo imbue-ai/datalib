@@ -15,7 +15,7 @@ use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
-use crate::problems::ProblemsQuery;
+use crate::problems::{Ids, ProblemsQuery};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{
@@ -293,7 +293,15 @@ fn ordered_sql<C: Column>(
     sort: &[Sort<C>],
     within: &[Within<C>],
 ) -> (String, Vec<String>) {
-    let (where_sql, params) = where_within(q, within);
+    ordered_sql_where(table, where_within(q, within), sort)
+}
+
+/// [`ordered_sql`] over a `WHERE` already built.
+fn ordered_sql_where<C: Column>(
+    table: &str,
+    (where_sql, params): (String, Vec<String>),
+    sort: &[Sort<C>],
+) -> (String, Vec<String>) {
     let order = order_by(sort).unwrap_or_else(default_order::<C::Table>);
     let key = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     (
@@ -563,7 +571,17 @@ impl At {
         sort: &[Sort<C>],
         within: &[Within<C>],
     ) -> Result<Vec<String>, RepoError> {
-        let (sql, params) = ordered_sql(table, q, sort, within);
+        self.keys_where(table, where_within(q, within), sort).await
+    }
+
+    /// [`Self::ordered_keys`] over a `WHERE` already built.
+    async fn keys_where<C: Column>(
+        &mut self,
+        table: &str,
+        where_params: (String, Vec<String>),
+        sort: &[Sort<C>],
+    ) -> Result<Vec<String>, RepoError> {
+        let (sql, params) = ordered_sql_where(table, where_params, sort);
         // Audited: the table name is a literal on `At`, every column name
         // a column enum's `as_str`, and every value bound.
         let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
@@ -1091,13 +1109,16 @@ impl IndexRepo for DoltRepo {
     async fn problem_keys(
         &self,
         q: &ProblemsQuery,
+        ids: &Ids,
         sort: &[Sort<ProblemRowColumn>],
         within: &[Within<ProblemRowColumn>],
     ) -> Result<Listing, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let uuids = at.ordered_keys(at.problems, q, sort, within).await?;
+        let uuids = at
+            .keys_where(at.problems, ids.narrow(where_within(q, within)), sort)
+            .await?;
         Ok(Listing {
             uuids,
             at: Some(at.commit),
@@ -1115,12 +1136,13 @@ impl IndexRepo for DoltRepo {
     async fn problem_groups(
         &self,
         q: &ProblemsQuery,
+        ids: &Ids,
         by: &[ProblemRowColumn],
     ) -> Result<Grouping<LocatedProblem>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
-        let (where_sql, params) = where_within(q, &[]);
+        let (where_sql, params) = ids.narrow(where_within(q, &[]));
         let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
         let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
         let samples = at.problems_in(&sample_keys).await?;
