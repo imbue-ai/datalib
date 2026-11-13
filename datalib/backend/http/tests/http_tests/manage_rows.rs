@@ -627,6 +627,15 @@ async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
         "source:slack -stage:fetch -stage:time_series -stage:occurrences -doc:render_store \
          -severity:info muted:no"
     );
+    assert_eq!(
+        chips_of(&rows, "group:slack"),
+        vec![chip("error", "1"), chip("warning", "1")],
+        "a group is its steps' rows together, each kind summed"
+    );
+    assert_eq!(
+        rows["group:slack"]["problems_query"],
+        "source:slack -doc:render_store -severity:info muted:no"
+    );
     mutes.close().await;
 }
 

@@ -4,7 +4,8 @@
 # index's embedder needs to run one GGUF embedding model. The source lists
 # follow ggml/src/CMakeLists.txt, ggml/src/ggml-cpu/CMakeLists.txt and
 # src/CMakeLists.txt at the pinned release; a bump re-reads them.
-# On macOS, Metal too, with its shader source embedded in the binary.
+# On macOS, Metal too, with its shader source embedded in the binary; on
+# Linux x86_64, CUDA as a module built apart (at the end of this file).
 # Left out: every other GPU backend, OpenMP, Accelerate and KleidiAI (a
 # second download), and the tools under common/ and tools/.
 
@@ -189,6 +190,10 @@ cc_library(
             "-ldl",
             "-lm",
             "-l:libgcc.a",
+            # For libggml-cuda.so, which takes ggml from the program
+            # that loads it (below). A list, not --export-dynamic-symbol:
+            # gold, which links the gnu builds, takes no glob there.
+            "-Wl,--dynamic-list=$(execpath @@//third-party/llama_cpp:ggml_exports.dynlist)",
         ],
         "@platforms//os:macos": [
             "-framework",
@@ -200,7 +205,11 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+    additional_linker_inputs = ["@@//third-party/llama_cpp:ggml_exports.dynlist"],
     visibility = ["//visibility:public"],
+    # Whole, so a part of ggml that only libggml-cuda.so calls is still
+    # there to export.
+    alwayslink = True,
     deps = select({
         "@platforms//os:macos": [":ggml_metal_objc"],
         "//conditions:default": [],
@@ -226,67 +235,20 @@ cc_library(
     deps = [":ggml"],
 )
 
-# The CUDA backend, as upstream's GGML_BACKEND_DL build makes it: ggml's
-# core as a shared library, libggml-base.so, and the backend as a module,
-# libggml-cuda.so, that links it and that a program loads with
-# ggml_backend_load when there is a GPU (docs/dev/plans/embed_on_modal.md).
-# The CUDA runtime and cuBLAS are linked into the module statically, so it
-# needs only the driver's libcuda.so.1 from the host. Linux x86_64 only;
-# nothing outside this file depends on these yet.
-
-GGML_BASE_SRCS = [
-    "ggml/src/ggml.c",
-    "ggml/src/ggml.cpp",
-    "ggml/src/ggml-alloc.c",
-    "ggml/src/ggml-backend.cpp",
-    "ggml/src/ggml-backend-meta.cpp",
-    "ggml/src/ggml-opt.cpp",
-    "ggml/src/ggml-threading.cpp",
-    "ggml/src/ggml-quants.c",
-    "ggml/src/gguf.cpp",
-]
+# The CUDA backend as a module, libggml-cuda.so, that a gnu build loads
+# with ggml_backend_load when there is a GPU
+# (docs/dev/plans/embed_on_modal.md). Upstream links such a module against
+# a shared libggml-base.so; ours leaves ggml's symbols undefined and takes
+# them from the program that loads it, whose ggml is linked in statically
+# and exported (`ggml`'s linkopts above), so the process holds one ggml
+# and the binaries stay self-contained. The module needs the host's
+# libcuda.so.1 and cuBLAS (libcublas.so.12, libcublasLt.so.12); the CUDA
+# runtime is linked in. Linux x86_64 only.
 
 LINUX_X86_64 = [
     "@platforms//os:linux",
     "@platforms//cpu:x86_64",
 ]
-
-cc_library(
-    name = "ggml_base_objs",
-    # ggml-quants.c includes ggml-cpu/ggml-cpu-impl.h.
-    srcs = GGML_BASE_SRCS + glob([
-        "ggml/src/*.h",
-        "ggml/src/ggml-cpu/*.h",
-    ]),
-    hdrs = glob(["ggml/include/*.h"]),
-    conlyopts = ["-std=gnu11"],
-    copts = COMMON_COPTS + [
-        "-DGGML_VERSION=\\\"" + GGML_VERSION + "\\\"",
-        "-DGGML_COMMIT=\\\"" + LLAMA_RELEASE + "\\\"",
-        "-DGGML_BUILD",
-        "-DGGML_SHARED",
-    ],
-    cxxopts = ["-std=c++17"],
-    defines = ["GGML_BACKEND_DL"],
-    includes = [
-        "ggml/include",
-        "ggml/src",
-    ],
-    linkopts = [
-        "-lpthread",
-        "-lm",
-    ],
-    target_compatible_with = LINUX_X86_64,
-    alwayslink = True,
-)
-
-cc_shared_library(
-    name = "ggml_base_so",
-    shared_lib_name = "libggml-base.so",
-    target_compatible_with = LINUX_X86_64,
-    visibility = ["//visibility:public"],
-    deps = [":ggml_base_objs"],
-)
 
 # The four fattn-vec instances upstream builds without GGML_CUDA_FA_ALL_QUANTS.
 GGML_CUDA_SRCS = glob(
@@ -347,52 +309,16 @@ cuda_library(
     ],
     target_compatible_with = LINUX_X86_64,
     alwayslink = True,
+    # cuBLAS is linked as the host's libcublas.so.12: static, it was most of
+    # a 939 MB module. Anyone running CUDA has the toolkit's libraries.
     deps = [
-        ":cublas_static",
+        "@cuda//:cublas",
         "@cuda//:cuda",
-    ],
-)
-
-# cuBLAS's static archives, picked by name out of the component's files.
-genrule(
-    name = "cublas_static_archives",
-    srcs = ["@cuda//:cublas_all_files"],
-    outs = [
-        "libcublas_static.a",
-        "libcublasLt_static.a",
-    ],
-    cmd = """
-for f in $(SRCS); do
-  case "$$f" in
-    */libcublas_static.a) cp "$$f" $(location libcublas_static.a) ;;
-    */libcublasLt_static.a) cp "$$f" $(location libcublasLt_static.a) ;;
-  esac
-done
-""",
-    target_compatible_with = LINUX_X86_64,
-)
-
-cc_library(
-    name = "cublas_static",
-    srcs = [
-        "libcublas_static.a",
-        "libcublasLt_static.a",
-    ],
-    linkopts = [
-        "-ldl",
-        "-lpthread",
-        "-lrt",
-    ],
-    target_compatible_with = LINUX_X86_64,
-    deps = [
-        "@cuda//:cublas_headers",
-        "@cuda//:culibos_a",
     ],
 )
 
 cc_shared_library(
     name = "ggml_cuda_so",
-    dynamic_deps = [":ggml_base_so"],
     shared_lib_name = "libggml-cuda.so",
     target_compatible_with = LINUX_X86_64,
     visibility = ["//visibility:public"],

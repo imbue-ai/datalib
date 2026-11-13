@@ -105,6 +105,16 @@ cuda.redist_json(
 cuda.toolkit(name = "cuda")
 use_repo(cuda, "cuda")
 
+# cuobjdump, from the same manifest but unknown to rules_cuda, reports
+# what GPU code the module holds (.github/workflows/cuda.yml).
+http_archive(
+    name = "cuda_cuobjdump",
+    build_file_content = 'exports_files(["bin/cuobjdump"])',
+    sha256 = "ee0de40e8c18068bfcc53e73510e7e7a1a80555205347940df67fa525d24452f",
+    strip_prefix = "cuda_cuobjdump-linux-x86_64-12.9.82-archive",
+    urls = ["https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-12.9.82-archive.tar.xz"],
+)
+
 # The autoconf source tarball, for its pre-generated `shell.c` — the
 # sqlite3-shell entry point that `//third-party/doltlite:doltlite`
 # links against the amalgamation to get a CLI for tests.
