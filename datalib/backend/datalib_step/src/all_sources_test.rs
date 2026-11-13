@@ -120,7 +120,8 @@ fn generate() -> String {
     out.push('\n');
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
-        "\n# The SQL index behind the grid and search reads every source's documents;\n\
+        "\n# The SQL index behind the grid and search reads every source's documents,\n\
+         # and the problem rows of its time-series and occurrences steps;\n\
          # the search index's aggregator reads every source's keyword index and\n\
          # embeddings, and keeps the search index to the sources it names.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Document Index\"\n\n\
@@ -139,7 +140,10 @@ fn generate() -> String {
          [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
-        inputs(&sources, &["render_markdown"]),
+        inputs(
+            &sources,
+            &["render_markdown", "render_time_series", "render_occurrences"]
+        ),
         inputs(&sources, &["keyword_index", "embed"]),
         inputs(&sources, &["render_time_series"]),
     ));

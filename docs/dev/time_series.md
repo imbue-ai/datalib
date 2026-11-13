@@ -35,7 +35,13 @@ Three sources do:
 - **`render_time_series`** (`datalib/backend/datalib_step/src/time_series.rs`)
   reads the source's raw store, builds every time series in memory and
   hands them to `datalib_etl_time_series::apply`, which writes only what
-  differs.
+  differs. A file whose time series could not be read (a FIT file that
+  will not parse, or one the blob store no longer holds) costs only its
+  own time series: it is a warning row in the store's `problems`, stage
+  `time_series` (`datalib_etl_time_series::unreadable_problems`).
+  `grid_index` reads the step too, for those rows alone, and copies them
+  into the problems list, where the step's Manage row counts them
+  (`etl/README.md` §"Problems flow downstream with the data").
 - **`time_series_index`** (same file) reads each source store named in
   its `inputs` at that store's newest commit. It copies the store's
   rows and records the store's path and that commit. It copies no
@@ -46,7 +52,8 @@ Three sources do:
 
 ## A source's store
 
-Two tables (`datalib/backend/time_series_schema/src/`).
+Two tables (`datalib/backend/time_series_schema/src/`), and the
+`problems` every store a step owns holds (§"The path").
 
 **`time_series`**, one row per time series:
 

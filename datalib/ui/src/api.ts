@@ -229,7 +229,8 @@ export type EdgeOut = {
 /// The words a problem's closed vocabularies take. Mirrors
 /// `datalib_problems`; change both halves together.
 export type ProblemSeverity = "error" | "warning" | "info";
-export type ProblemStage = "fetch" | "parse" | "render" | "grid_row";
+export type ProblemStage =
+  "fetch" | "parse" | "render" | "grid_row" | "time_series" | "occurrences";
 export type ProblemOutcome = "dropped" | "nulled" | "ok";
 export type ProblemReason =
   | "undeserializable"

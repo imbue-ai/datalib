@@ -5,10 +5,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::stop::StopFlag;
-use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_etl_render::grid_index::{build_grid_index_for, open_index, OwnStore};
+use datalib_schema::problems::{Severity, Stage, METRIC};
 
 use crate::events::{Emitter, OutputClaim};
+use crate::function::Function;
 use crate::source::StepEnv;
 
 /// The one tree this step writes, `unified_document_index/grid_index`, as the
@@ -19,6 +20,37 @@ pub fn out_rel() -> String {
         datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
         datalib_core::layout::GRID_DIR
     )
+}
+
+/// The inputs whose render store this step indexes, and the stores of
+/// the steps whose problem rows alone it copies, each with the stage
+/// those rows are in.
+fn split_inputs(data_root: &Path, inputs: &[String]) -> (Vec<String>, Vec<OwnStore>) {
+    let mut render = Vec::new();
+    let mut own = Vec::new();
+    for input in inputs {
+        let (group, function) = input.rsplit_once('/').unwrap_or((input, ""));
+        let (stage, path) = match Function::parse(function) {
+            Some(Function::RenderTimeSeries) => (
+                Stage::TimeSeries,
+                datalib_etl::layout::render_time_series_db(data_root, group),
+            ),
+            Some(Function::RenderOccurrences) => (
+                Stage::Occurrences,
+                datalib_etl::layout::render_occurrences_db(data_root, group),
+            ),
+            _ => {
+                render.push(input.clone());
+                continue;
+            }
+        };
+        own.push(OwnStore {
+            source_id: group.to_string(),
+            stage,
+            path,
+        });
+    }
+    (render, own)
 }
 
 pub async fn run(
@@ -46,8 +78,10 @@ pub async fn run(
 
     // The stores to read come from the graph, not from a directory scan:
     // the same rule the qmd step follows, so the two indexes agree on
-    // what a source is.
-    let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
+    // what a source is. A `render_time_series` or `render_occurrences`
+    // input is read for its problem rows alone.
+    let (render_inputs, own_stores) = split_inputs(data_root, &env.inputs);
+    let sources = crate::qmd_index::groups_from_inputs(&render_inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
     let summary = build_grid_index_for(
@@ -60,6 +94,10 @@ pub async fn run(
     )
     .await
     .context("stack the per-source render stores")?;
+    let own_store_problems =
+        datalib_etl_render::grid_index::copy_own_store_problems(&pool, &own_stores)
+            .await
+            .context("copy the time-series and occurrences steps' problems")?;
     tracing::info!(
         // `read` is the one that says whether the cursors are working:
         // it is how many documents were pulled out of the per-source
@@ -78,7 +116,10 @@ pub async fn run(
         ("last_pass_markdowns_loaded", summary.markdowns_loaded),
         ("last_pass_markdowns_removed", summary.markdowns_removed),
         ("last_pass_rows_inserted", summary.rows_inserted),
-        ("last_pass_problems_copied", summary.problems_copied),
+        (
+            "last_pass_problems_copied",
+            summary.problems_copied + own_store_problems,
+        ),
         ("last_pass_search_terms_written", summary.terms_written),
         (
             "last_pass_search_indexes_remade",

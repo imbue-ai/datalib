@@ -201,6 +201,13 @@ FACEBOOK_TABLES_NOT_READ = (
     "logged_information_search_your_search_history, "
     "your_facebook_activity_posts_your_videos"
 )
+# The TNG ride's activity file is not a FIT file, so `render_time_series`
+# leaves its time series out and keeps a warning in its own store, which
+# `grid_index` copies into the index under the step's own stage.
+GARMIN_RIDE_WITH_NO_FIT = (
+    "5692ad7c-fce5-54e6-96af-eb91974cbf89|warning|time_series|entity|17010414002"
+    "|||render_failed|no .FIT signature"
+)
 PDFS_WITH_NO_TEXT = (
     "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
     "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
@@ -320,6 +327,7 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "garmin": [GARMIN_RIDE_WITH_NO_FIT],
     "facebook": sorted(
         [
             FACEBOOK_TABLES_NOT_READ,
@@ -1014,9 +1022,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
         can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
-        for store in sorted(
-            self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
-        ):
+        # Every store a step keeps problems in: the render's, and the
+        # time-series and occurrences steps' own.
+        stores = [
+            *self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db"),
+            *self.workspace.glob("*/render_time_series/time_series.doltlite_db"),
+            *self.workspace.glob("*/render_occurrences/occurrences.doltlite_db"),
+        ]
+        for store in sorted(stores):
             rows = self._query(
                 store,
                 "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
@@ -1024,7 +1037,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
-                out[store.parent.parent.name] = rows
+                source = store.parent.parent.name
+                out[source] = sorted(out.get(source, []) + rows)
         return out
 
     def _index_problems(self) -> list[str]:

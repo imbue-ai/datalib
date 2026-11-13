@@ -1037,8 +1037,11 @@ The days the rows cover. One row.
 
 An event whose occurrences could not be worked out, and why: a `TZID`
 the zone database does not know, a rule part this build does not follow
-(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed; the
-Manage row counts them as warnings.
+(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed. Each
+event here is also a warning in the store's `problems`, with the
+columns a raw store's has (§ "What every raw store has"), `stage`
+`occurrences` and the raw row as `scope_key`; that is the row the
+problems list shows and the Manage row counts.
 
 | column | what it holds |
 |---|---|

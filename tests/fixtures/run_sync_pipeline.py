@@ -569,11 +569,14 @@ params = {params}
             rendered.append(f'"{group}/render_markdown"')
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
-        rendered_list = ", ".join(rendered)
         groups = [r.strip('"').split("/")[0] for r in rendered]
         qmd_list = ", ".join(
             f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
         )
+        # `grid_index` also reads each `render_time_series`, for its
+        # problem rows; wired here, as the app's config upgrade would.
+        series = [g for g in groups if g in time_series_groups]
+        grid_list = ", ".join(rendered + [f'"{g}/render_time_series"' for g in series])
         blocks.append(
             f"""[[groups]]
 id = "unified_document_index"
@@ -581,12 +584,11 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
-inputs = [{rendered_list}]"""
+inputs = [{grid_list}]"""
         )
         # The time-series index reads every source's `render_time_series`.
         # Declared here, so the app's config upgrade (which adds it to a
         # config without one) leaves this config as written.
-        series = [g for g in groups if g in time_series_groups]
         series_index = (
             f"""[[groups]]
 id = "unified_time_series_index"
@@ -615,7 +617,7 @@ name = "Document Index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
-inputs = [{rendered_list}]
+inputs = [{grid_list}]
 
 [[steps]]
 group = "unified_document_index"
