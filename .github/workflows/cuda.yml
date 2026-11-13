@@ -53,8 +53,11 @@ jobs:
           targets=(@llama_cpp//:ggml_cuda_so //datalib/backend/datalib_step:datalib_step)
           bazelisk build "${flags[@]}" "${targets[@]}"
           mkdir -p "$RUNNER_TEMP/cuda"
+          # A Rust target's files also list its rustfmt and clippy checks.
           for t in "${targets[@]}"; do
-            cp "$(bazelisk cquery "${flags[@]}" --output=files "$t" 2>/dev/null)" "$RUNNER_TEMP/cuda/"
+            bazelisk cquery "${flags[@]}" --output=files "$t" 2>/dev/null \
+              | grep -vE '\.(rustfmt|clippy)\.ok$' \
+              | xargs -I{} cp {} "$RUNNER_TEMP/cuda/"
           done
           ls -la "$RUNNER_TEMP/cuda"
           readelf -d "$RUNNER_TEMP/cuda/libggml-cuda.so" | grep NEEDED
