@@ -971,19 +971,22 @@ fn misfiled(md: &RenderedMarkdown, qmd_path: &str) -> Option<String> {
 }
 
 /// Write one rendered document into the index unconditionally. `out_dir`
-/// is stripped off `md_path` to produce a portable `qmd_path`.
+/// is stripped off `md_path` to produce a portable `qmd_path`. Every
+/// document reaches a render store or the grid index through here, so its
+/// names are settled here ([`crate::names`]).
 pub async fn apply_one(
     write_lock: &WriteLock,
     out_dir: &Path,
     md: &RenderedMarkdown,
 ) -> Result<usize> {
+    let md = crate::names::settled(md);
     let qmd_rel = md
         .md_path
         .strip_prefix(out_dir)
         .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_markdown(write_lock, md, &qmd_rel).await
+    apply_markdown(write_lock, &md, &qmd_rel).await
 }
 
 /// Every source under the data root with a render store: the directory

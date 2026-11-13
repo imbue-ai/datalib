@@ -134,6 +134,8 @@ mod tests {
     use datalib_etl::doltlite_raw::commit_run;
     use datalib_etl::progress::Progress;
     use datalib_etl_email::ingest::db::RawDb;
+    use datalib_etl_render::grid_index::RenderedMarkdown;
+    use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl_render::processor::BucketEnd;
     use datalib_schema::problems::ProblemRow;
 
@@ -241,11 +243,10 @@ mod tests {
         };
         let out = tempfile::tempdir().unwrap();
         let progress = Progress::noop();
-        let mut docs = Vec::new();
-        let mut on_doc = |md| {
-            docs.push(md);
-            Ok(())
-        };
+        // The names are settled as the store takes the document, so the
+        // test reads back what the store holds.
+        let store = IndexedMarkdownStore::open(out.path()).unwrap();
+        let mut on_doc = |md: RenderedMarkdown| store.put_document(out.path(), &md);
         let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
         let mut on_problems = |_: &ReadScope, _: &[ProblemRow]| Ok(());
         let ctx = RenderCtx::new(
@@ -262,6 +263,14 @@ mod tests {
         );
         render.run(dir.path(), &ctx).await.unwrap();
         drop(ctx);
+        store.commit("render").unwrap();
+        store.close();
+        let reader = IndexedMarkdownStore::open_for_reading(out.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let pin = reader.pin().unwrap().clone();
+        let docs = reader.documents_matching(out.path(), None, &pin).unwrap();
+        reader.close();
 
         let q = datalib_handle::Handle::email("q@continuum.test").unwrap();
         let names: Vec<&str> = docs

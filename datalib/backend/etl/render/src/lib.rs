@@ -15,7 +15,6 @@ pub mod html;
 pub mod indexed_markdown;
 pub mod inputs;
 pub mod message;
-#[allow(dead_code)]
 mod names;
 pub mod not_read;
 pub mod pages;
@@ -31,4 +30,4 @@ pub mod title;
 /// `front_matter`) or what `names` settles — so every source renders
 /// again. It rides in every source's render params; a provider's own
 /// change bumps its own version.
-pub const SHARED_RULES_VERSION: u32 = 1;
+pub const SHARED_RULES_VERSION: u32 = 2;
