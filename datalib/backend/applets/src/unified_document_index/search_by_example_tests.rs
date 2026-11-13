@@ -465,6 +465,27 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("from:will", vec!["riker-email"]),
         ("from:iker", vec!["riker-email"]),
         ("from:enterprise.org", vec!["riker-email"]),
+        // Three characters or more are looked up by their trigrams, fewer
+        // read every value; either way any part, case-blind, across the
+        // `@`, `.` and `:` a word search splits at.
+        ("from:ike", vec!["riker-email"]),
+        ("from:ik", vec!["riker-email"]),
+        ("from:RIKER", vec!["riker-email"]),
+        ("from:prise.o", vec!["riker-email"]),
+        ("to:icar", vec!["riker-email"]),
+        ("to:ic", vec!["riker-email"]),
+        ("cc:eann", vec!["riker-email"]),
+        ("recipient:roi", vec!["riker-email"]),
+        // Part of an id: every Slack user whose id starts so.
+        (
+            "with:T1701/U000000",
+            vec!["bridge-thread", "dm-message", "dm-thread", "worf-slack"],
+        ),
+        // A chip stands for a handle or a contact, which match whole: the
+        // same text that finds him as a bare word finds nobody as a handle.
+        ("from:email:iker@enterprise.org", vec![]),
+        ("from:iker@enterprise.org", vec![]),
+        ("with:slack:T1701/U000000", vec![]),
         (r#"from:"william riker""#, vec!["riker-email"]),
         (r#"from:"Riker""#, vec!["riker-email"]),
         ("to:picard@enterprise.org", vec!["riker-email"]),
