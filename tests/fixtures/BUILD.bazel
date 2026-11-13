@@ -568,13 +568,11 @@ genrule(
     name = "ingested_tng_vectors",
     srcs = [
         "ingested/search_prompts.tsv",
+        "//datalib/backend/search_index:embed_prompts",
         "//third-party/qmd_models:embeddinggemma",
     ],
     outs = ["ingested/inference_cache.sqlite"],
-    tools = [
-        "quiet.sh",
-        "//datalib/backend/search_index:embed_prompts",
-    ],
+    tools = ["quiet.sh"],
     cmd = " ".join([
         "$(execpath quiet.sh) $(RULEDIR)/vectors.log",
         "$(execpath //datalib/backend/search_index:embed_prompts)",
