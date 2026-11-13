@@ -425,98 +425,67 @@ async fn a_finished_run_reaches_the_rows() {
     );
 }
 
-/// The counts after a row's name read the `problems{severity=…}`
-/// metrics a step reported at the end of its last run: a red and a
-/// yellow number on each step that counted some, nothing on the index
-/// that counted none or a step that never counted — and the group shows
-/// its steps' summed, since each counts only what it found itself.
-#[tokio::test]
-async fn problem_counts_reach_the_rows_from_the_run_store() {
-    let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), CONFIG, None).await;
-    {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "r1",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        let metric = |step: &str, labels: &str, value: i64| datalib_runs::MetricRow {
-            run_id: "r1".into(),
-            step: step.into(),
-            name: datalib_problems::METRIC.into(),
-            labels: labels.into(),
-            value,
-            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
-            tz_offset: None,
-        };
-        w.metric(metric("slack/render_markdown", "severity=error", 2));
-        w.metric(metric("slack/render_markdown", "severity=warning", 5));
-        w.metric(metric("slack/ingest", "severity=error", 0));
-        w.metric(metric("slack/ingest", "severity=warning", 1));
-        w.metric(metric(
-            "unified_document_index/grid_index",
-            "severity=error",
-            0,
-        ));
-        w.metric(metric(
-            "unified_document_index/grid_index",
-            "severity=warning",
-            0,
-        ));
-    }
-
-    let rows = by_key(&get_rows(tmp.path()).await);
-    let chips = |key: &str| -> Vec<(String, String)> {
-        rows[key]["problems"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| {
-                (
-                    c["kind"].as_str().unwrap().to_string(),
-                    c["text"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect()
-    };
-    let red_and_yellow = vec![
-        ("error".to_string(), "2".to_string()),
-        ("warning".to_string(), "5".to_string()),
-    ];
-    assert_eq!(chips("slack/render_markdown"), red_and_yellow);
-    assert_eq!(
-        chips("slack/ingest"),
-        vec![("warning".to_string(), "1".to_string())]
-    );
-    assert_eq!(
-        chips("group:slack"),
-        vec![
-            ("error".to_string(), "2".to_string()),
-            ("warning".to_string(), "6".to_string()),
-        ],
-        "the group sums its steps"
-    );
-    assert_eq!(
-        chips("unified_document_index/grid_index"),
-        vec![],
-        "counted none: nothing drawn"
-    );
-    assert_eq!(chips("group:unified_document_index"), vec![]);
-}
-
-/// A problem a person muted comes off the count of the step that found
-/// it, so a source whose every problem is muted draws no count and drops
-/// off the Dashboard's Needs you. A mute whose problem the index no longer
-/// holds takes nothing off: the store and the index are read as they are
-/// now, the store through what its writer published.
-#[tokio::test]
-async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
-    use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+/// Rows written into the root's grid index as `grid_index` would copy
+/// them in.
+async fn index_problems(root: &Path, rows: &[&datalib_problems::ProblemRow]) {
+    use datalib_problems::ProblemRow;
     use datalib_table::BulkUpsertable;
 
+    let index =
+        datalib_etl_render::grid_index::open_index(&datalib_core::layout::grid_index_db(root))
+            .await
+            .unwrap();
+    let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
+        .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+        .collect();
+    let sql = format!(
+        "INSERT INTO problems ({}) VALUES ({})",
+        columns.join(", "),
+        vec!["?"; columns.len()].join(", ")
+    );
+    for row in rows {
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(&index)
+            .await
+            .unwrap();
+    }
+    datalib_etl_render::grid_index::seal(&datalib_etl_render::grid_index::WriteLock::for_index(
+        index.clone(),
+    ))
+    .await
+    .unwrap();
+    index.close().await;
+}
+
+fn chips_of(rows: &HashMap<String, serde_json::Value>, key: &str) -> Vec<(String, String)> {
+    rows[key]["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().unwrap().to_string(),
+                c["text"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn chip(kind: &str, text: &str) -> (String, String) {
+    (kind.to_string(), text.to_string())
+}
+
+/// The red and yellow numbers after a row's name are the grid index's
+/// error and warning rows the step found, less the muted ones, and never
+/// what the step reported of itself: a count that is not rows opened an
+/// empty list. Each row carries the problems grid's query for exactly
+/// those rows. A group sums its steps; the index's own rows are the
+/// grid index step's; a mute whose problem is gone counts nothing; and
+/// before there is an index nothing is drawn.
+#[tokio::test]
+async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
+    use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
+
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
@@ -537,67 +506,47 @@ async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
             updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
             tz_offset: None,
         };
-        w.metric(metric("slack/render_markdown", "severity=error", 1));
-        w.metric(metric("slack/render_markdown", "severity=warning", 0));
-        w.metric(metric("slack/ingest", "severity=error", 0));
-        w.metric(metric("slack/ingest", "severity=warning", 2));
+        w.metric(metric("slack/render_markdown", "severity=error", 5));
+        w.metric(metric("slack/render_markdown", "severity=warning", 5));
+        w.metric(metric("slack/ingest", "severity=warning", 5));
     }
-    let problem = |stage, key: &str, reason, outcome| {
+    let rows = by_key(&get_rows(tmp.path()).await);
+    for key in ["slack/render_markdown", "slack/ingest", "group:slack"] {
+        assert_eq!(chips_of(&rows, key), vec![], "{key}: no index, no count");
+        assert!(rows[key]["problems_query"].is_null(), "{key}");
+    }
+
+    let problem = |stage, key: &str, severity| {
         ProblemRow::new(
             "slack",
             stage,
             Scope::Entity(key),
             None,
-            outcome,
-            Problem::record(reason, "the bridge is not answering"),
+            Outcome::Dropped,
+            Problem::record(Reason::Undeserializable, key).severity(severity),
             None,
         )
     };
-    let render_error = problem(
-        Stage::Parse,
-        "messages:1",
-        Reason::Undeserializable,
-        Outcome::Dropped,
+    let render_error = problem(Stage::Parse, "messages:1", Severity::Error);
+    let fetch_warning = problem(Stage::Fetch, "messages:2", Severity::Warning);
+    let other_fetch_warning = problem(Stage::Fetch, "messages:3", Severity::Warning);
+    let render_info = problem(Stage::Render, "messages:4", Severity::Info);
+    let unreadable = problem(
+        Stage::Render,
+        datalib_problems::INDEX_OWN_SCOPE_KEY,
+        Severity::Warning,
     );
-    let fetch_warning = problem(
-        Stage::Fetch,
-        "messages:2",
-        Reason::OverSizeLimit,
-        Outcome::Nulled,
-    );
-    let other_fetch_warning = problem(
-        Stage::Fetch,
-        "messages:3",
-        Reason::OverSizeLimit,
-        Outcome::Nulled,
-    );
-    {
-        let index = datalib_etl_render::grid_index::open_index(
-            &datalib_core::layout::grid_index_db(tmp.path()),
-        )
-        .await
-        .unwrap();
-        let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
-            .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
-            .collect();
-        let sql = format!(
-            "INSERT INTO problems ({}) VALUES ({})",
-            columns.join(", "),
-            vec!["?"; columns.len()].join(", ")
-        );
-        for row in [&render_error, &fetch_warning, &other_fetch_warning] {
-            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
-                .execute(&index)
-                .await
-                .unwrap();
-        }
-        datalib_etl_render::grid_index::seal(
-            &datalib_etl_render::grid_index::WriteLock::for_index(index.clone()),
-        )
-        .await
-        .unwrap();
-        index.close().await;
-    }
+    index_problems(
+        tmp.path(),
+        &[
+            &render_error,
+            &fetch_warning,
+            &other_fetch_warning,
+            &render_info,
+            &unreadable,
+        ],
+    )
+    .await;
     let store = datalib_problem_mutes::store_path(tmp.path());
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
     let mutes = datalib_etl::doltlite_raw::open_curated(
@@ -626,27 +575,15 @@ async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
         .unwrap();
 
     let rows = by_key(&get_rows(tmp.path()).await);
-    let chips = |key: &str| -> Vec<(String, String)> {
-        rows[key]["problems"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| {
-                (
-                    c["kind"].as_str().unwrap().to_string(),
-                    c["text"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect()
-    };
     assert_eq!(
-        chips("slack/render_markdown"),
+        chips_of(&rows, "slack/render_markdown"),
         vec![],
-        "its one error is muted"
+        "its one error is muted, its info row is in no count, and its report is not read"
     );
+    assert!(rows["slack/render_markdown"]["problems_query"].is_null());
     assert_eq!(
-        chips("slack/ingest"),
-        vec![("warning".to_string(), "1".to_string())],
+        chips_of(&rows, "slack/ingest"),
+        vec![chip("warning", "1")],
         "one of its two warnings is muted; the fixed one takes nothing off"
     );
     let title = rows["slack/ingest"]["problems"][0]["title"]
@@ -654,8 +591,22 @@ async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
         .unwrap();
     assert!(title.contains("and 1 more you muted"), "{title}");
     assert_eq!(
-        chips("group:slack"),
-        vec![("warning".to_string(), "1".to_string())]
+        rows["slack/ingest"]["problems_query"],
+        "source:slack stage:fetch -doc:render_store -severity:info muted:no"
+    );
+    assert_eq!(chips_of(&rows, "group:slack"), vec![chip("warning", "1")]);
+    assert_eq!(
+        rows["group:slack"]["problems_query"],
+        "source:slack -doc:render_store -severity:info muted:no"
+    );
+    assert_eq!(
+        chips_of(&rows, "unified_document_index/grid_index"),
+        vec![chip("warning", "1")],
+        "the index's own row is its step's, whichever source it names"
+    );
+    assert_eq!(
+        rows["group:unified_document_index"]["problems_query"],
+        "scope:entity doc:render_store -severity:info muted:no"
     );
 
     datalib_problem_mutes::unmute(&mutes, std::slice::from_ref(&render_error.problem_uuid))
@@ -666,10 +617,48 @@ async fn a_muted_problem_still_in_the_index_comes_off_its_steps_count() {
         .unwrap();
     let rows = by_key(&get_rows(tmp.path()).await);
     assert_eq!(
-        rows["slack/render_markdown"]["problems"][0]["text"], "1",
+        chips_of(&rows, "slack/render_markdown"),
+        vec![chip("error", "1")],
         "unmuted, it counts again"
     );
+    assert_eq!(
+        rows["slack/render_markdown"]["problems_query"],
+        "source:slack -stage:fetch -doc:render_store -severity:info muted:no"
+    );
     mutes.close().await;
+}
+
+/// A pass that failed and was run again is not a problem row, so it is
+/// grey and apart from the yellow number, where a double-click could
+/// list nothing for it.
+#[tokio::test]
+async fn a_failed_pass_is_grey_and_not_a_warning() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        w.metric(datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            name: datalib_metrics::FAILED_PASSES.into(),
+            labels: String::new(),
+            value: 2,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        });
+    }
+    index_problems(tmp.path(), &[]).await;
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(chips_of(&rows, "slack/ingest"), vec![chip("metric", "2")]);
+    assert!(rows["slack/ingest"]["problems_query"].is_null());
+    assert_eq!(chips_of(&rows, "group:slack"), vec![chip("metric", "2")]);
 }
 
 /// A stopped sync's queue is emptied as it ends, and nothing on the row

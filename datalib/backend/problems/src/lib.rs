@@ -164,9 +164,8 @@ closed_vocabulary! {
 /// render store it could not read. Every other row in the index is a copy.
 pub const INDEX_OWN_SCOPE_KEY: &str = "render_store";
 
-/// Which step's [`METRIC`] count a row in the grid index is in: each step
-/// counts only the rows it found itself (`etl/README.md` §"Problems flow
-/// downstream with the data").
+/// Which step's Manage count a row in the grid index is in: each step
+/// counts only the rows it found itself (`problem_mutes/README.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CountedBy {
     /// The source's download: a fetch-stage row.

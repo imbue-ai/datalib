@@ -45,8 +45,8 @@
 <data_root>/datalib_curated/datalib_problem_mutes/mutes.doltlite_db
                                                   the problem rows a person muted; written
                                                   only by the `unified_document_index`
-                                                  applet, read by `datalib-http` for the
-                                                  Manage counts
+                                                  applet, read by `datalib-http`, which
+                                                  leaves them out of the Manage counts
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
                                                   the disk, over time (plain SQLite;

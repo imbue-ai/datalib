@@ -14,6 +14,7 @@ import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop"
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
 import { logSource } from "./libs/logView";
+import { problemsSource } from "./cardSources";
 import { statusTone, needsYou, type Tone } from "./dashboard";
 import type { CardCtx } from "./types";
 
@@ -132,13 +133,10 @@ export function useDashboard(
   }
 
   function openProblems(row: ManageRow) {
-    const everything = row.id === "unified_document_index";
-    const q = {
-      url: `${UNIFIED_DOCUMENT_INDEX}/problems`,
-      q: everything ? "" : `source:${row.id}`,
-      name: everything ? "Problems" : `Problems: ${row.name.label}`,
-    };
-    open(`gridView(${JSON.stringify(q)})`);
+    if (!row.problems_query) return;
+    const name =
+      row.id === "unified_document_index" ? "Problems: the index" : `Problems: ${row.name.label}`;
+    open(problemsSource(`${UNIFIED_DOCUMENT_INDEX}/problems`, row.problems_query, name));
   }
 
   function openDocument(row: SearchRow) {

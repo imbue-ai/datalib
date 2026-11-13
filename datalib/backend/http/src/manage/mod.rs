@@ -43,7 +43,7 @@ use status::{StatusView, StepEdges};
 
 pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
-pub use problems::{counts_by_step, take_off_mutes, ProblemCounts};
+pub use problems::{counts_by_step, IndexCounts, ProblemCounts};
 pub use queue::{owed_by_step, queue_drain, Owed, QueueDrain};
 pub use status::dropped_detail;
 
@@ -118,7 +118,7 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run, plus a warning for each pass of that run that failed and was run again; double-click them for the list. On System, the yellow number is the config's warnings; double-click it for the config.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) in its problems list, leaving out the ones you muted; double-click them for exactly those rows. In grey, what only its log holds: each pass of its last run that failed and was run again, and what a step that keeps no problems list counted. On System, the yellow number is the config's warnings; double-click it for the config.")
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
@@ -193,6 +193,9 @@ pub struct ManageRow {
     /// see `manage::problems`. A group shows the sum of its steps'; the
     /// System row, the config's warnings.
     pub problems: Vec<Chip>,
+    /// The problems grid's query for exactly the rows the red and yellow
+    /// numbers count; `None` when they count none.
+    pub problems_query: Option<String>,
     /// The items its store holds, as of the run it last counted in,
     /// with the series behind the number — see `manage::items`. No
     /// value, drawn blank, for a row that has never counted, which is
@@ -796,6 +799,7 @@ impl Snapshot<'_> {
             eta: Quantity::default(),
             owed: Quantity::default(),
             problems: vec![],
+            problems_query: None,
             items: Timeseries::default(),
             last_synced: None,
             last_success: None,
@@ -905,6 +909,7 @@ fn applets_section_row() -> ManageRow {
         eta: Quantity::default(),
         owed: Quantity::default(),
         problems: vec![],
+        problems_query: None,
         items: Timeseries::default(),
         last_synced: None,
         last_success: None,
@@ -1023,6 +1028,14 @@ impl RowCtx<'_> {
 
     fn step(&self, id: &str) -> Option<&StepRecord> {
         self.snap.record.steps.get(id)
+    }
+
+    fn step_problems(&self, id: &str) -> problems::StepProblems {
+        problems::StepProblems::of(
+            id,
+            self.snap.record.problems.get(id),
+            &self.snap.record.problem_rows,
+        )
     }
 
     fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
@@ -1293,9 +1306,12 @@ impl RowCtx<'_> {
             Entry::Step(_) => queue::owed_cell(self.snap.record.owed.get(&id), activity),
             Entry::Applet(_) => queue::owed_cell(None, activity),
         };
-        let problems = match e {
-            Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
-            Entry::Applet(_) => vec![],
+        let (problems, problems_query) = match e {
+            Entry::Step(_) => {
+                let p = self.step_problems(&id);
+                (problems::chips(&p), problems::query(&p))
+            }
+            Entry::Applet(_) => (vec![], None),
         };
         let items = match e {
             Entry::Step(_) => self.snap.record.items.get(&id).cloned(),
@@ -1379,6 +1395,7 @@ impl RowCtx<'_> {
             eta: cells.eta,
             owed,
             problems,
+            problems_query,
             items,
             disk,
             actions: [browse, sync]
@@ -1616,12 +1633,10 @@ impl RowCtx<'_> {
                 .map(|r| (r.name.label.as_str(), &r.owed))
                 .collect::<Vec<_>>(),
         );
-        let problems = problems::group_chips(
-            &steps
-                .iter()
-                .map(|c| self.snap.record.problems.get(c.id()))
-                .collect::<Vec<_>>(),
-        );
+        let step_problems: Vec<problems::StepProblems> =
+            steps.iter().map(|c| self.step_problems(c.id())).collect();
+        let problems = problems::group_chips(&step_problems);
+        let problems_query = problems::group_query(&step_problems);
         // Only the render step counts items, so the group shows that one
         // child's cell rather than a sum over children that would double
         // it the day a second step reported one.
@@ -1672,6 +1687,7 @@ impl RowCtx<'_> {
             eta: cells.eta,
             owed,
             problems,
+            problems_query,
             items,
             last_synced,
             last_success,

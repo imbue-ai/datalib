@@ -20,8 +20,8 @@ right-click, and pick **Mute**; **Unmute** undoes it.
   document's banner, marked muted. Nothing is hidden for good.
   `muted:no` (or `-muted:yes`) in the grid's search bar leaves the
   muted rows out; `muted:yes` shows only them.
-- **It counts toward nothing.** It comes off the count of the step that
-  found it, so off the Manage row and off the group's sum. A source whose
+- **It counts toward nothing.** It is left out of the count of the step
+  that found it, so out of the Manage row and the group's sum. A source whose
   only problems are muted shows no count, and drops off "Needs you",
   which reads those counts (`needsYou` in `ui/src/cards/dashboard.ts`).
 - **It lasts until the problem changes.** A mute is kept by the problem's
@@ -57,30 +57,40 @@ contacts applet opens its store, and holds it, with the file's writer
 lock, from its first mute (or its first read of a store an earlier run
 made) for its life. `datalib-http` only reads it.
 
-## How a mute comes off a count
+## How a count is made, and why it is the list it opens
 
-Nothing that counts problems knows about mutes. Each step still reports
-`problems{severity=…}` for what it found (`etl/README.md`), and
-`datalib-http` takes the mutes off as it draws the Manage rows
-(`http/src/manage/problems.rs::take_off_mutes`):
+A red or yellow number on a Manage row is **the rows the problems grid
+shows when it is double-clicked**, and nothing else. Both come from one
+place, `datalib_problem_mutes`:
 
-1. Read the ids the mutes store has published, read-only at `main`'s
-   head (`read_published`).
-2. Find which of those the grid index still holds, read-only
-   (`live_in_index`). The index holds every source's problems, copied
-   down from its stores, so a mute whose problem was fixed is not there
-   and takes nothing off.
-3. Tally them by whose count they are in (`tally`;
-   `datalib_problems::CountedBy`): a fetch-stage row is the source's
-   `ingest` step's, the index's own row about a render store it could not
-   read is `grid_index`'s, and every other row is the source's
-   `render_markdown` step's. An `info` row is in no count.
-4. Subtract each from its step's count. A step's count and the index
-   are read at different moments (the index catches up a render and an
-   index pass later), so a count stops at zero rather than going below.
+1. `datalib-http` reads the ids the mutes store has published, read-only
+   at `main`'s head (`read_published`).
+2. It counts the grid index's error and warning rows in one read-only
+   query, each by whose it is and whether its id is muted
+   (`count_in_index`). Whose it is, is `datalib_problems::CountedBy`: a
+   fetch-stage row is the source's `ingest` step's, the index's own row
+   about a render store it could not read is `grid_index`'s, and every
+   other row is the source's `render_markdown` step's. An `info` row is
+   in no count.
+3. The row's number is the unmuted rows; the muted ones are said on
+   hover. With the number the row carries `problems_query`, the grid's
+   query for exactly those rows (`query`, and `group_query` for a
+   group), which "Review" and a double-click open.
+
+A muted problem that was fixed is no longer in the index, so it counts
+nothing; and since the count and the list are one read of one store,
+they cannot drift. `//datalib/backend/applets` checks it: for every
+counter over rows of every stage and severity, the number is the rows
+its query lists.
+
+What is not a row is not in those numbers. A pass that failed and was
+run again, and the count of a step that writes no problem rows (the
+time-series and calendar-occurrence renders), are a grey number beside
+them, and a double-click on that opens the step's log.
 
 So `datalib-http` reads two stores' rows here, the mutes store and the
-index's `problems`; it opens both read-only and holds neither.
+index's `problems`; it opens both read-only and holds neither. Before
+there is an index it draws no counts.
 
 A mute is a commit to a store under `datalib_curated/`, which the app's
 watch reports as `curated`; that, and the index moving, make the Manage

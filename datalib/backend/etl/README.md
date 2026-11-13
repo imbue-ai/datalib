@@ -86,17 +86,20 @@ know, and filling in `item_uuid` — see below), `grid_index` copies
 every render store's into the index. The
 pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
-travel with the row. The step then reports whole-store counts as
-`problems{severity=…}` metrics, which the Manage screen reads — of the
-rows it found itself: render leaves the download's copied rows out and
-`grid_index` every source's, counting only a render store it could not
-read. So a download's warning is counted on the Download row alone,
-and a group's count is the sum of its steps'. An `info` row is counted
-nowhere: nothing failed, and the problems grid is where it is seen. A
-download reports them at every seal as well, right after it has written
-the problems its run has found so far (`run_problems::collecting_sealed`),
-and again when it ends, failed or not: a checkpoint's rows, its
-problems and its count move together.
+travel with the row.
+
+The Manage screen's red and yellow counts are the index's rows, counted
+by whose they are: a fetch-stage row on the Download row, the index's
+own row about a render store it could not read on `grid_index`'s, every
+other row on the render's. A group's count is the sum of its steps'.
+An `info` row is counted nowhere: nothing failed, and the problems grid
+is where it is seen. Each count opens exactly the rows it counted
+([`problem_mutes/README.md`](../problem_mutes/README.md)). A step still
+reports whole-store counts of the rows it found itself as
+`problems{severity=…}` metrics (a download at every seal too, right
+after it has written the problems its run has found so far,
+`run_problems::collecting_sealed`), and those are what a step that
+writes no rows is drawn from, in grey.
 
 A download's problem names only its raw entity (`<table>:<id>`): the
 grid row it is about has an id minted under the source's id, which the
@@ -112,9 +115,9 @@ the only pointer.
 Every error and warning row counts toward the Dashboard's "Needs you",
 including ones nothing can be done about (a corrupt file, a file no
 feed reads), until a person mutes it in the problems grid. A mute is
-kept apart, by the row's id, in a store nothing rebuilds, and taken off
-the count of the step that found the row as the Manage rows are drawn;
-no step knows of it ([`problem_mutes/README.md`](../problem_mutes/README.md)).
+kept apart, by the row's id, in a store nothing rebuilds, and left out
+of the count of the step that found the row as the Manage rows are
+drawn; no step knows of it ([`problem_mutes/README.md`](../problem_mutes/README.md)).
 
 ## Volatile fields: split them out, don't diff them
 
