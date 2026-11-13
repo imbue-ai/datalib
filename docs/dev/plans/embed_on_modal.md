@@ -64,29 +64,50 @@ step uses, `fit` included. So the prompts, the chunking, the hashing and
 the model are one code path wherever they run, and there is no second
 embedder to keep in line with the first.
 
-**The image gets a GPU backend.** On Linux our llama.cpp build is
-CPU-only today (`third-party/llama_cpp/llama_cpp.BUILD`: Metal on macOS,
-nothing else), and a CPU container is no faster than the machine the
-library is on. So the first thing built is **ggml's CUDA backend under
-Bazel**, for Linux x86_64:
+**The Linux build gets a GPU backend, loaded only where there is a GPU.**
+On Linux our llama.cpp build is CPU-only today
+(`third-party/llama_cpp/llama_cpp.BUILD`: Metal on macOS, nothing else),
+and a CPU container is no faster than the machine the library is on. So
+the first thing built is **ggml's CUDA backend under Bazel**, for Linux
+x86_64, as a module the one gnu build loads when it can:
 
-- NVIDIA's toolkit as a pinned, sha256-checked download, like every other
-  toolchain here, and its rules (likely `rules_cuda`), so the build stays
-  hermetic and CI can build it with no GPU.
-- `ggml-cuda`'s sources in `llama_cpp.BUILD` behind a `--config=cuda`
-  flag, the kernels compiled for the GPU generations Modal rents
-  (which ones is _to check_); the embedder picks the GPU as it picks
-  Metal on a Mac (`Device::Best`).
-- A GPU variant of the image, `ghcr.io/imbue-ai/datalib:<tag>-cuda`, with
-  the CUDA runtime libraries it needs and nothing else changed. The plain
-  image stays as it is: no one running the image on a CPU pays for CUDA.
+- **One binary, CPU and CUDA.** ggml can load a backend at run time
+  (`ggml_backend_load`, a `dlopen`), beside the CPU backend linked in.
+  Upstream's way of doing this, which we follow, makes ggml's core a
+  shared library, `libggml-base.so`, that the binary and the module
+  both link; it ships in the gnu tarball's `lib/` beside `libdoltlite`.
+  The CUDA backend is `libggml-cuda.so`. The embedder loads it when it
+  is there and `libcuda.so.1`, the driver, is on the loader path, and
+  otherwise runs on the CPU as today, saying which it chose. So the
+  same `datalib-step` runs on a laptop, a CPU container and a GPU one.
+- **The module is fetched, like the runtime's CUDA overlay.**
+  `libggml-cuda.so`, with the CUDA runtime and cuBLAS linked into it
+  statically, is hundreds of MB, more than everyone else should carry.
+  It ships as one more release asset, fetched on first use under the
+  probe `datalib_fetch::runtime` already makes for node-llama-cpp's CUDA
+  overlay (`QMD_LLAMA_GPU=cuda` or `libcuda.so.1` on the loader path;
+  `docs/dev/runtime_fetch.md`). The image does not change; on Modal the
+  module is fetched once into a Modal volume, or baked into a layer the
+  Modal side adds, so a container does not fetch it each start (which,
+  _to check_).
+- **musl stays CPU-only.** A fully static musl binary cannot `dlopen` a
+  glibc library, and NVIDIA's libraries are glibc builds.
+- NVIDIA's toolkit as a pinned, sha256-checked download (NVIDIA publishes
+  each component as a redistributable tarball with a JSON manifest of
+  hashes), and its rules (likely `rules_cuda`), so the build stays
+  hermetic and CI can build it with no GPU. It cannot be built on a Mac:
+  `nvcc` does not run there, so the loop is CI or a Linux box.
+- The kernels compiled for the GPU generations Modal rents (which ones
+  is _to check_).
 - The parity test gains a CUDA case, its vectors against the CPU's by
   cosine as Metal's are today, run on a Modal GPU, since CI has none.
 
 NVIDIA's runtime libraries are not open source; what their license lets
-us ship inside the image, and what the release's notices must say, is
-_to check_ before the image is published (`AGENTS.md` § "License: MIT,
-and what may come in").
+us ship inside the module, and what the release's notices must say, is
+_to check_ before the module is published (`AGENTS.md` § "License: MIT,
+and what may come in"). The runtime's CUDA overlay already ships
+node-llama-cpp's CUDA build; what that one carries of NVIDIA's is the
+first thing to read.
 
 ## How the step drives Modal
 
@@ -119,13 +140,12 @@ and the next run sends only what is still missing.
 
 ## Order of work
 
-1. The CUDA build: `ggml-cuda` under Bazel behind `--config=cuda`, the
-   pinned toolkit, the embedder choosing the GPU; built in CI, run by
-   hand on a Modal GPU through the parity test.
+1. The CUDA build: `libggml-base.so`, `libggml-cuda.so` under Bazel
+   with the pinned toolkit, the embedder loading it when it can; built
+   in CI, run by hand on a Modal GPU through the parity test.
 2. `datalib-step embed-prompts`: stdin to stdout over `datalib_embedder`,
    tested here on the CPU against the step's own vectors.
-3. The `-cuda` image, its license notices, and the release job that
-   builds and pushes it.
+3. The module as a release asset, its license notices, and the fetch.
 4. The Modal half behind `embed_on = "modal"`, measured on one small
    source of a real library, then a large one.
 5. The security posture section, and `docs/dev/config_model.md` and
