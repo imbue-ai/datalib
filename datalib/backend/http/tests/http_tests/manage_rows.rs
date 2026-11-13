@@ -634,7 +634,8 @@ async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
     );
     assert_eq!(
         rows["group:slack"]["problems_query"],
-        "source:slack -doc:render_store -severity:info muted:no"
+        "source:slack -stage:time_series -stage:occurrences -doc:render_store \
+         -severity:info muted:no"
     );
     mutes.close().await;
 }
