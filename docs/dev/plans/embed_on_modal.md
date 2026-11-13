@@ -73,11 +73,12 @@ x86_64, as a module the one gnu build loads when it can:
 
 - **One binary, CPU and CUDA.** ggml can load a backend at run time
   (`ggml_backend_load`, a `dlopen`), beside the CPU backend linked in.
-  Upstream's way of doing this, which we follow, makes ggml's core a
-  shared library, `libggml-base.so`, that the binary and the module
-  both link; it ships in the gnu tarball's `lib/` beside `libdoltlite`.
-  The CUDA backend is `libggml-cuda.so`. The embedder loads it when it
-  is there and the module loads, and otherwise runs on the CPU as today,
+  Upstream links the binary and the module against a shared
+  `libggml-base.so`; ours keeps ggml linked into the binary, which
+  exports its symbols on gnu Linux, and the module takes ggml from the
+  program that loads it, so the binaries stay self-contained (#1752).
+  The CUDA backend is `libggml-cuda.so`, looked for in `lib/` beside the
+  binary. The embedder loads it when it is there and the module loads, and otherwise runs on the CPU as today,
   saying which it chose and, when the module would not load, why. So
   the same `datalib-step` runs on a laptop, a CPU container and a GPU
   one.
@@ -150,7 +151,7 @@ and the next run sends only what is still missing.
 
 ## Order of work
 
-1. The CUDA build: `libggml-base.so`, `libggml-cuda.so` under Bazel
+1. The CUDA build: `libggml-cuda.so` under Bazel
    with the pinned toolkit, the embedder loading it when it can; built
    in CI, run by hand on a Modal GPU through the parity test.
 2. `datalib-step embed-prompts`: stdin to stdout over `datalib_embedder`,
