@@ -103,13 +103,16 @@ Three optional knobs:
   `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`. By default the
   script installs the release it names, which moves to each new release
   shortly after it publishes.
-- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
-  distros like Alpine get the fully-static musl build); set
-  `DATALIB_LIBC=musl` to force the static build on a glibc distro —
-  it runs on any Linux of the right architecture.
+- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected: musl
+  distros like Alpine, and glibc older than 2.39 (Ubuntu 24.04's), get
+  the fully-static musl build. If a binary fails with
+  ``version `GLIBC_2.xx' not found``, install again with
+  `DATALIB_LIBC=musl`: the static build runs on any Linux of the right
+  architecture.
 
 > The install script supports macOS on Apple Silicon and Linux
-> (x86_64 / arm64, glibc or musl); it auto-detects your platform and
+> (x86_64 / arm64; glibc 2.39 or newer, or any Linux through the static
+> musl build); it auto-detects your platform and
 > pulls the matching tarball. The rest of this guide is written
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.
@@ -243,8 +246,10 @@ app asking, which is the app an agent or a command runs inside, such as Claude
 or Terminal. It does not name the folder, the file or the command.
 
 So the same dialog can come from something routine: an AI agent running `docker`
-inside Claude has brought it up. Whether saying **Allow** there also lets that
-app into your protected libraries is not yet known, so assume it may.
+inside Claude has brought it up. And saying **Allow** to it lets that app into
+your protected libraries too: one Allow, given when Terminal asked for Docker's
+data, let Terminal list Datalib's protected folder with no second dialog. The
+dialog gives no sign that it does this.
 
 - **If you did not expect it, say no** and see what breaks.
 - **If you said Allow, quit that app when you are done.** The permission is meant

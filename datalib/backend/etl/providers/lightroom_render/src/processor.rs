@@ -31,7 +31,7 @@ pub fn plan_render(
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
     if let Some(name) = &config.capture_time_zone {
         NamedZone::get(name)
-            .ok_or_else(|| anyhow!("capture_time_zone {name:?} is not an IANA zone name"))?;
+            .ok_or_else(|| anyhow!("capture_time_zone {name:?} is not a time zone name"))?;
     }
     Ok(plan_source_render(
         ctx,
@@ -96,6 +96,8 @@ impl SourceRender for LightroomRender {
                 },
             );
             ctx.emit_doc(RenderedMarkdown {
+                section_layout: None,
+                content_hash: None,
                 markdown_uuid: built.photo.uuid.clone(),
                 source_id: ctx.name.to_string(),
                 upstream_cursor: None,
@@ -171,7 +173,7 @@ fn xmp_problems(source_id: &str, catalog: &Catalog) -> Vec<ProblemRow> {
         Scope::Entity("Adobe_AdditionalMetadata:xmp"),
         None,
         Outcome::Nulled,
-        Problem::lossy(
+        Problem::lossy_explained(
             "skip_xmp",
             Some("xmp".to_string()),
             "the mirror leaves out each photo's XMP (`skip_xmp`), which is the only place \
@@ -179,4 +181,29 @@ fn xmp_problems(source_id: &str, catalog: &Catalog) -> Vec<ProblemRow> {
         ),
         Some(RENDER_VERSION),
     )]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `skip_xmp` warning names both things the source goes without;
+    /// cut at 80 characters it stopped before either.
+    #[test]
+    fn the_skip_xmp_warning_is_kept_whole() {
+        let catalog = Catalog {
+            images: [(1, read::ImageRow::default())].into(),
+            ..Catalog::default()
+        };
+        let rows = xmp_problems("lightroom", &catalog);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0]
+                .sample
+                .ends_with("the time zone a photo was taken in"),
+            "{}",
+            rows[0].sample
+        );
+        assert_eq!(rows[0].rule.as_deref(), Some("skip_xmp"));
+    }
 }

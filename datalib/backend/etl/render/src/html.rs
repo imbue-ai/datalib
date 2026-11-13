@@ -16,13 +16,46 @@
 //! - a multi-line plain-text body: [`escape_md_block`];
 //! - text in another markup that must not open markdown's own
 //!   constructs (Slack's mrkdwn): [`escape_md_syntax`];
-//! - markdown another tool built from plain text without escaping it:
-//!   [`escape_html_outside_code`];
+//! - markdown someone else wrote goes in as written: the page renders
+//!   each message alone and sanitizes it
+//!   (docs/dev/data_architecture_parse_and_render.md), and
+//!   [`close_open_blocks`] closes what it leaves open;
 //! - a link destination: [`md_link_dest`];
 //! - inside a code span: [`md_code_span`].
 //!
+//! A subject, a name or a filename also goes through
+//! [`without_bidi_controls`] first, wherever it lands: on a markdown line
+//! [`escape_name_inline`], between tags [`escape_name_text`].
+//!
 //! Here rather than in `datalib_etl`: that crate sits upstream of ~130
 //! test targets, and only the render side writes markup.
+
+/// Upstream text with Unicode's bidi overrides, embeddings and isolates
+/// taken out, for a short field a person reads to decide what something
+/// is: a subject, a name, a filename. An override makes `evil.exe` show
+/// as `exe.live`, and an unclosed one reorders whatever follows it on the
+/// page. The marks (U+200E, U+200F, U+061C) stay: they reorder no letters,
+/// and right-to-left names carry them.
+pub fn without_bidi_controls(s: &str) -> String {
+    s.chars().filter(|c| !is_bidi_control(*c)).collect()
+}
+
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// A name, a filename or a label bound for one markdown line:
+/// [`without_bidi_controls`], then [`escape_md_inline`]. A body keeps
+/// its controls and takes [`escape_md_inline`] or [`escape_md_block`].
+pub fn escape_name_inline(s: &str) -> String {
+    escape_md_inline(&without_bidi_controls(s))
+}
+
+/// A name, a filename or a label between raw HTML tags:
+/// [`without_bidi_controls`], then [`escape_text`].
+pub fn escape_name_text(s: &str) -> String {
+    escape_text(&without_bidi_controls(s))
+}
 
 /// Escape text that lands between tags. A line break becomes a
 /// character reference: in an HTML block a blank line ends the block and
@@ -178,35 +211,85 @@ pub fn md_code_block(lang: &str, body: &str) -> String {
     format!("{fence}{lang}\n{body}\n{fence}")
 }
 
-/// Markdown that a converter built from plain text without escaping the
-/// text — a PDF's words through pdf-inspector: `<`, `>` and `&` escaped
-/// wherever markdown would read them as HTML, and left alone inside code,
-/// which markdown shows literally. A line's leading `>` stays a quote.
-pub fn escape_html_outside_code(md: &str) -> String {
-    let mut out = String::with_capacity(md.len() + 16);
-    let mut open_fence: Option<String> = None;
-    for (i, line) in md.split('\n').enumerate() {
-        if i > 0 {
-            out.push('\n');
-        }
-        let trimmed = line.trim_start();
-        if let Some(fence) = &open_fence {
-            if closes_fence(trimmed, fence) {
-                open_fence = None;
+/// `md` with any block it leaves open closed at its end: a fence, or an
+/// HTML block that only a closing tag or marker ends (`<pre`, `<!--`,
+/// `<?`, `<!X`, `<![CDATA[`). Markdown from upstream is pasted into a
+/// page of many messages, and a block one message leaves open would
+/// swallow every message after it.
+pub fn close_open_blocks(md: &str) -> String {
+    let mut open: Option<String> = None;
+    for line in md.split('\n') {
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let trimmed = &line[indent..];
+        open = match open {
+            Some(fence) if fence_opener(&fence).is_some() => {
+                (!closes_fence(trimmed, &fence)).then_some(fence)
             }
-            out.push_str(line);
-            continue;
-        }
-        if let Some(fence) = fence_opener(trimmed) {
-            open_fence = Some(fence);
-            out.push_str(line);
-            continue;
-        }
-        let rest = line.trim_start_matches(['>', ' ', '\t']);
-        out.push_str(&line[..line.len() - rest.len()]);
-        escape_html_outside_code_spans(rest, &mut out);
+            Some(end) => (!ends_html_block(line, &end)).then_some(end),
+            None if indent > 3 => None,
+            None => opens_fence(trimmed).or_else(|| {
+                let end = html_block_end(trimmed)?;
+                (!ends_html_block(trimmed, &end)).then_some(end)
+            }),
+        };
     }
-    out
+    match open {
+        Some(close) => format!("{md}\n{close}"),
+        None => md.to_string(),
+    }
+}
+
+/// [`fence_opener`], less a backtick run with a backtick after it on its
+/// line, which markdown reads as a code span.
+pub(crate) fn opens_fence(line: &str) -> Option<String> {
+    let fence = fence_opener(line)?;
+    (!(fence.starts_with('`') && line[fence.len()..].contains('`'))).then_some(fence)
+}
+
+/// What ends the HTML block `line` opens, for the kinds that a blank
+/// line does not end.
+fn html_block_end(line: &str) -> Option<String> {
+    if let Some(rest) = line.strip_prefix('<') {
+        let lower = rest.to_ascii_lowercase();
+        for tag in ["pre", "script", "style", "textarea"] {
+            let after = lower.strip_prefix(tag);
+            if after.is_some_and(|a| a.is_empty() || a.starts_with([' ', '\t', '>'])) {
+                return Some(format!("</{tag}>"));
+            }
+        }
+    }
+    let end = if line.starts_with("<!--") {
+        "-->"
+    } else if line.starts_with("<?") {
+        "?>"
+    } else if line.starts_with("<![CDATA[") {
+        "]]>"
+    } else if line
+        .strip_prefix("<!")
+        .is_some_and(|r| r.starts_with(|c: char| c.is_ascii_alphabetic()))
+    {
+        ">"
+    } else {
+        return None;
+    };
+    Some(end.to_string())
+}
+
+/// Whether `line` holds what ends an HTML block. Any of the four
+/// closing tags ends a `<pre>`-kind block, whichever opened it.
+fn ends_html_block(line: &str, end: &str) -> bool {
+    if end.starts_with("</") {
+        let lower = line.to_ascii_lowercase();
+        return ["</pre>", "</script>", "</style>", "</textarea>"]
+            .iter()
+            .any(|t| lower.contains(t));
+    }
+    let after_opener = match end {
+        "-->" => line.strip_prefix("<!--").unwrap_or(line),
+        "?>" => line.strip_prefix("<?").unwrap_or(line),
+        _ => line,
+    };
+    after_opener.contains(end)
 }
 
 /// The backticks or tildes opening a fenced block, if `line` opens one.
@@ -216,20 +299,10 @@ fn fence_opener(line: &str) -> Option<String> {
     (run.len() >= 3).then_some(run)
 }
 
-fn closes_fence(line: &str, fence: &str) -> bool {
+pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
     let mark = fence.chars().next().expect("a fence has a mark");
     let run = line.chars().take_while(|&c| c == mark).count();
     run >= fence.len() && line[run..].trim().is_empty()
-}
-
-fn escape_html_outside_code_spans(line: &str, out: &mut String) {
-    for (part, is_code) in code_span_parts(line) {
-        if is_code {
-            out.push_str(part);
-        } else {
-            out.push_str(&escape_text(part));
-        }
-    }
 }
 
 /// `text` cut into its code spans (`true`, backticks included) and the
@@ -399,6 +472,20 @@ fn block_marker_at(body: &str) -> Option<usize> {
 mod tests {
     use super::*;
 
+    /// A right-to-left override showed `orders\u{202E}fdp.exe` as
+    /// `ordersexe.pdf`.
+    #[test]
+    fn bidi_controls_go_and_marks_stay() {
+        assert_eq!(
+            without_bidi_controls("orders\u{202E}fdp.exe \u{2067}Worf\u{2069} \u{202A}a\u{202C}"),
+            "ordersfdp.exe Worf a"
+        );
+        assert_eq!(
+            without_bidi_controls("Deanna\u{200F} \u{200E}x\u{061C}"),
+            "Deanna\u{200F} \u{200E}x\u{061C}"
+        );
+    }
+
     #[test]
     fn text_escapes_markup_without_double_escaping() {
         assert_eq!(escape_text("Riker & Troi"), "Riker &amp; Troi");
@@ -451,27 +538,6 @@ mod tests {
         assert_eq!(
             escape_md_block(typed),
             "Hi &lt;b&gt;Data&lt;/b&gt;,\n\\# not a heading\n*really*\n\\---\n!\\[x\\](https://e.invalid/p.png)"
-        );
-    }
-
-    #[test]
-    fn converted_text_is_escaped_everywhere_but_in_code() {
-        let md = "# A <b> & B\n\
-                  > quoted <i>\n\
-                  run `a < b && c` then <x>\n\
-                  ```\n\
-                  <div> & </div>\n\
-                  ```\n\
-                  after <y>";
-        assert_eq!(
-            escape_html_outside_code(md),
-            "# A &lt;b&gt; &amp; B\n\
-             > quoted &lt;i&gt;\n\
-             run `a < b && c` then &lt;x&gt;\n\
-             ```\n\
-             <div> & </div>\n\
-             ```\n\
-             after &lt;y&gt;"
         );
     }
 
@@ -583,5 +649,43 @@ mod tests {
         }
         failures.truncate(10);
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+    /// A message that leaves a block open no longer takes the messages
+    /// after it into that block.
+    #[test]
+    fn a_block_left_open_is_closed_at_the_end() {
+        assert_eq!(
+            close_open_blocks("```rust\nfn main() {"),
+            "```rust\nfn main() {\n```"
+        );
+        assert_eq!(
+            close_open_blocks("a\n````\n```\nb"),
+            "a\n````\n```\nb\n````"
+        );
+        assert_eq!(close_open_blocks("<PRE>x\ny"), "<PRE>x\ny\n</pre>");
+        assert_eq!(close_open_blocks("<!-- note\nmore"), "<!-- note\nmore\n-->");
+        assert_eq!(close_open_blocks("<![CDATA[x"), "<![CDATA[x\n]]>");
+        assert_eq!(close_open_blocks("<!DOCTYPE"), "<!DOCTYPE\n>");
+    }
+
+    #[test]
+    fn a_closed_block_is_left_alone() {
+        for md in [
+            "```\ncode\n```\nafter",
+            "~~~\n```\n~~~",
+            "<pre>x</pre>",
+            "<!-- one line -->",
+            "<!--\n-->",
+            "<script>\n</style>",
+            "<?php ?>",
+            "<!DOCTYPE html>",
+            "    ```",
+            "> ```",
+            "<prefix>",
+            "`` ``` ``",
+            "```x = 1```",
+        ] {
+            assert_eq!(close_open_blocks(md), md, "{md:?}");
+        }
     }
 }

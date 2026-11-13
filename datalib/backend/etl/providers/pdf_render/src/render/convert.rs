@@ -11,7 +11,9 @@ use std::path::Path;
 /// v5: ids are minted through `datalib_id` under `Content`, and carry
 ///     the document's own date in their leading bits (`datalib_id`'s
 ///     v8 layout). Every uuid moved; the bucket key is now the blake3.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: each page is a section of its own, its markdown as pdf-inspector
+///      wrote it, and its first paragraph is read as markdown.
+pub const RENDER_VERSION: u32 = 10;
 
 /// One page of converted text.
 pub struct Page {

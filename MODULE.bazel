@@ -72,6 +72,39 @@ http_archive(
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
+# llama.cpp at the release node-llama-cpp 3.20.0 (qmd 2.8.3's) is built on,
+# so the search index's embedder runs the model the way qmd did:
+# third-party/llama_cpp/README.md.
+http_archive(
+    name = "llama_cpp",
+    urls = ["https://github.com/ggml-org/llama.cpp/archive/refs/tags/b10361.tar.gz"],
+    sha256 = "56d729e7820da0f23d1ad2b2198884150f35363bbc531e5cc2ce13ab31e870d3",
+    strip_prefix = "llama.cpp-b10361",
+    build_file = "//third-party/llama_cpp:llama_cpp.BUILD",
+)
+
+# NVIDIA's CUDA toolkit for llama.cpp's CUDA backend on Linux x86_64
+# (docs/dev/plans/embed_on_modal.md). NVIDIA's redistributable manifest,
+# pinned by its sha256, names every component's archive and hash; only
+# the four ggml-cuda needs are fetched, and only when a CUDA target builds.
+bazel_dep(name = "rules_cuda", version = "0.4.0")
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+cuda.redist_json(
+    name = "cuda_redist",
+    components = [
+        "cccl",
+        "cublas",
+        "cudart",
+        "nvcc",
+    ],
+    platforms = ["linux-x86_64"],
+    sha256 = "8335301010b0023ee1ff61eb11e2600ca62002d76780de4089011ad77e0c7630",
+    version = "12.9.1",
+)
+cuda.toolkit(name = "cuda")
+use_repo(cuda, "cuda")
+
 # The autoconf source tarball, for its pre-generated `shell.c` — the
 # sqlite3-shell entry point that `//third-party/doltlite:doltlite`
 # links against the amalgamation to get a CLI for tests.

@@ -1,0 +1,50 @@
+# Builds llama.cpp's CUDA backend, `libggml-cuda.so`, and the
+# `libggml-base.so` it links (third-party/llama_cpp/llama_cpp.BUILD), when
+# a change could move them. Nothing here has a GPU: this proves the module
+# compiles and links; running it is a Modal GPU's job
+# (docs/dev/plans/embed_on_modal.md). Kept out of `test.yml` because the
+# toolkit is a ~1 GB fetch that no other target needs.
+name: cuda
+
+on:
+  pull_request:
+    paths:
+      - .bazelrc
+      - .github/workflows/cuda.yml
+      - MODULE.bazel
+      - third-party/llama_cpp/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build libggml-cuda.so
+    # The release's gnu legs' runner (release_steps.md §"The Linux floor"):
+    # its gcc 13 is one CUDA 12.9's nvcc accepts, and its glibc is the floor
+    # the module has to load on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: bazel build
+        run: |
+          bazelisk build -c opt --config=cuda --nostamp \
+            @llama_cpp//:ggml_base_so @llama_cpp//:ggml_cuda_so
+          mkdir -p "$RUNNER_TEMP/cuda"
+          cp "$(bazelisk cquery -c opt --config=cuda --output=files @llama_cpp//:ggml_base_so 2>/dev/null)" \
+             "$(bazelisk cquery -c opt --config=cuda --output=files @llama_cpp//:ggml_cuda_so 2>/dev/null)" \
+             "$RUNNER_TEMP/cuda/"
+          ls -la "$RUNNER_TEMP/cuda"
+          readelf -d "$RUNNER_TEMP/cuda/libggml-cuda.so" | grep NEEDED
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ggml-cuda-linux-x86_64
+          path: ${{ runner.temp }}/cuda/*.so
+          if-no-files-found: error
+          retention-days: 7

@@ -32,7 +32,6 @@ export type ColumnType =
   | "status"
   | "chips"
   | "actions"
-  | "markdown_uuid"
   | "image"
   | "membership";
 
@@ -66,4 +65,18 @@ export type LiveTable =
   | "storage"
   | "disk"
   | "curated";
+
+/** `PassState in datalib/backend/dag/src/supervisor/pass.rs`. */
+export type PassState =
+  | "waiting"
+  | "running"
+  | "done"
+  | "failed";
+
+/** `WipeKind in datalib/backend/dag/src/supervisor/store.rs`. */
+export type WipeKind =
+  | "reset"
+  | "purge"
+  | "compact"
+  | "collect";
 

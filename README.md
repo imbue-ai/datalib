@@ -1,5 +1,10 @@
 # datalib — Project Data Liberation ✊
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mission-dark.png">
+  <img src="docs/assets/mission-light.png" width="480" alt="Organize the world's (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.">
+</picture>
+
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
 > [!NOTE]

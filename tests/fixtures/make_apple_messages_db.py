@@ -16,6 +16,10 @@ the daemon bookkeeping `skip_churn` drops. What the tests need from it:
     and one old-style row with `text` set and no `attributedBody`,
   * a body longer than 127 bytes, so the archive's two-byte length
     prefix (`0x81 lo hi`) is exercised,
+  * a body archived as an NSMutableAttributedString holding an
+    NSMutableString, which names two more classes first and so moves
+    the reference after `NSString` from 0x94 to 0x95 — once on a
+    message and once on a tapback, the two places a real database had it,
   * an attachment: its message's body is one U+FFFC, and the file is
     named through `message_attachment_join`,
   * tapbacks: rows whose `associated_message_type` is 2000–2005 (add)
@@ -131,13 +135,28 @@ def ts_int(n: int) -> bytes:
     return b"\x82" + n.to_bytes(4, "little")
 
 
-def attributed_body(text: str) -> bytes:
+IMMUTABLE_HEAD = (
+    b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12NSAttributedString\x00"
+    b"\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x08NSString\x01\x94\x84\x01+"
+)
+
+# The same up to the string, but mutable. What a real database showed is
+# the class names and `NSString 01 95 84 01 2b`; the bytes between are
+# built by typedstream's rules, not copied from one.
+MUTABLE_HEAD = (
+    b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x19NSMutableAttributedString\x00"
+    b"\x84\x84\x12NSAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92"
+    b"\x84\x84\x84\x0fNSMutableString\x01\x84\x84\x08NSString\x01\x95\x84\x01+"
+)
+
+
+def attributed_body(text: str, head: bytes = IMMUTABLE_HEAD) -> bytes:
     """The archive Messages writes: an NSAttributedString whose string is
-    `text` and whose one attribute run marks it as message part 0."""
+    `text` and whose one attribute run marks it as message part 0. The
+    attribute runs are the immutable archive's in both; nothing reads them."""
     body = text.encode("utf-8")
     return (
-        b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12NSAttributedString\x00"
-        b"\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x08NSString\x01\x94\x84\x01+"
+        head
         + ts_int(len(body))
         + body
         + b"\x86\x84\x02iI\x01"
@@ -171,7 +190,12 @@ GUID = {
     10: "A1B2C3D4-0010-4000-8000-000000000010",
     12: "A1B2C3D4-0012-4000-8000-000000000012",
     13: "A1B2C3D4-0013-4000-8000-000000000013",
+    14: "A1B2C3D4-0014-4000-8000-000000000014",
+    15: "A1B2C3D4-0015-4000-8000-000000000015",
 }
+
+# The messages whose bodies are archived mutable.
+MUTABLE_BODIES = {14, 15}
 
 LONG_BODY = (
     "Captain's log, supplemental. The away team reports that the settlement on "
@@ -188,6 +212,20 @@ MESSAGES = [
     (3, 1, 1, 0, 5, None, "\ufffc", 1, None, None),
     # Picard loves the picture.
     (4, 1, 0, 1, 6, None, "Loved an image", None, (2000, 3), None),
+    (14, 1, 0, 1, 7, None, "Number One, you have the bridge.", None, None, None),
+    # Riker likes it; this tapback's body is mutable too.
+    (
+        15,
+        1,
+        1,
+        0,
+        8,
+        None,
+        "Liked \u201cNumber One, you have the bridge.\u201d",
+        None,
+        (2001, 14),
+        None,
+    ),
     (5, 2, 2, 0, 30, None, "Query: shall I recalibrate the sensors?", None, None, None),
     (6, 2, 0, 1, 31, None, "Yes, Data.", None, None, None),
     # Riker likes Data's question, then takes it back.
@@ -252,7 +290,14 @@ def insert_messages(con: sqlite3.Connection, messages: list) -> None:
                 GUID[rowid],
                 text,
                 handle,
-                attributed_body(body) if body is not None else None,
+                (
+                    attributed_body(
+                        body,
+                        MUTABLE_HEAD if rowid in MUTABLE_BODIES else IMMUTABLE_HEAD,
+                    )
+                    if body is not None
+                    else None
+                ),
                 ACCOUNT,
                 date,
                 from_me,

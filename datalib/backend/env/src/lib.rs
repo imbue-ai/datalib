@@ -33,6 +33,7 @@ names! { STEP_PROTOCOL:
     DATALIB_DAG_CHECKPOINT_CADENCE,
     DATALIB_DAG_RENDER_PAGES,
     DATALIB_DAG_EMBED_CONTEXTS,
+    DATALIB_DAG_EMBED_SEARCH_INDEX,
 }
 
 names! { APPLET_PROTOCOL:
@@ -61,6 +62,11 @@ names! { BUILT_IN_SOURCE_KEYS:
 /// folder, whose latchkey store a person's terminal cannot reach. Children
 /// are not handed it.
 pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
+
+/// Which index the search applet reads Words and Meaning from: `qmd`, the
+/// default, or `search_index`, while the two are compared
+/// (`docs/dev/plans/search_index_from_ram.md`). Set in the applet's entry.
+pub const DATALIB_SEARCH_READS: &str = "DATALIB_SEARCH_READS";
 
 /// Names of more variables every child is handed, comma-separated: for a
 /// custom step or applet that reads one of its own, or a test harness.
@@ -123,6 +129,7 @@ const EVERY_CHILD: &[&str] = &[
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
     "DATALIB_QMD_MODELS_NO_FETCH",
+    "DATALIB_NO_FETCH",
     "QMD_LLAMA_GPU",
     // Bazel's, so a child of a test finds its runfiles and keeps out of
     // the host's caches.

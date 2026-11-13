@@ -158,6 +158,18 @@ impl Session {
         (personal && username.contains('@')).then(|| username.to_string())
     }
 
+    /// A limit the server states under `capabilities[core]` (RFC 8620
+    /// §2), such as `maxObjectsInGet`.
+    pub fn core_limit(&self, name: &str) -> Option<usize> {
+        self.raw
+            .pointer(&format!(
+                "/capabilities/{}/{name}",
+                CAP_CORE.replace('/', "~1")
+            ))
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+    }
+
     pub fn download_url_for(
         &self,
         account_id: &str,
@@ -296,5 +308,17 @@ mod tests {
             s.download_url_for("A1", "B1", "doc.pdf", "application/pdf"),
             "https://h/A1/B1/doc.pdf?type=application/pdf",
         );
+    }
+
+    #[test]
+    fn core_limit_reads_the_core_capability() {
+        let s = Session::from_value(json!({
+            "apiUrl": "x",
+            "downloadUrl": "y",
+            "capabilities": { CAP_CORE: { "maxObjectsInGet": 4096 } },
+        }))
+        .unwrap();
+        assert_eq!(s.core_limit("maxObjectsInGet"), Some(4096));
+        assert_eq!(s.core_limit("maxCallsInRequest"), None);
     }
 }

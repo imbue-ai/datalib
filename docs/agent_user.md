@@ -328,8 +328,12 @@ It prints each step's tree before and after. With the app up, `POST
 `"targets": ["lightroom/ingest"]` for one step only. It answers 204 when done, or 202 while it runs on; the steps it
 touches, and what reads them, wait meanwhile. Each store needs about its
 own size free on disk while it is rewritten, and takes minutes per ten
-gigabytes. The status bar's "Free up disk space…" (a right-click on the
-data root's size) asks the same.
+gigabytes. `GET /api/config`'s `free_space` says how far it has got:
+each step it asks, `waiting`, `running`, `done` with its store's
+`store_bytes` before and after, or `failed` with why; `running` turns
+false when it is over. The status bar's "Free up disk space…" (a
+right-click on the data root's size) asks the same, and a pill in the
+toolbar shows that progress.
 
 **Logs.** The run store is where to read what happened.
 `GET /api/runs` lists runs: a run is one stretch of the loop being busy,
@@ -437,7 +441,9 @@ Pick the surface that fits the question:
   the shell for each one: see that doc's §"Reading a store from Python".
   If you would rather not
   touch the store at all, `datalib-http`'s endpoints below serve the
-  same rows.
+  same rows, and `POST /applet/unified_document_index/sql` runs your
+  own `SELECT` against this or any other store, the raw stores and the
+  log included, a page at a time ([the applets](user/applets.md#reading-any-store-with-sql)).
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).

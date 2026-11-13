@@ -225,6 +225,7 @@ fn search(args: SearchArgs) -> Result<()> {
         offset: args.offset,
         sort: args.sort,
         through: None,
+        among: None,
         within: args.within,
         tab: args.tab,
     };

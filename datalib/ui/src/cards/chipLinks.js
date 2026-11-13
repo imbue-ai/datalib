@@ -44,6 +44,20 @@ export function handleFromUri(href) {
   return hidden.test(handle) ? null : handle;
 }
 
+/** The handle a display name spells out, if it is one: an address, a
+ *  number in international form, or a handle's URI. Mirrors
+ *  `handle_named_by` in `unified_document_index/src/people.rs`.
+ *  @param {string} name
+ *  @returns {string | null} */
+export function handleNamedBy(name) {
+  const shown = name.trim();
+  return (
+    handleFromUri(shown) ??
+    handleFromUri(`mailto:${shown}`) ??
+    (shown.startsWith("+") ? handleFromUri(`tel:${shown}`) : null)
+  );
+}
+
 /** @param {string} href
  *  @returns {string | null} */
 function readHandle(href) {
@@ -312,9 +326,20 @@ export function contactFromUri(href) {
  *  address in running text is left alone — its token says so — so a
  *  signature's address stays an address. With `env.chipMark`, each mark
  *  is signed with it in `data-chip-mark`, for the sanitizer to tell this
- *  plugin's chips from ones the body's own HTML claims to be.
+ *  plugin's chips from ones the body's own HTML claims to be. With
+ *  `env.messageHeader`, the fragment is one message's inside, and a link
+ *  that opens its first line, an `h2`, is its author as the message
+ *  itself named them (`data-chip-header`): nothing the message carries
+ *  can come before its header.
  *  @param {import("markdown-it").MarkdownIt} md */
 export function chipLinks(md) {
+  md.core.ruler.push("chip_header", (state) => {
+    if (!state.env?.messageHeader) return;
+    const [open, inline] = state.tokens;
+    if (open?.type !== "heading_open" || open.tag !== "h2") return;
+    const first = inline?.type === "inline" ? inline.children?.[0] : undefined;
+    if (first?.type === "link_open") first.attrSet("data-chip-header", "");
+  });
   const fallback =
     md.renderer.rules.link_open ||
     ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));

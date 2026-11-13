@@ -160,6 +160,33 @@ closed_vocabulary! {
     }
 }
 
+/// The scope key of a row the grid index records itself: a source's
+/// render store it could not read. Every other row in the index is a copy.
+pub const INDEX_OWN_SCOPE_KEY: &str = "render_store";
+
+/// Which step's [`METRIC`] count a row in the grid index is in: each step
+/// counts only the rows it found itself (`etl/README.md` §"Problems flow
+/// downstream with the data").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CountedBy {
+    /// The source's download: a fetch-stage row.
+    Download,
+    /// The source's render: every other row of the source.
+    Render,
+    /// The grid index, about a render store it could not read.
+    Index,
+}
+
+impl CountedBy {
+    pub fn of(stage: Stage, scope_kind: ScopeKind, scope_key: &str) -> Self {
+        match (stage, scope_kind) {
+            (_, ScopeKind::Entity) if scope_key == INDEX_OWN_SCOPE_KEY => CountedBy::Index,
+            (Stage::Fetch, _) => CountedBy::Download,
+            _ => CountedBy::Render,
+        }
+    }
+}
+
 /// The metric series a step reports its whole-store problem counts on,
 /// one sample per severity under the [`METRIC_LABEL`] label, every run
 /// and zero included: the Manage screen reads a missing series as
@@ -247,7 +274,8 @@ pub struct Problem {
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
     /// First 80 characters of the offending value — see [`sample_of`] —
-    /// or, from [`Problem::explained`], the writer's explanation whole.
+    /// or, from [`Problem::explained`] and [`Problem::lossy_explained`],
+    /// the writer's explanation whole.
     pub sample: String,
     /// `None` takes [`Severity::default_for`] the outcome.
     pub severity: Option<Severity>,
@@ -303,6 +331,20 @@ impl Problem {
             rule: Some(rule.into()),
             sample: sample_of(sample),
             severity: None,
+        }
+    }
+
+    /// A deliberate lossy rule that fired on a whole source or record
+    /// rather than on one value, so its sample is the explanation, kept
+    /// whole as [`Problem::explained`] keeps one.
+    pub fn lossy_explained(
+        rule: impl Into<String>,
+        field: Option<String>,
+        explanation: &str,
+    ) -> Self {
+        Self {
+            rule: Some(rule.into()),
+            ..Self::explained(Reason::DeliberateLoss, field, explanation)
         }
     }
 
@@ -635,6 +677,17 @@ mod tests {
         assert_eq!(p.rule.as_deref(), Some("pdf.strip_repeated_chrome"));
     }
 
+    /// An explanation longer than a value's sample stays whole, with
+    /// the rule a lossy problem carries.
+    #[test]
+    fn a_lossy_explanation_is_kept_whole() {
+        let why = "x".repeat(200);
+        let p = Problem::lossy_explained("rule", None, &why);
+        assert_eq!(p.sample, why);
+        assert_eq!(p.reason, Reason::DeliberateLoss);
+        assert_eq!(p.rule.as_deref(), Some("rule"));
+    }
+
     /// The id is a function of what names the problem: the same
     /// problem twice is one row, two problems on one record are two,
     /// and the sample — which changes with the data's wording — is not
@@ -681,6 +734,32 @@ mod tests {
             .severity,
             Severity::Warning,
             "a writer that says a severity keeps it"
+        );
+    }
+
+    /// A mute takes a row off the count of the step that found it, so a
+    /// fetch row the render copied must still be the download's.
+    #[test]
+    fn each_row_is_counted_by_the_step_that_found_it() {
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Entity, "emails:1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Markdown, "md-1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::GridRow, ScopeKind::Markdown, "md-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Parse, ScopeKind::Entity, "e-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Render, ScopeKind::Entity, INDEX_OWN_SCOPE_KEY),
+            CountedBy::Index
         );
     }
 

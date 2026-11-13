@@ -22,10 +22,7 @@
 //! step of datalib's own names `datalib-step` as its `command`; then
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
 //! `since`. Those last seven rewrites are also the ones `datalib-http`
-//! makes by itself (`upgrade_lowercase_ids`, `upgrade_qmd_steps`,
-//! `upgrade_document_index`, `upgrade_time_series_steps`,
-//! `upgrade_time_series_embeds`, `upgrade_step_commands`,
-//! `upgrade_todoist_since`).
+//! makes by itself ([`UNATTENDED`]).
 
 pub mod convert;
 pub mod document_index;
@@ -212,6 +209,93 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
     refuse_a_loss_but(text, out, follow, &[])
+}
+
+/// One rewrite `datalib-http` makes without asking: what the old shape
+/// has, for the log, what the rewrite does, and the rewrite.
+pub struct Rewrite {
+    pub why: &'static str,
+    pub what: &'static str,
+    pub run: fn(&str) -> Result<Option<String>>,
+}
+
+/// Every unattended rewrite, in the order they are made. `datalib-http`
+/// runs these on its config, and a config the repo ships or documents is
+/// tested to need none of them.
+pub const UNATTENDED: [Rewrite; 7] = [
+    Rewrite {
+        why: "has an id with capitals in it",
+        what: "every group, step and applet id, and every function, is lower case, \
+               since each names a folder and a Mac's disk ignores letter case",
+        run: upgrade_lowercase_ids,
+    },
+    Rewrite {
+        why: "still has a `qmd_index` step",
+        what: "`qmd_index` is now `qmd_aggregator`, reading each source's own \
+               keyword_index and embed steps",
+        run: upgrade_qmd_steps,
+    },
+    Rewrite {
+        why: "still names its index group `unified_index`",
+        what: "the `unified_index` group, its steps and its applet are now \
+               `unified_document_index`",
+        run: upgrade_document_index,
+    },
+    Rewrite {
+        why: "has a source with time series and no time-series index",
+        what: "each source with time series has a `render_time_series` step, read by \
+               the new `unified_time_series_index` group's `time_series_index`",
+        run: upgrade_time_series_steps,
+    },
+    Rewrite {
+        why: "has a time-series source with an `embed` step",
+        what: "a time-series source's markdown is summaries of numbers, which its \
+               keyword index already finds; its `embed` step is taken out",
+        run: upgrade_time_series_embeds,
+    },
+    Rewrite {
+        why: "has a step that does not name its program",
+        what: "every step names its program in `command`; datalib's own steps run \
+               `datalib-step`",
+        run: upgrade_step_commands,
+    },
+    Rewrite {
+        why: "has a Todoist source whose window is `completed_since`",
+        what: "Todoist's window is `since`, which takes the grammar every source's \
+               `since` does",
+        run: upgrade_todoist_since,
+    },
+];
+
+/// What [`upgrade_unattended`] made of a config.
+pub struct Unattended {
+    /// The text after every rewrite that applied.
+    pub text: String,
+    /// The `what` of each rewrite that changed the text.
+    pub done: Vec<&'static str>,
+    /// The `why` of each rewrite that refused, and its reason. The text
+    /// is left as that rewrite found it.
+    pub refused: Vec<(&'static str, anyhow::Error)>,
+}
+
+/// Run [`UNATTENDED`] over `text`, each on the last one's result.
+pub fn upgrade_unattended(text: &str) -> Unattended {
+    let mut out = Unattended {
+        text: text.to_string(),
+        done: Vec::new(),
+        refused: Vec::new(),
+    };
+    for rewrite in &UNATTENDED {
+        match (rewrite.run)(&out.text) {
+            Ok(Some(next)) => {
+                out.text = next;
+                out.done.push(rewrite.what);
+            }
+            Ok(None) => {}
+            Err(e) => out.refused.push((rewrite.why, e)),
+        }
+    }
+    out
 }
 
 /// [`refuse_a_loss`], for a rewrite whose job is to take out `meant`.
@@ -873,6 +957,26 @@ inputs = ["mail/render_markdown"]
         assert!(datalib_dag::config::check_text(&clash).is_clean());
         let err = upgrade_document_index(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
+    }
+
+    /// The unattended pass names what it did, and does nothing to a config
+    /// already in the current shape: the second pass over its own result
+    /// is empty.
+    #[test]
+    fn the_unattended_pass_names_each_rewrite_and_leaves_a_current_config_alone() {
+        let old = "[[groups]]\nid = \"mail\"\ntype = \"email\"\n\n\
+                   [[steps]]\ngroup = \"mail\"\nfunction = \"ingest\"\n";
+        let first = upgrade_unattended(old);
+        assert!(first.refused.is_empty());
+        assert_eq!(first.done, [UNATTENDED[5].what]);
+        assert!(
+            first.text.contains("command = \"datalib-step\""),
+            "{}",
+            first.text
+        );
+        let second = upgrade_unattended(&first.text);
+        assert!(second.done.is_empty() && second.refused.is_empty());
+        assert_eq!(second.text, first.text);
     }
 
     #[test]

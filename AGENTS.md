@@ -47,6 +47,7 @@ merge conflict waiting to happen.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
 - [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
+- [`docs/dev/deleted_upstream.md`](docs/dev/deleted_upstream.md) — `when_deleted_upstream`: keeping your copy of what you deleted upstream for privacy, and how a source offers it.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
@@ -82,6 +83,7 @@ merge conflict waiting to happen.
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 - [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
 - [`docs/user/applets.md`](docs/user/applets.md), [`docs/user/contacts_app.md`](docs/user/contacts_app.md) — what the running app serves, and an agent's way into the contacts app; compiled in the same way, so a change to a route changes them.
+- [`docs/user/rendered_documents.md`](docs/user/rendered_documents.md) — what a rendered document promises any viewer: the link a person is, the `<time>` a date is, the attachment addresses. Compiled in as `help documents`, so a change to those shapes changes it.
 - [`datalib/backend/agent_docs/README.md`](datalib/backend/agent_docs/README.md) — every doc `datalib-step help` prints, how its links print, and the checks on its TOML and commands (`toml fragment`). Read before editing a doc an agent is sent to.
 
 ## Keep a forward path for existing data
@@ -260,6 +262,9 @@ datalib/
                    and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites the one retired
                    config shape into the current one.
+    lightroom_retime/ `datalib-lightroom-retime`: applies a file of
+                   capture-time edits to a Lightroom catalog, the one
+                   thing here that writes a catalog. Not shipped.
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
@@ -270,8 +275,20 @@ datalib/
     qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
                    so qmd never fetches one itself. Linked by the step
                    and the applet.
+    search_index/  the search index that replaces qmd's storage: keyword
+                   rows per message and chunks keyed by their prompt's
+                   hash, in `search_*` tables of the grid index's file,
+                   and the inference cache of vectors, holding no text
+                   (docs/dev/plans/search_index_from_ram.md).
+    embedder/      text to vectors in process: llama.cpp
+                   (third-party/llama_cpp) behind a small C shim, on
+                   Metal on a mac. Tested against qmd itself.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    sql_guard/     reads SQL a caller wrote, and nothing else: a
+                   read-only open over SQLite's C API, the authorizer,
+                   deadline and one-statement check, parameters by name
+                   or position; behind the search applet's `POST /sql`.
     blob_store/    the blob store's shape: the one part of a step's data
                    `datalib-http` reads, and its reader.
     core/          the app stores plus re-exports of `runtime`.
@@ -292,6 +309,9 @@ datalib/
                    Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
+    problem_mutes/ the problem rows a person muted, under
+                   `datalib_curated/`; the `unified_document_index`
+                   applet is its one writer, `datalib-http` reads it.
     unified_document_index/ the grid index, the qmd index, the query language over
                    them. Linked by datalib-step and datalib-applet —
                    never by datalib-http or datalib-dag.
@@ -355,7 +375,9 @@ such store without copying its points (`docs/dev/time_series.md`). The document 
 queried by the `unified_document_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`). A render
+(`datalib/backend/blob_store/README.md`), and the muted problems still in
+the index, which come off the Manage counts
+(`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -435,7 +457,8 @@ place for what the engine does, with the recipes;
 Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`,
 `//datalib/backend/etl:doltlite_two_process_test` or, for the PyPI
 wheels, `//datalib/backend/doltlite_facts:python_package_test`,
-`:python_reader_test` and `//datalib/reader:reader_wheel_test`, so a doltlite
+`:python_reader_test` and `//datalib/reader:reader_wheel_test`, or, for
+the vec1 vector search, `:vec1_facts_test`, so a doltlite
 bump that moves one fails by name.
 
 The rules, none optional. How our code enforces them is in
@@ -780,6 +803,7 @@ upstream (block types, MIME types), free-form display text
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| who muted a problem row: a person, or an agent | `MutedHow` | `problem_mutes/src/lib.rs` (`datalib_problem_mutes`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side gets the ones the UI switches on as string-literal
@@ -878,6 +902,18 @@ Where such a column needs to sort it gets a derived UTC twin
 (`created_at_utc` + `created_offset`) rather than being rewritten. If you
 find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 `isoformat()` in Python, `to_rfc3339()` here.
+
+**`Z` means the clock is unknown; `+00:00` means it was UTC.** RFC 9557
+(2024) updated RFC 3339: `Z` now says "the instant in UTC is known, the
+local offset is not", and `+00:00` says the time really was on UTC's
+clock. RFC 3339's old spelling of "unknown", `-00:00`, is refused by ISO
+8601, and RFC 9557 asks for `Z` instead; read it, never write it. Both
+are the same instant to every parser (chrono, `Date.parse`). So a
+rendered time whose source names no clock (a Unix stamp, a service's own
+`Z`) is written `Z` (`datalib_time::with_unknown_offset`), and the viewer
+shows it on its reader's clock under "as written"; a stamp we mint, whose
+clock we know, never ends in `Z`. Which clock each source's messages are
+on: [`rendered_documents.md`](docs/user/rendered_documents.md#a-time).
 
 ## Auth (web API)
 

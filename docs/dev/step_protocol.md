@@ -121,6 +121,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
 | `DATALIB_DAG_EMBED_CONTEXTS` | set when the config has `embed_contexts`: how many embedding contexts an embed step gives qmd (default 1) |
+| `DATALIB_DAG_EMBED_SEARCH_INDEX` | `1` when the config has `embed_search_index = true`: an embed step also fills the search index's inference cache |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
 plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and
@@ -573,9 +574,12 @@ A structured tracing-JSON line (with a `level` field, as
 tracing-subscriber's JSON format writes) is unwrapped rather than
 quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
 `level`, `target` and thread (`threadName`, else `threadId`) become
-columns — the line's own timestamp wins over the runner's arrival time
-— and everything else it carried (`filename`, `line_number`, the
-remaining `fields`) rides along as `fields`. The Manage screen shows
+columns — the line's own timestamp wins over the runner's arrival time,
+offset included, so write it in the local offset
+(`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
+runner's lines in the real one — and everything else it carried
+(`filename`, `line_number`, the remaining `fields`) rides along as
+`fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
 Every level is kept, `debug` and `trace` included: the runner stores a
@@ -674,6 +678,13 @@ runner records it, so a step that kept its content and reports a
 content version moves nothing downstream. Report nothing when there is
 nothing to give back. As with Migrate, only `datalib-step`'s own steps
 take the verbs (`StepSpec::compacts`).
+
+A step that shrank a store also says how big it was, in bytes, before and
+after, which is what the app's free-space pill adds up:
+
+```json
+{"event":"outcome","store_bytes":{"before":6600000000,"after":3100000000},"outputs":[...]}
+```
 
 `--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
 doltlite store (`doltlite_raw::collect_garbage`), which deletes only

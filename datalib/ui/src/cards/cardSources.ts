@@ -123,3 +123,10 @@ export function appletBrowseSource(appletId: string): string | null {
 export function searchSource(q: string): string {
   return `searchView(${JSON.stringify({ q })})`;
 }
+
+/// The source of a document's card, at `section` when it is one of its
+/// messages.
+export function documentSource(page: string, section: string | null = null): string {
+  const args = section === null ? [page] : [page, section];
+  return `documentView(${args.map((a) => JSON.stringify(a)).join(", ")})`;
+}

@@ -244,7 +244,7 @@ impl RenderProcessor for SynthRender {
             ctx.raw_cursor,
             &pin,
             &DiffScanSpec {
-                global_fanout_tables: &[],
+                fanout_query: None,
                 bucket_query: "
                     SELECT DISTINCT bucket FROM (
                         SELECT to_id AS bucket FROM dolt_diff_parents
@@ -415,6 +415,8 @@ fn to_rendered(
         })
         .collect();
     RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
         upstream_cursor: None,
@@ -441,6 +443,7 @@ enum Mutation {
     Rebody(String, String),
     DeleteChild(String),
     RenameAuthor(String, String),
+    DeleteAuthor(String),
 }
 
 fn apply_to_model(model: &mut Model, m: &Mutation) {
@@ -466,6 +469,9 @@ fn apply_to_model(model: &mut Model, m: &Mutation) {
         }
         Mutation::RenameAuthor(id, name) => {
             model.authors.insert(id.clone(), name.clone());
+        }
+        Mutation::DeleteAuthor(id) => {
+            model.authors.remove(id);
         }
     }
 }
@@ -523,6 +529,12 @@ async fn apply_to_store(pool: &SqlitePool, m: &Mutation) -> Result<()> {
             sqlx::query("INSERT OR REPLACE INTO authors (id, name) VALUES (?, ?)")
                 .bind(id)
                 .bind(name)
+                .execute(pool)
+                .await?;
+        }
+        Mutation::DeleteAuthor(id) => {
+            sqlx::query("DELETE FROM authors WHERE id = ?")
+                .bind(id)
                 .execute(pool)
                 .await?;
         }
@@ -642,7 +654,7 @@ type StoreView = (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>);
 
 /// The render store at one commit, as documents, plus the `.md` files
 /// on disk, which must be exactly the documents' — a deleted document
-/// left on disk stays searchable (`remove_document`'s reason to exist).
+/// left on disk stays searchable (`remove_documents`' reason to exist).
 fn render_store_at(data_root: &Path, commit: Option<&str>) -> StoreView {
     try_render_store_at(data_root, commit).expect("a readable commit")
 }
@@ -1509,4 +1521,181 @@ async fn an_excluded_bucket_loses_its_document() {
     assert_eq!(report.removed, 1);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
     assert!(!held(&world).contains_key("p1"));
+}
+
+// ── a reset raw store ────────────────────────────────────────────────
+
+/// Two parents, each with a child, both by one author, rendered.
+async fn two_rendered_with_children(world: &mut World, synth: &SynthRender) {
+    let child = |parent: &str, body: &str| Child {
+        parent_id: parent.into(),
+        body: body.into(),
+        seq: 0,
+    };
+    world
+        .commit(&[
+            Mutation::RenameAuthor("a0".into(), "ann".into()),
+            parent(1),
+            parent(2),
+            Mutation::InsertChild("c1".into(), child("p1", "one")),
+            Mutation::InsertChild("c2".into(), child("p2", "two")),
+        ])
+        .await;
+    let first = world.render_report(synth, false).await.unwrap();
+    assert_eq!(first.docs, 2);
+}
+
+/// What the reverse lookup says from the render store's cursor to the
+/// raw store's HEAD, and the tables it diffed to say it.
+fn reverse_lookup_now(world: &World) -> (crate::render::ReverseLookup, BTreeSet<String>) {
+    let root = datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE);
+    let store = IndexedMarkdownStore::open(&root).unwrap();
+    let cursor = store
+        .cursor()
+        .unwrap()
+        .expect("a rendered store has a cursor");
+    let mut diffed = BTreeSet::new();
+    let lookup = crate::render::reverse_lookup_with(
+        &store,
+        Some(&world.raw_db),
+        Some(&cursor.raw_commit),
+        &mut |pool, table, from, to| {
+            diffed.insert(table.to_string());
+            blocking(doltlite_raw::changed_keys(pool, table, from, to))
+        },
+    )
+    .unwrap();
+    store.close();
+    (lookup, diffed)
+}
+
+/// Every input the store says `buckets` were last built from.
+fn declared_inputs(world: &World, buckets: &[&str]) -> Vec<Input> {
+    let root = datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE);
+    let store = IndexedMarkdownStore::open(&root).unwrap();
+    let inputs = store.inputs_of(buckets).unwrap();
+    store.close();
+    let mut all: Vec<Input> = inputs.into_values().flatten().collect();
+    all.sort_by(|a, b| (&a.table, &a.id).cmp(&(&b.table, &b.id)));
+    all
+}
+
+/// After `--reset <source>/ingest` empties the raw store, the reverse
+/// lookup names every bucket stale and every declared row removed
+/// without diffing a table: each held rows at the cursor and holds none
+/// now, which says every row left. Diffing them cost time in proportion
+/// to every row that left (24s of 86s on a real Lightroom reset).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reset_raw_store_is_looked_up_without_diffing_its_emptied_tables() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    assert!(world.dolt, "this build links doltlite");
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered_with_children(&mut world, &synth).await;
+    let declared = declared_inputs(&world, &["p1", "p2"]);
+    assert_eq!(declared.len(), 6, "{declared:?}");
+
+    doltlite_raw::reset_store(&world.raw_db).await.unwrap();
+    world.model = Model::default();
+
+    let (lookup, diffed) = reverse_lookup_now(&world);
+    assert_eq!(diffed, BTreeSet::new(), "no emptied table is diffed");
+    let stale = lookup.stale.expect("the lookup could say");
+    assert_eq!(stale, HashSet::from(["p1".into(), "p2".into()]));
+    let removed = lookup.removed.expect("the lookup could say");
+    for input in &declared {
+        assert!(removed.contains(input), "{input:?} left with its table");
+    }
+
+    // p1's renderer declares it with nothing, so only the removal
+    // evidence above can take its document; p2 declares the row it
+    // looked for and found gone.
+    synth
+        .broken
+        .lock()
+        .unwrap()
+        .insert("p1".into(), Broken::DeclaredEmpty);
+    let report = world.render_report(&synth, false).await.unwrap();
+    assert_eq!((report.docs, report.removed), (0, 2));
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    assert_store_is(&world, &BTreeMap::new(), "after the reset");
+}
+
+/// One table emptied beside others that changed: the emptied one is
+/// answered from what was declared, the rest are diffed as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_emptied_table_is_not_diffed_beside_tables_that_changed() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    assert!(world.dolt, "this build links doltlite");
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered_with_children(&mut world, &synth).await;
+
+    world
+        .commit(&[
+            Mutation::DeleteChild("c1".into()),
+            Mutation::DeleteChild("c2".into()),
+            Mutation::Retitle("p1".into(), "retitled".into()),
+        ])
+        .await;
+    let (lookup, diffed) = reverse_lookup_now(&world);
+    assert!(!diffed.contains("children"), "{diffed:?}");
+    assert!(diffed.contains("parents"), "{diffed:?}");
+    assert_eq!(
+        lookup.stale.expect("the lookup could say"),
+        HashSet::from(["p1".into(), "p2".into()])
+    );
+    let removed = lookup.removed.expect("the lookup could say");
+    assert!(removed.contains(&Input::new("children", "c1")));
+    assert!(removed.contains(&Input::new("children", "c2")));
+    assert!(!removed.contains(&Input::new("parents", "p1")));
+    assert!(!removed.contains(&Input::new("authors", "a0")));
+
+    world.render(&synth, false).await.unwrap();
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after emptying children",
+    );
+}
+
+/// A bucket that only looked up a key its table never had read nothing
+/// that changed when the table empties, so it is not stale and lost no
+/// row. Telling it apart takes the diff, so the table gets one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_emptied_table_a_bucket_only_missed_in_is_diffed() {
+    let td = tempfile::tempdir().unwrap();
+    let mut world = World::new(td.path()).await;
+    assert!(world.dolt, "this build links doltlite");
+    let synth = SynthRender::new(world.raw_db.clone());
+    two_rendered_with_children(&mut world, &synth).await;
+    world
+        .commit(&[Mutation::InsertParent(
+            "p3".into(),
+            Parent {
+                title: "by nobody".into(),
+                author_id: "a9".into(),
+            },
+        )])
+        .await;
+    world.render(&synth, false).await.unwrap();
+    assert!(declared_inputs(&world, &["p3"]).contains(&Input::new("authors", "a9")));
+
+    world.commit(&[Mutation::DeleteAuthor("a0".into())]).await;
+    let (lookup, diffed) = reverse_lookup_now(&world);
+    assert!(diffed.contains("authors"), "{diffed:?}");
+    assert_eq!(
+        lookup.stale.expect("the lookup could say"),
+        HashSet::from(["p1".into(), "p2".into()])
+    );
+    let removed = lookup.removed.expect("the lookup could say");
+    assert!(removed.contains(&Input::new("authors", "a0")));
+    assert!(!removed.contains(&Input::new("authors", "a9")));
+
+    world.render(&synth, false).await.unwrap();
+    assert_store_is(
+        &world,
+        &expected(&world.model, Params { upper: false }),
+        "after emptying authors",
+    );
 }

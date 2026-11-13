@@ -109,6 +109,13 @@ the row's document, and the document's banner lists the problem. A
 provider without the hook leaves `item_uuid` empty, and `scope_key` is
 the only pointer.
 
+Every error and warning row counts toward the Dashboard's "Needs you",
+including ones nothing can be done about (a corrupt file, a file no
+feed reads), until a person mutes it in the problems grid. A mute is
+kept apart, by the row's id, in a store nothing rebuilds, and taken off
+the count of the step that found the row as the Manage rows are drawn;
+no step knows of it ([`problem_mutes/README.md`](../problem_mutes/README.md)).
+
 ## Volatile fields: split them out, don't diff them
 
 Some payloads carry per-fetch fields that describe the fetch rather than the
@@ -385,7 +392,9 @@ table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
 `COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
 their blobs, at a commit the writer has since moved past (the
-time-series applet's read) — and that list is the allowlist. Any other
+time-series applet's read), and on a detached open, any `SELECT`
+`datalib_sql_guard` lets through (the search applet's `/sql`) — and
+that list is the allowlist. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and
@@ -506,6 +515,14 @@ pub const LADDER: &[Migration] = &[Migration {
     }),
 }];
 ```
+
+**A long rung says which statement it is on.** A rung that touches
+every row of a big store can run for many minutes, and a person
+watching has only the step's status to go on. The open already says
+which rung, from which version to which, and the store's size; a rung
+of several statements runs them through `doltlite_raw::run_statements`,
+each a `Statement { what, sql }`, so the status also says which one
+(email's `SEEN_INTO_READ_MARKS`).
 
 A rung may read the old shape through `dolt_at_<table>('HEAD')` and
 write the new one, and it clears a cursor table itself (`DELETE FROM
@@ -649,6 +666,54 @@ in a `.chunks(SQL_CHUNK)` loop (`push_placeholders`). The older chunked
 sized by anything other than `chunk.len()`. A helper that takes a slice
 and trusts its callers to chunk it counts as unsized, because nothing
 checks that they do.
+
+## Indexes: the planner has no statistics, so test the plan
+
+No store here runs `ANALYZE`, so SQLite's planner knows nothing about
+how many rows match a value. When a lookup could use either of two
+one-column indexes, it rates them the same, and which one it takes
+depends on the order they were created in, not on which is selective.
+Every test passes either way, because a fixture of a few rows is fast
+under any plan. A real store is not:
+
+- **#1165.** `email_keywords` and `email_mailboxes` had no index on
+  `email_id`, the column every lookup uses, so each email written
+  scanned both tables: a full sync quadratic in the mailbox's size.
+- **#1679.** A migration rung asked, for each email,
+  `EXISTS (… k.email_id = e.id AND k.keyword = '$seen')`. The planner
+  answered it from the *keyword* index and walked every `$seen` row once
+  per email: over an hour, unfinished, on 276k emails. Written as a set,
+  `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
+  the same statement takes a few seconds.
+
+So:
+
+- **Match a set as a set.** A statement over every row of one table that
+  asks whether each row is in another (has a keyword, has a label) is
+  `x IN (SELECT … WHERE …)`, which SQLite builds once. An `EXISTS` or
+  scalar subquery that names the outer row runs once per row, and its
+  plan is the planner's guess.
+- **A lookup that has to run per row** goes by the primary key, or by an
+  index whose columns cover every equality in the `WHERE`, so there is
+  only one good choice to make.
+- **Pin the index with `INDEXED BY` when two indexes really could fit.**
+  SQLite then uses exactly that index, and it errors if the index has
+  been renamed or dropped instead of quietly picking another: it fails
+  loudly. On the store in #1679, the old statement with `INDEXED BY
+  email_keywords_by_email` took 6.6 s instead of hours. It does not
+  check that the index fits the `WHERE`: one that does not is walked
+  whole, without an error, so the plan test below still applies.
+- **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
+  whatever rows a store held when it ran, so two libraries can plan one
+  statement two ways, and a plan can change as the rows do. Which index
+  a statement needs is known when it is written; say so in the SQL.
+- **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
+  statement over the table's real DDL and assert what it must not do.
+  Two templates in `providers/email/src/ingest/schema_raw.rs`:
+  `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
+  table, and `the_read_mark_rungs_never_search_a_table_per_email`
+  refuses a table searched under a `CORRELATED` subquery. Keep the
+  statements in a constant the code runs and the test reads.
 
 ## Blob CAS and per-provider edge tables
 

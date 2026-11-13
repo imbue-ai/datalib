@@ -7,4 +7,5 @@ mod parent_gone;
 mod relative_root;
 mod run_report;
 mod shared_root;
+mod step_log_offset;
 mod verbs;

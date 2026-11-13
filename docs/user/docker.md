@@ -18,7 +18,7 @@ Generate a token, start the demo, open it — on macOS, in one go:
 export DATALIB_TOKEN=$(openssl rand -hex 16)
 docker run -d --rm --name datalib-demo \
   -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
-  ghcr.io/imbue-ai/datalib@sha256:464618e3181d1b5b2bd26d06c5ed4732598cdc18b801fd7c75a0f4d755976756 datalib-http /opt/datalib/demo &&
+  ghcr.io/imbue-ai/datalib@sha256:e94e6c501516756125f90be69a302bfbc3dba7f38dc531b865f352245328cf00 datalib-http /opt/datalib/demo &&
   sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
 ```
 
@@ -58,7 +58,7 @@ page:
 
 <!-- doc-test: setup -->
 ```sh
-IMG=ghcr.io/imbue-ai/datalib@sha256:464618e3181d1b5b2bd26d06c5ed4732598cdc18b801fd7c75a0f4d755976756
+IMG=ghcr.io/imbue-ai/datalib@sha256:e94e6c501516756125f90be69a302bfbc3dba7f38dc531b865f352245328cf00
 PORT=8731                        # host port the web UI will be on
 TOKEN="$(openssl rand -hex 16)"  # the API token; the URL below carries it
 DATA_ROOT="$HOME/datalib-docker" # where your own data will go (step 2)
@@ -145,6 +145,7 @@ type = "email"
 [[steps]]
 group = "gmail"
 function = "ingest"
+command = "datalib-step"
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"
@@ -155,6 +156,7 @@ is_personal = true
 [[steps]]
 group = "gmail"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gmail/ingest"]
 [steps.params]
 outlink_format = "gmail"
@@ -165,21 +167,25 @@ id = "unified_document_index"
 [[steps]]
 group = "unified_document_index"
 function = "grid_index"
+command = "datalib-step"
 inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "unified_document_index"
 function = "qmd_aggregator"
+command = "datalib-step"
 inputs = ["gmail/keyword_index", "gmail/embed"]
 
 [[steps]]
 group = "gmail"
 function = "keyword_index"
+command = "datalib-step"
 inputs = ["gmail/render_markdown"]
 
 [[steps]]
 group = "gmail"
 function = "embed"
+command = "datalib-step"
 inputs = ["gmail/keyword_index"]
 
 [[applets]]
@@ -187,7 +193,16 @@ group = "unified_document_index"
 id = "unified_document_index"
 command = "datalib-applet unified_document_index"
 EOF
+if [ "$(uname)" = Linux ] && [ "$(id -u)" != 1000 ]; then
+  docker run --rm --user 0 --entrypoint chown -v "$DATA_ROOT:/data" "$IMG" -R 1000:1000 /data
+fi
 ```
+
+The container runs as uid 1000, not as root, so the folder has to be
+writable by uid 1000. On macOS, Docker Desktop takes care of that, and
+so does being the first user on a Linux machine, which is uid 1000.
+Anywhere else the last three lines hand the folder over, using the image
+itself, so no `sudo` is needed.
 
 There is no `data_root` line: it defaults to the folder the config is
 in, which inside the container is `/data`. Ingest, render and index:
@@ -233,9 +248,11 @@ docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
 docker rm -f datalib
 ```
 
-On a Linux host the files the container writes are owned by root, so
-edit `config.toml` with `sudo` or `chown` the folder afterwards. Docker
-Desktop on macOS maps them to your user.
+On a Linux host the files the container writes are owned by uid 1000,
+which is you if you are the machine's first user; otherwise edit
+`config.toml` with `sudo`. Docker Desktop on macOS maps them to your
+user. A data root an earlier image wrote as root works again after the
+same `chown` as above, and the container says so when it starts.
 
 ## 3. Live sources: credentials inside the container (no one's tested this)
 
@@ -250,7 +267,13 @@ file of passwords, because that is what it is.
 ```sh
 LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
 mkdir -p "$LATCHKEY_DIR" && chmod 700 "$LATCHKEY_DIR"
+if [ "$(uname)" = Linux ] && [ "$(id -u)" != 1000 ]; then
+  docker run --rm --user 0 --entrypoint chown -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" -R 1000:1000 /root/.latchkey
+fi
 ```
+
+On Linux, unless you are uid 1000, the key the container writes there
+is then readable only with `sudo`, which the `re-encrypt` below needs.
 
 Credentials you paste go in directly. For Claude.ai, copy the
 `sessionKey` cookie as described in
@@ -309,6 +332,7 @@ Nothing else. In particular, don't mount your home directory, and don't
 run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
-The image bundles the three qmd models, so semantic search never
-downloads anything (the `-slim` tag leaves them out). Building the image yourself, and what is in it, is
-in [`docs/dev/docker.md`](../dev/docker.md).
+The image bundles the search model, so search by meaning never
+downloads anything; the image fetches nothing at run time at all.
+Building the image yourself, and what is in it, is in
+[`docs/dev/docker.md`](../dev/docker.md).

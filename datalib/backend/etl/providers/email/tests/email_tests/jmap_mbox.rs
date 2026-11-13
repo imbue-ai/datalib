@@ -60,7 +60,6 @@ fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
 pub(crate) fn render_paged(
     store: &EmailStore,
     root: &std::path::Path,
-    only_labels: &[String],
     size: PageSize,
 ) -> (Vec<RenderedMarkdown>, Vec<PageEnd>) {
     let mut docs = Vec::new();
@@ -70,7 +69,6 @@ pub(crate) fn render_paged(
         root,
         "star-trek-mbox",
         Some(OutlinkFormat::Gmail),
-        only_labels,
         size,
         &Progress::noop(),
         &mut |doc| {
@@ -313,22 +311,25 @@ async fn mbox_only_labels_keeps_whole_threads() {
 /// Render-time label filter: download everything, render only the threads
 /// touching a label. Inclusion is thread-level. The expected set is
 /// computed from the parsed joins rather than hard-coded, so it stays
-/// correct regardless of fixture threading.
+/// correct regardless of fixture threading. The filter is decided in
+/// SQL: a full walk loaded every thread's rows and dropped the ones the
+/// filter keeps out in Rust, which on a real mailbox was 193k threads
+/// read to render 7.5k.
 #[tokio::test(flavor = "multi_thread")]
 async fn render_only_labels_filters_to_thread_subset() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let store = open(
+    let unfiltered = open(
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
-        false,
+        &[],
     )
     .expect("open")
     .expect("a committed store");
-    let threads = every_thread(&store);
+    let threads = every_thread(&unfiltered);
 
     // "Sent" is a flat mbox label, so its full path equals its name.
-    let sent_id = store
+    let sent_id = unfiltered
         .shared
         .mailboxes
         .iter()
@@ -337,6 +338,7 @@ async fn render_only_labels_filters_to_thread_subset() {
         .as_str()
         .unwrap()
         .to_string();
+    unfiltered.close();
     let expected: HashSet<String> = threads
         .iter()
         .filter(|b| {
@@ -355,12 +357,37 @@ async fn render_only_labels_filters_to_thread_subset() {
         "filter must be a strict subset to be a meaningful test"
     );
 
+    let sent = ["Sent".to_string()];
+    let open_sent = || {
+        open(
+            &db_path_for(&db_path),
+            "star-trek-mbox",
+            RawRange::cold(),
+            &sent,
+        )
+        .expect("open")
+        .expect("a committed store")
+    };
+    let store = open_sent();
+    assert_eq!(
+        store.threads,
+        expected.len(),
+        "the walk counts the kept threads"
+    );
+    let loaded: HashSet<String> = every_thread(&store)
+        .iter()
+        .map(|b| thread_uuid(&b.account_id, &b.thread_id))
+        .collect();
+    store.close();
+    assert_eq!(loaded, expected, "the walk loads only the kept threads");
+
+    let store = open_sent();
     let tmp = tempfile::tempdir().unwrap();
     let one_a_page = PageSize {
         buckets: 1,
         bytes: 1,
     };
-    let (docs, pages) = render_paged(&store, tmp.path(), &["Sent".to_string()], one_a_page);
+    let (docs, pages) = render_paged(&store, tmp.path(), one_a_page);
     store.close();
 
     let rendered: HashSet<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
@@ -376,7 +403,7 @@ async fn render_only_labels_filters_to_thread_subset() {
     assert_eq!(
         excluded,
         &every - &expected,
-        "every other thread is excluded, by the page that read it"
+        "every other thread is excluded, without being loaded"
     );
 }
 
@@ -391,7 +418,7 @@ async fn star_trek_mbox_renders_through_render_all() {
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
-        false,
+        &[],
     )
     .expect("open")
     .expect("a committed store");
@@ -406,7 +433,7 @@ async fn star_trek_mbox_renders_through_render_all() {
         buckets: 1,
         bytes: 1,
     };
-    let (docs, pages) = render_paged(&store, tmp.path(), &[], one_a_page);
+    let (docs, pages) = render_paged(&store, tmp.path(), one_a_page);
     store.close();
     let mut declared: Vec<String> = pages
         .iter()
@@ -505,4 +532,54 @@ async fn star_trek_mbox_renders_through_render_all() {
         !bridge_md.contains("cid:lcars-glyph"),
         "raw cid: reference leaked into bridge thread md:\n{bridge_md}"
     );
+}
+
+/// The message header was built from the email's instant alone, so an
+/// email sent at 09:00 in Paris read as 08:00 UTC under "as written",
+/// and its row's `created_at` lost the `+01:00` its `Date:` carried.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_email_keeps_the_offset_its_date_was_written_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mbox_path = dir.path().join("one.mbox");
+    std::fs::write(
+        &mbox_path,
+        "From picard@enterprise.starfleet Mon Jan 05 09:00:00 +0100 2026\n\
+         Message-Id: <paris-001@enterprise.starfleet>\n\
+         From: Jean-Luc Picard <picard@enterprise.starfleet>\n\
+         To: Beverly Crusher <crusher@enterprise.starfleet>\n\
+         Subject: Labarre\n\
+         Date: Mon, 5 Jan 2026 09:00:00 +0100\n\
+         Content-Type: text/plain; charset=utf-8\n\
+         \n\
+         The vineyard is as I left it.\n",
+    )
+    .unwrap();
+    let (_tmp, db_path) = fetch_into_tmp(mbox_path).await;
+    let store = open(
+        &db_path_for(&db_path),
+        "star-trek-mbox",
+        RawRange::cold(),
+        &[],
+    )
+    .expect("open")
+    .expect("a committed store");
+    let out = tempfile::tempdir().unwrap();
+    let (docs, _) = render_paged(&store, out.path(), PageSize::DEFAULT);
+    store.close();
+
+    let [doc] = docs.as_slice() else {
+        panic!("expected one document, got {}", docs.len());
+    };
+    let md = std::fs::read_to_string(&doc.md_path).unwrap();
+    assert!(
+        md.contains("class=\"msg-ts\" datetime=\"2026-01-05T09:00:00+01:00\""),
+        "the header lost the email's offset:\n{md}"
+    );
+    let stamps: Vec<_> = doc
+        .rows
+        .iter()
+        .filter(|r| r.uuid != doc.markdown_uuid)
+        .filter_map(|r| r.created_at.as_deref())
+        .collect();
+    assert_eq!(stamps, ["2026-01-05T09:00:00+01:00"]);
 }

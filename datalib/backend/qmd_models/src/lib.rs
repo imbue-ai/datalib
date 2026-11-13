@@ -145,7 +145,7 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel, fetch: Fetch) -> Result<Ou
     })
 }
 
-/// True when `path` hashes to `want`. Hashing 2 GB on every sync is
+/// True when `path` hashes to `want`. Hashing a 300 MB model on every sync is
 /// real time, so a passing hash is stamped beside the file with the
 /// size and mtime it had; the same size and mtime next time means the
 /// same bytes, short of someone editing the file and resetting its
@@ -239,7 +239,7 @@ mod tests {
         assert!(!verified(&path, HELLO_SHA).unwrap());
     }
 
-    /// What spares an applet start from re-reading 2 GB: a stamp matching
+    /// What spares an applet start from re-reading the model: a stamp matching
     /// the file's size and mtime is trusted without hashing, so other
     /// bytes under that size and mtime pass. Moving the mtime alone is
     /// enough to send the file back to the hash.

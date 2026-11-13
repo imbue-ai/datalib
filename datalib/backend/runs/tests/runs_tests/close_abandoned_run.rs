@@ -176,3 +176,27 @@ async fn a_run_that_is_not_there_is_not_an_error() {
         "and it leaves the run that does exist alone"
     );
 }
+
+/// A run begun under a pinned `--now` ahead of the wall clock is closed
+/// no earlier than it began, though the wall clock says it is earlier.
+#[tokio::test]
+async fn a_pinned_run_is_not_closed_before_it_began() {
+    let td = tempfile::tempdir().unwrap();
+    let pinned = "2369-04-15T00:00:00+00:00";
+    drop(RunWriter::start(td.path(), "r1", pinned, None, Retention::default()).unwrap());
+    let pool = open_or_create(&runs_path(td.path())).await.expect("open");
+    sqlx::query("UPDATE runs SET finished_at_utc = NULL WHERE run_id = 'r1'")
+        .execute(&pool)
+        .await
+        .expect("re-open the run");
+    pool.close().await;
+
+    close_abandoned_run(td.path(), "r1", STOPPED, "gone")
+        .await
+        .expect("close");
+    let run = runs(td.path(), None, 10).await.remove(0);
+    assert_eq!(
+        run.finished_at_utc.as_deref(),
+        Some(run.started_at_utc.as_str())
+    );
+}

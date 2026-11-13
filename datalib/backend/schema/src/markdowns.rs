@@ -91,4 +91,63 @@ pub struct MarkdownRow {
     /// NULL from a renderer that has not been ported to declare buckets.
     #[col(sql = "VARCHAR(256)")]
     pub bucket_key: Option<String>,
+    /// Where each section of the `.md` lies, as JSON: a list of
+    /// [`SectionSpan`]s in order, covering the file byte for byte. The UI
+    /// renders each message from it as a fragment of its own, so one
+    /// cannot reach into the next (`docs/dev/data_architecture_parse_and_render.md`
+    /// §"One section cannot reach the next"). NULL from a renderer that
+    /// declares no sections.
+    #[col(sql = "TEXT")]
+    pub section_layout: Option<String>,
+    /// blake3 of the document's text, its sections end to end, as hex: what
+    /// the search index compares to learn whether it holds this rendering.
+    /// NULL from a renderer that declares no sections.
+    #[col(sql = "VARCHAR(64)")]
+    pub content_hash: Option<String>,
+}
+
+/// One piece of a document's `.md`: the `data-section-uuid` it wraps, or
+/// none for a piece of the page's frame (front matter, title, a
+/// `<details>` opener or closer), and its length in bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionSpan {
+    pub uuid: Option<String>,
+    pub bytes: usize,
+}
+
+/// The layout as `section_layout` stores it.
+pub fn layout_json(spans: &[SectionSpan]) -> String {
+    serde_json::to_string(spans).expect("a list of spans serializes")
+}
+
+/// `None` for a layout this build cannot read, which the caller treats
+/// as no layout at all.
+pub fn parse_layout(json: &str) -> Option<Vec<SectionSpan>> {
+    serde_json::from_str(json).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_layout_reads_back_as_written() {
+        let spans = vec![
+            SectionSpan {
+                uuid: None,
+                bytes: 40,
+            },
+            SectionSpan {
+                uuid: Some("m1".into()),
+                bytes: 120,
+            },
+        ];
+        let json = layout_json(&spans);
+        assert_eq!(
+            json,
+            r#"[{"uuid":null,"bytes":40},{"uuid":"m1","bytes":120}]"#
+        );
+        assert_eq!(parse_layout(&json), Some(spans));
+        assert_eq!(parse_layout("not json"), None);
+    }
 }

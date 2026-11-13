@@ -18,6 +18,7 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
+use datalib_time::NamedZone;
 
 use super::emoji;
 use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
@@ -68,7 +69,10 @@ use datalib_schema::providers::Provider;
 ///     so every thread renders once.
 /// v18: a document says when its messages hold cards, link previews or
 ///     forwards that are not shown.
-pub const RENDER_VERSION: u32 = 18;
+/// v19: a message's time is on its author's profile clock (`tz`).
+/// v20: a ``` block with code on its fence lines is closed, so it no
+///     longer turns the messages after it into code.
+pub const RENDER_VERSION: u32 = 20;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -108,6 +112,8 @@ fn profile() -> RenderProfile {
 struct Lookups<'a> {
     shared: &'a Shared,
     user_labels: BTreeMap<String, String>,
+    /// Each user's profile zone, where Slack named one the tz database knows.
+    user_zones: BTreeMap<String, NamedZone>,
     channel_labels: BTreeMap<String, String>,
     account: Option<String>,
     org_name: Option<String>,
@@ -121,6 +127,11 @@ impl<'a> Lookups<'a> {
                 .users
                 .iter()
                 .map(|(id, u)| (id.clone(), u.label()))
+                .collect(),
+            user_zones: shared
+                .users
+                .iter()
+                .filter_map(|(id, u)| Some((id.clone(), NamedZone::get(u.tz.as_deref()?)?)))
                 .collect(),
             channel_labels: shared
                 .channels
@@ -328,12 +339,13 @@ fn build_chat(
         is_unread(&m.ts, from_me, marks, ids::ts_order)
     };
     // What the page shows under the root, a broadcast reply among them.
+    let zones = bucket.inputs.lookup("users", &lookups.user_zones);
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
     let mut items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
         .map(|m| {
-            let mut item = build_item(source_id, m, root, team_url, labels, unread(m));
+            let mut item = build_item(source_id, m, root, team_url, labels, zones, unread(m));
             item.replies = replies_of(m, held_replies, &mut item.problems);
             item
         })
@@ -452,6 +464,7 @@ fn build_item(
     root: &Message,
     team_url: Option<&str>,
     labels: Labels<'_>,
+    zones: Lookup<'_, BTreeMap<String, NamedZone>>,
     unread: bool,
 ) -> NormalizedChatItem {
     let author_display = m
@@ -481,6 +494,11 @@ fn build_item(
         author_kind: AuthorKind::Named,
         author_display,
         date_ms,
+        // The author's clock as their profile names it: a `ts` has none.
+        date_offset_secs: date_ms.and_then(|ms| {
+            let zone = zones.get(m.user_id.as_deref()?)?;
+            zone.offset_secs_at_millis(ms)
+        }),
         text: (!body.trim().is_empty()).then_some(body),
         kind,
         attachments,
@@ -527,7 +545,8 @@ fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Rep
 }
 
 fn thread_title(root_text: &str, labels: Labels<'_>) -> String {
-    let resolved = resolve_mentions(root_text, labels);
+    // A ``` ends the line it is on, as the body draws it.
+    let resolved = resolve_mentions(root_text, labels).replace("```", "\n");
     let first = resolved
         .lines()
         .map(str::trim)
@@ -662,6 +681,7 @@ fn build_reactions(
 
 #[cfg(test)]
 mod reaction_tests {
+    use super::super::User;
     use super::*;
     use datalib_etl_render::inputs::Inputs;
     use serde_json::json;
@@ -729,6 +749,7 @@ mod reaction_tests {
         let lookups = Lookups {
             shared: &shared,
             user_labels: BTreeMap::new(),
+            user_zones: BTreeMap::new(),
             channel_labels: BTreeMap::new(),
             account: None,
             org_name: None,
@@ -750,6 +771,55 @@ mod reaction_tests {
         assert_eq!(problems[1][0].severity, Some(Severity::Info));
         assert!(problems[1][0].sample.starts_with("2 messages here "));
         assert!(problems[2].is_empty());
+    }
+
+    /// A `ts` names no clock, so every Slack message read as UTC under
+    /// "as written". Its author's profile zone is the clock it is shown
+    /// on, daylight saving included; an author with none says so.
+    #[test]
+    fn a_message_is_on_its_authors_profile_clock() {
+        let user = |id: &str, tz: Option<&str>| User {
+            user_id: id.into(),
+            team_id: "T1".into(),
+            name: None,
+            real_name: None,
+            display_name: None,
+            email: None,
+            title: None,
+            avatar_url: None,
+            tz: tz.map(str::to_string),
+        };
+        let mut shared = Shared::default();
+        for u in [
+            user("U1", Some("Europe/Paris")),
+            user("U2", None),
+            user("U3", Some("Not/A_Zone")),
+        ] {
+            shared.users.insert(u.user_id.clone(), u);
+        }
+        let by = |uid: &str, ts: &str| Message {
+            user_id: Some(uid.into()),
+            ts: ts.into(),
+            ..reacted(json!([]))
+        };
+        let bucket = SlackThreadBucket {
+            thread_key: "T1#C1#1767603600.000100".to_string(),
+            messages: vec![
+                by("U1", "1767603600.000100"),
+                by("U1", "1783242000.000100"),
+                by("U2", "1767603600.000200"),
+                by("U3", "1767603600.000300"),
+            ],
+            blobs: Default::default(),
+            inputs: Inputs::default(),
+        };
+        let chat = build_chat(&Lookups::new(&shared), &bucket, "src");
+        let offsets: Vec<_> = chat.buckets[0]
+            .items
+            .iter()
+            .map(|i| i.date_offset_secs)
+            .collect();
+        assert_eq!(offsets, [Some(3600), Some(7200), None, None]);
     }
 
     /// Only a root carries Slack's count, and one that is not a number
@@ -776,5 +846,27 @@ mod reaction_tests {
         root.raw_json["reply_count"] = json!("three");
         assert_eq!(replies_of(&root, 1, &mut problems), None);
         assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use datalib_etl_render::inputs::Inputs;
+
+    use super::*;
+
+    /// A root opening with a ``` block was titled "```Kitchen".
+    #[test]
+    fn a_title_leaves_out_a_code_fence() {
+        let inputs = Inputs::default();
+        let none = BTreeMap::new();
+        let labels = Labels {
+            users: inputs.lookup("users", &none),
+            channels: inputs.lookup("channels", &none),
+            team_id: "T01",
+        };
+        assert_eq!(thread_title("```Kitchen\nx = 1```", labels), "Kitchen");
     }
 }

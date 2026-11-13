@@ -51,8 +51,8 @@ pub struct FeedOutcome {
     pub new_head: Option<String>,
 }
 
-/// LinkedIn's render processor — renders the three feeds (messages,
-/// connections, posts) and emits each rendered markdown through the
+/// LinkedIn's render processor — renders the four feeds (messages,
+/// connections, posts, skills) and emits each rendered markdown through the
 /// fused-Load callback.
 struct LinkedinRender;
 
@@ -94,6 +94,9 @@ impl SourceRender for LinkedinRender {
         // chat-style thread per post, with linkouts back to linkedin.com.
         let posts = crate::posts::render_posts(&source, ctx.progress, &mut on_doc)
             .context("linkedin posts render")?;
+        // The skills on the owner's profile, one page.
+        let skills = crate::skills::render_skills(&source, ctx.progress, &mut on_doc)
+            .context("linkedin skills render")?;
 
         let not_read: Vec<_> = tables_not_read_row(
             ctx.name,
@@ -106,16 +109,17 @@ impl SourceRender for LinkedinRender {
         // Each feed names the buckets it looked at, with nothing, and then
         // the ones it rendered, with what they read — in that order, so a
         // bucket that no feed rendered ends declared with nothing and its
-        // documents go. The three feeds' keys never collide.
+        // documents go. The feeds' keys never collide.
         for bucket in messages
             .buckets
             .iter()
             .chain(&connections.buckets)
             .chain(&posts.buckets)
+            .chain(&skills.buckets)
         {
             ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
         }
-        if let Some(head) = [&messages, &connections, &posts]
+        if let Some(head) = [&messages, &connections, &posts, &skills]
             .iter()
             .find_map(|o| o.new_head.as_deref())
         {
@@ -146,6 +150,7 @@ fn tables_the_render_skips(source: &Source<'_>) -> Result<Vec<(String, i64)>> {
                 "connections",
                 "shares",
                 "comments",
+                crate::skills::TABLE,
             ]);
             let found = tables_not_read(db.pool(), &read).await;
             db.close().await;

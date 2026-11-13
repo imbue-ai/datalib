@@ -306,8 +306,21 @@ fn field<C: Column>(
     let t = || <C::Table as SearchTable>::FLAGS;
     let ranged = <C::Table as SearchTable>::RANGE.is_some();
     match key {
-        "before" if ranged => Ok(Field::Before),
-        "after" if ranged => Ok(Field::After),
+        // `since:` is `after:`, in the word a source's window uses.
+        "before" | "after" | "since" if ranged => {
+            if !value.is_empty() && datalib_time::normalize_user_time_to_utc(value).is_none() {
+                return Err(format!(
+                    "`{key}:{value}` is not a time the search can read; write a day \
+                     (`2026-11-01`, `2026/11/01`, `\"April 3, 2026\"`), a time \
+                     (`2026-11-01T09:00`), or an offset from now (`-30d`, `-12h`, `-2w`)"
+                ));
+            }
+            Ok(if key == "before" {
+                Field::Before
+            } else {
+                Field::After
+            })
+        }
         "is" if !t().is_empty() => t()
             .iter()
             .find(|(word, _)| *word == value)
@@ -436,6 +449,45 @@ mod tests {
         assert_eq!(q.bound(Field::Before), Some("2025-01-01"));
         assert_eq!(kept(&q, col("channel")), ["bridge"]);
         assert_eq!(q.free_text, "hello");
+    }
+
+    /// `after:2026/11/01`, Gmail's spelling, read as no date and the filter
+    /// was dropped: the search answered for every day.
+    /// `since:` is `after:`, and a bound may be an offset from now or a
+    /// day in words, quoted.
+    #[test]
+    fn since_offsets_and_days_in_words_are_bounds() {
+        for typed in [
+            "since:-30d",
+            "after:-2w",
+            "before:-12h",
+            r#"before:"Tuesday, April 3, 2029""#,
+            r#"since:"Tue Apr 3rd, 2029 at 08:30""#,
+            r#"after:"3 April 2029""#,
+        ] {
+            let q = parse_query(&format!("{typed} hello"));
+            assert_eq!(q.refusal(), None, "{typed}");
+            assert_eq!(q.free_text, "hello", "{typed}");
+        }
+        let q = parse_query(r#"since:"April 3, 2029""#);
+        assert_eq!(q.bound(Field::After), Some("April 3, 2029"));
+        assert!(
+            parse_query(r#"before:"Monday, April 3, 2029""#)
+                .refusal()
+                .is_some(),
+            "April 3, 2029 is a Tuesday"
+        );
+    }
+
+    #[test]
+    fn a_bound_is_a_gmail_day_or_refused() {
+        let q = parse_query("after:2026/11/01 hello");
+        assert_eq!(q.refusal(), None);
+        assert_eq!(q.bound(Field::After), Some("2026/11/01"));
+        let why = parse_query("before:yesterday")
+            .refusal()
+            .expect("an unreadable bound is refused, not dropped");
+        assert!(why.contains("`before:yesterday`"), "{why}");
     }
 
     #[test]

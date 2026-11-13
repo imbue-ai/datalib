@@ -179,7 +179,10 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         .collect();
     if T::RANGE.is_some() {
         keys.push(key("before", KeyValues::Stamp));
-        keys.push(key("after", KeyValues::Stamp));
+        keys.push(SearchKeySpec {
+            aliases: &["since"],
+            ..key("after", KeyValues::Stamp)
+        });
     }
     if !T::FLAGS.is_empty() {
         let words = T::FLAGS.iter().map(|(word, _)| *word).collect();
@@ -302,6 +305,11 @@ fn declared() -> Vec<ColumnSpec> {
         ),
         // Second, so what a row says is on screen at any width.
         ColumnSpec::new("snippet", "Contents", ColumnType::Text),
+        ColumnSpec::new("document_ref", "Document", ColumnType::Identity).describe(
+            "The document the row is in, by its title: the page a message, a thread or a \
+             file opens in. Double-click it to open the document; right-click to copy its \
+             title or its datalib:doc link.",
+        ),
         ColumnSpec::new("kind", "Type", ColumnType::Text),
         ColumnSpec::new("subject_ref", "Subject", ColumnType::Identities).describe(
             "What the row belongs to: its conversation, thread, page or event, by name; \
@@ -381,6 +389,27 @@ fn declared() -> Vec<ColumnSpec> {
     ]
 }
 
+/// What a document is called where its page has no title: the title bar
+/// says the same (`ui/src/cards/documentMenu.ts::documentTitle`).
+pub const UNTITLED_DOCUMENT: &str = "Untitled document";
+
+/// A document as its chip: its title, led by the mark of the source it
+/// came from, named by its `datalib:doc` URI so the viewer draws, opens
+/// and copies it as a document (docs/dev/chips.md §"A document").
+pub fn document_identity(markdown_uuid: &str, title: Option<&str>, source: &Identity) -> Identity {
+    Identity {
+        id: markdown_uuid.to_string(),
+        label: title
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(UNTITLED_DOCUMENT)
+            .to_string(),
+        icon: source.icon.clone(),
+        detail: Some(source.label.clone()),
+        entity: Some(datalib_uri::Name::doc(markdown_uuid, None).write()),
+    }
+}
+
 /// What the config says about each group: its name, its type, and its
 /// ingest step's params (which narrow the type to a variant).
 #[derive(Default)]
@@ -450,7 +479,7 @@ impl Sources {
             source.icon = Some(row.provider.clone());
             source.detail = Some(row.source.clone());
         }
-        row.source_ref = Some(source);
+        row.source_ref = Some(source.clone());
         row.author_ref = author_identity(&row.author, row.author_handle.as_deref());
         row.contact_ref = contact_identity(
             row.contact.as_deref(),
@@ -458,6 +487,10 @@ impl Sources {
             row.phone.as_deref(),
             &row.contact_handles,
         );
+        row.document_ref = row
+            .markdown_uuid
+            .as_deref()
+            .map(|doc| document_identity(doc, row.document_title.as_deref(), &source));
         row.subject_ref = subject_identities(
             row.contact_ref.as_ref(),
             &row.subject_people,
@@ -508,6 +541,35 @@ impl Sources {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A document's chip is its title, led by its source's mark, and
+    /// named by its `datalib:doc` URI; with no title it says so rather
+    /// than showing its uuid.
+    #[test]
+    fn a_documents_chip_is_its_title_named_by_its_uri() {
+        let slack = Identity {
+            id: "slack".into(),
+            label: "Work Slack".into(),
+            icon: Some("slack".into()),
+            ..Identity::default()
+        };
+        let doc = "6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d";
+        let titled = document_identity(doc, Some(" #bridge "), &slack);
+        assert_eq!(titled.id, doc);
+        assert_eq!(titled.label, "#bridge");
+        assert_eq!(titled.icon.as_deref(), Some("slack"));
+        assert_eq!(titled.detail.as_deref(), Some("Work Slack"));
+        assert_eq!(
+            titled.entity.as_deref(),
+            Some("datalib:doc/6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d")
+        );
+        for title in [None, Some(""), Some("  ")] {
+            assert_eq!(
+                document_identity(doc, title, &slack).label,
+                UNTITLED_DOCUMENT
+            );
+        }
+    }
 
     /// A contact's cell is a chip by its address, else its number, else
     /// any handle the contact has; plain text where it has none, and any
@@ -627,6 +689,7 @@ mod tests {
         for k in &keys {
             let value = match &k.values {
                 KeyValues::Words { words } => words[0],
+                KeyValues::Stamp => "2026-11-01",
                 _ => "x",
             };
             let q = format!("{}:{value}", k.key);
@@ -664,7 +727,7 @@ mod tests {
     /// might narrow by names its key, and a row field the grid can read
     /// the term's value from.
     #[test]
-    fn every_column_but_score_contents_and_picture_says_how_to_search_it() {
+    fn every_column_but_score_contents_picture_and_document_says_how_to_search_it() {
         // A row as the applet sends it, with what it resolves filled in.
         let mut row = SearchRow {
             author: "Worf".into(),
@@ -674,7 +737,8 @@ mod tests {
         let row = serde_json::to_value(row).unwrap();
         for c in columns() {
             match (&c.search, c.field.as_str()) {
-                (None, "score" | "snippet" | "image") => {}
+                // No key names a document in the search grid.
+                (None, "score" | "snippet" | "image" | "document_ref") => {}
                 (None, field) => panic!("{field} has no search key"),
                 (Some(s), field) => assert!(
                     row.get(&s.field).is_some(),
@@ -734,6 +798,8 @@ mod tests {
             contact_ref: None,
             subject_people: Vec::new(),
             subject_ref: Vec::new(),
+            document_title: None,
+            document_ref: None,
             author_term: None,
             channel: "#c".into(),
             source_url: "https://x".into(),

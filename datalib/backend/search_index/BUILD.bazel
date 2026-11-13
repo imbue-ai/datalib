@@ -1,0 +1,61 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The search index that replaces qmd's storage: keyword postings and
+# embeddings keyed by document, holding no text; its tables live in the
+# grid index's file
+# (docs/dev/plans/search_index_from_ram.md).
+rust_library(
+    name = "datalib_search_index",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_search_index",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "search_index_unittests",
+    size = "small",
+    crate = ":datalib_search_index",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The SQLite facts the index is built on, one test each, run against the
+# engine we link: a doltlite bump that moves one fails by name.
+rust_test(
+    name = "fts_facts_test",
+    size = "small",
+    srcs = ["tests/fts_facts.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "read_test",
+    size = "small",
+    srcs = ["tests/read.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_search_index",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

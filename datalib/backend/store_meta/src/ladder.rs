@@ -10,6 +10,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
@@ -91,19 +92,101 @@ impl std::fmt::Display for AheadOfLadder {
 
 impl std::error::Error for AheadOfLadder {}
 
+/// Where one store's climb starts and ends, which a rung's report names
+/// so a person can tell how much is left.
+#[derive(Debug, Clone, Copy)]
+pub struct Climb {
+    pub ladder: Ladder,
+    /// The version the store was at when the climb began.
+    pub from: u32,
+    pub top: u32,
+    /// The store file's size, when the owner knows its path.
+    pub store_bytes: Option<u64>,
+}
+
+impl Climb {
+    /// What a person reads while `m` runs, in the log and on the step's
+    /// row.
+    pub fn describe(&self, m: &Migration) -> String {
+        let what = match self.ladder {
+            Ladder::Own => "the store",
+            Ladder::Shared => "the store's shared tables",
+        };
+        let size = match self.store_bytes {
+            Some(b) if b >= 1_000_000_000 => format!(" ({:.1} GB)", b as f64 / 1e9),
+            Some(b) => format!(" ({} MB)", b / 1_000_000),
+            None => String::new(),
+        };
+        format!(
+            "migrating {what}{size} from version {} to {}, now version {}: {}",
+            self.from, self.top, m.version, m.name
+        )
+    }
+}
+
+type Reporter = Box<dyn Fn(&str) + Send + Sync>;
+
+/// Where a rung's reports go besides the log, and the rung running now. A
+/// step process points the reporter at its progress message, so the
+/// step's row says which rung, and which statement of it, is running; a
+/// rung can take as long as the store is big, and the log says nothing
+/// more until it ends.
+static REPORTER: Mutex<Option<Reporter>> = Mutex::new(None);
+static RUNG: Mutex<String> = Mutex::new(String::new());
+
+pub fn report_to(reporter: impl Fn(&str) + Send + Sync + 'static) {
+    *REPORTER.lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(reporter));
+}
+
+fn report(msg: &str) {
+    if let Some(reporter) = &*REPORTER.lock().unwrap_or_else(|e| e.into_inner()) {
+        reporter(msg);
+    }
+}
+
+/// One statement of a rung, and what it does in a few words.
+pub struct Statement {
+    pub what: &'static str,
+    pub sql: &'static str,
+}
+
+/// Run a rung's statements in order, saying before each which it is: one
+/// statement over every row of a big store can run for many minutes, and
+/// a person watching should know which.
+pub async fn run_statements(
+    conn: &mut sqlx::SqliteConnection,
+    statements: &[Statement],
+) -> Result<()> {
+    for (i, s) in statements.iter().enumerate() {
+        let msg = format!("statement {} of {}: {}", i + 1, statements.len(), s.what);
+        tracing::info!(statement = i + 1, of = statements.len(), "migrating: {msg}");
+        let rung = RUNG.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        report(&format!("{rung}; {msg}"));
+        sqlx::query(s.sql)
+            .execute(&mut *conn)
+            .await
+            .with_context(|| msg.clone())?;
+    }
+    Ok(())
+}
+
 /// Run one rung: its body and the version bump, in one transaction.
 /// The owner commits after, so a crash between the two leaves the
 /// working set for the next open to discard and the rung to run again.
-pub async fn apply(pool: &SqlitePool, m: &Migration, ladder: Ladder) -> Result<()> {
-    // A rung can take as long as the store is big, and says nothing until
-    // it is done.
+pub async fn apply(pool: &SqlitePool, m: &Migration, climb: &Climb) -> Result<()> {
+    let ladder = climb.ladder;
+    let said = climb.describe(m);
     tracing::info!(
         version = m.version,
         name = m.name,
         ladder = ladder.key(),
-        "migrating the store: {}",
-        m.name
+        from = climb.from,
+        top = climb.top,
+        store_bytes = climb.store_bytes,
+        "{said}"
     );
+    report(&said);
+    said.clone_into(&mut RUNG.lock().unwrap_or_else(|e| e.into_inner()));
     let started = std::time::Instant::now();
     let mut tx = pool
         .begin()
@@ -126,6 +209,7 @@ pub async fn apply(pool: &SqlitePool, m: &Migration, ladder: Ladder) -> Result<(
     .execute(&mut *tx)
     .await
     .with_context(|| format!("write {}", ladder.key()))?;
+    report(&format!("{said} (committing)"));
     tx.commit()
         .await
         .with_context(|| format!("commit migration v{}", m.version))?;
@@ -164,6 +248,94 @@ mod tests {
                 })
             },
         }
+    }
+
+    /// A rung that runs for many minutes says, before it starts and before
+    /// each statement, where the climb is: from which version to which,
+    /// how big the store is, and which statement of the rung is running
+    /// (#1678: a 37-minute rung said only its name).
+    #[tokio::test]
+    async fn a_rung_reports_its_climb_and_each_statement() {
+        let said = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = said.clone();
+        report_to(move |msg| sink.lock().unwrap().push(msg.to_string()));
+
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(crate::DDL).execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE log (v INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let two_statements = Migration {
+            version: 8,
+            name: "read marks move",
+            apply: |c| {
+                Box::pin(async move {
+                    run_statements(
+                        c,
+                        &[
+                            Statement {
+                                what: "first",
+                                sql: "INSERT INTO log (v) VALUES (1)",
+                            },
+                            Statement {
+                                what: "second",
+                                sql: "INSERT INTO log (v) VALUES (2)",
+                            },
+                        ],
+                    )
+                    .await
+                })
+            },
+        };
+        let climb = Climb {
+            ladder: Ladder::Own,
+            from: 7,
+            top: 9,
+            store_bytes: Some(13_046_000_000),
+        };
+        apply(&pool, &two_statements, &climb).await.unwrap();
+        pool.close().await;
+
+        let start = "migrating the store (13.0 GB) from version 7 to 9, now version 8: \
+                     read marks move";
+        assert_eq!(
+            *said.lock().unwrap(),
+            [
+                start.to_string(),
+                format!("{start}; statement 1 of 2: first"),
+                format!("{start}; statement 2 of 2: second"),
+                format!("{start} (committing)"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_climb_names_the_shared_tables_and_a_small_store_in_megabytes() {
+        let climb = Climb {
+            ladder: Ladder::Shared,
+            from: 0,
+            top: 2,
+            store_bytes: Some(4_500_000),
+        };
+        assert_eq!(
+            climb.describe(&rung(1)),
+            "migrating the store's shared tables (4 MB) from version 0 to 2, now version 1: test"
+        );
+        let unsized_climb = Climb {
+            store_bytes: None,
+            ..climb
+        };
+        assert_eq!(
+            unsized_climb.describe(&rung(2)),
+            "migrating the store's shared tables from version 0 to 2, now version 2: test"
+        );
     }
 
     /// The rungs above the stored version, and a ladder with a gap or a

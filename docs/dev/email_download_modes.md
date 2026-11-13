@@ -9,7 +9,7 @@ relative to it), `email_render/` and `email_config/`.
 | JMAP | `[steps.params.jmap]` | Fastmail, Stalwart, any RFC 8620+8621 server |
 | Gmail API | `[steps.params.gmail]` | a Gmail / Google Workspace account |
 | mbox | `[steps.params.mbox] path = …` | a Google Takeout export |
-| Apple Mail | `[steps.params.apple_mail]` | one account of the Mail app on a Mac (§6) |
+| Apple Mail | `[steps.params.apple_mail]` | the accounts of the Mail app on a Mac (§6) |
 | Gmail API from a Takeout | both tables, in one step | a Gmail account with a Takeout of it to start from (§3, "Starting from a Takeout") |
 
 Render reads only the raw store, so it is mode-agnostic and needs no
@@ -528,7 +528,7 @@ latchkey, and a non-HTTP provider needs a different plan.
 
 ## 6. The Apple Mail mode
 
-`[steps.params.apple_mail]` copies one account of the Mail app on a Mac
+`[steps.params.apple_mail]` copies the accounts of the Mail app on a Mac
 out of `~/Library/Mail` (`src/ingest/apple_mail/`). Nothing is fetched:
 Mail has already downloaded the mail, and this mode reads what Mail
 keeps. The facts below were measured on macOS 26, whose folder is `V10`.
@@ -565,12 +565,17 @@ keeps. The facts below were measured on macOS 26, whose folder is `V10`.
 
 ### Identity
 
-- An email's id is its `Message-ID`, read from the index; a message with
-  none gets its content hash. Mail keeps no Gmail id (no `X-GM-MSGID`,
-  and no thread id), so a Gmail account copied through Mail and through
-  the Gmail API are two sets of rows: give each its own source.
-- Two index rows with one `Message-ID` are one email, in every mailbox
-  either row is in.
+- An email's id is its account's id, a colon, and its `Message-ID`
+  (`apple_mail_1f0b8a52:<id>`), read from the index; a message with none
+  gets its content hash in place of the `Message-ID`. The store keys
+  emails across every account, and one message sent to two accounts is a
+  copy in each. Mail keeps no Gmail id (no `X-GM-MSGID`, and no thread
+  id), so a Gmail account copied through Mail and through the Gmail API
+  are two sets of rows: give each its own source.
+- Two index rows of one account with one `Message-ID` are one email, in
+  every mailbox either row is in. A Gmail label is such a row; so is a
+  message a folder-based account (Fastmail) files in two folders, which
+  Mail keeps as a file in each.
 - A thread is keyed by the `Message-ID` of its first message by date,
   not by Mail's `conversation_id`, which a rebuilt index renumbers.
 - A mailbox is named by its path, with IMAP's `INBOX` shown as Mail
@@ -584,10 +589,14 @@ keeps. The facts below were measured on macOS 26, whose folder is `V10`.
 
 ### Which account
 
-A source copies one account. When one account in the index holds mail,
-that is the one; when more do, `apple_mail.account` names one by its
-folder under `V10`, and a sync without it fails with a list of them and
-their message counts.
+A source copies every account in the index that holds mail, each under
+its own account id (`apple_mail_` and the start of Mail's id for it):
+Mail's folder names an account only by a UUID, and its address is kept
+outside the folder, in `~/Library/Accounts`. `apple_mail.account` copies
+just the one it names, and only then may `account_id`, `display_name`,
+`email_address` and `is_personal` name its row. Deletions are per
+account: a sync removes what an account it copies no longer has, and
+leaves the rows of an account it does not copy alone.
 
 ### What a sync reads
 
@@ -627,7 +636,12 @@ HTTP playback: `gmail_label_union`,
 request in turn and run again must leave the store an uninterrupted run
 leaves). `apple_mail` syncs a made-up Mail folder three times: once
 whole, once with nothing moved (nothing written), and once after a
-message is read and another deleted in the index.
+message is read and another deleted in the index. `apple_mail_tng`
+syncs and renders the TNG Mail folder
+(`:tng_apple_mail`, written by `tests/fixtures/make_apple_mail_folder.py`
+with Python's own SQLite): a Gmail and a Fastmail account, partial files,
+a message in both accounts and one only in the index's WAL. It is the
+Apple Mail mode's own fixture, not part of the joint TNG demo.
 Incremental correctness against the real service needs the **live
 test** — the `live` module of `tests/email_tests/`, which the
 `email_tests` target skips with `--skip live::`:

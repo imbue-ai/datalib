@@ -360,6 +360,23 @@ fn routes(state: AppState) -> Router {
         ))
         // Outside the token gate, so a refused request is logged too.
         .layer(axum::middleware::from_fn(request_log::record))
+        .layer(axum::middleware::from_fn(send_no_referrer))
+}
+
+/// A link in a rendered message leads to its sender's site, and a
+/// `Referer` would tell that site the app's address and that the message
+/// was opened. Set on every response, so a page an applet answers or the
+/// desktop shell loads carries it too.
+async fn send_no_referrer(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    response
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
@@ -936,6 +953,9 @@ pub struct ConfigResponse {
     /// The launch's upgrade: the steps being asked to migrate, and the ones
     /// that answered they need to run again, which the page offers to run.
     pub upgrade: UpgradeView,
+    /// The newest "Free up disk space" since this server started, while
+    /// it runs and after: how each step it asks stands.
+    pub free_space: Option<supervisor::FreeSpace>,
 }
 
 /// `dag/README.md` §"Upgrading a root", as the page needs it.
@@ -1017,6 +1037,10 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         None => (false, None, 0, Vec::new(), false),
     };
     let pass = s.sync.upgrade();
+    let free_space = s.sync.free_space().await.unwrap_or_else(|e| {
+        tracing::warn!("config: could not read the free-space pass: {e:#}");
+        None
+    });
     let rerender = match &checked {
         Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
         _ => Vec::new(),
@@ -1033,6 +1057,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView { pass, rerender },
+        free_space,
     })
 }
 
@@ -1209,6 +1234,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView::default(),
+        free_space: None,
     })
 }
 
@@ -1453,10 +1479,18 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
     let run_progress = started.elapsed() - loop_record;
 
-    let problems = manage::counts_by_step(
+    let mut problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
         &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
     );
+    // What a person muted, of what the index holds now: read from the
+    // mutes store and the index, both read-only (problem_mutes/README.md).
+    match datalib_problem_mutes::live_mutes(root).await {
+        Ok(live) => manage::take_off_mutes(&mut problems, &datalib_problem_mutes::tally(&live)),
+        Err(e) => {
+            tracing::warn!("could not read which problems are muted, so every one counts: {e:#}")
+        }
+    }
     let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();

@@ -8,9 +8,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
+use datalib_etl_render::html::{
+    escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
+};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
@@ -168,6 +170,8 @@ fn render_one(
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact
@@ -370,7 +374,7 @@ fn render_markdown(
         out.push_str(&format!("external_id: {}\n", yaml_scalar(&contact.key)));
     }
     if let Some(dn) = contact.name() {
-        out.push_str(&format!("title: {}\n", yaml_scalar(dn)));
+        out.push_str(&format!("title: {}\n", yaml_name(dn)));
     }
     // A stamp we don't have is omitted, never written empty; the grid
     // row is `None` to match.
@@ -407,13 +411,13 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if let Some(src) = photo {
         out.push_str(&format!(
             "<div class=\"contact-photo\">\n\n![{}]({src})\n\n</div>\n\n",
-            escape_md_inline(name)
+            escape_name_inline(name)
         ));
     }
     out.push_str("<div class=\"contact-who\">\n\n");
     let heading = match head_handle(contact) {
         Some(handle) => chip_link(name, &handle),
-        None => escape_md_inline(name),
+        None => escape_name_inline(name),
     };
     out.push_str(&format!("# {heading}"));
     if let Some(url) = &contact.source_url {
@@ -432,14 +436,19 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if !role.is_empty() {
         out.push_str(&format!(
             "<p class=\"contact-role\">{}</p>\n\n",
-            lines_html(&role.join(" · "))
+            lines_html(&without_bidi_controls(&role.join(" · ")))
         ));
     }
     if !contact.groups.is_empty() {
         let pills: Vec<String> = contact
             .groups
             .iter()
-            .map(|g| format!("<span class=\"contact-group\">{}</span>", escape_text(g)))
+            .map(|g| {
+                format!(
+                    "<span class=\"contact-group\">{}</span>",
+                    escape_name_text(g)
+                )
+            })
             .collect();
         out.push_str(&format!(
             "<p class=\"contact-groups\">{}</p>\n\n",
@@ -481,11 +490,11 @@ fn fields(contact: &NormalizedContact) -> String {
             .map(|q| {
                 format!(
                     " <span class=\"contact-qualifier\">{}</span>",
-                    escape_text(q)
+                    escape_name_text(q)
                 )
             })
             .unwrap_or_default();
-        let dt = format!("<dt>{}{qualifier}</dt>", escape_text(&row.label));
+        let dt = format!("<dt>{}{qualifier}</dt>", escape_name_text(&row.label));
         let line = match (&row.handle, &row.href) {
             (Some(handle), _) => format!(
                 "{dt}<dd class=\"chip-identifiers\">\n\n{}\n\n</dd>\n",
@@ -513,7 +522,7 @@ fn members(doc: &ContactDoc) -> String {
     for (i, name) in doc.contact.members.iter().enumerate() {
         let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
             Some(handle) => chip_link(name, handle),
-            None => escape_md_inline(name),
+            None => escape_name_inline(name),
         };
         out.push_str(&format!("- {line}\n"));
     }
@@ -997,6 +1006,52 @@ mod tests {
             ),
             "{md}"
         );
+    }
+
+    /// A right-to-left override in a card's name, role, group, field
+    /// label or member reordered the page around it (`Orders exe.live`
+    /// for `Orders evil.exe`). The page shows none of them; a note, the
+    /// card's body, keeps its own.
+    #[test]
+    fn a_cards_names_lose_their_bidi_controls() {
+        const RLO: &str = "\u{202E}";
+        let mut doc = mk_contact();
+        doc.contact.names = vec![format!("Jean-Luc {RLO}Picard")];
+        doc.contact.org = Some(format!("Star{RLO}fleet"));
+        doc.contact.groups = vec![format!("Bridge {RLO}werC")];
+        doc.contact.details = vec![Detail::new(format!("Ship{RLO}"), "Enterprise")];
+        doc.contact.members = vec![format!("Will {RLO}Riker"), format!("Q{RLO}")];
+        doc.member_handles = vec![Handle::email("riker@enterprise.org"), None];
+        doc.contact.note = Some(format!("Orders {RLO}exe.live"));
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc],
+            dir.path(),
+            "linkedin",
+            &Progress::default(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+        let note = format!("<dt>Note</dt><dd>Orders {RLO}exe.live</dd>");
+        assert!(md.contains(&note), "the note is the card's own: {md}");
+        let rest = md.replace(&note, "");
+        assert!(!rest.contains(RLO), "{rest}");
+        for name in [
+            "Jean-Luc Picard",
+            "Starfleet",
+            "Bridge werC",
+            "<dt>Ship</dt>",
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")",
+            "- Q\n",
+        ] {
+            assert!(md.contains(name), "{name:?} is missing: {md}");
+        }
     }
 
     /// The sink's answer is the run's answer: a document it refuses fails

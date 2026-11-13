@@ -161,6 +161,12 @@ describe("rowMenu", () => {
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
   });
 
+  it("offers the Applets heading nothing, and leaves it out of a selection", () => {
+    const applets = target({ id: "section:applets", name: "Applets", kind: "section", type: null });
+    expect(rowMenu([applets], opts)).toEqual([]);
+    expect(rowMenu([target(), applets], opts)).toEqual(rowMenu([target()], opts));
+  });
+
   it("names Browse for what it opens on a download step with a raw store", () => {
     const step = { kind: "step" as const, func: "ingest", id: "slack/ingest" };
     expect(entry(rowMenu([target(step)], opts), "browse").name).toBe("Browse this data");

@@ -123,6 +123,15 @@ A run does three things with emails, in this order:
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that
    fails is a `problems` row, and the run goes on with what is stored.
+   Listing again costs an `Email/get` of every email's envelope, but no
+   `.eml` the store already holds is downloaded again.
+
+   **Fastmail keeps less than two weeks of changes.** On a
+   277k-email account, a state token 14 days old was refused with
+   `cannotCalculateChanges`, so an account not synced for two weeks is
+   listed again on its next run. At 50 emails to an `Email/get`, that
+   was an hour of requests, nearly all of it spent waiting on Fastmail's
+   answers (about a second each, ~40 KB): hence the batch size in step 3.
 2. **Enumerates what is not listed whole.** The scopes wanted are the
    mailboxes `only_extract_labels` admits, or `*`. `Email/query` walks
    the ones with no `listed_whole` row, listing each page's ids; an
@@ -133,8 +142,10 @@ A run does three things with emails, in this order:
    `only_extract_labels` is therefore an admitted mailbox with no row,
    and it is enumerated until an enumeration of it finishes. A label
    path that matches no mailbox is a `problems` row.
-3. **Fetches what is owed** with `owed::drain`, fifty to an
-   `Email/get`, one transaction per batch: the email rows, their thread
+3. **Fetches what is owed** with `owed::drain`, one `Email/get` at a
+   time, each naming as many emails as the session's `maxObjectsInGet`
+   allows, up to 500 (50 for a server that states none, which RFC 8620
+   requires it to); one transaction per batch: the email rows, their thread
    rows and the stamp they satisfy. An email the server answers
    `notFound` for, or that a label filter keeps out, is gone: its
    listing, its row and whatever was held for it go.
@@ -377,6 +388,9 @@ of a thread whose newest message the filter keeps, drop a thread the
 filter no longer keeps, and count a message the filter drops toward
 its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
 mbox.
+`jmap_start_over_prunes.rs` lists an account again: what upstream
+destroyed meanwhile goes, and each `Email/get` names as many emails as
+the session's `maxObjectsInGet` allows.
 
 **Most tests call a download function directly**, with options they
 build by hand, so they do not see how a config becomes those options
@@ -496,6 +510,29 @@ the envelope row already exists — so it lives on its own CAS edge table, like
 every other provider's attachment edge. That keeps `emails` single-writer, so
 re-upserting a changed envelope (flag or move churn) never clobbers a stored
 hash.
+
+### The render's label filter
+
+When the render step sets `only_render_labels`, a thread renders if any
+of its emails is filed under one of those mailboxes, and the whole
+thread renders. The filter is decided in SQL (`KEPT_THREADS` in
+`email_render/src/render/parse.rs`): a run loads the rows of the
+threads it keeps and nothing of the others. On a full walk the threads
+it keeps out are listed by key alone, so that any documents they still
+have go.
+
+A run renders every thread the filter keeps, not just the changed ones,
+only when the mailbox tree changes in a way that can move a thread
+into or out of the filter: a mailbox added or removed, or its name or
+parent changed (`MAILBOX_TREE_MOVED`). Any other change to a mailbox
+row re-renders only the threads that looked that mailbox up. This
+matters because only a mailbox's counts are kept out of `payload`
+(they go in the sidecar's `volatile_payload`); every other key the
+server returns is stored as it came. Fastmail adds keys of its own to a
+mailbox (`autoLearn`, `hidden`, `splits`, `purgeOlderThanDays` and
+others), and it has been seen to drop them from one mailbox between two
+syncs; fanning out on that would re-render every thread the filter
+keeps for a change no document shows.
 
 ### Tables
 

@@ -1,15 +1,19 @@
 //! A change request's one document: front matter, title, description,
 //! then its reviews, its general conversation and its inline threads.
-//! The description and the comments are markdown their authors wrote and
-//! go in as written; everything else here is plain text and is escaped.
+//! The description and each comment are markdown their authors wrote and
+//! go in as written, HTML included, each in a message wrapper and a
+//! section of its own, so the page renders each alone: a tag one leaves
+//! open cannot reach the next. Everything else here is plain text and is
+//! escaped.
 
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::{escape_md_inline, md_code_span};
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
 use datalib_etl_render::message::{chip_link, source_link, stamp_text_html};
+use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 
@@ -20,22 +24,26 @@ pub(crate) fn write(
     cr: &ChangeRequest,
     comments: &[&Comment],
     md_path: &Path,
-) -> Result<()> {
+) -> Result<Vec<Section>> {
     if let Some(dir) = md_path.parent() {
         fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    let out = render(profile, cr, comments);
-    fs::write(md_path, &out).with_context(|| format!("write {}", md_path.display()))
+    let sections = render(profile, cr, comments);
+    fs::write(md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
+    Ok(sections)
 }
 
-fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> String {
+/// The document as sections: the frame (front matter, title, the part
+/// headings) unkeyed, and each message keyed by its uuid.
+fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> Vec<Section> {
+    let mut sections = Vec::new();
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("provider: {}\n", profile.tag));
     let front: [(&str, String); 12] = [
         (profile.container_key, yaml_scalar(&cr.container)),
         (profile.number_key, cr.number.to_string()),
-        ("title", yaml_scalar(&cr.title)),
+        ("title", yaml_name(&cr.title)),
         ("state", yaml_opt(cr.state.as_deref())),
         ("author", yaml_opt(cr.author.as_deref())),
         ("created_at", yaml_opt(cr.created_at.as_deref())),
@@ -71,11 +79,8 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
     if cr.body.trim().is_empty() {
         out.push_str("*(no description)*\n\n");
     } else {
-        out.push_str(&cr.body);
-        if !cr.body.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push('\n');
+        sections.push(Section::unkeyed(std::mem::take(&mut out)));
+        sections.push(message(profile, &cr.uuid, None, &cr.body));
     }
 
     let ordered = ordered(comments);
@@ -85,14 +90,7 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
             out.push_str("*(no reviews)*\n\n");
         }
         for r in &ordered.reviews {
-            out.push_str(&header(r));
-            out.push_str("\n\n");
-            // A review with no body is a bare approval: its header says
-            // everything.
-            if !r.body.trim().is_empty() {
-                out.push_str(&quote_body(&r.body));
-                out.push_str("\n\n");
-            }
+            push_comment(profile, &mut sections, &mut out, r);
         }
     }
 
@@ -101,7 +99,7 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
         out.push_str("*(no general comments)*\n\n");
     }
     for c in &ordered.general {
-        push_comment(&mut out, c);
+        push_comment(profile, &mut sections, &mut out, c);
     }
 
     out.push_str("## Inline comments\n\n");
@@ -114,24 +112,55 @@ fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> 
             md_code_span(&format!("{path}:{line}"))
         ));
         for c in thread {
-            push_comment(&mut out, c);
+            push_comment(profile, &mut sections, &mut out, c);
         }
     }
 
-    while out.ends_with("\n\n") {
-        out.pop();
+    if !out.is_empty() {
+        sections.push(Section::unkeyed(out));
     }
-    if !out.ends_with('\n') {
-        out.push('\n');
+    if let Some(last) = sections.last_mut() {
+        while last.md.ends_with("\n\n") {
+            last.md.pop();
+        }
     }
-    out
+    sections
 }
 
-fn push_comment(out: &mut String, c: &Comment) {
-    out.push_str(&header(c));
-    out.push_str("\n\n");
-    out.push_str(&quote_body(&c.body));
-    out.push_str("\n\n");
+/// Ends the frame piece `out` holds and adds `c` as a message of its own.
+fn push_comment(
+    profile: &ForgeProfile,
+    sections: &mut Vec<Section>,
+    out: &mut String,
+    c: &Comment,
+) {
+    if !out.is_empty() {
+        sections.push(Section::unkeyed(std::mem::take(out)));
+    }
+    let header = header(c);
+    sections.push(message(profile, &c.uuid, Some(&header), &c.body));
+}
+
+/// One message in its wrapper: the header line, if any, then the body
+/// as its author wrote it. A review with no body is a bare approval, so
+/// its header says everything; a comment with none says it is empty.
+fn message(profile: &ForgeProfile, uuid: &str, header: Option<&str>, body: &str) -> Section {
+    let mut md = msg_div_open(uuid, profile.provider);
+    md.push_str("\n\n");
+    if let Some(header) = header {
+        md.push_str(header);
+        md.push_str("\n\n");
+    }
+    let body = body.trim_end();
+    if !body.is_empty() {
+        md.push_str(body);
+        md.push_str("\n\n");
+    } else if header.is_none() {
+        md.push_str("*(empty)*\n\n");
+    }
+    md.push_str(MSG_DIV_CLOSE);
+    md.push_str("\n\n");
+    Section::keyed(uuid, md)
 }
 
 /// Who wrote something: a chip where the forge gave an account, else
@@ -140,7 +169,7 @@ fn person(author: Option<&str>, handle: Option<&Handle>) -> String {
     let shown = author.unwrap_or("unknown");
     match handle {
         Some(h) => chip_link(shown, h),
-        None => format!("@{}", escape_md_inline(shown)),
+        None => format!("@{}", escape_name_inline(shown)),
     }
 }
 
@@ -168,23 +197,6 @@ fn header(c: &Comment) -> String {
         ""
     };
     format!("{who}{state}{reply} · {when}{link}")
-}
-
-/// Each line prefixed `> `, so the comment renders as a blockquote.
-fn quote_body(body: &str) -> String {
-    if body.is_empty() {
-        return "> *(empty)*".into();
-    }
-    body.lines()
-        .map(|l| {
-            if l.is_empty() {
-                ">".to_string()
-            } else {
-                format!("> {l}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn yaml_opt(s: Option<&str>) -> String {
@@ -274,7 +286,7 @@ mod tests {
         cr.author_handle = Handle::github("data-soong");
         comment.author = Some("Data".into());
         comment.author_handle = Handle::github("data-soong");
-        let md = render(&profile(), &cr, &[&comment]);
+        let md = join(&render(&profile(), &cr, &[&comment]));
         let chip = "[Data](datalib:handle/github/data-soong \"Data (github:data-soong)\")";
         assert!(md.contains(&format!(" — {chip} — ")), "{md}");
         assert!(
@@ -286,7 +298,7 @@ mod tests {
     #[test]
     fn a_change_request_in_markup_renders_escaped() {
         let (cr, comment) = sample();
-        let md = render(&profile(), &cr, &[&comment]);
+        let md = join(&render(&profile(), &cr, &[&comment]));
         let (_, body) = md
             .split_once("---\n\n")
             .expect("front matter, then the body");
@@ -308,6 +320,37 @@ mod tests {
             )),
             "{body}"
         );
-        assert!(body.contains("> *looks good*"), "a comment: {body}");
+        assert!(body.contains("\n*looks good*\n"), "a comment: {body}");
+    }
+
+    /// The description and each comment are a section of their own, in
+    /// a wrapper keyed by their uuid, holding what their author wrote,
+    /// HTML included: the page renders each alone, so a tag one leaves
+    /// open cannot reach the next. Joined, the sections are the file.
+    #[test]
+    fn each_message_is_a_section_of_its_own_as_written() {
+        let (mut cr, mut comment) = sample();
+        cr.body = "**Engage** <div style=\"display:none\">".into();
+        comment.body = "<details><summary>Logs</summary>\n\nwarp 9\n\n</details>".into();
+        let sections = render(&profile(), &cr, &[&comment]);
+        let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(keys, [None, Some("u"), None, Some("c")], "{sections:#?}");
+        let description = &sections[1].md;
+        assert!(
+            description.starts_with(
+                "<div id=\"m-u\" data-section-uuid=\"u\" class=\"msg msg--github\">\n"
+            ),
+            "{description}"
+        );
+        assert!(description.ends_with("\n</div>\n\n"), "{description}");
+        assert!(
+            description.contains("\n**Engage** <div style=\"display:none\">\n"),
+            "{description}"
+        );
+        assert!(
+            sections[3].md.contains("<details><summary>Logs</summary>"),
+            "{}",
+            sections[3].md
+        );
     }
 }

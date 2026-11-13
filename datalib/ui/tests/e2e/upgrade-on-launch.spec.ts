@@ -71,7 +71,7 @@ test("the migrate pass leaves the app usable and says in the toolbar how each so
   await expect(
     menu.getByRole("heading", { name: "Updating your data for this version" }),
   ).toBeVisible();
-  const rows = menu.locator(".upgrade-list li");
+  const rows = menu.locator(".pass-list li");
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("enterprise-mail");
   await expect(rows.nth(0)).toContainText("Done");
@@ -142,9 +142,9 @@ test("a step the pass could not ask turns the pill red, not a dialog, until dism
   const menu = page.getByRole("dialog", { name: "1 source could not be updated" });
   await expect(menu).toContainText("1 of 2 sources are up to date");
   // Only what failed is listed, with its reason.
-  await expect(menu.locator(".upgrade-list li")).toHaveCount(1);
-  await expect(menu.locator(".upgrade-list li")).toContainText("enterprise-mail");
-  await expect(menu.locator(".upgrade-list li")).toContainText("no datalib-step");
+  await expect(menu.locator(".pass-list li")).toHaveCount(1);
+  await expect(menu.locator(".pass-list li")).toContainText("enterprise-mail");
+  await expect(menu.locator(".pass-list li")).toContainText("no datalib-step");
   await menu.getByRole("button", { name: "Dismiss" }).click();
   await expect(pill).toHaveCount(0);
 });

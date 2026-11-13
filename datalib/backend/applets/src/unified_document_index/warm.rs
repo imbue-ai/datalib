@@ -3,8 +3,9 @@
 //! a person's own filter reaches. On a large library that is a quarter of a
 //! minute the first search would otherwise wait, and the vectors go on being
 //! held in memory, about a gigabyte on that library, whether or not anyone
-//! searches. A change to the stored vectors drops them all (`VectorCache`), so
-//! they are loaded again once a sync has finished moving the index.
+//! searches. While a sync is writing the index a search answers from what
+//! is held (`INDEX_SETTLE`); once the index has sat still, this reads what
+//! the sync added, and a removed vector drops them all (`VectorCache`).
 
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use datalib_unified_document_index::qmd::index_state::IndexStamp;
 use datalib_unified_document_index::qmd::qmd_index_path;
 
 use super::models::ModelGate;
-use super::{meaning_ranking, parse_query, with_people, Index, SearchFailure};
+use super::{meaning_ranking, parse_query, with_people, Index, SearchFailure, SearchReads};
 
 /// How often the index is looked at, and how long it must then sit still:
 /// an embed step commits as it goes, and each load costs tens of seconds of
@@ -61,13 +62,23 @@ pub(super) async fn keep_warm(s: Index, models: ModelGate) {
     {
         return;
     }
-    let index = qmd_index_path(&s.root);
     let mut watch = Watch::new();
     let mut ticks = tokio::time::interval(TICK);
     loop {
         ticks.tick().await;
-        if watch.should_load(&IndexStamp::of(&index)) {
+        if watch.should_load(&watched(&s)) {
             warm_once(&s).await;
+        }
+    }
+}
+
+/// How the files a search by meaning reads look on disk.
+fn watched(s: &Index) -> Vec<IndexStamp> {
+    match s.reads {
+        SearchReads::Qmd => vec![IndexStamp::of(&qmd_index_path(&s.root))],
+        SearchReads::SearchIndex => {
+            let (index, cache) = datalib_unified_document_index::search_index::stamps(&s.root);
+            vec![index, cache]
         }
     }
 }

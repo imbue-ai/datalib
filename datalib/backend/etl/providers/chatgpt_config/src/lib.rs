@@ -1,6 +1,7 @@
 //! Provider-owned config schema for the `chatgpt` source (Program A goal
 //! #1). Schema-only (serde + anyhow).
 
+pub use datalib_source_common::WhenDeletedUpstream;
 use datalib_source_common::{not_negative, LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +54,13 @@ pub struct ChatgptConfig {
     /// Either way it is read again only once its bytes change.
     #[serde(default)]
     pub export: Option<LocalPath>,
+    /// What becomes of the copy of a conversation (or anything else this
+    /// source holds) once it is deleted on chatgpt.com, or a newer export
+    /// leaves it out: `"delete_local_copy"` (the default) deletes it here
+    /// too; `"keep_local_copy"` keeps it as last fetched, so a person can
+    /// delete it upstream for privacy and still have it.
+    #[serde(default)]
+    pub when_deleted_upstream: WhenDeletedUpstream,
 }
 
 impl ChatgptConfig {

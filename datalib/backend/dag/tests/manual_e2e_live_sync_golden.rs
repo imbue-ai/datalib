@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
 use datalib_handle::Handle;
+use datalib_runtime::layout::UNINDEXED_DIR;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -1337,14 +1338,19 @@ fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
 }
 
 /// The markdown files qmd indexes under `dir`: its glob skips hidden paths
-/// and a few build directories (`reindexCollection`), and it drops a file
-/// with no text.
+/// and a few build directories (`reindexCollection`), it drops a file with
+/// no text, and the collection ignores what a renderer filed under
+/// `UNINDEXED_DIR` (`datalib_qmd_indexer::ignore_for_group`).
 fn markdown_qmd_reads(dir: &Path) -> u64 {
     const SKIPPED: &[&str] = &["node_modules", "vendor", "dist", "build"];
     WalkDir::new(dir)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md"))
+        .filter(|e| {
+            let mut parts = e.path().strip_prefix(dir).unwrap().components();
+            parts.next().map(|c| c.as_os_str()) != Some(UNINDEXED_DIR.as_ref())
+        })
         .filter(|e| {
             !e.path().strip_prefix(dir).unwrap().components().any(|c| {
                 let seg = c.as_os_str().to_string_lossy();
@@ -1716,7 +1722,8 @@ fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison: the store's record
 /// of itself, of its runs and cursors, of the spans a walk has looked at
-/// (whose newest end is the run's clock), of the token each listed
+/// (whose newest end is the run's clock) and when it last found nothing
+/// newer, of the token each listed
 /// message was last named under (Gmail's is account-wide, so any new mail
 /// restamps every row a re-list names), and of the files or scans a
 /// file-backed ingest has already been through.
@@ -1725,6 +1732,7 @@ const NON_CONTENT_TABLES: &[&str] = &[
     "sync_runs",
     "sync_scope_state",
     "coverage",
+    "coverage_checked",
     "listed_messages",
     "problems",
     "ingested_files",

@@ -41,7 +41,10 @@ use crate::ids;
 ///     reminders) is a Harness Message, and a subagent's brief an Agent
 ///     Prompt, not "Me".
 /// v7: a tool's result is the harness's, not authored by the tool's name.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: an HTML tag in a prompt, a reply or a harness message shows as typed.
+/// v9: a prompt, a reply or a harness message is markdown as written
+///     again, HTML included.
+pub const RENDER_VERSION: u32 = 9;
 
 /// Who the harness's own rows are by: what it writes in the person's place,
 /// a tool's result, its system notes. A tool's name is not a person, and

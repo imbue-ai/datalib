@@ -311,6 +311,7 @@ is not what this section defends, and the desktop app does not use it.
 | The library's files | macOS's guard on a group container, from macOS 15. Before that the app does not offer the folder | A program you said Allow to, and one with Full Disk Access | Full Disk Access measured on macOS 26.7.2. The version comes from Apple's documentation |
 | The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
 | The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
+| Any store, read with SQL the caller writes (`POST /applet/unified_document_index/sql`) | The API token, as every route. The store opens read-only and pinned to one commit; `datalib_sql_guard`'s authorizer lets a statement read tables and call SQLite's functions and doltlite's answering ones, and nothing else, and the statement it checked is the one that runs, refused again if SQLite does not call it read-only; under `system/`, only the stores it names | Reading: the token's holder reads every store a step wrote, the raw stores and the log among them. A program that can read the token could read those files anyway | `sql::tests::nothing_a_caller_sends_writes` and `a_guarded_connection_refuses_attach_and_writes_at_prepare`, both seen failing with the authorizer off; `detached_readers_running_guarded_sql_never_make_the_writers_commit_fail`. Measured with the doltlite shell: a read-only open, detached or not, still let `dolt_creds_new()` write a key under `~/.doltlite` |
 | Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
 | The web view's disk cache, which would hold documents and search results | The server of a protected library answers everything but `/assets/`, the app's own code, `Cache-Control: no-store` (`keep_off_disk`), and the shell empties `~/Library/Caches/com.imbue.datalib/WebKit/NetworkCache` at launch for anyone with a protected folder, which clears what earlier builds stored | A library's pages in the web view's memory while it runs | The cache's files opened from a shell with no prompt (measured, 2,142 files). `disk_cache` tests, and the header read off a real server. That WKWebView obeys it follows from the standard and has not been measured |
 | An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
@@ -322,6 +323,15 @@ is not what this section defends, and the desktop app does not use it.
 outside the folder. Name the path instead: `mktemp "$TMPDIR/x.XXXXXX"`. A
 visible Chromium keeps its `SingletonSocket` in macOS's temp dir at any `TMPDIR`
 length (measured up to 94 bytes), which holds no library content.
+
+**One Allow opens every app's data.** macOS's dialog names only the app asking,
+not the folder. A freshly opened Terminal asked for Docker's group container and
+was allowed. It then listed Datalib's protected container with no second dialog
+(macOS 26.7.2). People click Allow for routine reasons (an agent's `docker`
+command has brought the dialog up inside Claude), and each time the app asking,
+and everything running inside it, can read a protected library until it quits.
+An Apple-owned container was refused with no dialog at all. So the guard is only
+as good as every Allow a person has given that app since it started.
 
 ### What is still open
 
@@ -348,12 +358,6 @@ These all put something from a protected library outside its folder:
 
 ### What has not been shown
 
-- What **Allow** grants. macOS's dialog names only the app asking, and a person
-  has clicked it for an agent's `docker` command, so a routine yes may also open
-  a protected library to that app until it quits. Whether the yes covers every
-  group container or only the one asked for has not been tested. Until it is, the
-  guard is only as good as a choice made from a dialog that does not say what is
-  at stake.
 - All of this on a signed release. The measurements used dev builds, and the
   `ps` one an ad-hoc signature rather than a Developer ID.
 - macOS's guard on `system/applet-secret` and `system/api-token` themselves.
@@ -376,10 +380,12 @@ code before repeating it as current.
 |---|---|---|---|
 | Something a person received runs script in the app. From there it could rewrite the config, whose step `command` runs any program | a stranger | Every served file gets the sandbox policy and keeps its type only if that type is on a short list; message bodies go through a sanitizer | `set_data_headers` in `http/src/embed.rs`, `ui/tests/e2e/document-sandbox.spec.ts`, [`chat-common/README.md`](../../datalib/backend/etl/chat-common/README.md) |
 | A website drives the local server | a website | A per-process API token; a cross-site request is refused unless it is a navigation, and named routes refuse those too | `fetch_policy` and `only_from_this_site` in `http/src/auth.rs` |
+| A link in a message tells its sender where you read it | a stranger | Every response the server sends carries `Referrer-Policy: no-referrer`, and a link the UI opens in a new window asks for `noreferrer` | `send_no_referrer` in `http/src/lib.rs`, `http_tests::referrer_policy` |
 | A message's remote image tells its sender you read it | a stranger | Remote media is fetched only for an allowed sender or document, through the server | `http/src/remote_media.rs` |
 | A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs `AssertSqlSafe` and a reason", `etl/src/run_problems.rs` |
+| A crafted mail or PDF takes over the parser that reads it, in the docker image | a stranger | Nothing in the image runs as root: everything runs as uid 1000, which owns only the data root, the credential store and the demo, and cannot write the binaries. Reasoned, not measured: no exploit was tried | [`docker.md`](docker.md) § "Permissions and signals" |
 | A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
 | A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
 | datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
-| A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime fetch and the qmd models are pinned by sha256 | [`runtime_fetch.md`](runtime_fetch.md) |
+| A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime fetch and the qmd models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |

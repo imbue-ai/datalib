@@ -292,13 +292,26 @@ becomes markup (`docs/dev/data_architecture_parse_and_render.md`
 escapes every field it writes — the author, a label, a reactor, a file
 name, a system note — and an item's `text` according to the profile's
 `text_format`: `Plain` for what a person typed (a text message, a
-LinkedIn message), `Markdown` for an assistant's reply or for markdown
-the provider built itself, having escaped the plain text it put inside
-(Facebook's posts, Beeper's reply line, an email). The grid's search
+LinkedIn message), `Markdown` for markdown the provider built itself,
+having escaped the plain text it put inside (Facebook's posts, Beeper's
+reply line), or markdown someone else wrote, which goes in as written,
+HTML included (an assistant's reply and the prompt before it, an
+email's `text/html` part after htmd). The chat's title and names, and
+each item's author, recipients, reactors, attachment filenames and
+labels, lose their bidi controls first (`without_bidi_controls`). Each
+item is a section of its own, so
+the page renders it alone. The grid's search
 text is `text` as given either way. Front-matter values go through
 `yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
 document whose every plain field holds HTML and markdown through the
 app's own markdown-it and sanitizer, and checks each reads as typed.
+
+A `Markdown` body is pasted into a page of many messages, so a block it
+leaves open would run on through every message after it: an assistant's
+reply cut off inside a code block, a prompt that opens ```` ``` ```` or
+`<pre>` and never closes it. `close_open_blocks` closes any fence, or
+any HTML block that only a closing tag or marker ends, at the end of
+the body.
 
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
 through DOMPurify: scripts, event handlers, `javascript:` URLs and form
@@ -314,6 +327,18 @@ only when it is exactly an attachment's blob-store address,
 `/data/<group>/<function>/blob/<hash>`, or a part of an email stored
 there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
 relative references included, is dropped.
+
+Nor can one message reach the next. The UI renders and sanitizes each
+message as a fragment of its own, from the sections this crate hands
+over (`render_markdown` returns them; the store keeps their layout), so
+a tag a message leaves open is closed at its end, and only the
+renderer's own wrapper answers to a message's id. Each wrapper also has
+`contain: paint`, so nothing in a message draws over another. Keep the
+pieces honest: a message is one keyed `Section` that opens with its
+wrapper's line and ends with its `</div>`, and the `<details>` openers
+and closers are unkeyed ones of their own
+(`docs/dev/data_architecture_parse_and_render.md` §"One section cannot
+reach the next").
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),

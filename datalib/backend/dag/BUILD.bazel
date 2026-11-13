@@ -77,7 +77,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.52.0",
+    version = "0.54.1",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -112,11 +112,13 @@ rust_test(
     crate_root = "tests/dag_tests/main.rs",
     data = [
         ":datalib_dag_bin",
+        "//datalib/backend/obs:log_probe",
         "//datalib/backend/parent_watch:parent_watch_probe",
     ],
     edition = "2021",
     env = {
         "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+        "LOG_PROBE": "$(rootpath //datalib/backend/obs:log_probe)",
         "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
     },
     deps = [

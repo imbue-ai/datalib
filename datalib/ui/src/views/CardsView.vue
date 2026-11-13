@@ -9,18 +9,18 @@ import TimeViewClock from "@/components/TimeViewClock.vue";
 import { editMode } from "@/editMode";
 import { density, larger, smaller } from "@/density";
 import { MAX_STEP, MIN_STEP, STEP, STEPS, onScale, stepIndex } from "@/densityScale";
-import { LOG_CARD, surface, type SurfaceCommands } from "@/surface";
+import { LOG_CARD, registerSurface, type SurfaceCommands } from "@/surface";
 
 // The toolbar's commands go to the layout.
 const containers = useTemplateRef<SurfaceCommands>("containers");
 onMounted(() => {
-  surface.value = {
+  registerSurface({
     addCard: () => containers.value?.addCard(),
     showCard: (source) => containers.value?.showCard(source),
-  };
+  });
 });
 onBeforeUnmount(() => {
-  surface.value = null;
+  registerSurface(null);
 });
 </script>
 

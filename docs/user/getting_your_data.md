@@ -35,11 +35,12 @@ on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
 holds the credentials instead, and those commands may be refused or sign
 in somewhere else: sign in, or ask for access, wherever that gateway is
 managed. Either way, `datalib-step probe <type>` says whether the
-sign-in works.
+sign-in works; for a type reached more than one way, name the way with
+`--method` (`datalib-step probe calendar --method google`).
 
 ## Apple Mail
 
-`type = "email"` with an `apple_mail` table — one account of the Mail
+`type = "email"` with an `apple_mail` table — every account of the Mail
 app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
 every message Mail has downloaded, with its mailboxes (a Gmail account's
 labels among them), whether it was read, flagged or answered, and its
@@ -54,11 +55,11 @@ in the dialog reaches `~/Library/Mail`). A terminal running
 `datalib-dag` needs Full Disk Access instead (System Settings → Privacy
 & Security).
 
-When Mail holds mail for more than one account, `apple_mail.account`
-names the one to copy, by the name of its folder under
-`~/Library/Mail/V10`; a sync without it lists them. Add a source per
-account to copy several. Mail keeps no Gmail ids, so a Gmail account
-copied through Mail and through [Gmail](#gmail) is two separate copies.
+Each account is copied under its own id, made from the name of its folder
+under `~/Library/Mail/V10`; a message sent to two of your accounts is
+copied once for each. To copy just one account, set `apple_mail.account`
+to its folder's name. Mail keeps no Gmail ids, so a Gmail account copied
+through Mail and through [Gmail](#gmail) is two separate copies.
 
 ## Apple Messages
 
@@ -149,6 +150,14 @@ that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
 day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
 it. A windowed calendar is listed whole every run, and an event the
 window no longer reaches leaves the mirror.
+
+**To sync a calendar often, leave the window out.** Neither Google nor
+CalDAV can pick a listing up where the last one stopped once it is
+bounded by dates, so a window costs the whole listing every run; a
+busy calendar takes seconds and several requests each time. Without
+`since` and `until`, a run after the first asks only for what changed.
+To see just the days around now, read the `render_occurrences` step's
+table, which is windowed already, rather than windowing the download.
 
 ## Calendly
 
@@ -693,7 +702,8 @@ The first time, latchkey needs an OAuth client to sign in with:
 [your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
-calendars you name. Behind a latchkey gateway, its permissions have to
+calendars you name, and `since` and `until` to a stretch of days, at
+the cost [Calendar (CalDAV)](#calendar-caldav) describes. Behind a latchkey gateway, its permissions have to
 allow reading the calendar list (`/users/me/calendarList`) as well as
 the events: every sync reads the list first.
 
@@ -891,7 +901,10 @@ what changed since, and for a quiet workspace that takes seconds.
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
-(`export`). Mirrors messages, and connections as contacts.
+(`export`). Mirrors messages, your posts and comments, the skills on
+your profile, and connections as contacts. The rest of the export is
+stored but not searchable, and the source's warning names those
+tables.
 
 **Settings & Privacy** → **Data privacy** → **Get a copy of your
 data**, request the full archive, and unzip it when the email arrives

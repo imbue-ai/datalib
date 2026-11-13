@@ -88,6 +88,19 @@ impl NormalizedContact {
     pub fn name(&self) -> Option<&str> {
         self.names.first().map(String::as_str)
     }
+
+    pub fn holds(&self, handle: &Handle) -> bool {
+        self.handles
+            .iter()
+            .any(|h| h.handle.as_ref() == Some(handle))
+    }
+
+    /// Whether `name` is not a name but a handle this record does not
+    /// hold ([`Handle::spelled_by`]): shown as the person's name, it
+    /// would draw them as whoever that handle is.
+    pub fn is_anothers_handle(&self, name: &str) -> bool {
+        Handle::spelled_by(name).is_some_and(|h| !self.holds(&h))
+    }
 }
 
 #[derive(

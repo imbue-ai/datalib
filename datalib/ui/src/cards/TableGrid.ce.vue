@@ -98,8 +98,6 @@ const emit = defineEmits<{
   /// An in-place edit of an `editable` cell was committed. The card
   /// decides what it means; the value never lands in the row.
   edit: [row: T, field: string, value: string];
-  /// A `markdown_uuid` cell was clicked.
-  openDocument: [uuid: string];
   /// A tree row was opened or closed.
   rowGroupOpened: [row: T, expanded: boolean];
   /// A movable row was dropped above `before`, a sibling of it, or
@@ -250,7 +248,6 @@ function buildColumns(): Column<T>[] {
     tree: props.tree,
     actions: props.actions,
     onMembership: props.membership,
-    onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
     chips: props.chips,
   }).map((c, i) =>
@@ -541,10 +538,10 @@ function writePath(item: unknown, field: string, value: unknown) {
 /// A chip is a link whose href names something in this app, never to be
 /// followed. In the desktop app, following one dropped every request in
 /// flight: the loads of the card a double-click on the chip had opened.
-function onClick(e: SlickEventData) {
-  if (chipElAt(e.getNativeEvent<MouseEvent>()?.target)) {
-    e.getNativeEvent<MouseEvent>()?.preventDefault();
-  }
+/// Prevented once the click reaches the box, after the grid has selected
+/// the row: a click the grid sees already prevented selects nothing.
+function followNoChipLink(e: MouseEvent) {
+  if (chipElAt(e.target)) e.preventDefault();
 }
 
 /// A part of a cell that names a field of its own (`data-field`, as the
@@ -636,7 +633,6 @@ function createGrid() {
   hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
-  b.slickGrid.onClick.subscribe(onClick);
   b.slickGrid.onDblClick.subscribe(onDblClick);
   b.slickGrid.onSort.subscribe(onSort);
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
@@ -704,6 +700,6 @@ watch(
 
 <template>
   <div ref="rootEl" class="tg-root" @pointerdown="onGripDown">
-    <div ref="boxEl" class="tg-grid" />
+    <div ref="boxEl" class="tg-grid" @click="followNoChipLink" />
   </div>
 </template>

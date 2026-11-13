@@ -10,11 +10,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{
-    escape_html_outside_code, escape_md_inline, escape_text, md_link_dest,
-};
+use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
@@ -31,7 +29,11 @@ use crate::store::{flag, str_of, uid_of, Store};
 
 /// v1: one document per project, completed tasks folded under each
 ///     section.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a comment's time, which Todoist stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+/// v3: a task, a description or a comment is markdown as written, HTML
+///     included.
+pub const RENDER_VERSION: u32 = 3;
 
 const SOURCE_LABEL: &str = "Todoist";
 const KIND_PROJECT: &str = "Todoist Project";
@@ -313,7 +315,7 @@ pub fn build(
             };
             out.sections.push(Section::unkeyed(format!(
                 "## {}{archived}\n\n",
-                escape_md_inline(name)
+                escape_name_inline(name)
             )));
         }
         let open: Vec<&Task> = group.iter().copied().filter(|t| !t.done).collect();
@@ -371,6 +373,8 @@ pub fn build(
         .build_or_record(source_id, project_id, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -420,7 +424,7 @@ fn tree<'t, 'a>(tasks: &[&'t Task<'a>]) -> Vec<(&'t Task<'a>, usize)> {
 
 fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
     let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_scalar(&facts.name)));
+    s.push_str(&format!("title: {}\n", yaml_name(&facts.name)));
     s.push_str(&format!("provider: {}\n", Provider::Todoist));
     s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
     s.push_str(&format!("markdown_uuid: {}\n", facts.id.uuid));
@@ -452,7 +456,7 @@ fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
             s.push_str("*Archived.*\n\n");
         }
         if let Some(d) = str_of(p, "description") {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
     }
@@ -504,7 +508,7 @@ impl Out<'_, '_, '_> {
         s.push_str("\n\n");
         s.push_str(&format!(
             "{level} {check} {}\n\n",
-            escape_html_outside_code(&content.replace(['\r', '\n'], " "))
+            content.replace(['\r', '\n'], " ")
         ));
         let meta = self.meta(t);
         if !meta.is_empty() {
@@ -512,7 +516,7 @@ impl Out<'_, '_, '_> {
             s.push_str("\n\n");
         }
         if let Some(d) = description {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -617,7 +621,7 @@ impl Out<'_, '_, '_> {
             out.push(
                 labels
                     .iter()
-                    .map(|l| escape_md_inline(&format!("@{l}")))
+                    .map(|l| escape_name_inline(&format!("@{l}")))
                     .collect::<Vec<_>>()
                     .join(" "),
             );
@@ -651,13 +655,14 @@ impl Out<'_, '_, '_> {
                 author: author.as_ref().map_or("", |p| p.name.as_str()),
                 handle: author.as_ref().and_then(|p| p.handle.as_ref()),
                 date_ms: posted.and_then(datalib_time::record_stamp_ms),
+                offset_secs: posted.and_then(datalib_time::written_offset_secs),
                 source_url: None,
             }
             .render(),
         );
         s.push_str("\n\n");
         if !content.is_empty() {
-            s.push_str(&escape_html_outside_code(content));
+            s.push_str(content);
             s.push_str("\n\n");
         }
         let attachment = n.get("file_attachment").filter(|a| a.is_object());
@@ -666,10 +671,10 @@ impl Out<'_, '_, '_> {
             match str_of(a, "file_url") {
                 Some(url) => s.push_str(&format!(
                     "📎 [{}]({})\n\n",
-                    escape_md_inline(name),
+                    escape_name_inline(name),
                     md_link_dest(url)
                 )),
-                None => s.push_str(&format!("📎 {}\n\n", escape_md_inline(name))),
+                None => s.push_str(&format!("📎 {}\n\n", escape_name_inline(name))),
             }
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -733,6 +738,6 @@ fn labels(row: &Value) -> Vec<&str> {
 fn person_md(p: &Person) -> String {
     match &p.handle {
         Some(h) => chip_link(&p.name, h),
-        None => escape_md_inline(&p.name),
+        None => escape_name_inline(&p.name),
     }
 }

@@ -35,6 +35,12 @@ TOKEN=$(cat <data_root>/system/api-token)
 curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/datalib_contacts/"
 ```
 
+An answer of 502 naming `no applet "datalib_contacts"` means this
+library's config has no entry for it: a root set up before the app
+existed. Turning it on is the person's call, in **Add data source** →
+Contacts app, or with the entry [the applets page](applets.md#what-ships)
+gives.
+
 That answer lists every route, what each does and its `kind`; so does
 `datalib-applet datalib_contacts --help`, with no server. `kind` is the
 part to read before you write:

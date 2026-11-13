@@ -781,7 +781,7 @@ impl host::Periods for Periods {
         let env = host::step_env(&checked.cfg, None, &[], &now, &run_id).unwrap();
         let sink: Arc<dyn EventSink> = match self.record {
             true => {
-                let started = host::sync_start(&[]);
+                let started = host::period_start(&[], &[]);
                 let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, started)
                     .expect("open the run store");
                 Arc::new(FanOutSink(vec![self.sink.clone(), Arc::new(store)]))

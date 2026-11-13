@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 use super::announce::{Listener, CONFIG_CHANGED};
 use super::inputs;
+use super::pass::PassState;
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
@@ -233,6 +234,10 @@ impl Runner {
             .get(crate::subprocess::ENV_NOW)
             .cloned()
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+        let clock = datalib_time::RunClock::starting_at(
+            datalib_time::parse_strict(&started_at)
+                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
+        );
         let run_id = self
             .child_env
             .get(crate::subprocess::ENV_RUN_ID)
@@ -759,7 +764,7 @@ impl Runner {
         );
         record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(now_stamp());
+            run.finished_at = Some(clock.now().to_rfc3339_micros());
         }
         record.save(&state).await?;
 
@@ -980,11 +985,11 @@ impl Runner {
                     .await
                     .map(|()| wipe::forget_groups(state, &w.targets)),
                 WipeKind::Compact => {
-                    self.shrink_in_loop(graph, &w.targets, Shrink::Compact, state, facts)
+                    self.shrink_in_loop(graph, &w, Shrink::Compact, state, facts, store)
                         .await
                 }
                 WipeKind::Collect => {
-                    self.shrink_in_loop(graph, &w.targets, Shrink::Collect, state, facts)
+                    self.shrink_in_loop(graph, &w, Shrink::Collect, state, facts, store)
                         .await
                 }
             };
@@ -1039,21 +1044,38 @@ impl Runner {
     async fn shrink_in_loop(
         &self,
         graph: &Graph,
-        targets: &[String],
+        w: &WipeRow,
         how: Shrink,
         state: &mut Record,
         facts: &mut Facts,
+        store: &Store,
     ) -> Result<()> {
+        let asked = wipe::compact_targets(graph, &w.targets);
+        let ids: Vec<&str> = asked.iter().map(|&i| graph.steps[i].id.as_str()).collect();
+        store.begin_wipe_steps(&w.id, &ids).await?;
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-        for i in wipe::compact_targets(graph, targets) {
+        for (ord, &i) in asked.iter().enumerate() {
             let step = &graph.steps[i].id;
+            store
+                .set_wipe_step(&w.id, ord, PassState::Running, None, None)
+                .await?;
             match self.shrink_one(graph, step, how).await {
-                Ok(Some(version)) => {
-                    state.steps.entry(step.clone()).or_default().version = Some(version.clone());
-                    facts.sinks[i] = Some(version);
+                Ok((version, bytes)) => {
+                    if let Some(version) = version {
+                        state.steps.entry(step.clone()).or_default().version =
+                            Some(version.clone());
+                        facts.sinks[i] = Some(version);
+                    }
+                    store
+                        .set_wipe_step(&w.id, ord, PassState::Done, None, bytes)
+                        .await?;
                 }
-                Ok(None) => {}
-                Err(e) => failed.entry(e).or_default().push(step),
+                Err(e) => {
+                    store
+                        .set_wipe_step(&w.id, ord, PassState::Failed, Some(&e), None)
+                        .await?;
+                    failed.entry(e).or_default().push(step);
+                }
             }
         }
         anyhow::ensure!(
@@ -2729,5 +2751,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
+    }
+
+    /// A round pinned with `--now` ends on that clock. The demo's bake,
+    /// pinned to 2369, recorded its run as ending in the present, three
+    /// centuries before it began.
+    #[tokio::test]
+    async fn a_pinned_round_ends_after_it_began() {
+        let f = fixture();
+        f.go.store(true, Ordering::SeqCst);
+        let store = Store::open(f.root.path()).await.unwrap();
+        store.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let pinned = "2369-04-15T00:00:00+00:00";
+        let env = BTreeMap::from([(crate::subprocess::ENV_NOW.to_string(), pinned.to_string())]);
+        Runner::new(f.root.path())
+            .child_env(env)
+            .serve(&f.graph, &store)
+            .await
+            .unwrap();
+
+        let run = store.load_record().await.unwrap().current_run.unwrap();
+        store.close().await;
+        assert_eq!(run.started_at, pinned);
+        let finished = run.finished_at.expect("the round closed its run");
+        assert!(
+            finished.as_str() >= pinned && finished.starts_with("2369-04-15T00:0"),
+            "began {pinned}, ended {finished}"
+        );
     }
 }

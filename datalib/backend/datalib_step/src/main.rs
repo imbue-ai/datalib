@@ -31,6 +31,7 @@ mod render_diff;
 #[cfg(test)]
 mod render_model_test;
 mod reset;
+mod search_index;
 mod source;
 mod source_docs;
 mod source_type;
@@ -90,6 +91,10 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "config stanzas for one source, the least it needs and every option, and how to add one",
         command: "datalib-step examples slack",
+    },
+    Example {
+        what: "the stanzas for one of a source's ways in, to read before adding it",
+        command: "datalib-step examples email --method gmail",
     },
     Example {
         what: "add a source's least config to a config, wired into the index steps that read it",
@@ -212,7 +217,8 @@ enum Cmd {
     /// One source's config stanzas: for each of its ingest methods, the
     /// least a config needs and one that sets every option, with how to
     /// add one to a config, rename its group and wire it into the index.
-    /// With `--append`, adds the least one to a config instead.
+    /// `--method` prints one method's; `--append` adds the least one to a
+    /// config instead.
     Examples {
         /// Source type (`slack`, `email`, …).
         source_type: String,
@@ -223,9 +229,10 @@ enum Cmd {
         /// as `<file>.<UTC time>.bak`, one per append.
         #[arg(long, value_name = "CONFIG")]
         append: Option<PathBuf>,
-        /// With --append: which ingest method's stanza, for a source with
-        /// more than one (`gmail`, `jmap` or `mbox` for email).
-        #[arg(long, requires = "append")]
+        /// Which ingest method's stanzas, for a source with more than one
+        /// (`gmail`, `jmap` or `mbox` for email): without --append, print
+        /// only that method's; with it, append that method's minimal one.
+        #[arg(long)]
         method: Option<String>,
         /// With --append: the group's id, in place of the type's name. It
         /// is the folder under the data root its data goes in.
@@ -370,9 +377,14 @@ async fn main() {
             method.as_deref(),
             id.as_deref(),
         )),
-        Some(Cmd::Examples { source_type, .. }) => {
-            std::process::exit(print_page(help::examples_page(source_type)))
-        }
+        Some(Cmd::Examples {
+            source_type,
+            method,
+            ..
+        }) => std::process::exit(print_page(help::examples_page(
+            source_type,
+            method.as_deref(),
+        ))),
         _ => {}
     }
     // A probe run by hand says on stderr only what went wrong; the
@@ -417,7 +429,7 @@ async fn main() {
             tokio::task::spawn_blocking(move || {
                 datalib_qmd_models::ensure_models(
                     &dir,
-                    datalib_qmd_models::PINNED_MODELS,
+                    datalib_runtime::qmd::EMBED_MODELS,
                     datalib_qmd_models::Fetch::from_env(),
                 )
             })
@@ -426,7 +438,7 @@ async fn main() {
         };
         match ensure {
             Ok(outcomes) => {
-                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(&outcomes) {
+                for (model, outcome) in datalib_runtime::qmd::EMBED_MODELS.iter().zip(&outcomes) {
                     datalib_obs::status_line!(
                         "{:?}: {}",
                         outcome,
@@ -476,6 +488,10 @@ async fn main() {
         .or_else(|| std::env::current_dir().ok())
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
     let emitter = Emitter::new(step_id);
+    // A store's migration rung can run for many minutes; whatever verb
+    // opened the store, the step's row says which rung and statement.
+    let rung_progress = emitter.progress();
+    datalib_store_meta::ladder::report_to(move |msg| rung_progress.set_message(msg));
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
     // SIGTERM (a process manager stopping a step run by hand, as
@@ -634,10 +650,10 @@ async fn run(
                 return migrate::run(&env, data_root, emitter).await;
             }
             if cli.compact {
-                return compact::run(&env, data_root, compact::Verb::Compact).await;
+                return compact::run(&env, data_root, compact::Verb::Compact, emitter).await;
             }
             if cli.collect {
-                return compact::run(&env, data_root, compact::Verb::Collect).await;
+                return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
             }
             run_function(
                 env,

@@ -37,6 +37,11 @@ ignore = [
     { id = "RUSTSEC-2026-0368", reason = "zip 8 extract writes symlinks outside the destination, via candle-core, which never calls extract" },
     { id = "RUSTSEC-2026-0369", reason = "zip 8 extract applies permissions through symlinks, via candle-core, which never calls extract" },
     { id = "RUSTSEC-2026-0429", reason = "zip 8 extract aborts on a symlink entry with a huge declared size, via candle-core, which never calls extract" },
+    # libsqlite3-sys 0.37 bundles SQLite before 3.54.0; sqlx 0.9 accepts
+    # nothing newer. We never compile that copy: the MODULE.bazel
+    # annotation links doltlite instead (//datalib/backend:doltlite_link_test),
+    # and doltlite 0.51.3 embeds SQLite 3.54.0, the fixed release.
+    { id = "RUSTSEC-2026-0459", reason = "bundled SQLite in libsqlite3-sys 0.37, via sqlx; we link doltlite (SQLite 3.54.0) instead" },
 ]
 
 [bans]

@@ -484,6 +484,8 @@ mod tests {
             .put_document(
                 dir,
                 &RenderedMarkdown {
+                    section_layout: None,
+                    content_hash: None,
                     markdown_uuid: md.to_string(),
                     source_id: "slack".into(),
                     upstream_cursor: None,

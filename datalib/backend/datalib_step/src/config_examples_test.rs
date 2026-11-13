@@ -1,8 +1,9 @@
 //! The checked-in example configs — `docs/user/config_examples/*.toml`,
-//! `configs/dag_example.toml`, and the TOML the agent config guide shows —
-//! have to load as the runner would and plan as
-//! this binary would, so the documentation cannot drift from the real
-//! schemas. Every `ingest` and `render_markdown` step's params go through
+//! `configs/dag_example.toml`, the docker image's demo, and the TOML the
+//! agent config guide shows — have to load as the runner would and plan
+//! as this binary would, so the documentation cannot drift from the real
+//! schemas, and be in the shape `datalib-http` leaves as written. Every
+//! `ingest` and `render_markdown` step's params go through
 //! `dispatch::plan`, the same parse a sync performs.
 
 use std::path::PathBuf;
@@ -15,6 +16,26 @@ fn example_config(repo_rel: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("rlocation for {rel}"));
     assert!(path.exists(), "example config missing in runfiles: {rel}");
     path
+}
+
+/// A config the repo ships or documents whole is in the current shape:
+/// one `datalib-http` would rewrite on sight is rewritten on every start
+/// of a copy of it, with a `config.toml.bak` left beside it each time.
+/// Not for a one-source stanza, which the app's upgrade would rightly
+/// complete (a time-series source's index) once it sits in a config.
+pub(crate) fn assert_current_shape(name: &str, path: &std::path::Path) {
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{name}: read: {e}"));
+    let upgrade = datalib_migrate_config::upgrade_unattended(&text);
+    assert!(
+        upgrade.done.is_empty() && upgrade.refused.is_empty(),
+        "{name}: datalib-http would rewrite this config on load: {:?}{:?}",
+        upgrade.done,
+        upgrade
+            .refused
+            .iter()
+            .map(|(why, e)| format!("{why}: {e:#}"))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// `name` is only used for panic messages.
@@ -49,7 +70,9 @@ fn example_configs_load_and_plan() {
         // The demo library the docker image bakes in.
         "datalib/docker/demo/config.toml",
     ] {
-        validate_config(name, &example_config(name));
+        let path = example_config(name);
+        validate_config(name, &path);
+        assert_current_shape(name, &path);
     }
 }
 
@@ -72,6 +95,7 @@ fn the_agent_config_guides_example_loads_and_plans() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, toml).expect("write the example");
     validate_config("agent_config_guide.md", &path);
+    assert_current_shape("agent_config_guide.md", &path);
     let check = datalib_dag::config::check_text(toml);
     assert!(
         !check

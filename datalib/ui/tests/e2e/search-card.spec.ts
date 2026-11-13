@@ -219,7 +219,8 @@ test("the list keeps what is loaded and picked when the index moves", async ({ p
   await viewTab(page, "List and preview").click();
   await expect(results(page)).toHaveCount(50, { timeout: 10_000 });
 
-  await shownCards(page).getByRole("button", { name: "Show more" }).click();
+  // Scrolling to the end of the list reads the next page.
+  await results(page).last().scrollIntoViewIfNeeded();
   await expect(results(page)).toHaveCount(100);
   await results(page).nth(70).click();
   const title = await pickedResult(page).locator(".sc-title").innerText();

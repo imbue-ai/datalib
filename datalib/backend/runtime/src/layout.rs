@@ -51,6 +51,11 @@ pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
 /// step. Every qmd step writes the one index under it, which qmd lays
 /// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
 pub const QMD_DIR: &str = "qmd_aggregator";
+/// The inference cache's directory, relative to
+/// [`UNIFIED_DOCUMENT_INDEX_DIR`]: every source's `embed` writes it, the
+/// aggregator sweeps it. The search index's tables are in the grid
+/// index's file.
+pub const SEARCH_INDEX_DIR: &str = "search_index";
 
 /// A download step's raw store, inside its tree: entity tables,
 /// per-provider CAS edge tables and the shared sync bookkeeping.
@@ -160,6 +165,23 @@ pub fn time_series_index_db(data_root: &Path) -> PathBuf {
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
     unified_document_index_dir(data_root).join(QMD_DIR)
+}
+
+/// Where the search index was a file of its own, before its tables moved
+/// into the grid index's file ([`grid_index_db`]). Deleted on sight: every
+/// row in it is made again from the render stores.
+pub fn retired_search_index_db(data_root: &Path) -> PathBuf {
+    unified_document_index_dir(data_root)
+        .join(SEARCH_INDEX_DIR)
+        .join("index.sqlite")
+}
+
+/// The inference cache: each chunk's vector, in a file of its own so it
+/// outlives the search index and the grid index it shares a file with.
+pub fn inference_cache_db(data_root: &Path) -> PathBuf {
+    unified_document_index_dir(data_root)
+        .join(SEARCH_INDEX_DIR)
+        .join("inference_cache.sqlite")
 }
 
 pub fn feedback_db(data_root: &Path) -> PathBuf {

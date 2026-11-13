@@ -14,6 +14,12 @@
 //! a stamp is right without parsing. [`IsoOffsetTimestamp::to_utc_and_offset`]
 //! and [`split_stamp`] are the two ways to get from one form to the other.
 //!
+//! **`Z` means the clock is unknown, `+00:00` that it was UTC** (RFC 9557
+//! §2, updating RFC 3339). A stamp we mint knows its clock and is written
+//! with an explicit offset; [`with_unknown_offset`] writes `Z` for an
+//! instant whose source named no clock (a Unix stamp), and
+//! [`written_offset_secs`] reads a source's `Z` as no clock.
+//!
 //! **A timestamp we cannot parse becomes a null, never a stand-in.** Every
 //! parse helper returns a `Result`, and callers are expected to let the
 //! failure become a `None`. An `unwrap_or(0)` on the way out of one of these
@@ -26,8 +32,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
+mod run_clock;
+mod spoken;
 mod window;
 mod zone;
+pub use run_clock::{closed_now, RunClock};
 pub use window::{widest_start, TimeBound, TimeWindow, WindowError};
 pub use zone::NamedZone;
 
@@ -51,6 +60,22 @@ impl IsoOffsetTimestamp {
         DateTime::<Utc>::from_timestamp_millis(ms).map(|dt| Self(dt.fixed_offset()))
     }
 
+    /// The instant `ms` on the clock the source wrote it in, `offset_secs`
+    /// east of UTC; UTC when the source named no offset (a Unix stamp).
+    /// `None` for an instant or an offset chrono cannot represent.
+    pub fn from_unix_millis_at(ms: i64, offset_secs: Option<i32>) -> Option<Self> {
+        let utc = Self::from_unix_millis(ms)?;
+        match offset_secs {
+            None => Some(utc),
+            Some(secs) => Some(Self(utc.0.with_timezone(&FixedOffset::east_opt(secs)?))),
+        }
+    }
+
+    /// The offset this stamp was written in, in seconds east of UTC.
+    pub fn offset_secs(&self) -> i32 {
+        self.0.offset().local_minus_utc()
+    }
+
     /// Bump this timestamp forward by `n` microseconds. The canonical
     /// recipe for synthesizing sub-item stamps when upstream gave the
     /// parent a time but didn't give one to each child (claude /
@@ -61,7 +86,7 @@ impl IsoOffsetTimestamp {
     }
 
     /// Render as RFC 3339 with auto-selected sub-second precision and
-    /// an explicit offset (never bare `Z`).
+    /// an explicit offset (never bare `Z`, which says the clock is unknown).
     pub fn to_rfc3339(&self) -> String {
         self.0.to_rfc3339_opts(SecondsFormat::AutoSi, false)
     }
@@ -287,8 +312,46 @@ pub fn record_stamp_from_unix_millis(
     ms: Option<i64>,
     precision: RecordStampPrecision,
 ) -> Option<String> {
+    record_stamp_on_clock(ms, None, precision)
+}
+
+/// [`record_stamp_from_unix_millis`] on the clock the source wrote the
+/// stamp in, `offset_secs` east of UTC, so the offset reaches the row.
+/// `None` is a source that names no clock at all (a Unix stamp): the
+/// instant in UTC with the local offset unknown, `Z` ([`UNKNOWN_OFFSET`]).
+pub fn record_stamp_from_unix_millis_at(
+    ms: Option<i64>,
+    offset_secs: Option<i32>,
+    precision: RecordStampPrecision,
+) -> Option<String> {
+    let stamp = record_stamp_on_clock(ms, offset_secs, precision)?;
+    Some(match offset_secs {
+        Some(_) => stamp,
+        None => with_unknown_offset(stamp),
+    })
+}
+
+/// An instant whose UTC is known and whose local offset is not, as RFC
+/// 9557 §2 spells it: `Z`, where `+00:00` says the clock really was UTC.
+/// (RFC 3339 wrote this `-00:00`, which ISO 8601 refuses; RFC 9557 asks
+/// for `Z` instead.) A viewer shows such an instant on its reader's clock.
+pub const UNKNOWN_OFFSET: &str = "Z";
+
+/// `…+00:00` as `…Z`: a UTC stamp marked as having no clock of its own.
+pub fn with_unknown_offset(utc: String) -> String {
+    match utc.strip_suffix("+00:00") {
+        Some(instant) => format!("{instant}{UNKNOWN_OFFSET}"),
+        None => utc,
+    }
+}
+
+fn record_stamp_on_clock(
+    ms: Option<i64>,
+    offset_secs: Option<i32>,
+    precision: RecordStampPrecision,
+) -> Option<String> {
     let ms = ms?;
-    match IsoOffsetTimestamp::from_unix_millis(ms) {
+    match IsoOffsetTimestamp::from_unix_millis_at(ms, offset_secs) {
         Some(t) => Some(match precision {
             RecordStampPrecision::Seconds => t.to_rfc3339_secs(),
             RecordStampPrecision::Millis => t.to_rfc3339_millis(),
@@ -426,6 +489,19 @@ pub fn record_stamp_ms(s: &str) -> Option<i64> {
     parse_strict(&utc).ok().map(|t| t.to_unix_millis())
 }
 
+/// The clock an RFC 3339 stamp was written on, in seconds east of UTC:
+/// `+01:00` is 3600 and `+00:00` is 0. `None` for a stamp in `Z`, which
+/// is a service stamping its own UTC rather than anyone's wall clock
+/// (Google Drive, Todoist, a JMAP `receivedAt`), and for anything that
+/// is not a stamp.
+pub fn written_offset_secs(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.ends_with(['Z', 'z']) {
+        return None;
+    }
+    parse_strict(s).ok().map(|t| t.offset_secs())
+}
+
 pub fn split_record_stamp(s: &str) -> Option<(String, String)> {
     if s.is_empty() {
         return None;
@@ -454,17 +530,25 @@ fn utc_micros(dt: DateTime<FixedOffset>) -> String {
         .to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
-/// Normalize a user-typed time bound (the value behind a `before:` / `after:`
-/// search filter) into the **same canonical UTC form** as the `created_at_utc`
-/// index column, so the two compare correctly as plain strings.
+/// Normalize a user-typed time bound (the value behind a `before:` /
+/// `after:` / `since:` search filter) into the **same canonical UTC form**
+/// as the `created_at_utc` index column, so the two compare correctly as
+/// plain strings.
 ///
-/// **A user-typed timestamp with no offset means local machine time**, since
+/// **A user-typed time with no offset means local machine time**, since
 /// people type wall-clock times in the zone they are sitting in. An explicit
 /// offset is honored as given. `None` when the input matches no accepted
-/// shape, so the caller drops the bound rather than comparing against
-/// garbage. During a spring-forward gap the wall-clock instant does not exist
+/// shape: an RFC 3339 instant, a day (`2026-01-15`, `2026/01/15`), a day and
+/// time with no zone, an offset from now (`-30d`, the grammar a source's
+/// window uses), or a day as a person writes one (`Tuesday, April 3, 2026`).
+/// During a spring-forward gap the wall-clock instant does not exist
 /// locally; we take the earlier candidate.
 pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
+    user_time_to_utc(s, Local::now())
+}
+
+/// [`normalize_user_time_to_utc`] with `now` given, for an offset from it.
+pub fn user_time_to_utc(s: &str, now: DateTime<Local>) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -473,22 +557,26 @@ pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(utc_micros(dt));
     }
-    // 2. Naive date-time → local wall-clock.
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+    // 2. An offset from now, as a source's `since` writes one.
+    if let Ok(window::TimeBound::Relative(span)) = window::TimeBound::parse(s) {
+        return Some(utc_micros((now + span).fixed_offset()));
+    }
+    // 3. Naive date-time → local wall-clock.
+    let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
-    {
-        let local = Local.from_local_datetime(&naive).earliest()?;
-        return Some(utc_micros(local.fixed_offset()));
-    }
-    // 3. Bare date → local midnight.
-    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let naive = date
-            .and_hms_opt(0, 0, 0)
-            .expect("00:00:00 is always a valid time-of-day");
-        let local = Local.from_local_datetime(&naive).earliest()?;
-        return Some(utc_micros(local.fixed_offset()));
-    }
-    None
+        .ok()
+        // 4. Bare date → local midnight; `2026/11/01` is how Gmail's search
+        // writes one, and people porting a Gmail query type it so.
+        .or_else(|| {
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .or_else(|_| NaiveDate::parse_from_str(s, "%Y/%m/%d"))
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+        })
+        // 5. A day as a person writes or pastes one.
+        .or_else(|| spoken::spoken(s))?;
+    let local = Local.from_local_datetime(&naive).earliest()?;
+    Some(utc_micros(local.fixed_offset()))
 }
 
 pub fn validate_iso_offset(s: &str) -> Result<(), TimestampParseError> {
@@ -652,6 +740,61 @@ mod tests {
             (suffix.starts_with('+') || suffix.starts_with('-')) && &suffix[3..4] == ":",
             "expected explicit offset suffix, got {s:?}"
         );
+    }
+
+    /// A message header built from epoch millis alone wrote every email
+    /// in UTC, though the email said `+01:00`.
+    #[test]
+    fn a_stamp_from_millis_keeps_the_offset_it_was_written_in() {
+        let written = parse_strict("2364-04-11T09:30:00+01:00").unwrap();
+        let back =
+            IsoOffsetTimestamp::from_unix_millis_at(written.to_unix_millis(), Some(3600)).unwrap();
+        assert_eq!(back.to_rfc3339_secs(), "2364-04-11T09:30:00+01:00");
+        assert_eq!(back.offset_secs(), 3600);
+        assert_eq!(
+            IsoOffsetTimestamp::from_unix_millis_at(written.to_unix_millis(), None)
+                .unwrap()
+                .to_rfc3339_secs(),
+            "2364-04-11T08:30:00+00:00"
+        );
+        assert_eq!(
+            record_stamp_from_unix_millis_at(
+                Some(written.to_unix_millis()),
+                Some(-7 * 3600),
+                RecordStampPrecision::Seconds
+            )
+            .as_deref(),
+            Some("2364-04-11T01:30:00-07:00")
+        );
+    }
+
+    #[test]
+    fn a_stamp_in_z_names_no_ones_clock() {
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00+01:00"), Some(3600));
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00+00:00"), Some(0));
+        assert_eq!(written_offset_secs("2364-04-11T08:30:00Z"), None);
+        assert_eq!(written_offset_secs("2364-04-11"), None);
+    }
+
+    /// A Unix stamp names no clock, and `+00:00` claimed UTC was its
+    /// sender's, so "as written" showed every such message in UTC.
+    #[test]
+    fn a_stamp_with_no_clock_says_its_offset_is_unknown() {
+        let ms = parse_strict("2364-04-11T08:30:00Z")
+            .unwrap()
+            .to_unix_millis();
+        let stamp = record_stamp_from_unix_millis_at(Some(ms), None, RecordStampPrecision::Seconds)
+            .unwrap();
+        assert_eq!(stamp, "2364-04-11T08:30:00Z");
+        // Every reader of a stored stamp still takes it as that instant.
+        assert_eq!(parse_strict(&stamp).unwrap().to_unix_millis(), ms);
+        assert_eq!(record_stamp_ms(&stamp), Some(ms));
+        assert!(validate_iso_offset(&stamp).is_ok());
+        assert_eq!(
+            record_stamp_from_unix_millis(Some(ms), RecordStampPrecision::Seconds).as_deref(),
+            Some("2364-04-11T08:30:00+00:00")
+        );
+        assert!(IsoOffsetTimestamp::from_unix_millis_at(0, Some(86_400)).is_none());
     }
 
     #[test]
@@ -882,6 +1025,48 @@ mod tests {
             normalize_user_time_to_utc("2026-01-15").as_deref(),
             Some(expect_local(2026, 1, 15, 0, 0).as_str())
         );
+        // Gmail's spelling of a day, which a filter typed from a Gmail
+        // query uses; it read as no date and the filter was dropped.
+        assert_eq!(
+            normalize_user_time_to_utc("2026/01/15").as_deref(),
+            Some(expect_local(2026, 1, 15, 0, 0).as_str())
+        );
+    }
+
+    /// `since:-30d` in a search: the offset grammar a source's window uses,
+    /// from the moment of the search.
+    #[test]
+    fn user_time_reads_an_offset_from_now() {
+        let now = Local.with_ymd_and_hms(2026, 11, 9, 12, 0, 0).unwrap();
+        let back = |d: i64| utc_micros((now - chrono::Duration::days(d)).fixed_offset());
+        assert_eq!(user_time_to_utc("-30d", now), Some(back(30)));
+        assert_eq!(user_time_to_utc("-2w", now), Some(back(14)));
+        assert_eq!(
+            user_time_to_utc("-12h", now),
+            Some(utc_micros(
+                (now - chrono::Duration::hours(12)).fixed_offset()
+            ))
+        );
+        assert_eq!(user_time_to_utc("30d", now), None, "the sign is required");
+    }
+
+    /// A date pasted from a page or typed in words, quoted in the query.
+    #[test]
+    fn user_time_reads_a_day_in_words_as_local() {
+        let now = Local::now();
+        let midnight = utc_micros(
+            Local
+                .with_ymd_and_hms(2029, 4, 3, 0, 0, 0)
+                .earliest()
+                .unwrap()
+                .fixed_offset(),
+        );
+        assert_eq!(
+            user_time_to_utc("Tuesday, April 3, 2029", now),
+            Some(midnight.clone())
+        );
+        assert_eq!(user_time_to_utc("Tue Apr 3rd, 2029", now), Some(midnight));
+        assert_eq!(user_time_to_utc("Monday, April 3, 2029", now), None);
     }
 
     #[test]

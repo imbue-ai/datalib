@@ -14,8 +14,8 @@ describe("what a cell copies as", () => {
 
   it("copies a resolved value as its label", () => {
     expect(copyText("identity", { id: "g1", label: "Slack", icon: "slack" })).toBe("Slack");
-    expect(copyText("markdown_uuid", { id: "u1", label: "Standup notes" })).toBe("Standup notes");
-    expect(copyText("markdown_uuid", "u1")).toBe("u1");
+    const doc = { id: "u1", label: "Standup notes", entity: "datalib:doc/u1" };
+    expect(copyText("identity", doc)).toBe("Standup notes");
   });
 
   it("copies chips and a series as the words they show", () => {

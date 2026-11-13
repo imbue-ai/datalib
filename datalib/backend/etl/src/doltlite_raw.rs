@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+pub use datalib_store_meta::ladder::{run_statements, Statement};
 use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
@@ -1016,7 +1017,13 @@ async fn open_inner(
                 .execute(&pool)
                 .await
                 .context("create _datalib_meta before migrating")?;
-            datalib_store_meta::ladder::apply(&pool, rung, which).await?;
+            let climb = datalib_store_meta::ladder::Climb {
+                ladder: which,
+                from: stored,
+                top,
+                store_bytes: std::fs::metadata(db_path).ok().map(|m| m.len()),
+            };
+            datalib_store_meta::ladder::apply(&pool, rung, &climb).await?;
             let label = match which {
                 Ladder::Shared => "migrate shared",
                 Ladder::Own => "migrate",
@@ -2735,8 +2742,8 @@ pub async fn merge_volatile_payloads_in_tx(
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
     /// The buckets to load and render. `None` → every bucket: no cursor,
-    /// a cursor this store cannot resolve, a `global_fanout_tables` row
-    /// changed, or no doltlite extension.
+    /// a cursor this store cannot resolve, the `fanout_query` found a
+    /// change, or no doltlite extension.
     pub render: Option<std::collections::HashSet<String>>,
     /// The buckets the diff named as added, modified or removed since
     /// the cursor — the ones to probe for removal. `None` only when there
@@ -2751,11 +2758,12 @@ pub struct DiffScan {
 
 /// Spec for [`scan_buckets`].
 pub struct DiffScanSpec<'a> {
-    /// Bare entity-table names whose changes mean "render every bucket" —
-    /// typically tables that appear in every rendered doc's header
-    /// (`workspaces`, `users`, `channels`, `me`, …). Any non-`unchanged` row
-    /// in one of these short-circuits the scan.
-    pub global_fanout_tables: &'a [&'a str],
+    /// SQL that returns a row when the range changed something every
+    /// bucket depends on, so every bucket renders; refs bound as in
+    /// `bucket_query`. Name the columns that matter rather than a whole
+    /// table: a row that changed only in a key nothing reads would
+    /// otherwise re-render the whole source.
+    pub fanout_query: Option<&'a str>,
     /// SQL projecting bucket keys for changed rows, with `last_render_hash`
     /// bound at parameter index 1, the commit being scanned to at index 2,
     /// and the bucket key in column 0.
@@ -2773,8 +2781,8 @@ pub struct DiffScanSpec<'a> {
     pub bucket_query: &'a str,
 }
 
-/// Look up HEAD, short-circuit if any [`DiffScanSpec::global_fanout_tables`]
-/// changed, then project the per-bucket changed set.
+/// Look up HEAD, short-circuit if [`DiffScanSpec::fanout_query`] finds a
+/// change, then project the per-bucket changed set.
 ///
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
@@ -2799,26 +2807,6 @@ pub async fn scan_buckets(
             scan_elapsed: None,
         });
     };
-
-    let mut fanout_changed = false;
-    for table in spec.global_fanout_tables {
-        let sql = format!(
-            "SELECT 1 FROM dolt_diff_{table} \
-              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1"
-        );
-        // Audited: `table` comes from a static list; both refs are bound.
-        let any: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-            .bind(from_ref)
-            .bind(&to_ref)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-        if any.is_some() {
-            fanout_changed = true;
-            break;
-        }
-    }
 
     let started = std::time::Instant::now();
     // Audited: `bucket_query` is a fixed projection from provider source;
@@ -2871,6 +2859,21 @@ pub async fn scan_buckets(
             });
         }
     };
+    // After the bucket query, which has already cold-started on a cursor
+    // this store cannot resolve: an error here is a broken query.
+    let fanout_changed = match spec.fanout_query {
+        None => false,
+        // Audited: `fanout_query` is a fixed query from provider source;
+        // both refs are bound.
+        Some(sql) => sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+            .bind(from_ref)
+            .bind(&to_ref)
+            .fetch_optional(pool)
+            .await
+            .context("the fan-out query")?
+            .is_some(),
+    };
+
     use sqlx::Row;
     let set: std::collections::HashSet<String> =
         rows.iter().map(|r| r.get::<String, _>(0)).collect();
@@ -2987,6 +2990,131 @@ pub async fn changed_keys(
         .collect()
 }
 
+/// Whether `table` held a row at `from` and holds none at `to`: every
+/// row it had left. Two one-row reads whatever the table's size, where
+/// [`changed_keys`] would read every row that left.
+pub async fn emptied_between(
+    pool: &SqlitePool,
+    table: &str,
+    from: &crate::pin::Pin,
+    to: &crate::pin::Pin,
+) -> Result<bool> {
+    let holds_a_row = |pin: &crate::pin::Pin| {
+        // Audited: `Pin::table` quotes the module name and checked the hash.
+        sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS (SELECT 1 FROM {})",
+            pin.table(table)
+        )))
+    };
+    let held = holds_a_row(from)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("does {table} hold a row at {}", from.commit()))?;
+    if !held {
+        return Ok(false);
+    }
+    let holds = holds_a_row(to)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("does {table} hold a row at {}", to.commit()))?;
+    Ok(!holds)
+}
+
+/// Asks whether a table held a row, by the key [`changed_keys`] names it
+/// with, at one commit: a primary-key equality, which `dolt_at_<table>`
+/// seeks rather than scans.
+pub struct KeyLookup<'p> {
+    pool: &'p SqlitePool,
+    columns: Vec<KeyColumn>,
+    sql: String,
+}
+
+/// How a key column compares with a bound value. SQLite converts a text
+/// value compared with a column of INTEGER, REAL or NUMERIC affinity, so
+/// `'007'` would find row 7; a REAL or NUMERIC key is not looked up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyColumn {
+    /// Bound as the integer its text renders, and only text that is
+    /// how `CAST(n AS TEXT)` renders one.
+    Integer,
+    /// TEXT or BLOB affinity: bound as text, compared exactly.
+    Exact,
+}
+
+impl KeyColumn {
+    /// SQLite's affinity rules, in their order, from the declared type.
+    fn of(declared: &str) -> Option<Self> {
+        let ty = declared.to_ascii_uppercase();
+        if ty.contains("INT") {
+            Some(Self::Integer)
+        } else if ["CHAR", "CLOB", "TEXT"].iter().any(|t| ty.contains(t))
+            || ty.is_empty()
+            || ty.contains("BLOB")
+        {
+            Some(Self::Exact)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'p> KeyLookup<'p> {
+    pub async fn new(pool: &'p SqlitePool, table: &str, at: &crate::pin::Pin) -> Result<Self> {
+        let declared: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, type FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(pool)
+                .await
+                .with_context(|| format!("pragma_table_info({table})"))?;
+        if declared.is_empty() {
+            bail!("{table} has no primary key to look a row up by");
+        }
+        let mut columns = Vec::new();
+        let mut equal = Vec::new();
+        for (i, (name, ty)) in declared.iter().enumerate() {
+            let Some(column) = KeyColumn::of(ty) else {
+                bail!("{table}.{name} is {ty}, which a text key cannot be looked up in exactly");
+            };
+            columns.push(column);
+            equal.push(format!("{} = ?{}", quote_ident(name), i + 1));
+        }
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM {} WHERE {})",
+            at.table(table),
+            equal.join(" AND ")
+        );
+        Ok(Self { pool, columns, sql })
+    }
+
+    /// The first of `keys` the table held. A key that does not split
+    /// into the key's columns, or names an integer the way `CAST` never
+    /// renders one, is not found: a `Some` is always a row that held.
+    pub async fn first_held(&self, keys: &[String]) -> Result<Option<String>> {
+        'keys: for key in keys {
+            let parts: Vec<&str> = key.split('|').collect();
+            if parts.len() != self.columns.len() {
+                continue;
+            }
+            // Audited: every name is quoted and the hash checked by
+            // `Pin::table`; each key part is bound.
+            let mut q = sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(self.sql.clone()));
+            for (part, column) in parts.iter().zip(&self.columns) {
+                q = match column {
+                    KeyColumn::Exact => q.bind(*part),
+                    KeyColumn::Integer => match part.parse::<i64>() {
+                        Ok(n) if n.to_string() == *part => q.bind(n),
+                        _ => continue 'keys,
+                    },
+                };
+            }
+            if q.fetch_one(self.pool).await.context("look a key up")? {
+                return Ok(Some(key.clone()));
+            }
+        }
+        Ok(None)
+    }
+}
+
 pub async fn record_object_error(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -3100,6 +3228,7 @@ pub async fn upsert_scope_state<'e>(
 mod tests {
 
     use super::*;
+    use crate::pin::Pin;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -4312,6 +4441,77 @@ mod tests {
         pool.close().await;
     }
 
+    /// A reset store's tables read as emptied, and the keys `changed_keys`
+    /// named their rows by are found at the commit before — an integer
+    /// key and a composite one included, which a lookup by the key's
+    /// text alone would miss.
+    #[tokio::test]
+    async fn an_emptied_table_finds_the_keys_it_held() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        let pool = open(
+            &p,
+            &[
+                "CREATE TABLE IF NOT EXISTS ints (n INTEGER PRIMARY KEY, v TEXT)",
+                "CREATE TABLE IF NOT EXISTS pairs (a TEXT, b INTEGER, v TEXT, PRIMARY KEY (a, b))",
+                "CREATE TABLE IF NOT EXISTS kept (id TEXT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS never (id TEXT PRIMARY KEY)",
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            has_dolt_extensions(&pool).await,
+            "this build links doltlite"
+        );
+        for sql in [
+            "INSERT INTO ints (n, v) VALUES (7, 'x'), (12, 'y')",
+            "INSERT INTO pairs (a, b, v) VALUES ('p', 3, 'x')",
+            "INSERT INTO kept (id) VALUES ('k')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let from = Pin::at(commit_run(&pool, "rows").await.unwrap().unwrap()).unwrap();
+        for sql in ["DELETE FROM ints", "DELETE FROM pairs"] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let to = Pin::at(commit_run(&pool, "emptied").await.unwrap().unwrap()).unwrap();
+
+        for (table, emptied) in [
+            ("ints", true),
+            ("pairs", true),
+            ("kept", false),
+            ("never", false),
+        ] {
+            assert_eq!(
+                emptied_between(&pool, table, &from, &to).await.unwrap(),
+                emptied,
+                "{table}"
+            );
+        }
+        for (table, missing) in [("ints", ["8", "007"]), ("pairs", ["p|4", "p"])] {
+            let held: Vec<String> = changed_keys(&pool, table, from.commit(), to.commit())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|k| k.key)
+                .collect();
+            assert!(!held.is_empty(), "{table}");
+            let lookup = KeyLookup::new(&pool, table, &from).await.unwrap();
+            let mut keys: Vec<String> = missing.iter().map(|k| k.to_string()).collect();
+            assert_eq!(lookup.first_held(&keys).await.unwrap(), None, "{table}");
+            keys.extend(held.iter().cloned());
+            assert_eq!(
+                lookup.first_held(&keys).await.unwrap().as_ref(),
+                held.first(),
+                "{table}"
+            );
+            let at_the_pin = KeyLookup::new(&pool, table, &to).await.unwrap();
+            assert_eq!(at_the_pin.first_held(&held).await.unwrap(), None);
+        }
+        pool.close().await;
+    }
+
     async fn count(pool: &SqlitePool, table: &str) -> i64 {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) FROM \"{table}\""
@@ -5256,7 +5456,10 @@ mod tests {
             .unwrap();
         let pin = crate::pin::Pin::at(&second).unwrap();
         let spec = DiffScanSpec {
-            global_fanout_tables: &["users"],
+            fanout_query: Some(
+                "SELECT 1 FROM dolt_diff_users \
+                  WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1",
+            ),
             bucket_query: "SELECT DISTINCT coalesce(to_bucket, from_bucket) FROM dolt_diff_notes \
                            WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
         };
@@ -5300,7 +5503,7 @@ mod tests {
         let pin = crate::pin::Pin::at(&commit).unwrap();
 
         let good = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_bucket IS NOT NULL",
         };
         // A cursor this store never had: a reset, a rebuild, a replaced store.
@@ -5314,7 +5517,7 @@ mod tests {
         );
 
         let broken = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
         };
         let err = scan_buckets(&pool, Some(&commit), &pin, &broken)

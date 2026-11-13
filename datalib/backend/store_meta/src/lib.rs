@@ -53,6 +53,12 @@ pub enum StoreKind {
     TimeSeriesIndex,
     /// The grid index (`unified_document_index/grid_index`).
     GridIndex,
+    /// Every source's keyword index and embeddings, keyed by document,
+    /// holding no text (`unified_document_index/search_index`). Plain SQLite.
+    SearchIndex,
+    /// Each chunk's vector under the model that made it and the hash of
+    /// its prompt (`unified_document_index/search_index`). Plain SQLite.
+    InferenceCache,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.
@@ -67,6 +73,9 @@ pub enum StoreKind {
     /// `datalib_curated/datalib_contacts/contacts.doltlite_db`: contacts a person
     /// made and the handles they linked to them.
     Contacts,
+    /// `datalib_curated/datalib_problem_mutes/mutes.doltlite_db`: the
+    /// problem rows a person muted.
+    ProblemMutes,
 }
 
 impl StoreKind {
@@ -234,6 +243,68 @@ async fn table_exists(pool: &SqlitePool) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// The shape a store records, read inside a caller's transaction: an owner
+/// that rebuilds a store in another shape checks again under its write
+/// lock, so two openers do not both rebuild it. `None` when nothing is
+/// recorded, and creates the table if it is missing.
+pub async fn schema_hash_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<String>> {
+    sqlx::query(DDL)
+        .execute(&mut *conn)
+        .await
+        .context("create _datalib_meta")?;
+    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
+        .bind(Key::SchemaHash.as_str())
+        .fetch_optional(conn)
+        .await
+        .context("read _datalib_meta.schema_hash")
+}
+
+/// A store that shares another's file keeps its shape in that file's
+/// `_datalib_meta` under a key of its own, so each owner empties only its
+/// own tables when its shape moves: the search index in the grid index's
+/// file. Read inside the caller's transaction, as [`schema_hash_in`].
+pub async fn part_schema_hash_in(
+    conn: &mut sqlx::SqliteConnection,
+    part: StoreKind,
+) -> Result<Option<String>> {
+    sqlx::query(DDL)
+        .execute(&mut *conn)
+        .await
+        .context("create _datalib_meta")?;
+    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
+        .bind(part_key(part))
+        .fetch_optional(conn)
+        .await
+        .with_context(|| format!("read _datalib_meta.{}", part_key(part)))
+}
+
+/// Records `part`'s shape, inside the caller's transaction.
+pub async fn write_part_schema_hash(
+    conn: &mut sqlx::SqliteConnection,
+    part: StoreKind,
+    schema_hash: &str,
+) -> Result<()> {
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    sqlx::query(
+        "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
+         written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset \
+         WHERE value <> excluded.value",
+    )
+    .bind(part_key(part))
+    .bind(schema_hash)
+    .bind(&now)
+    .bind(&tz_offset)
+    .execute(conn)
+    .await
+    .with_context(|| format!("write _datalib_meta.{}", part_key(part)))?;
+    Ok(())
+}
+
+fn part_key(part: StoreKind) -> String {
+    format!("{}_{}", part.as_str(), Key::SchemaHash.as_str())
+}
+
 /// key → (value, written_at_utc).
 async fn rows(pool: &SqlitePool) -> Result<std::collections::BTreeMap<String, (String, String)>> {
     let rows = sqlx::query("SELECT key, value, written_at_utc FROM _datalib_meta")
@@ -303,6 +374,38 @@ mod tests {
         assert_ne!(a, reordered);
         assert_ne!(a, widened);
         assert_eq!(a.len(), 64);
+    }
+
+    /// A part sharing a file records its shape under its own key and
+    /// leaves the owner's shape and kind alone.
+    #[tokio::test]
+    async fn a_part_keeps_its_shape_apart_from_the_owners() {
+        let td = tempfile::tempdir().unwrap();
+        let p = pool(&td.path().join("s.db")).await;
+        let owner = schema_hash(["CREATE TABLE grid (x INT)"]);
+        write(&p, StoreKind::GridIndex, &owner, Versions::default())
+            .await
+            .unwrap();
+        let mut conn = p.acquire().await.unwrap();
+        let part = StoreKind::SearchIndex;
+        assert_eq!(part_schema_hash_in(&mut conn, part).await.unwrap(), None);
+        write_part_schema_hash(&mut conn, part, "one")
+            .await
+            .unwrap();
+        write_part_schema_hash(&mut conn, part, "two")
+            .await
+            .unwrap();
+        assert_eq!(
+            part_schema_hash_in(&mut conn, part)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("two")
+        );
+        drop(conn);
+        let meta = read(&p).await.unwrap().unwrap();
+        assert_eq!(meta.schema_hash, owner);
+        assert_eq!(meta.store_kind, Some(StoreKind::GridIndex));
     }
 
     /// A store with no table reads as `None`, not as an error: every

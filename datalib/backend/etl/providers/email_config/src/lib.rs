@@ -83,7 +83,7 @@ pub struct EmailConfig {
     /// signs in as.
     #[serde(default)]
     pub mbox: Option<MboxSync>,
-    /// One account of the Mail app on this Mac, read from its folder. A
+    /// The accounts of the Mail app on this Mac, read from its folder. A
     /// mode of its own: excludes `jmap`, `gmail` and `mbox`.
     #[serde(default)]
     pub apple_mail: Option<AppleMailSync>,
@@ -189,6 +189,9 @@ impl EmailConfig {
                 "email source sets `apple_mail` beside another download mode — pick one. \
                  To mirror the same account two ways, declare two sources."
             );
+        }
+        if let Some(apple_mail) = &self.apple_mail {
+            apple_mail.validate()?;
         }
         match (&live, &self.mbox) {
             (Some(EmailLiveMode::Jmap(_)), Some(_)) => anyhow::bail!(
@@ -344,8 +347,8 @@ impl MboxSync {
     }
 }
 
-/// The Apple Mail download path: Mail's folder and which of its accounts
-/// to mirror, plus the account row to file it under.
+/// The Apple Mail download path: Mail's folder, and every account in it or
+/// the one `account` names, with that one's account row.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AppleMailSync {
@@ -353,28 +356,56 @@ pub struct AppleMailSync {
     /// `V10` folder inside it, works too.
     #[serde(default)]
     pub path: Option<PathBuf>,
-    /// Which of Mail's accounts to mirror, by Mail's id for it: the name of
-    /// its folder under `~/Library/Mail/V10`. Needed only when Mail holds
-    /// mail for more than one account; a sync that needs it lists them.
+    /// Copy only this one of Mail's accounts, named by Mail's id for it:
+    /// the name of its folder under `~/Library/Mail/V10`. Unset copies
+    /// every account that holds mail, each under its own account id.
     #[serde(default)]
     pub account: Option<String>,
-    /// Id of the account the mail is filed under. Defaults to
-    /// `apple_mail_` and the start of Mail's id for it.
+    /// Id of the account the mail is filed under; only beside `account`.
+    /// Defaults to `apple_mail_` and the start of Mail's id for it.
     #[serde(default)]
     pub account_id: Option<String>,
-    /// The account's display name. Defaults to `account_id`.
+    /// The account's display name; only beside `account`. Defaults to
+    /// `account_id`.
     #[serde(default)]
     pub display_name: Option<String>,
-    /// The account's email address. Unset by default.
+    /// The account's email address; only beside `account`. Unset by
+    /// default.
     #[serde(default)]
     pub email_address: Option<String>,
-    /// Whether this is a personal (rather than work) account. Defaults to
-    /// true.
+    /// Whether this is a personal (rather than work) account; only beside
+    /// `account`. Defaults to true.
     #[serde(default)]
     pub is_personal: Option<bool>,
 }
 
 impl AppleMailSync {
+    /// The account row's settings describe one account, so without
+    /// `account` naming it they would describe every account at once.
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.account.is_some() {
+            return Ok(());
+        }
+        let set: Vec<&str> = [
+            ("account_id", self.account_id.is_some()),
+            ("display_name", self.display_name.is_some()),
+            ("email_address", self.email_address.is_some()),
+            ("is_personal", self.is_personal.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key, is_set)| is_set.then_some(key))
+        .collect();
+        if set.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "email `apple_mail.{}` names one account's row, and without `apple_mail.account` \
+             this source copies every account in Mail. Set `account` to the account's folder \
+             under ~/Library/Mail/V10, or remove it.",
+            set.join("`, `apple_mail.")
+        )
+    }
+
     pub fn path(&self) -> PathBuf {
         expand_tilde(
             self.path
@@ -678,6 +709,22 @@ mod tests {
             let err = c.validate().unwrap_err().to_string();
             assert!(err.contains("apple_mail"), "{err}");
         }
+    }
+
+    /// An account row's name describes one account, so it needs `account`.
+    #[test]
+    fn apple_mail_account_row_settings_need_an_account() {
+        let parse = |v: serde_json::Value| -> EmailConfig { serde_json::from_value(v).unwrap() };
+        let err = parse(serde_json::json!({"apple_mail": {"display_name": "Mail"}}))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("apple_mail.display_name"), "{err}");
+        parse(serde_json::json!({
+            "apple_mail": {"account": "1F0B8A52-0000-4000-8000-00000000E1D0", "display_name": "Mail"}
+        }))
+        .validate()
+        .unwrap();
     }
 
     #[test]

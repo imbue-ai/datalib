@@ -23,8 +23,9 @@ use super::{calendly, google, ics, ids};
 /// "this and following" edit moved them to a new UID; 7 when "Added" and
 /// "Last changed" became `<time>` stamps; 8 when an organizer or guest
 /// with an address became a chip; 9 when an event's row was placed at its
-/// start rather than its last edit.
-pub const RENDER_VERSION: u32 = 9;
+/// start rather than its last edit; 10 when a Windows zone name or a
+/// `GMT-0700` `TZID` began to resolve.
+pub const RENDER_VERSION: u32 = 10;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

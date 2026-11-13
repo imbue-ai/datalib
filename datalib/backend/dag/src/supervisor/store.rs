@@ -17,6 +17,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
+use super::pass::{PassRow, PassState};
+use crate::step::StoreBytes;
+
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
 const SCHEMA_VERSION: u32 = 5;
@@ -31,7 +34,7 @@ const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
     ("steps", "paused_by", "turned_off_by"),
 ];
 
-const DDL: [&str; 4] = [
+const DDL: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS requests (
         id TEXT PRIMARY KEY,
         roots TEXT NOT NULL,
@@ -69,6 +72,19 @@ const DDL: [&str; 4] = [
         tz_offset TEXT NOT NULL,
         closed_at_utc TEXT,
         error TEXT
+    )",
+    // How a compaction or a collection stands with each step it asks, in
+    // the order it asks them: what the app's pill counts. `state` is a
+    // `PassState` word.
+    "CREATE TABLE IF NOT EXISTS wipe_steps (
+        wipe_id TEXT NOT NULL,
+        ord INTEGER NOT NULL,
+        step TEXT NOT NULL,
+        state TEXT NOT NULL,
+        error TEXT,
+        before_bytes INTEGER,
+        after_bytes INTEGER,
+        PRIMARY KEY (wipe_id, ord)
     )",
 ];
 
@@ -647,6 +663,109 @@ impl Store {
         .await?;
         row.as_ref().map(wipe_of).transpose()
     }
+}
+
+impl Store {
+    /// The loop's to call, before it asks the first step: every step the
+    /// wipe asks, waiting.
+    pub async fn begin_wipe_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM wipe_steps WHERE wipe_id = ?")
+            .bind(wipe)
+            .execute(&mut *tx)
+            .await?;
+        for (ord, step) in steps.iter().enumerate() {
+            sqlx::query("INSERT INTO wipe_steps (wipe_id, ord, step, state) VALUES (?, ?, ?, ?)")
+                .bind(wipe)
+                .bind(ord as i64)
+                .bind(step)
+                .bind(PassState::Waiting.as_str())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        Ok(())
+    }
+
+    /// The loop's to call, as each step it asked moves.
+    pub async fn set_wipe_step(
+        &self,
+        wipe: &str,
+        ord: usize,
+        state: PassState,
+        error: Option<&str>,
+        bytes: Option<StoreBytes>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE wipe_steps SET state = ?, error = ?, before_bytes = ?, after_bytes = ? \
+             WHERE wipe_id = ? AND ord = ?",
+        )
+        .bind(state.as_str())
+        .bind(error)
+        .bind(bytes.map(|b| b.before as i64))
+        .bind(bytes.map(|b| b.after as i64))
+        .bind(wipe)
+        .bind(ord as i64)
+        .execute(&self.pool)
+        .await?;
+        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        Ok(())
+    }
+
+    /// In the order the wipe asks them. A state this build does not know
+    /// reads as waiting.
+    pub async fn wipe_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
+        let rows = sqlx::query(
+            "SELECT step, state, error, before_bytes, after_bytes FROM wipe_steps \
+             WHERE wipe_id = ? ORDER BY ord",
+        )
+        .bind(wipe)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let state: String = r.try_get("state")?;
+                let before: Option<i64> = r.try_get("before_bytes")?;
+                let after: Option<i64> = r.try_get("after_bytes")?;
+                Ok(PassRow {
+                    step: r.try_get("step")?,
+                    state: PassState::parse(&state).unwrap_or(PassState::Waiting),
+                    error: r.try_get("error")?,
+                    store_bytes: before.zip(after).map(|(b, a)| StoreBytes {
+                        before: b as u64,
+                        after: a as u64,
+                    }),
+                })
+            })
+            .collect()
+    }
+
+    /// The newest compaction or collection opened at or after
+    /// `since_utc`, open or closed.
+    pub async fn latest_shrink_since(&self, since_utc: &str) -> Result<Option<WipeRow>> {
+        let row = sqlx::query(
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes \
+             WHERE kind IN (?, ?) AND opened_at_utc >= ? \
+             ORDER BY opened_at_utc DESC, id DESC LIMIT 1",
+        )
+        .bind(WipeKind::Compact.as_str())
+        .bind(WipeKind::Collect.as_str())
+        .bind(since_utc)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(wipe_of).transpose()
+    }
+}
+
+/// What the store announces when a wipe's steps move, ahead of the wipe's
+/// id: how a listener tells progress from the rest of the record.
+pub const WIPE_MOVED: &str = "wipe moved";
+
+/// The clock the store stamps with, as UTC text: what
+/// [`Store::latest_shrink_since`] compares against.
+pub fn now_utc() -> String {
+    now_split().0
 }
 
 fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<WipeRow> {

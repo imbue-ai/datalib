@@ -57,7 +57,9 @@ use serde_json::Value;
 ///     conversation repeats the original's message ids.
 /// v14: an answer's author is its model's chip (`ai_model:` handle).
 /// v15: the account's address is tied to "Me", so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: an HTML tag in a message shows as typed.
+/// v17: a message is markdown as written again, HTML included.
+pub const RENDER_VERSION: u32 = 17;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -221,6 +223,7 @@ fn build_chat(
             author_kind,
             author_display,
             date_ms: ms,
+            date_offset_secs: None,
             text: body,
             kind,
             attachments,

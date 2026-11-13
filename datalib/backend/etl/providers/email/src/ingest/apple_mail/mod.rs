@@ -1,6 +1,6 @@
-//! Apple Mail: one account of the Mail app on this Mac, read from
-//! `~/Library/Mail` into the shared email raw store as if it had come off
-//! a JMAP server. Mail's Envelope Index says which messages the account
+//! Apple Mail: the accounts of the Mail app on this Mac, read from
+//! `~/Library/Mail` into the shared email raw store as if they had come off
+//! a JMAP server. Mail's Envelope Index says which messages each account
 //! has, where each is filed and its flags; each message's bytes are its
 //! `.emlx` file, with any attachments Mail keeps beside a `.partial.emlx`
 //! put back. How Mail's folder is laid out:
@@ -43,9 +43,9 @@ const PROGRESS_EVERY: usize = 250;
 /// The source's `apple_mail` block, as the download needs it.
 #[derive(Debug, Clone, Default)]
 pub struct AppleMailAccountConfig {
-    /// Mail's id for the account; with none, the one account holding mail.
+    /// Mail's id for the one account to copy; with none, every account
+    /// holding mail. The fields below name that one account's row.
     pub account: Option<String>,
-    /// The account every email is filed under in the store.
     pub account_id: Option<String>,
     pub display_name: Option<String>,
     pub email_address: Option<String>,
@@ -85,7 +85,7 @@ pub struct FetchSummary {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
-    run_problems::collecting(&pool, &stop, |found| read_account(opts, found)).await
+    run_problems::collecting(&pool, &stop, |found| read_accounts(opts, found)).await
 }
 
 /// The folder Mail keeps its version's data in: the one holding
@@ -266,6 +266,16 @@ async fn held_emails(db: &RawDb, account_id: &str) -> Result<HashMap<String, Hel
         .collect())
 }
 
+/// One account this sync copies: its id in the store, and what the store
+/// should hold of it.
+struct Copy {
+    account_id: String,
+    plan: plan::Plan,
+}
+
+/// Thread → its emails, as `(received, email id)`.
+type Threads = BTreeMap<String, Vec<(String, String)>>;
+
 fn default_account_id(uuid: &str) -> String {
     let short: String = uuid
         .chars()
@@ -275,26 +285,39 @@ fn default_account_id(uuid: &str) -> String {
     format!("apple_mail_{}", short.to_ascii_lowercase())
 }
 
-async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
+async fn read_accounts(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
     let root = version_dir(&opts.path)?;
     let rows = index::read(&index_path(&root)).await?;
     let accounts = plan::accounts(&rows);
-    let account = plan::choose_account(&accounts, opts.account.account.as_deref())?;
-    let account_id = opts
-        .account
-        .account_id
-        .clone()
-        .unwrap_or_else(|| default_account_id(&account.uuid));
-    let plan = plan::plan(
-        &rows,
-        &account.uuid,
-        &account_id,
-        &opts.only_labels,
-        opts.whole_threads,
-    );
+    let chosen = plan::choose_accounts(&accounts, opts.account.account.as_deref())?;
+    // The account row's settings name one account, so they come only
+    // beside `account` (the config refuses them otherwise).
+    let copies: Vec<Copy> = chosen
+        .iter()
+        .map(|a| {
+            let account_id = opts
+                .account
+                .account_id
+                .clone()
+                .filter(|_| opts.account.account.is_some())
+                .unwrap_or_else(|| default_account_id(&a.uuid));
+            let plan = plan::plan(
+                &rows,
+                &a.uuid,
+                &account_id,
+                &opts.only_labels,
+                opts.whole_threads,
+            );
+            Copy { account_id, plan }
+        })
+        .collect();
     drop(rows);
-    found.config(unmatched_labels(&opts.only_labels, &plan.names));
+    let names: BTreeSet<String> = copies
+        .iter()
+        .flat_map(|c| c.plan.names.iter().cloned())
+        .collect();
+    found.config(unmatched_labels(&opts.only_labels, &names));
 
     let scan_opts = ScanOptions {
         ignore: vec!["/MailData/".to_string()],
@@ -309,9 +332,9 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     listing.report_problems(&found, "Apple Mail");
     let files = Files::from_listing(&listing.files);
 
-    let planned_rowids: HashSet<i64> = plan
-        .emails
+    let planned_rowids: HashSet<i64> = copies
         .iter()
+        .flat_map(|c| c.plan.emails.iter())
         .flat_map(|e| e.rowids.iter().copied())
         .collect();
     let prev = file_checkpoint::load_cursor(db.pool(), SCOPE).await?;
@@ -325,15 +348,21 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let may_have_changed: HashSet<&str> =
         changes.to_read().iter().map(|f| f.rel.as_str()).collect();
 
-    let held = held_emails(&db, &account_id).await?;
+    let mut held: HashMap<String, Held> = HashMap::new();
+    for c in &copies {
+        held.extend(held_emails(&db, &c.account_id).await?);
+    }
     let known_blobs = db.loaded_blob_ids().await?;
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut read_files: Vec<ScannedFile> = Vec::new();
-    // Every email the account has, filter or not: narrowing
+    // Every email each account has, filter or not: narrowing
     // `only_extract_labels` never deletes.
-    let mut kept: BTreeSet<String> = plan.unfiltered_ids.clone();
-    let mut threads: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut kept: Vec<BTreeSet<String>> = copies
+        .iter()
+        .map(|c| c.plan.unfiltered_ids.clone())
+        .collect();
+    let mut threads: Vec<Threads> = vec![Threads::new(); copies.len()];
     let mut unread: Vec<SkippedRecord> = Vec::new();
     // Attachments Mail has not downloaded, per email. Only an email read
     // this run has a verdict; one skipped as unchanged keeps its row.
@@ -341,9 +370,14 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let mut tried: HashSet<String> = HashSet::new();
     let mut stopped = false;
 
-    opts.progress.set_length(Some(plan.emails.len() as u64));
+    let planned_count: usize = copies.iter().map(|c| c.plan.emails.len()).sum();
+    opts.progress.set_length(Some(planned_count as u64));
     let mut done = 0usize;
-    for planned in &plan.emails {
+    let mut every_email: Vec<(usize, &str, &plan::PlannedEmail)> = Vec::new();
+    for (i, c) in copies.iter().enumerate() {
+        every_email.extend(c.plan.emails.iter().map(|e| (i, c.account_id.as_str(), e)));
+    }
+    for (i, account_id, planned) in every_email {
         if opts.control.stop.requested() {
             stopped = true;
             break;
@@ -372,7 +406,7 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         {
             summary.emails_unchanged += 1;
             if let Some(id) = &planned.email_id {
-                threads
+                threads[i]
                     .entry(planned.thread_id.clone().unwrap_or_else(|| id.clone()))
                     .or_default()
                     .push((received_key(planned.date_received), id.clone()));
@@ -414,12 +448,15 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
             }
         };
         let blob_id = blake3_hex(&read.raw);
-        let email_id = planned.email_id.clone().unwrap_or_else(|| blob_id.clone());
+        let email_id = planned
+            .email_id
+            .clone()
+            .unwrap_or_else(|| plan::email_id(account_id, &blob_id));
         let thread_id = planned
             .thread_id
             .clone()
             .unwrap_or_else(|| email_id.clone());
-        kept.insert(email_id.clone());
+        kept[i].insert(email_id.clone());
         tried.insert(email_id.clone());
         if !read.missing.is_empty() {
             summary.emails_missing_attachments += 1;
@@ -436,7 +473,7 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                 )
             });
         }
-        threads
+        threads[i]
             .entry(thread_id.clone())
             .or_default()
             .push((received_key(planned.date_received), email_id.clone()));
@@ -464,7 +501,7 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                 preview: None,
             },
         );
-        if let Some(email) = FetchedEmail::from_jmap_envelope(&account_id, &envelope) {
+        if let Some(email) = FetchedEmail::from_jmap_envelope(account_id, &envelope) {
             batch.marks.push(email.mark());
             batch.emails.push(email.row);
         }
@@ -476,15 +513,24 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     summary.emails_upserted += flush(&db, &mut batch, &mut read_files).await?;
     listing.finish().await?;
 
-    write_account_and_lookups(
-        &db,
-        &account_id,
-        &opts.account,
-        &plan,
-        &threads,
-        &mut summary,
-    )
-    .await?;
+    // The account row's settings are for the one account `account` names.
+    let named = AppleMailAccountConfig::default();
+    let row_config = if opts.account.account.is_some() {
+        &opts.account
+    } else {
+        &named
+    };
+    for (c, threads) in copies.iter().zip(&threads) {
+        write_account_and_lookups(
+            &db,
+            &c.account_id,
+            row_config,
+            &c.plan,
+            threads,
+            &mut summary,
+        )
+        .await?;
+    }
 
     if summary.emails_without_file > 0 {
         found.push(not_downloaded(
@@ -497,9 +543,9 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     }
     // An email the account still has and this run did not read keeps its
     // row; one Mail no longer has was tried, and its row goes.
-    let untried: HashSet<String> = plan
-        .unfiltered_ids
+    let untried: HashSet<String> = copies
         .iter()
+        .flat_map(|c| c.plan.unfiltered_ids.iter())
         .filter(|id| !tried.contains(*id))
         .cloned()
         .collect();
@@ -512,7 +558,9 @@ async fn read_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         return Ok(summary);
     }
     if walked_clean && summary.read_errors == 0 {
-        summary.emails_removed = db.prune_emails_to(&account_id, &kept).await?;
+        for (c, kept) in copies.iter().zip(&kept) {
+            summary.emails_removed += db.prune_emails_to(&c.account_id, kept).await?;
+        }
         let gone = changes.gone_by_path(&BTreeSet::new());
         file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
     } else {
@@ -591,7 +639,7 @@ async fn write_account_and_lookups(
     account_id: &str,
     config: &AppleMailAccountConfig,
     plan: &plan::Plan,
-    threads: &BTreeMap<String, Vec<(String, String)>>,
+    threads: &Threads,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let now = datalib_time::IsoOffsetTimestamp::now_local();
@@ -627,7 +675,7 @@ async fn write_account_and_lookups(
         &now,
     )
     .await?;
-    summary.mailboxes_upserted = mailbox_specs.len();
+    summary.mailboxes_upserted += mailbox_specs.len();
 
     let thread_specs: Vec<(String, i64, Option<i64>, String)> = threads
         .iter()
@@ -652,7 +700,7 @@ async fn write_account_and_lookups(
         &now,
     )
     .await?;
-    summary.threads_upserted = thread_specs.len();
+    summary.threads_upserted += thread_specs.len();
     tx.commit().await.context("commit lookups tx")?;
 
     // A mailbox Mail no longer has comes off its mail.
@@ -664,7 +712,7 @@ async fn write_account_and_lookups(
         .filter(|id| !planned.contains(id.as_str()))
         .map(|id| (id, None))
         .collect();
-    summary.mailboxes_removed = gone.len();
+    summary.mailboxes_removed += gone.len();
     super::refile_mailboxes(db, &now, &gone).await?;
     Ok(())
 }

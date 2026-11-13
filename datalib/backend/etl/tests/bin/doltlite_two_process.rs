@@ -997,6 +997,19 @@ async fn rev_read(args: &Args) -> Result<Value> {
             }
         };
         opens.push(json!({ "txn": txn, "ms": started.elapsed().as_millis() as u64 }));
+        let mut guarded = match args.flag("guarded") {
+            true => match datalib_sql_guard::Reader::open(
+                Path::new(&format!("{}@{tip}", db.display())),
+                Instant::now() + Duration::from_secs(60),
+            ) {
+                Ok(reader) => Some(reader),
+                Err(e) => {
+                    errors.push(format!("guarded open in window {txn}: {e}"));
+                    None
+                }
+            },
+            false => None,
+        };
         let opened = Instant::now();
         while opened.elapsed() < hold && !until.exists() {
             match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
@@ -1018,12 +1031,60 @@ async fn rev_read(args: &Args) -> Result<Value> {
                     errors.push(format!("range in window {txn}: {e:#}"));
                 }
             }
+            if let Some(reader) = guarded.as_mut() {
+                if let Err(e) = guarded_reads(reader) {
+                    errors.push(format!("guarded reads in window {txn}: {e:#}"));
+                }
+            }
             tokio::time::sleep(interval).await;
         }
+        drop(guarded);
         pool.close().await;
         txn += 1;
     }
     Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
+}
+
+/// What the search applet's `/sql` route sends a store, read through
+/// `datalib_sql_guard`'s reader as the route reads it, beside the window's
+/// own connection.
+/// Doltlite's history functions, a temporary table (`DISTINCT`, `IN`), a
+/// group and a pragma table.
+const GUARDED_READS: [(&str, Option<&str>); 6] = [
+    (
+        "SELECT DISTINCT substr(id, 1, 2) FROM entities ORDER BY 1",
+        None,
+    ),
+    (
+        "SELECT id FROM entities WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+        Some(r#"["a", "b"]"#),
+    ),
+    (
+        "SELECT substr(id, 1, 1), count(*), max(length(body)) FROM entities GROUP BY 1",
+        None,
+    ),
+    (
+        "SELECT commit_hash FROM dolt_log() ORDER BY date DESC",
+        None,
+    ),
+    ("SELECT name FROM pragma_table_info('entities')", None),
+    ("SELECT dolt_hashof('HEAD')", None),
+];
+
+fn guarded_reads(reader: &mut datalib_sql_guard::Reader) -> Result<()> {
+    use datalib_sql_guard::{Params, Value, Window};
+    let window = Window {
+        offset: 0,
+        limit: 100,
+        max_bytes: 1 << 20,
+    };
+    for (sql, param) in GUARDED_READS {
+        let params = Params::ByPosition(param.map(|p| Value::Text(p.into())).into_iter().collect());
+        reader
+            .read(sql, &params, window)
+            .map_err(|r| anyhow!("{sql}: {r:?}"))?;
+    }
+    Ok(())
 }
 
 async fn main_tip(db: &Path) -> Result<String> {
