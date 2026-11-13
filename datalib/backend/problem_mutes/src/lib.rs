@@ -1,6 +1,7 @@
 //! Problem rows a person muted: "I have seen this, stop telling me". The
 //! store's shape, its reads and writes over a pool someone else opened,
-//! and the read of what is still muted in the grid index. Opening the
+//! and the Manage counts: the grid index's rows less the muted ones, with
+//! the problems grid's query for exactly those rows. Opening the
 //! store to write it is the `unified_document_index` applet's
 //! (`applets/src/unified_document_index/mutes.rs`), so this crate links
 //! no ingest machinery and `datalib-http` can read the store through it.
@@ -171,35 +172,73 @@ pub async fn read_published(data_root: &Path) -> Result<HashMap<String, MuteRow>
     mutes
 }
 
-/// A muted problem the grid index still holds, with what says whose
-/// count it is in.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveMute {
-    pub source_id: String,
-    pub counted_by: CountedBy,
-    pub severity: Severity,
+/// Errors and warnings, as a count is kept. An `info` row is in no count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Tally {
+    pub errors: i64,
+    pub warnings: i64,
 }
 
-/// The muted problems among the index's rows now. A mute whose problem
-/// is gone — fixed, or changed into another id — is not among them, so
-/// it takes nothing off a count.
-pub async fn live_in_index(index: &SqlitePool, ids: &[String]) -> Result<Vec<LiveMute>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
+impl Tally {
+    fn add(&mut self, severity: Severity, n: i64) {
+        match severity {
+            Severity::Error => self.errors += n,
+            Severity::Warning => self.warnings += n,
+            Severity::Info => {}
+        }
     }
+
+    pub fn is_empty(self) -> bool {
+        self == Tally::default()
+    }
+}
+
+/// Whose count a row is in: a source's download or render, or
+/// `(None, Index)` for the index's own rows, which the index's row counts
+/// whatever source they are about.
+pub type Counter = (Option<String>, CountedBy);
+
+pub fn counter_of(source_id: &str, by: CountedBy) -> Counter {
+    match by {
+        CountedBy::Index => (None, CountedBy::Index),
+        by => (Some(source_id.to_string()), by),
+    }
+}
+
+/// One counter's rows in the index: those a person has not muted, which
+/// are the number shown, and those they have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Counted {
+    pub shown: Tally,
+    pub muted: Tally,
+}
+
+/// The index's error and warning rows, counted by [`Counter`], each
+/// either muted or not by its id. The one place a Manage count comes
+/// from, so it is the rows [`query`] opens and nothing else.
+pub async fn count_in_index(
+    index: &SqlitePool,
+    muted: &[String],
+) -> Result<HashMap<Counter, Counted>> {
     let rows = match sqlx::query(
-        "SELECT source_id, stage, severity, scope_kind, scope_key FROM problems \
-         WHERE problem_uuid IN (SELECT value FROM json_each(?))",
+        "SELECT source_id, stage, scope_kind, \
+           CASE WHEN scope_key = ? THEN scope_key ELSE '' END AS own_key, severity, \
+           problem_uuid IN (SELECT value FROM json_each(?)) AS muted, COUNT(*) AS n \
+         FROM problems WHERE severity IN (?, ?) \
+         GROUP BY source_id, stage, scope_kind, own_key, severity, muted",
     )
-    .bind(serde_json::to_string(ids)?)
+    .bind(datalib_problems::INDEX_OWN_SCOPE_KEY)
+    .bind(serde_json::to_string(muted)?)
+    .bind(Severity::Error.as_str())
+    .bind(Severity::Warning.as_str())
     .fetch_all(index)
     .await
     {
         Ok(rows) => rows,
-        Err(e) if datalib_pin::is_missing_table(&e, "problems") => return Ok(Vec::new()),
-        Err(e) => return Err(e).context("read the muted problems in the index"),
+        Err(e) if datalib_pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
+        Err(e) => return Err(e).context("count the problems in the index"),
     };
-    let mut out = Vec::new();
+    let mut out: HashMap<Counter, Counted> = HashMap::new();
     for r in rows {
         let word = |col: &str| -> Result<String> { Ok(r.try_get::<String, _>(col)?) };
         let (stage, severity, scope_kind) =
@@ -210,60 +249,72 @@ pub async fn live_in_index(index: &SqlitePool, ids: &[String]) -> Result<Vec<Liv
             ScopeKind::parse(&scope_kind),
         ) else {
             anyhow::bail!(
-                "problems: a muted row in words this build does not know \
+                "problems: rows in words this build does not know \
                  ({stage:?}, {severity:?}, {scope_kind:?})"
             );
         };
-        out.push(LiveMute {
-            source_id: word("source_id")?,
-            counted_by: CountedBy::of(stage, scope_kind, &word("scope_key")?),
-            severity,
-        });
+        let by = CountedBy::of(stage, scope_kind, &word("own_key")?);
+        let entry = out.entry(counter_of(&word("source_id")?, by)).or_default();
+        let n: i64 = r.try_get("n")?;
+        if r.try_get::<bool, _>("muted")? {
+            entry.muted.add(severity, n);
+        } else {
+            entry.shown.add(severity, n);
+        }
     }
     Ok(out)
 }
 
-/// [`live_in_index`] over the root's grid index, read-only, for the mutes
-/// the store has published. No index, or no mutes, is none.
-pub async fn live_mutes(data_root: &Path) -> Result<Vec<LiveMute>> {
-    let mutes = read_published(data_root).await?;
+/// [`count_in_index`] over the root's grid index, read-only, with the
+/// mutes the store has published. `None` when there is no index yet, so
+/// nothing has been counted.
+pub async fn counts(data_root: &Path) -> Result<Option<HashMap<Counter, Counted>>> {
     let index = datalib_runtime::layout::grid_index_db(data_root);
-    if mutes.is_empty() || !index.exists() {
-        return Ok(Vec::new());
+    if !index.exists() {
+        return Ok(None);
     }
-    let ids: Vec<String> = mutes.into_keys().collect();
+    let muted: Vec<String> = read_published(data_root).await?.into_keys().collect();
     let pool = datalib_pin::open_reader(&index).await?;
-    let live = live_in_index(&pool, &ids).await;
+    let counted = count_in_index(&pool, &muted).await;
     pool.close().await;
-    live
+    counted.map(Some)
 }
 
-/// Errors and warnings muted, as a count is kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Muted {
-    pub errors: i64,
-    pub warnings: i64,
-}
+/// What every query below ends in: a count leaves out info rows and
+/// muted ones.
+const COUNTED_ONLY: &str = "-severity:info muted:no";
 
-/// The live mutes tallied by whose count they are in: `(source, counter)`
-/// for a source's download and render, `(None, Index)` for the index's
-/// own. An `info` row is in no count, so it takes nothing off one.
-pub fn tally(live: &[LiveMute]) -> HashMap<(Option<String>, CountedBy), Muted> {
-    let mut out: HashMap<(Option<String>, CountedBy), Muted> = HashMap::new();
-    for m in live {
-        let key = match m.counted_by {
-            CountedBy::Index => (None, CountedBy::Index),
-            by => (Some(m.source_id.clone()), by),
-        };
-        let entry = out.entry(key).or_default();
-        match m.severity {
-            Severity::Error => entry.errors += 1,
-            Severity::Warning => entry.warnings += 1,
-            Severity::Info => {}
+/// The problems grid's query for exactly the rows a counter shows.
+pub fn query(counter: &Counter) -> String {
+    let own = datalib_problems::INDEX_OWN_SCOPE_KEY;
+    match counter {
+        (_, CountedBy::Index) => format!("scope:entity doc:{own} {COUNTED_ONLY}"),
+        (Some(source), CountedBy::Download) => {
+            format!("source:{source} stage:fetch -doc:{own} {COUNTED_ONLY}")
         }
+        (Some(source), CountedBy::Render) => {
+            format!("source:{source} -stage:fetch -doc:{own} {COUNTED_ONLY}")
+        }
+        (None, by) => unreachable!("a {by:?} count is always a source's"),
     }
-    out.retain(|_, m| *m != Muted::default());
-    out
+}
+
+/// The query for the rows a group's counters show together: one
+/// counter's, or a source's download and render as one. `None` for any
+/// other mix, which no one query names.
+pub fn group_query(counters: &[Counter]) -> Option<String> {
+    let mut counters: Vec<&Counter> = counters.iter().collect();
+    counters.sort_by_key(|(s, by)| (s.clone(), *by as u8));
+    counters.dedup();
+    match counters.as_slice() {
+        [] => None,
+        [one] => Some(query(one)),
+        [(Some(a), CountedBy::Download), (Some(b), CountedBy::Render)] if a == b => Some(format!(
+            "source:{a} -doc:{} {COUNTED_ONLY}",
+            datalib_problems::INDEX_OWN_SCOPE_KEY
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -284,46 +335,24 @@ mod tests {
         }
     }
 
-    fn live(source: &str, by: CountedBy, severity: Severity) -> LiveMute {
-        LiveMute {
-            source_id: source.into(),
-            counted_by: by,
-            severity,
-        }
-    }
-
     #[test]
-    fn mutes_are_tallied_by_whose_count_they_are_in() {
-        let t = tally(&[
-            live("enterprise", CountedBy::Download, Severity::Warning),
-            live("enterprise", CountedBy::Render, Severity::Error),
-            live("enterprise", CountedBy::Render, Severity::Warning),
-            live("enterprise", CountedBy::Render, Severity::Info),
-            live("defiant", CountedBy::Index, Severity::Error),
-            live("defiant", CountedBy::Render, Severity::Info),
-        ]);
+    fn a_group_query_names_one_counter_or_one_source() {
+        let c = |s: Option<&str>, by| (s.map(str::to_string), by);
+        let download = c(Some("enterprise"), CountedBy::Download);
+        let render = c(Some("enterprise"), CountedBy::Render);
         assert_eq!(
-            t[&(Some("enterprise".into()), CountedBy::Download)],
-            Muted {
-                errors: 0,
-                warnings: 1
-            }
+            group_query(std::slice::from_ref(&render)),
+            Some(query(&render))
         );
         assert_eq!(
-            t[&(Some("enterprise".into()), CountedBy::Render)],
-            Muted {
-                errors: 1,
-                warnings: 1
-            }
+            group_query(&[render.clone(), download.clone()]).as_deref(),
+            Some("source:enterprise -doc:render_store -severity:info muted:no")
         );
         assert_eq!(
-            t[&(None, CountedBy::Index)],
-            Muted {
-                errors: 1,
-                warnings: 0
-            }
+            group_query(&[download, c(Some("defiant"), CountedBy::Render)]),
+            None
         );
-        assert_eq!(t.len(), 3, "an info row takes nothing off: {t:?}");
+        assert_eq!(group_query(&[]), None);
     }
 
     async fn plain(path: &Path) -> SqlitePool {
@@ -379,39 +408,58 @@ mod tests {
         pool.close().await;
     }
 
-    /// Only a muted problem the index still holds is live, and each is
-    /// counted against the step that found it.
+    /// Each row is counted against the step that found it, a muted one
+    /// apart, an info row nowhere, and a mute of a row the index no
+    /// longer holds counts nothing.
     #[tokio::test]
-    async fn only_a_muted_problem_still_in_the_index_is_live() {
+    async fn rows_are_counted_by_whose_they_are_and_whether_muted() {
         let dir = tempfile::tempdir().unwrap();
         let pool = plain(&dir.path().join("index.sqlite")).await;
-        assert!(live_in_index(&pool, &["x".into()])
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(count_in_index(&pool, &[]).await.unwrap().is_empty());
         sqlx::query(datalib_problems::DDL[0].1)
             .execute(&pool)
             .await
             .unwrap();
-        let fetch = ProblemRow::new(
+        let row = |source: &str, stage, scope, severity, sample: &str| {
+            ProblemRow::new(
+                source,
+                stage,
+                scope,
+                None,
+                Outcome::Dropped,
+                Problem::record(Reason::RenderFailed, sample).severity(severity),
+                None,
+            )
+        };
+        let fetch = row(
             "enterprise",
             Stage::Fetch,
             Scope::Entity("logs:1"),
-            None,
-            Outcome::Dropped,
-            Problem::record(Reason::FetchFailed, "subspace interference"),
-            None,
+            Severity::Error,
+            "a",
         );
-        let unreadable = ProblemRow::new(
+        let parse = row(
+            "enterprise",
+            Stage::Parse,
+            Scope::Entity("logs:2"),
+            Severity::Warning,
+            "b",
+        );
+        let info = row(
+            "enterprise",
+            Stage::Render,
+            Scope::Markdown("md-1"),
+            Severity::Info,
+            "c",
+        );
+        let unreadable = row(
             "defiant",
             Stage::Render,
             Scope::Entity(INDEX_OWN_SCOPE_KEY),
-            None,
-            Outcome::Dropped,
-            Problem::record(Reason::RenderFailed, "older shape").severity(Severity::Warning),
-            None,
+            Severity::Warning,
+            "d",
         );
-        for row in [&fetch, &unreadable] {
+        for row in [&fetch, &parse, &info, &unreadable] {
             sqlx::query(
                 "INSERT INTO problems (problem_uuid, source_id, stage, severity, outcome, \
                  reason, scope_kind, scope_key, sample, first_seen_at_utc, changed_at_utc) \
@@ -430,24 +478,32 @@ mod tests {
             .await
             .unwrap();
         }
-        let mut found = live_in_index(
-            &pool,
-            &[
-                fetch.problem_uuid.clone(),
-                unreadable.problem_uuid.clone(),
-                "fixed-since".into(),
-            ],
-        )
-        .await
-        .unwrap();
-        found.sort_by(|a, b| a.source_id.cmp(&b.source_id));
+        let counted = count_in_index(&pool, &[parse.problem_uuid.clone(), "fixed-since".into()])
+            .await
+            .unwrap();
+        let t = |errors, warnings| Tally { errors, warnings };
         assert_eq!(
-            found,
-            [
-                live("defiant", CountedBy::Index, Severity::Warning),
-                live("enterprise", CountedBy::Download, Severity::Error),
-            ]
+            counted[&counter_of("enterprise", CountedBy::Download)],
+            Counted {
+                shown: t(1, 0),
+                muted: t(0, 0)
+            }
         );
+        assert_eq!(
+            counted[&counter_of("enterprise", CountedBy::Render)],
+            Counted {
+                shown: t(0, 0),
+                muted: t(0, 1)
+            }
+        );
+        assert_eq!(
+            counted[&(None, CountedBy::Index)],
+            Counted {
+                shown: t(0, 1),
+                muted: t(0, 0)
+            }
+        );
+        assert_eq!(counted.len(), 3, "{counted:?}");
         pool.close().await;
     }
 
@@ -457,7 +513,7 @@ mod tests {
     async fn a_root_with_no_store_has_no_mutes_and_gets_none() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_published(dir.path()).await.unwrap().is_empty());
-        assert!(live_mutes(dir.path()).await.unwrap().is_empty());
+        assert_eq!(counts(dir.path()).await.unwrap(), None);
         assert!(!store_path(dir.path()).exists());
     }
 }

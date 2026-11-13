@@ -1,6 +1,7 @@
 // A Manage row's problem counts, after its name, open in the search grid over the index's
-// `problems` table: the filter it opens with is text in its search bar,
-// and a cell's right-click narrows it the way the search's does.
+// `problems` table: exactly the rows they count, by the query the row
+// carries, as text in its search bar; and a cell's right-click narrows
+// it the way the search's does.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
@@ -22,7 +23,9 @@ type Problem = {
 };
 
 async function problems(request: APIRequestContext, q: string): Promise<Problem[]> {
-  const r = await request.get(`/applet/unified_document_index/problems?q=${encodeURIComponent(q)}`);
+  const r = await request.get(
+    `/applet/unified_document_index/problems?q=${encodeURIComponent(q)}&limit=2000`,
+  );
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: Problem[] }).rows;
 }
@@ -32,60 +35,60 @@ const held = (page: Page) =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows(),
   ) as Promise<Problem[]>;
 
-/// Give a row counts after its name — a group's, or with `key` a step's —
-/// whatever the served root's run store holds: the counts come from
-/// metrics a render run reports (covered in `manage_rows.rs`), and this
-/// spec is about where a double-click on them leads.
-async function withCounts(page: Page, source: string, key = `group:${source}`) {
-  await page.route("**/api/manage/rows**", async (route) => {
-    const response = await route.fetch();
-    const body = (await response.json()) as { rows: { key: string; problems: unknown[] }[] };
-    for (const r of body.rows) {
-      if (r.key === key) {
-        r.problems = [
-          { kind: "error", text: "2", title: "2 errors" },
-          { kind: "warning", text: "5", title: "5 warnings" },
-        ];
-      }
-    }
-    await route.fulfill({ response, json: body });
-  });
+type CountedRow = { key: string; problems: { kind: string }[]; problems_query: string | null };
+
+/// A Manage row as the server sends it: its counts, and the query for
+/// exactly the rows they count.
+async function manageRow(request: APIRequestContext, key: string): Promise<CountedRow> {
+  const r = await request.get("/api/manage/rows");
+  expect(r.ok()).toBe(true);
+  const row = ((await r.json()) as { rows: CountedRow[] }).rows.find((x) => x.key === key);
+  expect(row, `a Manage row ${key}`).toBeDefined();
+  return row!;
 }
 
-// A rewrite still waiting on its `route.fetch()` when the page closes
-// throws outside any test and takes the worker down with it.
-test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
-
-/// The counts after a row's name.
-const counts = (page: Page, source: string) =>
-  nameCell(page, `group:${source}`).locator(".tg-badges");
-
-/// The source with the most problems in the fixture, and its problems.
-async function busiest(request: APIRequestContext): Promise<[string, Problem[]]> {
-  const all = await problems(request, "");
-  expect(all.length, "the fixture has problems").toBeGreaterThan(0);
-  const by = new Map<string, Problem[]>();
-  for (const p of all) by.set(p.source_id, [...(by.get(p.source_id) ?? []), p]);
-  return [...by.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+/// The red and yellow numbers a set of rows makes.
+function numbers(rows: Problem[]): string[] {
+  const n = (severity: string) => rows.filter((p) => p.severity === severity).length;
+  return [n("error"), n("warning")].filter((x) => x > 0).map(String);
 }
 
+/// The counts after a row's name — a group's, or with `key` a step's.
+const counts = (page: Page, key: string) => nameCell(page, key).locator(".tg-badges");
+const red = (page: Page, key: string) =>
+  counts(page, key).locator(".tg-chip-error, .tg-chip-warning");
+
+/// The source whose render found the most errors and warnings in the
+/// fixture, and the query its group's counts open with.
+async function busiest(request: APIRequestContext): Promise<[string, string]> {
+  const found = await problems(request, "-stage:fetch -doc:render_store -severity:info muted:no");
+  expect(found.length, "the fixture has problems a render found").toBeGreaterThan(0);
+  const by = new Map<string, number>();
+  for (const p of found) by.set(p.source_id, (by.get(p.source_id) ?? 0) + 1);
+  const [source] = [...by.entries()].sort((a, b) => b[1] - a[1])[0];
+  const query = (await manageRow(request, `group:${source}`)).problems_query;
+  expect(query, `group:${source} counts some`).not.toBeNull();
+  return [source, query!];
+}
+
+/// The number a double-click lands on is the list it opens: the counts
+/// come from the index's rows (covered in `manage_rows.rs`), and the
+/// query that opens is the one that counted them.
 test("a source's problems open in the grid, its filter in the search bar", async ({
   page,
   request,
 }) => {
-  const [source, theirs] = await busiest(request);
-  await withCounts(page, source);
+  const [source, query] = await busiest(request);
+  const theirs = await problems(request, query);
   await page.goto("/data_sources");
-  await expect(counts(page, source).locator(".tg-badge")).toHaveText(["2", "5"]);
-  await counts(page, source).locator(".tg-chip-warning").dblclick();
+  const key = `group:${source}`;
+  await expect(red(page, key)).toHaveText(numbers(theirs));
+  await red(page, key).first().dblclick();
 
-  await expect(page.getByTestId("grid-search-input")).toHaveAttribute(
-    "data-query",
-    `source:${source}`,
-  );
+  await expect(page.getByTestId("grid-search-input")).toHaveAttribute("data-query", query);
   // The badges are inside the Name cell, which a double-click would
   // otherwise open for renaming.
-  await expect(nameCell(page, `group:${source}`).locator("input")).toHaveCount(0);
+  await expect(nameCell(page, key).locator("input")).toHaveCount(0);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
   const rows = await held(page);
@@ -99,29 +102,27 @@ test("a source's problems open in the grid, its filter in the search bar", async
 test("a step's counts sit beside its chip, and open its problems", async ({ page, request }) => {
   const [source] = await busiest(request);
   const step = `${source}/render_markdown`;
-  await withCounts(page, source, step);
+  const query = (await manageRow(request, step)).problems_query;
+  expect(query).not.toBeNull();
   await page.goto("/data_sources");
   await expandGroup(page, source);
   const cell = nameCell(page, step);
   await expect(cell.locator(`a.chip[data-entity="datalib:step/${step}"]`)).toBeVisible();
-  await expect(cell.locator(".tg-badges .tg-badge")).toHaveText(["2", "5"]);
-  await cell.locator(".tg-chip-warning").dblclick();
-  await expect(page.getByTestId("grid-search-input")).toHaveAttribute(
-    "data-query",
-    `source:${source} -stage:fetch`,
-  );
+  await expect(red(page, step)).toHaveText(numbers(await problems(request, query!)));
+  await red(page, step).first().dblclick();
+  await expect(page.getByTestId("grid-search-input")).toHaveAttribute("data-query", query!);
 });
 
 /// In a short window too: the menu is taller than the room above or below
 /// a row in the middle of it, and must still be reachable end to end.
 test("a severity cell's right-click keeps only its severity", async ({ page, request }) => {
-  const [source, theirs] = await busiest(request);
-  await withCounts(page, source);
+  const [source, query] = await busiest(request);
+  const theirs = await problems(request, query);
   await page.goto("/data_sources");
   // Opened at full height: in the short window the Manage grid scrolls
   // to reach a row low in it, and a double-click lands on whichever row
   // it redrew there.
-  await counts(page, source).locator(".tg-chip-warning").dblclick();
+  await red(page, `group:${source}`).first().dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
   await page.setViewportSize({ width: 1280, height: 480 });
@@ -137,7 +138,7 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
   await searchMenuItem(page, new RegExp(`Keep only Severity=${target.severity}`)).click();
   await expect(page.getByTestId("grid-search-input")).toHaveAttribute(
     "data-query",
-    `source:${source} severity:${target.severity}`,
+    `${query} severity:${target.severity}`,
   );
   await gridSettled(page);
   const kept = await held(page);
@@ -152,13 +153,12 @@ test("a Document chip names its document and opens it beside the grid", async ({
   page,
   request,
 }) => {
-  const all = await problems(request, "");
-  const target = all.find((p) => p.markdown_uuid);
-  expect(target, "the fixture has a problem on a document").toBeDefined();
+  const counted = await problems(request, "-doc:render_store -severity:info muted:no");
+  const target = counted.find((p) => p.markdown_uuid);
+  expect(target, "the fixture has a counted problem on a document").toBeDefined();
   const { source_id: source, problem_uuid, markdown_uuid } = target!;
-  await withCounts(page, source);
   await page.goto("/data_sources");
-  await counts(page, source).dblclick();
+  await red(page, `group:${source}`).first().dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
 

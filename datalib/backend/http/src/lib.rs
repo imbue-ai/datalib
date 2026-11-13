@@ -1427,10 +1427,12 @@ pub struct DagRecord {
     pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
-    /// step id → the errors and warnings its store held the last time
-    /// it counted, in whichever run that was, and the passes of its last
-    /// run that failed and were run again.
+    /// step id → what it last reported of its problems, and the passes of
+    /// its last run that failed and were run again.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
+    /// The grid index's error and warning rows, by whose they are and
+    /// whether muted: what a row's red and yellow numbers are.
+    pub problem_rows: manage::IndexCounts,
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
@@ -1479,18 +1481,17 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
     let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
     let run_progress = started.elapsed() - loop_record;
 
-    let mut problems = manage::counts_by_step(
+    let problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
         &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
     );
-    // What a person muted, of what the index holds now: read from the
-    // mutes store and the index, both read-only (problem_mutes/README.md).
-    match datalib_problem_mutes::live_mutes(root).await {
-        Ok(live) => manage::take_off_mutes(&mut problems, &datalib_problem_mutes::tally(&live)),
-        Err(e) => {
-            tracing::warn!("could not read which problems are muted, so every one counts: {e:#}")
-        }
-    }
+    // Read-only, from the index and the mutes store (problem_mutes/README.md).
+    let problem_rows = datalib_problem_mutes::counts(root)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("could not count the problems in the index, so none are drawn: {e:#}");
+            None
+        });
     let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
@@ -1513,6 +1514,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         steps: state.steps,
         progress,
         problems,
+        problem_rows,
         items,
         owed,
         took,
@@ -1549,6 +1551,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         steps: records,
         progress,
         problems: _,
+        problem_rows: _,
         items: _,
         owed: _,
         took: _,

@@ -847,6 +847,111 @@ mod tests {
         assert_eq!((groups[1].0.as_deref(), groups[1].1), (Some("warning"), 1));
     }
 
+    /// The guarantee behind a Manage count: for every counter, the
+    /// number the app server draws is the number of rows its query lists
+    /// here — over rows of every stage and severity, two sources, the
+    /// index's own row about one of them, and a mute. A count that is not
+    /// the list it opens is the bug this pins.
+    #[tokio::test]
+    async fn every_count_is_the_rows_its_query_lists() {
+        use datalib_problem_mutes::{group_query, query, Counter};
+        use datalib_problems::CountedBy;
+        use strum::VariantArray;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut rows = Vec::new();
+        for source in ["enterprise", "defiant"] {
+            for (i, stage) in Stage::VARIANTS.iter().enumerate() {
+                for severity in Severity::VARIANTS {
+                    let key = format!("{source}:{i}:{}", severity.as_str());
+                    let scope = if i % 2 == 0 {
+                        Scope::Entity(&key)
+                    } else {
+                        Scope::Markdown(&key)
+                    };
+                    rows.push(ProblemRow::new(
+                        source,
+                        *stage,
+                        scope,
+                        None,
+                        Outcome::Dropped,
+                        Problem::record(Reason::RenderFailed, &key).severity(*severity),
+                        None,
+                    ));
+                }
+            }
+        }
+        rows.push(ProblemRow::new(
+            "defiant",
+            Stage::Render,
+            Scope::Entity(datalib_problems::INDEX_OWN_SCOPE_KEY),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::RenderFailed, "older shape"),
+            None,
+        ));
+        index_problems(tmp.path(), &rows).await;
+        let s = super::super::tests::index_over(tmp.path()).await;
+        let muted: Vec<String> = rows
+            .iter()
+            .filter(|r| r.severity != Severity::Info)
+            .step_by(3)
+            .map(|r| r.problem_uuid.clone())
+            .collect();
+        let _ = mutes::handler(
+            State(s.clone()),
+            Json(mutes::MuteBody {
+                problem_uuids: muted,
+                muted: true,
+                agent: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let counts = datalib_problem_mutes::counts(tmp.path())
+            .await
+            .unwrap()
+            .expect("the index is there");
+        let listed = |text: String| {
+            let s = s.clone();
+            async move {
+                let r = ask(&s, q(&text)).await;
+                assert!(r.errors.is_empty(), "{text}: {:?}", r.errors);
+                r.total
+            }
+        };
+        let mut seen = Vec::new();
+        for (counter, counted) in &counts {
+            let shown = counted.shown.errors + counted.shown.warnings;
+            assert_eq!(
+                listed(query(counter)).await as i64,
+                shown,
+                "{counter:?}: {}",
+                query(counter)
+            );
+            seen.push(counter.1);
+        }
+        for by in [CountedBy::Download, CountedBy::Render, CountedBy::Index] {
+            assert!(seen.contains(&by), "no {by:?} rows to check");
+        }
+        for source in ["enterprise", "defiant"] {
+            let pair: Vec<Counter> = [CountedBy::Download, CountedBy::Render]
+                .into_iter()
+                .map(|by| datalib_problem_mutes::counter_of(source, by))
+                .collect();
+            let shown: i64 = pair
+                .iter()
+                .map(|c| counts[c].shown.errors + counts[c].shown.warnings)
+                .sum();
+            assert_eq!(
+                listed(group_query(&pair).unwrap()).await as i64,
+                shown,
+                "{source}"
+            );
+        }
+    }
+
     /// A muted row stays in the table, marked with who muted it, and
     /// `muted:` keeps or leaves out the muted ones in the rows and in the
     /// groups alike. Unmuted, it is a row like the rest again; a root

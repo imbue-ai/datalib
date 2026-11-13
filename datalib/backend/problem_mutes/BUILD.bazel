@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Problem rows a person muted (`datalib_curated/datalib_problem_mutes/`):
 # the store's shape, its reads and writes over a pool the caller opened,
-# and what of it is still in the grid index. No ingest machinery, so
+# and the Manage counts over the grid index's rows. No ingest machinery, so
 # `datalib-http` reads it; the `unified_document_index` applet is its one
 # writer. See README.md.
 rust_library(

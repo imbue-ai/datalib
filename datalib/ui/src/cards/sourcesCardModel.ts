@@ -462,12 +462,14 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems, or on System, whose count is the config's warnings, the
-  /// config.
+  /// exactly the problems it counts, or on System, whose count is the
+  /// config's warnings, the config. A count of only what the log holds
+  /// opens the log.
   function onCellDoubleClicked(data: Row, field: string) {
     if (field === "problems" && data.kind === "system") openConfig();
-    else if (field === "problems") actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
-    else if (field === "status") void actions.openStepLog(data);
+    else if (field === "problems" && data.problems_query)
+      actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
+    else if (field === "problems" || field === "status") void actions.openStepLog(data);
   }
 
   /// The row whose name the menu's Rename is opening, the one edit a

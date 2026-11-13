@@ -1,6 +1,8 @@
 // Muting problem rows a person has seen: select them in the problems grid
-// the Dashboard's "Review" opens, right-click, Mute. The rows stay in the
-// grid, marked, and the source's count, and so its line in "Needs you",
+// the Dashboard's "Review" opens, right-click, Mute. "Review" opens on
+// exactly the rows the source's count counts, which leave out the muted
+// ones, so the rows leave the grid (still listed, marked, under
+// `muted:yes`), and the source's count, and so its line in "Needs you",
 // goes. Writes the mutes store and syncs, so it runs on a root of its own
 // (`config-mutating.ts`).
 
@@ -34,6 +36,16 @@ async function problems(request: APIRequestContext, q: string): Promise<Problem[
 
 const ids = (rows: Problem[]) => rows.map((p) => p.problem_uuid).sort();
 
+/// The query a group's counts open with, as the server sends it.
+async function countedQuery(request: APIRequestContext, source: string): Promise<string> {
+  const r = await request.get("/api/manage/rows");
+  expect(r.ok()).toBe(true);
+  const rows = (await r.json()) as { rows: { key: string; problems_query: string | null }[] };
+  const query = rows.rows.find((x) => x.key === `group:${source}`)?.problems_query;
+  expect(query, `group:${source} counts some`).toBeTruthy();
+  return query!;
+}
+
 const isSelected = (page: Page, uuid: string) =>
   page.evaluate(
     (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.isSelected(u),
@@ -59,8 +71,8 @@ async function quietestRendered(request: APIRequestContext): Promise<string> {
   return sources[0][0];
 }
 
-/// Sync the source's render, which reports its problem counts, and wait
-/// for the request to close: the fixture root's run store has no counts.
+/// Sync the source's render, and the index after it, and wait for the
+/// request to close.
 async function render(request: APIRequestContext, source: string) {
   const step = `${source}/render_markdown`;
   const opened = await request.post("/api/requests", { data: { roots: [step] } });
@@ -90,12 +102,13 @@ test("muting a source's problems in the grid takes it off Needs you", async ({ p
   test.setTimeout(180_000);
   const source = await quietestRendered(request);
   await render(request, source);
-  const theirs = await problems(request, `source:${source}`);
+  const query = await countedQuery(request, source);
+  const theirs = await problems(request, query);
   // Rendered again unchanged, every problem has the id it had: a mute
   // keyed on the id holds across syncs.
   await render(request, source);
-  expect(ids(await problems(request, `source:${source}`))).toEqual(ids(theirs));
-  expect(theirs.every((p) => p.muted === "no")).toBe(true);
+  expect(ids(await problems(request, query))).toEqual(ids(theirs));
+  expect(theirs.every((p) => p.muted === "no" && p.severity !== "info")).toBe(true);
 
   await page.goto("/");
   await expect(lineOf(page, source)).toHaveCount(1, { timeout: 15_000 });
@@ -106,10 +119,7 @@ test("muting a source's problems in the grid takes it off Needs you", async ({ p
   await lineOf(page, source).getByRole("button", { name: "Review" }).click();
   const grid = cardOf(page, "gridView(");
   await expect(grid).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("grid-search-input")).toHaveAttribute(
-    "data-query",
-    `source:${source}`,
-  );
+  await expect(page.getByTestId("grid-search-input")).toHaveAttribute("data-query", query);
   await grid.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
   await gridSettled(page);
   const held = (await page.evaluate(() =>
@@ -136,16 +146,25 @@ test("muting a source's problems in the grid takes it off Needs you", async ({ p
   muted = ids(theirs);
   await searchMenuItem(page, mute).click();
 
-  // The store has them, and the rows stay, each marked.
+  // The store has them, each still listed and marked; the grid, which
+  // lists what the count counts, no longer holds them.
+  const marked = async () =>
+    (await problems(request, `source:${source} muted:yes`)).filter((p) =>
+      theirs.some((t) => t.problem_uuid === p.problem_uuid),
+    );
+  await expect.poll(async () => ids(await marked())).toEqual(ids(theirs));
+  expect((await marked()).every((p) => p.muted === "yes")).toBe(true);
   await expect
-    .poll(async () => ids(await problems(request, `source:${source} muted:yes`)))
-    .toEqual(ids(theirs));
-  await actOnRowByUuid(
-    page,
-    first.problem_uuid,
-    (row) => expect(row.locator('[col-id="muted_chip"]')).toHaveText("MUTED", { timeout: 3_000 }),
-    "muted_chip",
-  );
+    .poll(
+      async () =>
+        (
+          (await page.evaluate(() =>
+            (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows(),
+          )) as Problem[]
+        ).length,
+      { timeout: 15_000, message: "the muted rows never left the grid" },
+    )
+    .toBe(0);
 
   // The Dashboard, back in front, no longer lists the source. Its library
   // section is the proof the Dashboard is what is on screen.
