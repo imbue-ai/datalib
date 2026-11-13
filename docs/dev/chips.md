@@ -259,6 +259,9 @@ A grid draws a chip from an `identity` typed cell
   The log's Time column is the same chip to the millisecond,
   `2026-09-22 14:07:47.190` (`dates.ts::millisDateCell`), which a
   narrow column cuts from the left so the seconds stay.
+  An applet's card has none of this code: the `<time datetime>` it
+  writes is drawn by the app, which mounts it
+  (`appletDates.ts::withDateChips`), as the photo card's Taken is.
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
 when given its `chips` option, and `GridCard` redraws the Author,

@@ -282,6 +282,8 @@ struct Render {
     uuid: String,
     digest: String,
     levels: Vec<Level>,
+    /// How to turn the stored pixels to show them, Lightroom's code.
+    orientation: Option<String>,
 }
 
 /// The render Lightroom's `previews.db` says is current for this photo,
@@ -315,7 +317,8 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
         .with_context(|| format!("open {}", db.display()))?;
     let read = async {
         let entry = sqlx::query(
-            "SELECT CAST(uuid AS TEXT) AS uuid, CAST(digest AS TEXT) AS digest \
+            "SELECT CAST(uuid AS TEXT) AS uuid, CAST(digest AS TEXT) AS digest, \
+                    CAST(orientation AS TEXT) AS orientation \
                FROM ImageCacheEntry WHERE CAST(imageId AS INTEGER) = ?",
         )
         .bind(image_id_local)
@@ -326,6 +329,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
             return Ok(None);
         };
         let (uuid, digest): (String, String) = (entry.get("uuid"), entry.get("digest"));
+        let orientation: Option<String> = entry.get("orientation");
         let levels = sqlx::query(
             "SELECT CAST(level AS INTEGER) AS level, \
                     CAST(longDimension AS INTEGER) AS long_edge \
@@ -347,6 +351,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
             uuid,
             digest,
             levels,
+            orientation,
         }))
     }
     .await;
@@ -411,7 +416,9 @@ async fn image(
     if let Some(render) = current_render(&photo).await.map_err(ours)? {
         if let Some(level) = pictures::pick(&render.levels, q.size) {
             if let Some(bytes) = preview_bytes(&render, level).await.map_err(ours)? {
-                let etag = format!("\"{}-{}\"", render.digest, level.long_edge);
+                let code = render.orientation.as_deref().unwrap_or("AB");
+                let etag = format!("\"{}-{}-{code}\"", render.digest, level.long_edge);
+                let bytes = turned(bytes, code, &uuid);
                 return Ok(picture(bytes, "preview", &etag, &headers));
             }
         }
@@ -435,6 +442,24 @@ async fn image(
         None => Err(not_found(format!(
             "{why_no_preview}, and its original is not on this computer"
         ))),
+    }
+}
+
+/// A preview as Lightroom shows it: its stored pixels, told how to turn.
+fn turned(bytes: Vec<u8>, code: &str, uuid: &str) -> Vec<u8> {
+    let Some(orientation) = pictures::exif_orientation(code) else {
+        tracing::warn!(photo = %uuid, code, "unknown Lightroom orientation; serving the preview unturned");
+        return bytes;
+    };
+    if orientation == 1 {
+        return bytes;
+    }
+    match pictures::with_orientation(&bytes, orientation) {
+        Some(out) => out,
+        None => {
+            tracing::warn!(photo = %uuid, code, "preview is not a JPEG this can turn; serving it unturned");
+            bytes
+        }
     }
 }
 
