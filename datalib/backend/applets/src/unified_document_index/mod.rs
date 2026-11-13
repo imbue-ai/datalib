@@ -1752,7 +1752,7 @@ async fn qmd_state(
                         None => DocReport {
                             indexed: Some(false),
                             embedded: Some(false),
-                            note: Some("not in the search index".to_string()),
+                            note: None,
                         },
                     };
                     (u.clone(), report)
