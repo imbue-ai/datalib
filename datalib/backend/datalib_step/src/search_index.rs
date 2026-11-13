@@ -248,6 +248,13 @@ async fn embed_into(
             .await
             .context("embedder open panicked")??,
     );
+    if let Some(embedder) = &embedder {
+        tracing::info!(
+            device = %embedder.device(),
+            cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
+            "loaded the search model"
+        );
+    }
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut result = Ok(());
     for (uuid, chunks) in by_doc {

@@ -34,7 +34,11 @@ impl LocalEmbedder {
                 let file = dir.join(datalib_runtime::qmd::EMBED_MODELS[0].cache_name());
                 let opened = Embedder::open(&file, Device::Best, 0)
                     .with_context(|| format!("load the search model {}", file.display()))?;
-                tracing::info!(device = %opened.device(), "loaded the search model");
+                tracing::info!(
+                    device = %opened.device(),
+                    cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
+                    "loaded the search model"
+                );
                 live.insert(opened)
             }
         };
