@@ -347,46 +347,11 @@ cuda_library(
     ],
     target_compatible_with = LINUX_X86_64,
     alwayslink = True,
+    # cuBLAS is linked as the host's libcublas.so.12: static, it was most of
+    # a 939 MB module. Anyone running CUDA has the toolkit's libraries.
     deps = [
-        ":cublas_static",
+        "@cuda//:cublas",
         "@cuda//:cuda",
-    ],
-)
-
-# cuBLAS's static archives, picked by name out of the component's files.
-genrule(
-    name = "cublas_static_archives",
-    srcs = ["@cuda//:cublas_all_files"],
-    outs = [
-        "libcublas_static.a",
-        "libcublasLt_static.a",
-    ],
-    cmd = """
-for f in $(SRCS); do
-  case "$$f" in
-    */libcublas_static.a) cp "$$f" $(location libcublas_static.a) ;;
-    */libcublasLt_static.a) cp "$$f" $(location libcublasLt_static.a) ;;
-  esac
-done
-""",
-    target_compatible_with = LINUX_X86_64,
-)
-
-cc_library(
-    name = "cublas_static",
-    srcs = [
-        "libcublas_static.a",
-        "libcublasLt_static.a",
-    ],
-    linkopts = [
-        "-ldl",
-        "-lpthread",
-        "-lrt",
-    ],
-    target_compatible_with = LINUX_X86_64,
-    deps = [
-        "@cuda//:cublas_headers",
-        "@cuda//:culibos_a",
     ],
 )
 
