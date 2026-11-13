@@ -59,6 +59,7 @@ fn read(
 pub async fn run_render(
     env: &StepEnv,
     data_root: &Path,
+    now: &str,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let source_type = SourceType::parse(env.source_type()?)
@@ -66,17 +67,22 @@ pub async fn run_render(
     let raw = data_root.join(env.raw_store_rel());
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
-    // nothing else; the Manage row counts it as a warning.
-    for (record, why) in &unreadable {
-        tracing::warn!(record = %record, error = %why, "a source file held no readable time series");
-    }
+    // nothing else; it is a warning row, which `grid_index` copies into
+    // the index for the Manage row to count.
+    let problems = datalib_etl_time_series::unreadable_problems(&env.group, &unreadable);
     let progress = emitter.progress();
-    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, unreadable.len())] {
+    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {
         progress.metric(METRIC, &[severity.metric_label()], n as i64);
     }
     let db = datalib_etl::layout::render_time_series_db(data_root, &env.group);
     let pool = store::open(&db, StoreKind::TimeSeries).await?;
-    let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await;
+    let written = async {
+        let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await?;
+        datalib_etl::step_problems::replace(&pool, problems, &datalib_time::split_stamp(now))
+            .await?;
+        Ok(written)
+    }
+    .await;
     let claim = seal(pool, written, "render_time_series", emitter).await?;
     Ok(vec![OutputClaim {
         path: env.step.clone(),
@@ -277,6 +283,130 @@ mod tests {
         assert_eq!(sources[0].commit_hash, riker_head);
         assert_eq!(root.join(&sources[0].store), db);
         index.close().await;
+    }
+
+    /// A source file whose time series could not be read was only a log
+    /// line and a number, so it reached neither the problems list nor
+    /// "Needs you". Now the step keeps it as a warning row in its store,
+    /// `grid_index` copies it into the index under the step's own stage,
+    /// and takes it out again once the step is no longer an input. The
+    /// TNG account's ride holds no FIT file the reader can parse.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_file_is_a_warning_row_in_the_index() {
+        use datalib_etl::progress::Progress;
+        use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+        use datalib_etl_web::synthesize::Synthesizer;
+
+        const NOW: &str = "2369-04-15T09:00:00+02:00";
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let spec = runfiles::Runfiles::create()
+            .unwrap()
+            .rlocation(
+                "_main/datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
+            )
+            .unwrap();
+        let playback = root.join("playback");
+        datalib_etl_garmin::synthesize::GarminSynth::new(spec)
+            .synthesize(&playback)
+            .unwrap();
+        let db = RawDb::open(&db_path_for(&root.join("riker/ingest")))
+            .await
+            .unwrap();
+        let download = fetch(FetchOptions {
+            db: db.clone(),
+            latchkey: Default::default(),
+            api: datalib_etl_garmin_config::GarminApi {
+                since: Some("2369-04-01".into()),
+                ..Default::default()
+            },
+            today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
+            progress: Progress::noop(),
+            control: Default::default(),
+            sealer: None,
+        });
+        datalib_etl_web::playback::scope(&playback, download)
+            .await
+            .unwrap();
+        doltlite_raw::commit_run(db.pool(), "test ingest")
+            .await
+            .unwrap();
+        db.close().await;
+
+        let render = StepEnv {
+            step: "riker/render_time_series".into(),
+            group: "riker".into(),
+            group_type: Some("garmin".into()),
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::RenderTimeSeries,
+            inputs: vec!["riker/ingest".into()],
+        };
+        run_render(&render, root, NOW, &Emitter::new("test".into()))
+            .await
+            .unwrap();
+        let index_with = |inputs: Vec<String>| StepEnv {
+            step: crate::grid_index::out_rel(),
+            group: datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR.into(),
+            group_type: None,
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::GridIndex,
+            inputs,
+        };
+        let stop = datalib_etl::stop::StopFlag::new();
+        let index_rows = || async {
+            let index = datalib_core::layout::grid_index_db(root);
+            let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .connect_with(datalib_sqlite_open::file(&index).read_only(true))
+                .await
+                .unwrap();
+            let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+                "SELECT source_id, stage, severity, scope_key FROM problems ORDER BY scope_key",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            pool.close().await;
+            rows
+        };
+
+        crate::grid_index::run(
+            root,
+            &index_with(vec!["riker/render_time_series".into()]),
+            Some(NOW),
+            &Emitter::new("test".into()),
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            index_rows().await,
+            [(
+                "riker".to_string(),
+                "time_series".to_string(),
+                "warning".to_string(),
+                "17010414002".to_string()
+            )]
+        );
+
+        crate::grid_index::run(
+            root,
+            &index_with(vec![]),
+            Some(NOW),
+            &Emitter::new("test".into()),
+            &stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            index_rows().await,
+            [],
+            "a step no longer read leaves no rows"
+        );
     }
 
     /// The config side adds `render_time_series` steps for the types its

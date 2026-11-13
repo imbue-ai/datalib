@@ -18,7 +18,11 @@ pub use datalib_runtime::layout::TIME_SERIES_DB as DB;
 fn ddl(kind: StoreKind) -> Vec<&'static str> {
     match kind {
         StoreKind::TimeSeriesIndex => datalib_time_series_schema::index_ddl(),
-        _ => datalib_time_series_schema::store_ddl(),
+        _ => {
+            let mut ddl = datalib_time_series_schema::store_ddl();
+            ddl.push(datalib_etl::step_problems::ddl());
+            ddl
+        }
     }
 }
 

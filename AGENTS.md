@@ -360,7 +360,8 @@ the program it runs in `command`; datalib's own steps run
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_document_index` reads every render tree its `inputs`
-name into the SQL index the grid reads. A searched source fills its own
+name into the SQL index the grid reads, and the problem rows of the
+time-series and occurrences steps it names. A searched source fills its own
 collection of the qmd index (free-text search) with two more steps of
 its own, `keyword_index` and then `embed`, so the slow embedding can be
 turned off or run by hand per source. `qmd_aggregator` reads every

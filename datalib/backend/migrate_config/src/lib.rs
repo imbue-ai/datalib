@@ -21,12 +21,15 @@
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
 //! step of datalib's own names `datalib-step` as its `command`; then
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
-//! `since`. Those last seven rewrites are also the ones `datalib-http`
+//! `since`; then `problem_inputs.rs`: `grid_index` reads each
+//! `render_time_series` and `render_occurrences` step, for its problem
+//! rows. Those last eight rewrites are also the ones `datalib-http`
 //! makes by itself ([`UNATTENDED`]).
 
 pub mod convert;
 pub mod document_index;
 pub mod lowercase_ids;
+pub mod problem_inputs;
 pub mod qmd_steps;
 pub mod step_commands;
 pub mod time_series_embeds;
@@ -73,6 +76,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if todoist_since::is_retired(text)? {
         return Ok(LegacyFormat::TodoistCompletedSince);
     }
+    if problem_inputs::is_retired(text)? {
+        return Ok(LegacyFormat::UnreadProblems);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -84,7 +90,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::NoTimeSeries
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand
-        | LegacyFormat::TodoistCompletedSince => text.to_string(),
+        | LegacyFormat::TodoistCompletedSince
+        | LegacyFormat::UnreadProblems => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -98,6 +105,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = time_series_embeds::rewrite(&out)?;
     let out = step_commands::rewrite(&out)?;
     let out = todoist_since::rewrite(&out)?;
+    let out = problem_inputs::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -205,6 +213,19 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Add each `render_time_series` and `render_occurrences` step to
+/// `grid_index`'s `inputs` (`problem_inputs.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did.
+pub fn upgrade_problem_inputs(text: &str) -> Result<Option<String>> {
+    if !problem_inputs::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = problem_inputs::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
@@ -222,7 +243,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 7] = [
+pub const UNATTENDED: [Rewrite; 8] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -264,6 +285,12 @@ pub const UNATTENDED: [Rewrite; 7] = [
         what: "Todoist's window is `since`, which takes the grammar every source's \
                `since` does",
         run: upgrade_todoist_since,
+    },
+    Rewrite {
+        why: "has a `grid_index` that does not read a time-series or occurrences step",
+        what: "`grid_index` reads each `render_time_series` and `render_occurrences` step, \
+               so their problem rows reach the problems list and the Manage counts",
+        run: upgrade_problem_inputs,
     },
 ];
 

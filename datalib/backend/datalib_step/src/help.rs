@@ -305,7 +305,11 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              `inputs` of `unified_document_index/qmd_aggregator`.{}",
             if t.renders_time_series() {
                 " Add `<id>/render_time_series` to the `inputs` of \
-                 `unified_time_series_index/time_series_index`."
+                 `unified_time_series_index/time_series_index`, and of \
+                 `unified_document_index/grid_index`, which copies its problem rows."
+            } else if t.renders_occurrences() {
+                " Add `<id>/render_occurrences` to the `inputs` of \
+                 `unified_document_index/grid_index`, which copies its problem rows."
             } else {
                 ""
             }

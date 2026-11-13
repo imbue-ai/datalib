@@ -134,6 +134,9 @@ pub enum Retired {
     ImplicitStepCommand,
     /// A Todoist ingest's window named `completed_since` (`todoist_since.rs`).
     TodoistCompletedSince,
+    /// A `grid_index` that does not read a `render_time_series` or
+    /// `render_occurrences` step (`problem_inputs.rs`).
+    UnreadProblems,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

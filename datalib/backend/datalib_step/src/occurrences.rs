@@ -55,6 +55,7 @@ pub async fn run(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let cfg = params(env.group_type.as_deref(), params_json)?;
+    let stamp = datalib_time::split_stamp(now);
     let now = DateTime::parse_from_rfc3339(now)
         .with_context(|| format!("the run's now, {now:?}"))?
         .with_timezone(&Utc);
@@ -64,14 +65,11 @@ pub async fn run(
         tracing::info!(raw = %raw.display(), "no raw store yet; nothing to list");
         return Ok(Vec::new());
     };
-    for u in &listed.unlisted {
-        tracing::warn!(event = %u.event_row, reason = %u.reason, "an event's occurrences could not be listed");
-    }
+    // An event whose occurrences could not be listed is a warning row,
+    // which `grid_index` copies into the index for the Manage row to count.
+    let problems = listed.problems(&env.group);
     let progress = emitter.progress();
-    for (severity, n) in [
-        (Severity::Error, 0),
-        (Severity::Warning, listed.unlisted.len()),
-    ] {
+    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {
         progress.metric(METRIC, &[severity.metric_label()], n as i64);
     }
 
@@ -79,6 +77,7 @@ pub async fn run(
     let pool = store::open(&db).await?;
     let sealed = async {
         store::replace(&pool, &listed, &window).await?;
+        datalib_etl::step_problems::replace(&pool, problems, &stamp).await?;
         doltlite_raw::commit_run(
             &pool,
             &format!(

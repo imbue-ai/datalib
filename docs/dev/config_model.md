@@ -419,7 +419,10 @@ fingerprint. The rules are the dag README's "What keeps steps apart";
 `inputs` they declare — `<group>/render_markdown` for the grid,
 `<group>/keyword_index` and `<group>/embed` for the aggregator — and
 the group is each input's first segment (`qmd_index::groups_from_inputs`,
-shared by `grid_index.rs`). Nothing scans the root. A source removed
+shared by `grid_index.rs`). `grid_index` also reads each source's
+`render_time_series` and `render_occurrences`, for their problem rows
+alone (`etl/README.md` §"Problems flow downstream with the data").
+Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
 rendered tree is still on disk, and `qmd_aggregator` retires the
 collections no group claims.

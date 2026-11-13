@@ -77,7 +77,7 @@ pub async fn open(db_path: &Path) -> Result<SqlitePool> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let pool = doltlite_raw::open_derived_indexed(db_path, DDL, INDEXES, StoreKind::Occurrences)
+    let pool = doltlite_raw::open_derived_indexed(db_path, &ddl(), INDEXES, StoreKind::Occurrences)
         .await
         .with_context(|| format!("open the occurrences store at {}", db_path.display()))?;
     Ok(pool)
@@ -86,7 +86,16 @@ pub async fn open(db_path: &Path) -> Result<SqlitePool> {
 /// The shape `open` records in `_datalib_meta`: what a launch's migrate
 /// pass compares to decide whether the store must be rebuilt.
 pub fn schema_hash() -> String {
-    doltlite_raw::recorded_shape(DDL.iter().copied())
+    doltlite_raw::recorded_shape(ddl())
+}
+
+/// The tables, and the events that could not be listed as problem rows
+/// (`Listed::problems`).
+fn ddl() -> Vec<&'static str> {
+    DDL.iter()
+        .copied()
+        .chain([datalib_etl::step_problems::ddl()])
+        .collect()
 }
 
 /// Make the store hold `listed` and `window` and nothing else, in one
