@@ -21,7 +21,10 @@ permissions:
 jobs:
   build:
     name: build libggml-cuda.so
-    runs-on: ubuntu-latest
+    # The release's gnu legs' runner (release_steps.md §"The Linux floor"):
+    # its gcc 13 is one CUDA 12.9's nvcc accepts, and its glibc is the floor
+    # the module has to load on.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
