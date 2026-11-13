@@ -28,7 +28,9 @@
                                                   each chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
-<data_root>/unified_document_index/qmd_aggregator/           the qmd index (plain SQLite inside)
+<data_root>/unified_document_index/qmd_aggregator/           nothing now: the aggregator's directory,
+                                                  where qmd's index was; the aggregator
+                                                  deletes what qmd left there
 <data_root>/unified_document_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
@@ -108,7 +110,7 @@
                                                   moved (`http/src/manage/summary.rs`)
 ```
 
-Every store above but qmd's index and the JSON files carries a
+Every store above but the JSON files carries a
 `_datalib_meta` table — which datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open

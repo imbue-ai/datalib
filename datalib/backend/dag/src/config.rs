@@ -83,17 +83,6 @@ pub struct DagConfig {
     /// defaults.
     #[serde(default)]
     pub render_pages: Option<RenderPages>,
-    /// How many embedding contexts an embed step gives qmd. Omitted means
-    /// `datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS`. A plain number the
-    /// runner forwards, as for [`RenderPages`]: the step owns what it means.
-    #[serde(default)]
-    pub embed_contexts: Option<u32>,
-    /// Whether each embed step also embeds into the search index's
-    /// inference cache, beside qmd's index
-    /// (docs/dev/plans/search_index_from_ram.md). Off unless set: until
-    /// search reads that index, embedding into it costs a second embed.
-    #[serde(default)]
-    pub embed_search_index: bool,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -1019,11 +1008,26 @@ struct RawConfig {
     disk_space: Option<DiskFloor>,
     #[serde(default)]
     render_pages: Option<RenderPages>,
+    /// Retired with qmd; a file naming either still loads, and is warned
+    /// at the line ([`RETIRED_TOP_KEYS`]).
     #[serde(default)]
-    embed_contexts: Option<u32>,
+    embed_contexts: Option<toml::Spanned<toml::Value>>,
     #[serde(default)]
-    embed_search_index: bool,
+    embed_search_index: Option<toml::Spanned<toml::Value>>,
 }
+
+/// Top-level keys that no longer do anything, with why.
+const RETIRED_TOP_KEYS: &[(&str, &str)] = &[
+    (
+        "embed_contexts",
+        "has no effect: it set how many contexts qmd embedded with, and search no longer \
+         runs qmd",
+    ),
+    (
+        "embed_search_index",
+        "has no effect: every embed step fills the search index's vectors now",
+    ),
+];
 
 /// One entry on its way in: where it sits in the file, and what it
 /// deserialized to. Generic so groups, steps and applets share the
@@ -2231,6 +2235,21 @@ fn entries_of(text: &str) -> Entries {
     };
 
     let mut diags = Vec::new();
+    for (key, written) in [
+        ("embed_contexts", &raw.embed_contexts),
+        ("embed_search_index", &raw.embed_search_index),
+    ] {
+        let Some(written) = written else { continue };
+        let why = RETIRED_TOP_KEYS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map_or("has no effect", |(_, why)| why);
+        diags.push(
+            Diagnostic::new(Severity::Warning, format!("`{key}` {why}"))
+                .with_help("delete this line")
+                .at_span(text, written.span()),
+        );
+    }
     let mut spans: BTreeMap<String, std::ops::Range<usize>> = BTreeMap::new();
     let mut named: BTreeSet<String> = BTreeSet::new();
 
@@ -2331,8 +2350,6 @@ fn entries_of(text: &str) -> Entries {
             log_level: raw.log_level,
             disk_space: raw.disk_space,
             render_pages: raw.render_pages,
-            embed_contexts: raw.embed_contexts,
-            embed_search_index: raw.embed_search_index,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2471,8 +2488,6 @@ impl DagConfig {
             log_level: None,
             disk_space: None,
             render_pages: None,
-            embed_contexts: None,
-            embed_search_index: false,
         }
     }
 }
@@ -4228,6 +4243,36 @@ command = "datalib-applet unified_document_index"
         assert!(d.message.contains("has no effect"), "{d:?}");
         assert_eq!(d.help.as_deref(), Some("delete this line"));
         assert_eq!(d.column, Some(1), "{d:?}");
+    }
+
+    /// `embed_contexts` and `embed_search_index` went with qmd. A config
+    /// that still sets them loads whole, and each is warned at its line.
+    #[test]
+    fn the_retired_embed_keys_only_warn_at_their_lines() {
+        let check = check_text(
+            "embed_contexts = 4\nembed_search_index = true\n\n\
+             [[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
+             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
+             params = { export = { path = \"/e\" } }\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        assert_eq!(check.cfg.steps.len(), 1);
+        let warned: Vec<_> = check
+            .diagnostics
+            .iter()
+            .map(|d| (d.severity, d.line, d.help.as_deref()))
+            .collect();
+        assert_eq!(
+            warned,
+            vec![
+                (Severity::Warning, Some(1), Some("delete this line")),
+                (Severity::Warning, Some(2), Some("delete this line")),
+            ]
+        );
+        assert!(check.diagnostics[0].message.contains("`embed_contexts`"));
+        assert!(check.diagnostics[1]
+            .message
+            .contains("`embed_search_index`"));
     }
 
     /// LinkedIn's photo fetch went when linkedin.com stopped showing a

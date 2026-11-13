@@ -37,11 +37,12 @@ steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/render_markdown` step (raw → markdown + a per-source index
 database), `grid_index` under the `unified_document_index` group (the SQL
 index), and, for a searched source, `<group>/keyword_index` and
-`<group>/embed`, which fill that source's collection of the search
-index. `unified_document_index/qmd_aggregator` runs after every source's pair
+`<group>/embed`, which fill that source's part of the search index.
+`unified_document_index/qmd_aggregator` runs after every source's pair
 and keeps the search index to the sources it names. A step's function
-is the directory it writes (the qmd steps are the exception: they all
-write the one index file under `unified_document_index/qmd_aggregator/`):
+is the directory it writes (the search steps are the exception: they
+write the search index's tables in the grid index's file, and the
+vectors in `unified_document_index/search_index/`):
 
 ```
 <data_root>/
@@ -52,8 +53,8 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid_index/db.sqlite        # the grid_rows SQL index and each row's search terms (plain SQLite) — query this
-│   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
+│   ├── grid_index/db.sqlite        # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
+│   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
 ├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -391,7 +392,7 @@ Pick the surface that fits the question:
 
   It exits 1, with each reason on stderr, when the answer is not the
   search you asked for: a query it refused (`refused`), an error, a
-  free-text search qmd could not answer, or free text on a root with no
+  free-text search the search index could not answer, or free text on a root with no
   search index yet (a source's words are searchable once its
   `keyword_index` step has run), or part of a search that could not
   answer (`query_echo.partial`, with the rows the rest found). An empty
@@ -483,13 +484,8 @@ Pick the surface that fits the question:
   `start_time` is in the event's own. The columns:
   [Reading the raw stores](user/raw_stores.md) § "A calendar's
   occurrences".
-- **Semantic search** — the qmd index:
-
-  ```sh
-  rt=$(echo ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
-  INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
-      "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
-  ```
+- **Semantic search** — `datalib-applet search <data_root> '<words>'`
+  (above) searches by meaning as well as by words.
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
   `GET /applet/unified_document_index/search?q=…` (the query language,
   `from:me` included, is [Searching your mirror](user/searching.md);
@@ -497,15 +493,15 @@ Pick the surface that fits the question:
   the values one takes, most rows first. A key the search does not
   have is refused by name, in `refused`, rather than ignored. Free text
   made only of uuids and handles (an email address, `tel:+…`,
-  `slack:T…/U…`) is looked up in the grid index's search terms, not sent to
-  qmd: every row that answers to each one, best match first, with
+  `slack:T…/U…`) is looked up in the grid index's search terms, not ranked
+  by text: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author or an addressee,
   3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
   Other free text has one answer: `score` is reciprocal rank fusion of the
   search terms (any word as the start of one), every document's text by BM25
-  (from qmd's keyword index, a document holding the words as typed first) and
-  the documents nearest the text by cosine over qmd's vectors, one row a
+  (over each message, a document holding the words as typed first) and
+  the documents nearest the text by cosine over the search index's vectors, one row a
   document. `semantic:off` in the query leaves out the vectors, and
   `semantic:0.4` asks for that similarity where the default is 0.25: a word or
   a field that matches counts however far off its meaning is. All are ranked

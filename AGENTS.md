@@ -107,7 +107,7 @@ it properly — then bring the existing data along:
   `datalib-http`'s config upgrade when it can be made without asking,
   otherwise in `datalib-migrate-config` (`docs/dev/config_model.md`
   §"The retired shapes").
-- **A derived store** (a render store, the grid or qmd index) can be
+- **A derived store** (a render store, the grid or search index) can be
   rebuilt from the raw stores; a change that costs a re-render or
   re-index is fine.
 
@@ -361,11 +361,14 @@ the program it runs in `command`; datalib's own steps run
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_document_index` reads every render tree its `inputs`
 name into the SQL index the grid reads. A searched source fills its own
-collection of the qmd index (free-text search) with two more steps of
-its own, `keyword_index` and then `embed`, so the slow embedding can be
+part of the search index (`search_*` tables in the grid index's file, and
+the vectors in `search_index/inference_cache.sqlite`) with two more steps
+of its own, `keyword_index` and then `embed`, so the slow embedding can be
 turned off or run by hand per source. `qmd_aggregator` reads every
-source's pair: it retires the collection of any source it does not name
-and reports on the whole, and removing it turns search off.
+source's pair: it drops any source it does not name, sweeps vectors no
+chunk names, and reports on the whole, and removing it turns search off.
+Its id is qmd's, whose index this replaced
+(`docs/dev/plans/search_index_from_ram.md`).
 `embedding_map` reads the aggregator and lays the embeddings out on a
 plane for the map card (`datalib/backend/embedding_map/README.md`).
 A source whose data is also time series (Garmin, YoLink, AirVisual) has a

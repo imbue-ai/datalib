@@ -120,8 +120,6 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
-| `DATALIB_DAG_EMBED_CONTEXTS` | set when the config has `embed_contexts`: how many embedding contexts an embed step gives qmd (default 1) |
-| `DATALIB_DAG_EMBED_SEARCH_INDEX` | `1` when the config has `embed_search_index = true`: an embed step also fills the search index's inference cache |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
 plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and

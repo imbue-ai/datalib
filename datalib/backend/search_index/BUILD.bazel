@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # The search index that replaces qmd's storage: keyword postings and
 # embeddings keyed by document, holding no text; its tables live in the
@@ -56,6 +56,39 @@ rust_test(
         ":datalib_search_index",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The TNG fixture's search index (`//tests/fixtures:ingested_tng_search_index`
+# and `:ingested_tng_vectors`): every chunk's prompt, then its vector.
+rust_binary(
+    name = "search_prompts",
+    srcs = ["tools/search_prompts.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_search_index",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "embed_prompts",
+    srcs = ["tools/embed_prompts.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",
     ],
 )

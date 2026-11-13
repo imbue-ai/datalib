@@ -197,6 +197,26 @@ async fn held_vectors_are_the_cached_chunks_with_their_messages() {
     f.reader.close().await;
 }
 
+/// A document is embedded when every chunk of it has a vector; one the
+/// index does not hold is not answered, and the whole index is counted.
+#[tokio::test]
+async fn a_document_is_embedded_when_every_chunk_has_a_vector() {
+    let t = thread();
+    let text: String = t.sections.iter().map(|s| s.text.as_str()).collect();
+    let hash = chunk_hash(&t.title, &text);
+    let unembedded = doc("mail", "draft", &[(Some("d1"), "not yet embedded\n")]);
+    let f = fixture(&[t, unembedded], &[(hash, vec![3.0, 4.0])]).await;
+    let model = datalib_search_index::model_key();
+    let asked = ["thread", "draft", "never-indexed"].map(String::from);
+    let states = f.reader.states(&model, &asked).await.unwrap();
+    assert_eq!(states.len(), 2, "{states:?}");
+    assert!(states["thread"]);
+    assert!(!states["draft"]);
+    assert_eq!(f.reader.coverage(&model).await.unwrap(), (2, 1));
+    assert_eq!(f.reader.coverage("another-model").await.unwrap(), (2, 0));
+    f.reader.close().await;
+}
+
 #[tokio::test]
 async fn no_index_reads_as_none() {
     let dir = tempfile::tempdir().unwrap();
