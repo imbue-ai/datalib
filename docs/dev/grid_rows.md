@@ -134,7 +134,13 @@ rather than an error.
    on its `#[col]` so Keep only, Exclude and dropping it on the search
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
-5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+5. If it is a string, say whether a person reads it as a name or a
+   label: settle it in `settle_row` (`etl/render/src/names.rs`), which
+   strips its bidi controls as the document is stored, or add it to
+   that file's `KEPT` list as an id, a path, a stamp or a body.
+   `every_grid_row_string_is_settled_or_kept` fails until it is one or
+   the other.
+6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape only
 when the step that writes them runs. The first launch of the new build

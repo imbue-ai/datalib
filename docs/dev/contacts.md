@@ -689,7 +689,7 @@ that spells out an address, a number, a handle's URI or its stored form
 (`datalib_handle::Handle::spelled_by`) that the record does not hold
 (`"picard@enterprise.org" <q@continuum.test>`) is no name for it
 (`NormalizedContact::is_anothers_handle`). The render drops it from
-every source's contacts as the document is handed over
+every source's contacts as the document is stored
 (`datalib_etl_render::names`), `/people` drops it from a store rendered
 before that, the search's `names` table takes no row author spelled
 that way (`search_terms::names_seen_under`), and the chip refuses one
