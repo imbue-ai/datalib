@@ -835,17 +835,19 @@ pub(crate) fn seal_run(
         let kept_documents: BTreeSet<&str> =
             held_by_kept.iter().map(|(_, uuid)| uuid.as_str()).collect();
         if end.sweep {
-            for uuid in store.all_document_uuids()? {
-                if end.keep.contains(&uuid) || kept_documents.contains(uuid.as_str()) {
-                    continue;
-                }
-                store
-                    .remove_document(data_root, &uuid)
-                    .with_context(|| format!("remove document {uuid}"))?;
-                sealed.removed += 1;
+            let gone: Vec<String> = store
+                .all_document_uuids()?
+                .into_iter()
+                .filter(|uuid| !end.keep.contains(uuid) && !kept_documents.contains(uuid.as_str()))
+                .collect();
+            store
+                .remove_documents(data_root, &gone)
+                .context("remove the documents this source no longer produces")?;
+            sealed.removed += gone.len();
+            if !gone.is_empty() {
                 tracing::info!(
-                    document = %uuid,
-                    "this source no longer produces this document; dropped it",
+                    documents = gone.len(),
+                    "this source no longer produces these documents; dropped them",
                 );
             }
         }
@@ -869,19 +871,29 @@ pub(crate) fn seal_run(
                 .put_inputs(bucket, &[])
                 .with_context(|| format!("clear inputs of bucket {bucket}"))?;
         }
+        let mut gone_by_bucket: BTreeMap<String, usize> = BTreeMap::new();
+        let mut gone: Vec<String> = Vec::new();
         for (bucket, uuid) in store.documents_for_buckets(&swept)? {
-            if end.keep.contains(&uuid) {
-                continue;
+            if !end.keep.contains(&uuid) {
+                *gone_by_bucket.entry(bucket).or_default() += 1;
+                gone.push(uuid);
             }
-            store
-                .remove_document(data_root, &uuid)
-                .with_context(|| format!("remove document {uuid}"))?;
-            sealed.removed += 1;
+        }
+        store
+            .remove_documents(data_root, &gone)
+            .context("remove the documents swept buckets no longer produce")?;
+        sealed.removed += gone.len();
+        // One line for the sweep, not one per document: a source that
+        // emptied drops every document it had.
+        if !gone.is_empty() {
             tracing::info!(
-                document = %uuid,
-                bucket,
-                "this bucket no longer produces this document; dropped it",
+                documents = gone.len(),
+                buckets = gone_by_bucket.len(),
+                "swept buckets no longer produce these documents; dropped them",
             );
+        }
+        for (bucket, documents) in &gone_by_bucket {
+            tracing::debug!(bucket, documents, "dropped this bucket's documents");
         }
         // The report is skipped whole when no count moved: its byte
         // sizes wobble from run to run, so a rewrite would be a diff for
@@ -915,24 +927,33 @@ pub(crate) fn seal_run(
 
 /// The driver's half of the scan.
 #[derive(Debug, Default)]
-struct ReverseLookup {
+pub(crate) struct ReverseLookup {
     /// The raw store's HEAD, for the provider to pin.
-    pin: Option<String>,
+    pub(crate) pin: Option<String>,
     /// The buckets whose declared inputs changed between the cursor and
     /// the pin.
-    stale: Option<HashSet<String>>,
-    /// The declared inputs the diff reports removed: the only evidence a
-    /// bucket declared with nothing is gone.
-    removed: Option<HashSet<Input>>,
+    pub(crate) stale: Option<HashSet<String>>,
+    /// Declared inputs that left: every one the diff reports, and from
+    /// a table emptied since the cursor, one per bucket that named its
+    /// rows — enough for `rows_left`, which asks whether any did. The
+    /// only evidence a bucket declared with nothing is gone.
+    pub(crate) removed: Option<HashSet<Input>>,
     /// Between the cursor and the pin only bookkeeping moved: `sync_runs`,
     /// the sidecars, the other shared tables. Every download commits a
     /// `sync_runs` row, so this is a sync that fetched nothing new.
-    bookkeeping_only: bool,
+    pub(crate) bookkeeping_only: bool,
 }
+
+/// One table's changed keys between two commits: `changed_keys`, or a
+/// test's wrapper around it that records which tables were diffed.
+pub(crate) type DiffTable<'a> = dyn FnMut(&sqlx::SqlitePool, &str, &str, &str) -> Result<Vec<datalib_etl::doltlite_raw::ChangedKey>>
+    + 'a;
 
 /// The buckets whose declared inputs changed between the cursor and the
 /// raw store's HEAD, from `dolt_diff` over every table `render_inputs`
-/// mentions and a reverse lookup, and which of those rows left. Nothing
+/// mentions and a reverse lookup, and which of those rows left. A table
+/// emptied in that range is answered without its diff where it can be
+/// (`emptied_table_evidence`). Nothing
 /// to say — no cursor, no raw doltlite store, nothing declared yet, or a
 /// range this store cannot resolve — leaves the provider's own scan to
 /// decide alone, as it did before `render_inputs`, and no bucket gone.
@@ -940,6 +961,19 @@ fn reverse_lookup(
     store: &IndexedMarkdownStore,
     raw_db: Option<&Path>,
     raw_cursor: Option<&str>,
+) -> Result<ReverseLookup> {
+    reverse_lookup_with(store, raw_db, raw_cursor, &mut |pool, table, from, to| {
+        blocking(datalib_etl::doltlite_raw::changed_keys(
+            pool, table, from, to,
+        ))
+    })
+}
+
+pub(crate) fn reverse_lookup_with(
+    store: &IndexedMarkdownStore,
+    raw_db: Option<&Path>,
+    raw_cursor: Option<&str>,
+    diff_table: &mut DiffTable<'_>,
 ) -> Result<ReverseLookup> {
     let (Some(from), Some(raw_db)) = (raw_cursor, raw_db) else {
         return Ok(ReverseLookup::default());
@@ -961,10 +995,17 @@ fn reverse_lookup(
         let to = reader.pin().commit().to_string();
         let mut changed: Vec<Input> = Vec::new();
         let mut removed: HashSet<Input> = HashSet::new();
+        let mut stale: HashSet<String> = HashSet::new();
+        let mut emptied: Vec<&str> = Vec::new();
         for table in &tables {
-            match blocking(datalib_etl::doltlite_raw::changed_keys(
-                &pool, table, from, &to,
-            )) {
+            if let Some(evidence) = emptied_table_evidence(store, &pool, table, from, reader.pin())?
+            {
+                stale.extend(evidence.stale);
+                removed.extend(evidence.left);
+                emptied.push(table);
+                continue;
+            }
+            match diff_table(&pool, table, from, &to) {
                 Ok(keys) => {
                     for k in keys {
                         let input = Input::new(table.clone(), k.key);
@@ -991,7 +1032,7 @@ fn reverse_lookup(
                 }
             }
         }
-        let stale = store.buckets_reading(&changed)?;
+        stale.extend(store.buckets_reading(&changed)?);
         let bookkeeping_only = blocking(datalib_etl::doltlite_raw::content_tables_changed(
             &pool, from, &to,
         ))?
@@ -999,6 +1040,7 @@ fn reverse_lookup(
         tracing::info!(
             changed_rows = changed.len(),
             removed_rows = removed.len(),
+            emptied_tables = ?emptied,
             stale_buckets = stale.len(),
             "reverse lookup from the changed rows to the buckets"
         );
@@ -1012,6 +1054,89 @@ fn reverse_lookup(
     blocking(pool.close());
     result
 }
+
+/// What a table emptied since the cursor says without its diff.
+struct EmptiedTable {
+    /// Every bucket that declared an input from it.
+    stale: HashSet<String>,
+    /// For each bucket that named rows of it, one that held at the cursor.
+    left: Vec<Input>,
+}
+
+/// The answer the diff would give for a table that held rows at the
+/// cursor and holds none at the pin, as after a reset, at the cost of a
+/// few key lookups rather than a read of every row that left. Each
+/// bucket that named rows of the table needs one that held at the
+/// cursor: that row left, so the bucket is stale and has lost a row. A
+/// bucket that only ever looked up keys the table did not have read
+/// nothing that changed, and a key that cannot be sought proves nothing,
+/// so either sends the table to the diff (`None`), as does a table that
+/// cannot be read at both commits.
+fn emptied_table_evidence(
+    store: &IndexedMarkdownStore,
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    from: &str,
+    to: &datalib_etl::pin::Pin,
+) -> Result<Option<EmptiedTable>> {
+    use datalib_etl::doltlite_raw::{emptied_between, KeyLookup};
+    let Ok(from) = datalib_etl::pin::Pin::at(from) else {
+        return Ok(None);
+    };
+    let ready = blocking(async {
+        if !emptied_between(pool, table, &from, to).await? {
+            return Ok(None);
+        }
+        KeyLookup::new(pool, table, &from).await.map(Some)
+    });
+    let lookup = match ready {
+        Ok(Some(lookup)) => lookup,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            tracing::debug!(table, error = %format!("{e:#}"), "leaving this table to the diff");
+            return Ok(None);
+        }
+    };
+    let stale = store.buckets_reading_table(table)?;
+    let mut left = Vec::new();
+    for bucket in &stale {
+        let mut named_any = false;
+        let mut witness = None;
+        let mut after: Option<String> = None;
+        while witness.is_none() {
+            let ids = store.ids_read_from(bucket, table, after.as_deref(), KEYS_PER_PAGE)?;
+            let Some(last) = ids.last() else {
+                break;
+            };
+            named_any = true;
+            after = Some(last.clone());
+            witness = match blocking(lookup.first_held(&ids)) {
+                Ok(found) => found,
+                Err(e) => {
+                    tracing::debug!(table, error = %format!("{e:#}"), "leaving this table to the diff");
+                    return Ok(None);
+                }
+            };
+        }
+        match witness {
+            Some(id) => left.push(Input::new(table, id)),
+            None if named_any => {
+                tracing::debug!(
+                    table,
+                    bucket,
+                    "a bucket named no row this table held; leaving it to the diff"
+                );
+                return Ok(None);
+            }
+            None => {}
+        }
+    }
+    Ok(Some(EmptiedTable { stale, left }))
+}
+
+/// How many of a bucket's keys one lookup at the cursor tries: the first
+/// usually held, and a page bounds what a bucket of a million rows loads.
+const KEYS_PER_PAGE: usize = 64;
 
 /// Replace the store's fetch problems with `rows`, each naming the grid
 /// row its raw entity is where the store holds one.
@@ -1237,11 +1362,16 @@ const HANDLE_RULES_PARAM: &str = "_handle_rules";
 /// documents are filed moved, so every source writes its files again.
 const DOC_LAYOUT_PARAM: &str = "_doc_layout";
 
+/// The key `datalib_etl_render::SHARED_RULES_VERSION` sits under: what
+/// the shared writers put on every source's pages changed.
+const SHARED_RULES_PARAM: &str = "_shared_render_rules";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, the handle rules and the document layout, so one source's
-/// cursor carries all of them and a change to any one — a processor's
-/// knob, the shape of the store, what a handle normalizes to, where a
-/// document is filed — re-renders the source.
+/// hash, the handle rules, the document layout and the shared render
+/// rules, so one source's cursor carries all of them and a change to any
+/// one — a processor's knob, the shape of the store, what a handle
+/// normalizes to, where a document is filed, what every page's shared
+/// parts say — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
@@ -1258,6 +1388,10 @@ pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) ->
             (
                 DOC_LAYOUT_PARAM.to_string(),
                 serde_json::Value::from(datalib_etl_render::grid_index::DOC_LAYOUT),
+            ),
+            (
+                SHARED_RULES_PARAM.to_string(),
+                serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION),
             ),
         ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
@@ -1453,6 +1587,8 @@ mod plan_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
+                    content_hash: None,
                     markdown_uuid: uuid.to_string(),
                     source_id: "src".into(),
                     upstream_cursor: None,
@@ -1759,7 +1895,7 @@ mod stale_tree_tests {
     use super::{
         declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
         tree_is_from_an_older_renderer, RenderCursorRow, RenderPlan, HANDLE_RULES_PARAM,
-        STORE_SCHEMA_PARAM,
+        SHARED_RULES_PARAM, STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -1784,6 +1920,8 @@ mod stale_tree_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
+                    content_hash: None,
                     markdown_uuid: chat_uuid.to_string(),
                     source_id: "claude_web".into(),
                     upstream_cursor: None,
@@ -1990,7 +2128,7 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 4);
+        assert_eq!(params.as_object().unwrap().len(), 5);
     }
 
     /// A stored handle is only as current as the rules that minted it
@@ -2006,6 +2144,33 @@ mod stale_tree_tests {
         );
         let mut older = params.clone();
         older[HANDLE_RULES_PARAM] = serde_json::Value::from(datalib_handle::RULES_VERSION - 1);
+        let stored = RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: "commit-a".into(),
+            params: older.to_string(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &params, false),
+            RenderPlan::Everything("render params changed")
+        );
+    }
+
+    /// What the shared writers put on every page — a title, a chip, a
+    /// name without its bidi controls — changed for every source, and
+    /// only the chat sources' layout version moved, so the rest kept
+    /// their old pages. The shared rules ride in every source's params.
+    #[test]
+    fn a_shared_render_rules_change_renders_everything() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[SHARED_RULES_PARAM],
+            serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION)
+        );
+        let mut older = params.clone();
+        older.as_object_mut().unwrap().remove(SHARED_RULES_PARAM);
         let stored = RenderCursorRow {
             source_id: "src".into(),
             raw_commit: "commit-a".into(),

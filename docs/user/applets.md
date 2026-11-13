@@ -40,9 +40,21 @@ and the app starts it within a moment, with no restart.
 
 `datalib-dag init` writes the first two. `datalib-step examples <type>
 --append` adds the time-series index when a source that has time series
-is the first. The other two are yours to add:
+is the first.
+
+In the app, **Add data source** lists the contacts app and the photos
+applet under "Apps that read every source", each with a button that
+turns it on or off; the Lightroom form offers the photos applet too,
+and editing a Lightroom source you already have is enough to turn it
+on. Turning one off takes its entry out of the config; anything it
+stored stays on disk. From the command line, add the entry yourself:
 
 ```toml fragment
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
+
 [[applets]]
 id = "photos"
 command = "datalib-applet photos"
@@ -72,11 +84,150 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document, as markdown |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
-| `GET /problems?q=` | what a step could not fully do to a record |
+| `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
+| `POST /problems/mute` | `{"problem_uuids": […], "muted": true}` mutes those rows, `false` unmutes them; add `"agent": "<name>"` when an agent mutes for a person. A muted row stays listed and counts toward nothing until it changes |
 | `GET /embedding_map` | the documents' embeddings laid out on a plane; `/embedding_map/matches` the ones a search finds |
+| `POST /sql` | one `SELECT` over any store under the data root, a page of rows at a time (below) |
+| `GET /sql/stores` | the stores `/sql` reads |
+
+How a document names people, times and attachments, for an app that
+shows one: [showing a rendered document](rendered_documents.md).
+
+### Reading any store with SQL
+
+`POST /sql` runs one `SELECT` you write against any store under the data
+root and answers a page of rows as JSON. It is the shell's
+`datalib-doltlite -readonly` over HTTP, behind the API token like every
+route here: nothing to install, and the same answer from a container or
+another machine that can reach the app. What each store's tables hold is
+in [reading the raw stores](raw_stores.md), [the grid index's
+columns](../dev/grid_rows.md) and [the log store](../dev/logging.md).
+
+Every example below sends the token and posts JSON, so set them up once:
+
+```sh
+TOKEN=$(cat <data_root>/system/api-token)
+SQL="<origin>/applet/unified_document_index/sql"
+ask() { curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$1" "$SQL"; }
+```
+
+**1. Find the store.** `GET /sql/stores` lists every store it reads, by
+the name you send back as `store`:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" "$SQL/stores"
+```
+
+```json
+{"stores": [{"store": "slack/ingest/entities.doltlite_db", "kind": "doltlite", "bytes": 52183040},
+            {"store": "system/runs/runs.sqlite", "kind": "sqlite", "bytes": 8650752}, …]}
+```
+
+**2. See its tables and columns.** Both are ordinary `SELECT`s:
+
+```sh
+ask '{"store": "system/runs/runs.sqlite",
+      "sql": "SELECT name FROM sqlite_schema WHERE type = :type ORDER BY name",
+      "params": {"type": "table"}}'
+ask '{"store": "system/runs/runs.sqlite",
+      "sql": "SELECT name, type FROM pragma_table_info(:table)",
+      "params": {"table": "log"}}'
+```
+
+**3. Ask it something.** Put each value in `params` rather than in the
+SQL, by name or by position:
+
+```sh
+ask '{"store": "system/runs/runs.sqlite",
+      "sql": "SELECT seq, step, msg FROM log WHERE level = :level AND step LIKE :step ORDER BY seq DESC",
+      "params": {"level": "error", "step": "slack/%"},
+      "limit": 50}'
+```
+
+```json
+{"store": "system/runs/runs.sqlite", "kind": "sqlite", "commit": null,
+ "columns": ["seq", "step", "msg"],
+ "rows": [[90211, "slack/ingest", "…"], …],
+ "next_offset": 50}
+```
+
+The request:
+
+- **`store`** is the file's path under the data root: a `.doltlite_db`
+  or `.sqlite` file in a step's tree (`<group>/<step>/…`), or one of
+  `system/runs/runs.sqlite` (the log and every run's metrics),
+  `system/supervisor.sqlite` (sync requests and each step's state),
+  `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,
+  `system/disk_stats.sqlite` and `system/usage.doltlite_db`. Nothing
+  else under `system/` is a store here. `GET /sql/stores` lists them,
+  with each one's `kind` and `bytes`, the qmd index
+  (`unified_document_index/qmd_aggregator/qmd/index.sqlite`) among them.
+  Any other store deeper than `<group>/<step>/<file>` reads by name but
+  is not listed.
+- **`sql`** is one statement that returns rows: a `SELECT`, a `WITH …
+  SELECT` or a `VALUES`. A trailing `;` is fine; a second statement is
+  refused. `PRAGMA table_info(t)` is written `SELECT * FROM
+  pragma_table_info('t')`.
+- **`params`** gives the statement's parameters their values, in one of
+  two shapes:
+  - **An object, for named parameters.** `:name`, `@name` and `$name`
+    are all named; key each by its name, with or without the sigil
+    (`{"level": "error"}` or `{":level": "error"}`). A name used twice
+    in the statement takes one value.
+  - **A list, for numbered ones.** `?` takes the next value in order,
+    and `?2` the second wherever it appears.
+
+  Don't mix the two in one statement. Every parameter needs a value and
+  every value a parameter, so a misspelt name is an error rather than a
+  `NULL`. A value is a string, a number, `true`/`false` (bound as 1/0),
+  `null`, or `{"base64": "…"}` for a blob. To match a set, send one JSON
+  array as a string and read it with `json_each`: `"sql": "… WHERE id IN
+  (SELECT value FROM json_each(:ids))", "params": {"ids": "[3, 4]"}`.
+- **`limit`** is the page's rows, 500 by default and at most 10,000;
+  **`offset`** is where the page starts.
+- **`commit`**, for a doltlite store, is the commit to read. Leave it out
+  and the page reads the store's newest commit and says which.
+
+The answer's `rows` are lists in `columns`' order. An integer is a JSON
+number, exact to 64 bits (JavaScript's `JSON.parse` rounds past 2^53;
+select it as text if you read it there), a real is a number, text is a
+string, and a blob is `{"base64": "…"}`.
+
+**Paging.** Send the same request again with `offset` set to
+`next_offset`, and stop when it is `null`:
+
+```sh
+ask '{"store": "system/runs/runs.sqlite", "sql": "SELECT seq, msg FROM log ORDER BY seq",
+      "limit": 1000, "offset": 1000}'
+```
+
+ Give the statement an
+`ORDER BY`, or two pages may disagree on the order. On a doltlite store,
+send the first page's `commit` with every later page, and they all read
+that commit however far the sync has moved on. A plain SQLite store (the
+grid index, the run store) has no commits, so a page reads it as it is
+then; to walk one that is being written, page by key instead: `WHERE
+seq > :after ORDER BY seq` with `{"after": <the last seq you read>}`. A page can stop short of `limit` when its
+values pass 8 MB; `next_offset` still says where to go on.
+
+**What it will not do.** It reads, and nothing else. The store is opened
+read-only and pinned to one commit, and every statement is checked before
+it runs: reading tables and calling SQLite's functions is allowed, and so
+are doltlite's that only answer (`dolt_hashof`, `dolt_merge_base`,
+`dolt_version`), its history tables (`dolt_log()`, `dolt_diff_<table>`,
+`dolt_history_<table>`) and the `pragma_…` tables that describe a schema.
+Anything else is refused with a 403 naming it: a write, `ATTACH`, and
+doltlite's functions that change or reach past the store (`dolt_commit`,
+`dolt_push`, `dolt_clone`, `dolt_creds_new`). A query still running after
+20 seconds is stopped with a 504; narrow it or page with a smaller
+`limit`. Four run at once, and the rest wait their turn.
+
+Other errors are a JSON `{"error": "…"}`: 400 for a statement SQLite
+cannot run (its message, such as `no such table`) or a request that does
+not fit the above, and 404 for a store or commit that is not there.
 
 ## `datalib_contacts`
 

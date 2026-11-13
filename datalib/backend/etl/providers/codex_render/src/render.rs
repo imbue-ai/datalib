@@ -39,7 +39,10 @@ use crate::ids;
 ///     them.
 /// v4: an answer's author is its model's chip (`ai_model:` handle).
 /// v5: a tool's result is the harness's, not authored by the tool's name.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: an HTML tag in a prompt, a reply or a harness message shows as typed.
+/// v7: a prompt, a reply or a harness message is markdown as written
+///     again, HTML included.
+pub const RENDER_VERSION: u32 = 7;
 
 /// Who the harness's own rows are by: its notes, a tool's result. A tool's
 /// name is not a person, and `from:` must not find it as one.

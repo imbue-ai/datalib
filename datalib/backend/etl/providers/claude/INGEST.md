@@ -216,7 +216,8 @@ nothing (`reading_an_unchanged_export_again_commits_nothing`).
 
 A bulk export is a complete snapshot, so an id it stops mentioning has
 been deleted upstream: after upserting, the ingest drops the rows the
-export no longer names. Pruning is per table and runs only when that
+export no longer names, unless `when_deleted_upstream =
+"keep_local_copy"` (above). Pruning is per table and runs only when that
 table's file is present, so a partially unpacked export can't wipe the
 store.
 
@@ -286,6 +287,23 @@ that names no org, is not there to fetch rather than failed: its edge is held wi
 a `not_found` warning, and asked for again only when its conversation
 changes and is refetched.
 
+A `404` from `/contents` is not proof the file is gone. On one real
+root, a first download in October 2026 got `404` for every picture
+uploaded before March 2026 (seven of them) and the file for every
+newer one. A month later, after the store was cleared, the same
+requests got all seven. Rate limiting is unlikely to explain it: a
+rate limit comes back as `429`, which this download handles on its
+own path. The failures were also spread over a minute and fell by
+upload date, not at random. Since a `404` is held until its
+conversation changes, those pictures stayed missing for the month
+between. What is still open:
+
+- Whether a `404` should be asked again on later runs. If more of
+  these turn up for pictures, it should.
+- Older sandbox files carry a `path` and no `download_source`.
+  `/contents` answers `404` for them, both times. They may live at
+  another address, or be gone.
+
 ## What is owed
 
 There is no checkpoint file and no cursor. Each run lists every org's
@@ -326,6 +344,13 @@ payload, so no org. When every walked org listed, a stub no listing
 names is pruned too, problem and all; otherwise stubs wait for a run in
 which they all did. An org with no chat lists nothing, so it holds no
 stub back.
+
+With `when_deleted_upstream = "keep_local_copy"` none of these deletions
+happen: a conversation, project, document or user deleted on claude.ai
+(or left out of a newer export) stays as last fetched, and the run's
+summary counts it as `kept_deleted_upstream`. Stubs are still pruned;
+they hold nothing. Why someone wants that:
+[`docs/dev/deleted_upstream.md`](../../../../../docs/dev/deleted_upstream.md).
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 

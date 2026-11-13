@@ -371,7 +371,7 @@ fn what_cannot_be_listed_is_said() {
             ),
             one(
                 "outlook",
-                "DTSTART;TZID=Pacific Standard Time:20261006T090000\r\n",
+                "DTSTART;TZID=Customized Time Zone:20261006T090000\r\n",
             ),
             one(
                 "fortnightly",
@@ -394,7 +394,7 @@ fn what_cannot_be_listed_is_said() {
         [
             (
                 "bridge#outlook",
-                "unknown time zone \"Pacific Standard Time\""
+                "unknown time zone \"Customized Time Zone\""
             ),
             (
                 "bridge#fortnightly",

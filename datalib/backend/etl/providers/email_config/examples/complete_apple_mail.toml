@@ -17,11 +17,12 @@ command = "datalib-step"
 only_extract_labels = ["Inbox", "Starfleet/Reports"]
 whole_threads = true  # also keep the rest of the thread of a message the mailboxes keep; default true
 
-# `account` picks one of Mail's accounts; the rest name the account row
-# its mail is filed under.
+# Without `account`, every account in Mail that holds mail is copied, each
+# under its own account id. `account` copies just that one, and the rest
+# name its account row (they need `account`).
 [steps.params.apple_mail]
 path = "~/Library/Mail"                          # Mail's folder (the default), or a copy of it
-account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # the account's folder under ~/Library/Mail/V10; needed only when Mail has more than one
+account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # copy only this account: its folder under ~/Library/Mail/V10; default every account
 account_id = "picard_mail"                       # the account's id; default made from Mail's
 display_name = "Picard's mail"                   # the account's name; default its account_id
 email_address = "picard@example.com"             # the account's address; unset by default

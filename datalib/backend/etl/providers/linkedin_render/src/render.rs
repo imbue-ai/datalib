@@ -50,7 +50,8 @@ use datalib_schema::providers::Provider;
 /// v14: the owner's address is marked as the account's own on their
 ///     posts, so search reads it as `me`.
 /// v15: the tables no feed reads are counted on record.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: the profile's skills render, one page with a row per skill.
+pub const RENDER_VERSION: u32 = 16;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -218,6 +219,7 @@ fn build_chats(
                     },
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
+                    date_offset_secs: None,
                     text: nonempty(content).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),

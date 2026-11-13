@@ -80,6 +80,10 @@ pub async fn run(
         ("last_pass_rows_inserted", summary.rows_inserted),
         ("last_pass_problems_copied", summary.problems_copied),
         ("last_pass_search_terms_written", summary.terms_written),
+        (
+            "last_pass_search_indexes_remade",
+            summary.search_indexes_remade,
+        ),
     ] {
         progress.metric(name, &[], n as i64);
     }

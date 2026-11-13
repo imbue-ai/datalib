@@ -7,14 +7,28 @@
 //! it (message parts, mentions, the attachment's transfer guid) are not
 //! read.
 
-const STRING_MARK: &[u8] = b"NSString\x01\x94\x84\x01+";
+/// The class `NSString`, version 1.
+const STRING_CLASS: &[u8] = b"NSString\x01";
+/// The type of the value that follows: one new type string, `+` (UTF-8).
+const UTF8_TYPE: &[u8] = b"\x84\x01+";
+/// The smallest back-reference. NSString's superclass, NSObject, is
+/// always one, and its number depends on how many classes the archive
+/// named first: 0x94 for an NSAttributedString, 0x95 for a mutable one.
+const FIRST_REFERENCE: u8 = 0x92;
 
 pub fn attributed_body_text(blob: &[u8]) -> Option<String> {
-    let start = blob
-        .windows(STRING_MARK.len())
-        .position(|w| w == STRING_MARK)?
-        + STRING_MARK.len();
-    let (len, at) = read_int(blob, start)?;
+    let class_end = blob
+        .windows(STRING_CLASS.len())
+        .position(|w| w == STRING_CLASS)?
+        + STRING_CLASS.len();
+    if *blob.get(class_end)? < FIRST_REFERENCE {
+        return None;
+    }
+    let type_at = class_end + 1;
+    if blob.get(type_at..type_at + UTF8_TYPE.len())? != UTF8_TYPE {
+        return None;
+    }
+    let (len, at) = read_int(blob, type_at + UTF8_TYPE.len())?;
     String::from_utf8(blob.get(at..at + len)?.to_vec()).ok()
 }
 
@@ -39,12 +53,24 @@ fn read_int(b: &[u8], i: usize) -> Option<(usize, usize)> {
 mod tests {
     use super::*;
 
-    /// The head of a real macOS 26 archive, up to the string; the tail
-    /// is attributes and does not matter here.
+    const IMMUTABLE_HEAD: &[u8] =
+        b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12NSAttributedString\
+          \x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x08NSString\x01\x94\x84\x01+";
+
+    /// An NSMutableAttributedString holding an NSMutableString: two more
+    /// classes ahead of NSString, so its superclass reference is 0x95.
+    const MUTABLE_HEAD: &[u8] = b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x19NSMutableAttributedString\
+          \x00\x84\x84\x12NSAttributedString\x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x0fNSMutableString\
+          \x01\x84\x84\x08NSString\x01\x95\x84\x01+";
+
     fn archive(len_prefix: &[u8], text: &[u8]) -> Vec<u8> {
-        let mut v = b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x12NSAttributedString\
-                      \x00\x84\x84\x08NSObject\x00\x85\x92\x84\x84\x84\x08NSString\x01\x94\x84\x01+"
-            .to_vec();
+        archive_with(IMMUTABLE_HEAD, len_prefix, text)
+    }
+
+    /// The head of an archive up to the string; the tail is attributes
+    /// and does not matter here.
+    fn archive_with(head: &[u8], len_prefix: &[u8], text: &[u8]) -> Vec<u8> {
+        let mut v = head.to_vec();
         v.extend_from_slice(len_prefix);
         v.extend_from_slice(text);
         v.extend_from_slice(b"\x86\x84\x02iI\x01\x11\x92");
@@ -63,5 +89,16 @@ mod tests {
         assert_eq!(attributed_body_text(&long).as_deref(), Some(text.as_str()));
         assert_eq!(attributed_body_text(b"not an archive"), None);
         assert_eq!(attributed_body_text(&archive(&[0x80], b"")), None);
+    }
+
+    /// A message whose body Messages archived as mutable strings (seen on
+    /// macOS 26) was reported as "not a typedstream archive".
+    #[test]
+    fn a_mutable_archive_decodes() {
+        let text = "y".repeat(200);
+        let body = archive_with(MUTABLE_HEAD, &[0x81, 0xc8, 0x00], text.as_bytes());
+        assert_eq!(attributed_body_text(&body).as_deref(), Some(text.as_str()));
+        let short = archive_with(MUTABLE_HEAD, &[2], b"ok");
+        assert_eq!(attributed_body_text(&short).as_deref(), Some("ok"));
     }
 }

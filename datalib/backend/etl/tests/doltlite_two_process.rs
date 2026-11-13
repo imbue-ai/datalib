@@ -937,6 +937,13 @@ fn detached_readers_of_an_older_commit_read_ranges_while_the_writer_seals() {
     }
 }
 
+/// The search applet's `/sql` reads: arbitrary statements behind
+/// `datalib_sql_guard`'s authorizer and deadline, on detached opens.
+#[test]
+fn detached_readers_running_guarded_sql_never_make_the_writers_commit_fail() {
+    detached_readers_reading(3, 500, 0, &["--guarded"]);
+}
+
 /// A detached open takes no write lock, so a writer holding its batch open
 /// does not hold it up.
 #[test]

@@ -216,7 +216,7 @@ pub fn render_all(
     for cr in &parsed.change_requests {
         let comments = by_parent.remove(cr.row_id.as_str()).unwrap_or_default();
         let md_path = doc_md_path(&render_markdown_root(root, stanza), &cr.uuid);
-        markdown::write(profile, cr, &comments, &md_path)?;
+        let sections = markdown::write(profile, cr, &comments, &md_path)?;
         let md_rel = md_path
             .strip_prefix(root)
             .unwrap_or(&md_path)
@@ -225,6 +225,8 @@ pub fn render_all(
         let mut problems: Vec<ProblemRow> = Vec::new();
         let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &md_rel, &mut problems);
         on_doc_complete(RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid: cr.uuid.clone(),
             source_id: String::new(),
             upstream_cursor: None,
@@ -232,7 +234,7 @@ pub fn render_all(
             md_path,
             render_version: profile.render_version,
             rows,
-            sections: Vec::new(),
+            sections,
             edges: Vec::new(),
             contacts: account_contact(stanza, parsed.account.as_ref(), cr, &comments)
                 .into_iter()

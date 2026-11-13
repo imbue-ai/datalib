@@ -19,7 +19,9 @@ datalib-applet search ~/datalib 'warp core -from:riker is:document'
 ## Words, and how they are matched
 
 A query is free text and `key:value` terms, in any order; everything
-must match. Free text looks for words in your documents:
+must match. There is no `OR`: typed between two words it is searched
+as the word "or", so `sam OR samuel` asks for documents holding both
+names. Search for each separately. Free text looks for words in your documents:
 
 - **By their fields:** every word as the start of a value a row is filed
   under: a name, an address, an id, a title, a label.
@@ -52,7 +54,10 @@ a name. Meaning covers a source only once its `embed` step has run, so a source
 with that step turned off answers in the words it is written in. A line above
 the results says how many of the documents the search could have found have no
 vectors, and hovering says which sources they are in. From a shell or the API
-it is `query_echo.without_vectors`.
+it is `query_echo.without_vectors`. While a sync is writing the index, meaning
+and that line answer from what the search last read, so a
+search stays quick; what the sync added counts once the index has been still
+for half a minute.
 
 A search covers the sources the document index holds. A source turned off can
 leave it after an upgrade changes how documents are stored, because a turned-off
@@ -75,7 +80,7 @@ until then free text finds nothing there and the answer says why.
 | `-key:value` | rows whose `key` is not `value` |
 | `key:"two words"` | a value with a space in it |
 | `key:*` / `-key:*` | rows with any value there / with none |
-| `before:2026-10-01`, `after:2026-10-01T09:00` | rows last active before or after then — a thread's last message, a page's last edit, an event's start; a time with no zone is your machine's |
+| `before:2026-10-01`, `after:2026-10-01T09:00` (`since:` is `after:`) | rows last active before or after then — a thread's last message, a page's last edit, an event's start. See "Writing a time" below |
 | `is:document` / `-is:document` | one row per document (a thread, a conversation, a page) / only the rows inside documents |
 
 The keys for what a row is and where it lives are `source:` (a
@@ -85,6 +90,21 @@ source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `email:` (an address book's columns), and the id of any other column the
 grid shows (`org_name:`, `created_at:`, …). These match the whole value
 as stored, case and all: `kind:Email`, not `kind:email`.
+
+### Writing a time
+
+`before:`, `after:` and `since:` take any of these. A time with no zone
+is your machine's.
+
+| you write | it means |
+|---|---|
+| `2026-10-01`, `2026/10/01` | midnight starting that day; the second is how Gmail writes a day |
+| `2026-10-01T09:00`, `2026-10-01T09:00:00-07:00` | that moment |
+| `-30d`, `-12h`, `-2w` | that long before now: days, hours or weeks, with the sign, as a source's `since` is written |
+| `"Tuesday, April 3, 2029"`, `"3 Apr 2029 at 9pm"`, `"Tue Apr 3rd, 2029 at 08:30"` | a day, or a day and a time, in words: in quotes, with the year. A weekday the date does not fall on is refused |
+
+Anything else is refused, with a line saying why, rather than ignored.
+`since:-30d` is the last thirty days.
 
 ### Dates and words together
 
@@ -112,11 +132,15 @@ A person is found by the part they played:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks mentions up |
-| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
-| `label:` | (not a person) an email's labels; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
+| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about, or is tagged in a photo |
+| `pictured:` | is tagged in a photo, on a face or by a person keyword. A tag is a name and no address, so the value matches the name |
+| `label:` (also `in:`, as Gmail writes `in:sent`) | (not a person) an email's labels and mailboxes; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
 | `place:` | (not a person) where a photo was taken: a city or a landmark; or, given an [H3](https://h3geo.org) cell at any resolution (`place:86283082fffffff`), every row whose location falls in it |
 | `near:` | (not a person) given an H3 cell, every row in it or in one of its six neighbours: what the photo card's "photos in this area" writes. `place:` with a cell can miss a row just inside the cell's edge, because H3's coarse cells do not exactly hold their finer ones; `near:` never does, and also finds some rows just outside |
 | `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |
+| `keyword:` (also `tag:`) | (not a person) a photo's keywords, and the keywords above them in the keyword tree |
+| `rating:` | (not a person) a photo's stars, `1` to `5`: `rating:4` exactly, or compared, `rating:>=3`, `rating:<2` (`>`, `>=`, `<`, `<=`). `-rating:*` is the unrated ones |
+| `collection:` (also `album:`) | (not a person) the collections a photo is in: in Lightroom its collections, the Quick Collection, a saved book, slideshow, print or web gallery, and a publish service's collections (Flickr, Hard Drive, …). A collection inside a set answers to its own name, each set's name above it, and its whole path, `"Trips › Japan"`. A smart collection is a saved search, not a list of photos, and is not one |
 
 The value can be:
 

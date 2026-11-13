@@ -11,7 +11,7 @@ use tower::ServiceExt;
 
 use crate::support::{state, TEST_TOKEN};
 
-const CONFIG: &str = r#"
+pub(crate) const CONFIG: &str = r#"
 [[groups]]
 id = "pdfs"
 type = "pdf"
@@ -23,7 +23,7 @@ function = "ingest"
 
 /// Writes `<tree>/blobs.sqlite` the way the contract says a step does,
 /// and answers each row's hash.
-async fn blob_store(tree: &Path, rows: &[(Option<&str>, &[u8])]) -> Vec<String> {
+pub(crate) async fn blob_store(tree: &Path, rows: &[(Option<&str>, &[u8])]) -> Vec<String> {
     std::fs::create_dir_all(tree).unwrap();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

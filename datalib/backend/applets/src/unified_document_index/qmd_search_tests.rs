@@ -173,10 +173,7 @@ async fn a_search_reads_only_the_sources_the_grid_holds() {
 
     let hits = word_hits(&s, &plain).await.unwrap();
     assert!(!hits.is_empty(), "the other sources still answer");
-    let documents: Vec<String> = hits
-        .iter()
-        .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
-        .collect();
+    let documents: Vec<String> = hits.iter().map(|(d, _)| d.clone()).collect();
     let with_rows = s
         .repo
         .documents_kept(&parse_query(""), &documents)
@@ -591,6 +588,23 @@ async fn only_a_document_meant_to_have_vectors_counts_as_lacking_them() {
     );
     drop(s);
 
+    // A Slack document the grid files under `slack`: the qmd collection
+    // also holds documents filed under another source (a Source Size
+    // page), so the first of the collection may not be one.
+    let mut grid = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_runtime::layout::grid_index_db(root.path()))
+        .connect()
+        .await
+        .unwrap();
+    let (slack_doc,): (String,) = sqlx::query_as(
+        "SELECT uuid FROM grid_rows WHERE source_id = 'slack' AND is_document = 1 \
+         ORDER BY uuid LIMIT 1",
+    )
+    .fetch_one(&mut grid)
+    .await
+    .unwrap();
+    sqlx::Connection::close(grid).await.unwrap();
+
     let index = datalib_unified_document_index::qmd::qmd_index_path(root.path());
     let mut index = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(&index)
@@ -599,8 +613,10 @@ async fn only_a_document_meant_to_have_vectors_counts_as_lacking_them() {
         .unwrap();
     let removed = sqlx::query(
         "DELETE FROM content_vectors WHERE hash = \
-           (SELECT hash FROM documents WHERE active = 1 AND collection = 'slack' LIMIT 1)",
+           (SELECT hash FROM documents WHERE active = 1 AND collection = 'slack' \
+            AND path LIKE '%/' || ? || '.md')",
     )
+    .bind(&slack_doc)
     .execute(&mut index)
     .await
     .unwrap();
@@ -654,6 +670,7 @@ async fn a_search_naming_a_tab_is_refused() {
         offset: None,
         sort: None,
         through: None,
+        among: None,
         within: None,
         tab: Some("words".to_string()),
     };

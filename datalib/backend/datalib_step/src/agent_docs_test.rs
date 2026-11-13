@@ -67,6 +67,7 @@ fn every_toml_block_in_the_docs_loads_and_plans_unless_it_is_a_fragment() {
                     let path = dir.path().join("config.toml");
                     std::fs::write(&path, &config).expect("write the block");
                     crate::config_examples_test::validate_config(&name, &path);
+                    crate::config_examples_test::assert_current_shape(&name, &path);
                     let check = datalib_dag::config::check_text(&config);
                     let dropped: Vec<_> = check
                         .diagnostics
@@ -88,6 +89,101 @@ fn every_toml_block_in_the_docs_loads_and_plans_unless_it_is_a_fragment() {
         }
     }
     assert!(configs > 0, "no TOML block was checked");
+}
+
+/// The configs a doc's shell block writes whole, with a heredoc into a
+/// `config.toml` (`cat > "$DATA_ROOT/config.toml" <<EOF`): its body, each
+/// shell expansion in it standing in as `x`.
+fn heredoc_configs(sh: &str) -> Vec<String> {
+    let mut configs = Vec::new();
+    let mut lines = sh.lines();
+    while let Some(line) = lines.next() {
+        let Some((head, marker)) = line.split_once("<<") else {
+            continue;
+        };
+        if !head.contains("config.toml") {
+            continue;
+        }
+        let marker = marker.trim().trim_matches(['\'', '"', '-']);
+        let body: Vec<&str> = lines.by_ref().take_while(|l| l.trim() != marker).collect();
+        configs.push(without_expansions(&body.join("\n")));
+    }
+    configs
+}
+
+fn without_expansions(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        out.push('x');
+        match chars.peek() {
+            Some('(') => {
+                let mut depth = 0;
+                for c in chars.by_ref() {
+                    depth += match c {
+                        '(' => 1,
+                        ')' => -1,
+                        _ => 0,
+                    };
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            Some('{') => {
+                chars.by_ref().find(|&c| c == '}');
+            }
+            _ => {
+                while chars
+                    .next_if(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .is_some()
+                {}
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_shell_expansion_in_a_heredoc_config_stands_in_as_x() {
+    let sh = "mkdir -p \"$D\"\ncat > \"$D/config.toml\" <<EOF\n\
+              path = \"/import/$(basename \"$MBOX\")\"\nroot = \"${HOME}/$NAME.d\"\nEOF\necho done\n";
+    assert_eq!(
+        heredoc_configs(sh),
+        ["path = \"/import/x\"\nroot = \"x/x.d\""]
+    );
+}
+
+/// A doc that writes a whole config in a shell block (docs/user/docker.md
+/// does) is held to what a TOML block is: it loads, plans, and is in the
+/// shape `datalib-http` leaves alone.
+#[test]
+fn every_config_a_docs_shell_block_writes_loads_and_plans() {
+    let mut configs = 0;
+    for d in markdown_docs() {
+        for block in fenced_blocks(d.text) {
+            if !matches!(
+                block.info.split_whitespace().next(),
+                Some("sh" | "bash") | None
+            ) {
+                continue;
+            }
+            for (i, config) in heredoc_configs(&block.body).into_iter().enumerate() {
+                let name = format!("{}:{} (heredoc {})", d.path, block.line, i + 1);
+                let dir = tempfile::tempdir().expect("tempdir");
+                let path = dir.path().join("config.toml");
+                std::fs::write(&path, &config).expect("write the heredoc");
+                crate::config_examples_test::validate_config(&name, &path);
+                crate::config_examples_test::assert_current_shape(&name, &path);
+                configs += 1;
+            }
+        }
+    }
+    assert!(configs > 0, "no doc writes a config.toml with a heredoc");
 }
 
 #[test]

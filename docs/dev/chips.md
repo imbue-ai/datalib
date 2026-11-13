@@ -10,15 +10,18 @@ the same in each: the same tooltip, right-click menu and double-click,
 and the same text when copied.
 
 Start here to add a new kind of chip or a new place that draws them.
-What makes a *person* who they are — handles, each source's record,
-the contacts app — is [`contacts.md`](contacts.md); this page is the
-machinery every kind shares.
+What a document promises any viewer — the link a person is written as,
+the `<time>` a date is, the attachment addresses — is
+[showing a rendered document in your app](../user/rendered_documents.md),
+the contract an app builder reads; this page is how datalib's own
+viewer keeps it. What makes a *person* who they are — handles, each
+source's record, the contacts app — is [`contacts.md`](contacts.md).
 
 ## Words
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step, a date |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a date |
 | **chip link** | how a chip is written down: a markdown link, `[text](href "title")` |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -45,19 +48,14 @@ link carries only what the producer knew when it wrote it:
 - **title** — the hover any other viewer shows. Datalib replaces it
   with a live tooltip.
 
-The URIs, a standard scheme where one exists so that a pasted link
-still works in another app, and `datalib:` otherwise:
-
-| entity | URI | written by |
-|---|---|---|
-| a person by email | `mailto:riker@enterprise.org` | `Handle::to_uri` |
-| a person by phone | `tel:+12025550101` | `Handle::to_uri` |
-| a Slack user | `slack://user?team=T01&id=U02` (Slack's own deep link) | `Handle::to_uri` |
-| a LinkedIn member | `https://www.linkedin.com/in/<slug>` (their profile) | `Handle::to_uri` |
-| a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id, `datalib:handle/facebook/name/Will%20Riker` or `datalib:handle/github/data-soong`. A GitHub profile's address is not used: `github.com/<x>` is as often an organization or one of GitHub's own pages | `Handle::to_uri` |
-| one of your contacts, by its id | `datalib:contact/<id>` (`contactFromUri` in `chipLinks.js`) | `datalib_contacts::contact_uri` |
-| a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
-| a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
+The URI for each kind of handle, and the trust rule a viewer keeps, are
+in [the document contract](../user/rendered_documents.md#a-person). The
+backend writes a handle's URI with `Handle::to_uri`; one of your
+contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
+read by `contactFromUri` in `chipLinks.js`); a group is
+`datalib:group/<id>` and a step `datalib:step/<group>/<function>`
+(`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
+(`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`).
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:
@@ -115,7 +113,11 @@ What goes into the look is each kind's own rule, pure and unit-tested:
 
 - **A person** — `chipLook` and `chipTooltip` in `contacts.ts`: the
   contact's name if a person linked one, else the best-ranked source's
-  name, else what the source showed; the kind's mark while it is not
+  name, else what the source showed. A message's own author, in its
+  header, shows the name that message gave instead of the source's
+  (see [Trust](#trust)). A name that spells out an address or another
+  handle the person does not hold is never shown; the chip shows its
+  own identifier instead. The kind's mark while it is not
   linked to a contact, and a quiet "+" when a contacts app is there to
   link it. A chip linked to one of your contacts is blue, and one that
   is not is grey (`chip.css`). [`contacts.md`](contacts.md)
@@ -141,14 +143,25 @@ no page styles.
 
 ## Trust
 
-A chip may appear anywhere in a body, including in a link a stranger
-wrote in an email. That is safe for one reason: **a chip shows what
-its href resolves to, never the link text.** A body that writes
-`[Picard](mailto:phisher@romulan.net)` gets a chip for the phisher,
-under the name the sources know them by, with "Shown here as
-“Picard”" in its tooltip. A link to `datalib:group/slack` shows that
-group's real name. Forging a link can only point at a real entity
-under its real name, which is what any link already does.
+**A chip shows what its href resolves to, never the link text**;
+[the contract](../user/rendered_documents.md#trust-the-href-never-the-text)
+says why. So a body's `[Picard](mailto:phisher@romulan.net)` is a chip
+for the phisher, under the name the sources know them by, with "Shown
+here as “Picard”" in its tooltip, and a link to `datalib:group/slack`
+shows that group's real name. Forging a link can only point at a real
+entity under its real name, which is what any link already does.
+
+**One exception: a message's own header shows the name that message
+gave its author**, as any mail client does, so a forged `From:` shows
+on the forged message and on no other. The source's name for the
+person is decided across everything they wrote, not by any one message
+([`contacts.md`](contacts.md) §"In the UI"). The viewer knows a header
+by its place: `renderDocument.ts` renders each message's inside alone
+once its wrapper checks out, and `chipLinks.js` marks a link opening
+that fragment's first line, an `h2`, with `data-chip-header`. Nothing a
+message carries comes before its header, and the sanitizer takes the
+attribute off any link the plugin did not sign. A body rendered whole,
+without its sections, has no header chips.
 
 ## Resolving
 
@@ -227,6 +240,14 @@ A grid draws a chip from an `identity` typed cell
   the Source cell's id. The search and problems grids' Source column
   is one (`Sources::identity` sets `entity` for every source the
   config declares).
+- **A document**: the cell's `entity` is its `datalib:doc/<uuid>`, its
+  `label` the document's title (`markdowns.title`, the heading its page
+  opens with, or "Untitled document"), its `icon` and `detail` its
+  source's mark and name. The search grid's Document column is one,
+  and so is the problems grid's (`columns.rs::document_identity`, the
+  titles read beside the rows by `dolt_repo.rs::document_titles`). It
+  is drawn by `documentChip.ts::documentCell` whether or not the grid
+  resolves chips, since nothing in it needs resolving (§"A document").
 - **A date**: a `datetime` cell (the search grid's Touched, Created
   and Modified) is the date chip a document draws (§"A date"), through
   `cellRenderers.ts::renderDateTime`; a value it cannot read stays
@@ -238,6 +259,9 @@ A grid draws a chip from an `identity` typed cell
   The log's Time column is the same chip to the millisecond,
   `2026-09-22 14:07:47.190` (`dates.ts::millisDateCell`), which a
   narrow column cuts from the left so the seconds stay.
+  An applet's card has none of this code: the `<time datetime>` it
+  writes is drawn by the app, which mounts it
+  (`appletDates.ts::withDateChips`), as the photo card's Taken is.
 
 `typedColumns.ts` draws such a cell through `chipCell` or `entityCell`
 when given its `chips` option, and `GridCard` redraws the Author,
@@ -249,7 +273,11 @@ run log draws its Group and Step columns as chips the same way
 `TableGrid` takes the option too, as the contacts app's table and the
 Sources table do: a double-click on a chip there opens its card
 (`openCard`) instead of the cell's in-place edit, and its right-click
-is still the row's menu. A group row of an identity column draws its
+is still the row's menu. In every grid a single click on a chip selects
+its row, as a click anywhere else in the row does. The chip's href is
+stopped by a click listener on the grid's box, which the click reaches
+after the grid has selected the row: SlickGrid selects nothing for a
+click already `preventDefault`ed when it sees it. A group row of an identity column draws its
 value as the chip of the group's first row, where the rows are loaded
 (`typedColumns.ts`), and the run log's Group and Step group rows draw
 theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
@@ -273,7 +301,8 @@ document does:
   each source's record; the time-series card's heading for each
   source; the log-line card's group and step.
 - **The app's chrome:** each row of the toolbar's "what is syncing"
-  menu, the upgrade indicator's list and the re-render dialog's list.
+  menu, the pass pills' lists (upgrading, freeing disk space) and the
+  re-render dialog's list.
   The search index keeps its plain name there ("Search index").
 
 It looks the entity up in `entities`, redraws when the answer moves,
@@ -313,6 +342,32 @@ is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
 right-click away; linking a handle stays the popover's
 (`ui/src/search/chipMenu.ts`).
 
+## A document
+
+**A rendered document is a chip by its title**, named by its
+`datalib:doc/<uuid>` (`ui/src/cards/documentChip.ts`). Unlike a person,
+a group or a step it has **no resolver**: the producer sends the title,
+and a title changes only when the document is rendered again, which
+changes the index row the producer read it from. So a grid draws it
+from the cell alone, and a new search shows the new title.
+
+- **look**: the title, led by its source's mark; "From Work Slack" and
+  the URI on hover.
+- **double-click**: the document's card. In the search and problems
+  grids it opens beside the grid at the row's own section, as clicking
+  the row does.
+- **right-click**: Open “<title>”; Copy ID (the uuid), the title, or
+  Copy title and link, which puts a link on the clipboard —
+  `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
+  rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
+  href is the document's name, which datalib reads; no app registers
+  the scheme, so outside datalib it is a name, not a link that opens
+  anything. The rest of the title
+  bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
+  document itself, which a chip does not hold.
+- **drag**: no search key names a document in the search grid, so it
+  drags as a link.
+
 ## A date
 
 **Every stamp in a document is a chip too.** A render writes one as
@@ -328,12 +383,17 @@ the rules are pure functions over the parsed stamp and the **time view**.
 app, chips and every other stamp (`ui/src/config/timeView.ts`, kept per
 browser). A click or a right-click on it picks the zone — this
 computer's, **as written** (each stamp in the offset its source wrote it
-in), UTC, the last few named zones, or any zone found by place or offset —
+in: an email in its `Date:`'s), UTC, the last few named zones, or any zone found by place or offset —
 and how a date is written: `Wed, Apr 15, 2026` or `2026-04-15`, on a 24-
 or 12-hour clock. The clock shows the time now in that zone, outlined
 when it is not this computer's. Under "as written", a stamp with no
 offset of its own reads as this computer does; a day is the same day in
-every zone. Anything that formats a stamp goes through `timeView.ts`, and
+every zone, and so is a stamp in `Z` (or RFC 3339's older `-00:00`),
+which since RFC 9557 names no clock and which a render writes for a
+time whose source names none
+([the contract](../user/rendered_documents.md#a-time) says which).
+Picking any other zone reads every stamp in that zone, whatever its
+offset (`parseStamp` in `dates.ts`, `parseInstant` in `timeView.ts`). Anything that formats a stamp goes through `timeView.ts`, and
 anything that draws one into the page itself (a grid, a document, the
 search field) draws it again when the view changes.
 
@@ -473,14 +533,15 @@ A new kind of *handle* is a person and goes through
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`, `dates.test.ts`, and
+- The rules: `contacts.test.ts`, `entities.test.ts`, `documentChip.test.ts`, `dates.test.ts`, and
   `chipActions.test.ts` (one menu order for every kind, and where each
   entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
 - The writers: `etl_render_unittests` (`chip_link`), the storage
   report's test in `introspect.rs`, chat-common's header and reactor
   tests.
-- End to end: `chip-menu.spec.ts` (a person in a document),
+- End to end: `problems-grid.spec.ts` (a problem's Document chip),
+  `chip-menu.spec.ts` (a person in a document),
   `grid-chips.spec.ts` (the Author and Source cells, the storage
   report), `contacts.spec.ts` (two handles linked to one contact,
   followed by an open grid), and `data-sources-sync.spec.ts` (a run
@@ -490,7 +551,9 @@ A new kind of *handle* is a person and goes through
 ## Not built
 
 A system event as a chip ("Worf joined the channel"), which needs each
-provider to carry the handle on its system events; chips for a channel
-or a document (a document chip's menu is to be the document title bar's,
-`ui/src/cards/documentMenu.ts`); and editing a contact on the person card
+provider to carry the handle on its system events; a chip for a
+channel; a document chip in a rendered page (a `datalib:doc/` link in
+markdown is not marked as one yet, and would need a resolver for its
+title) or in the search field (no `doc:` key in the search grid); the
+title bar's whole menu on a document chip; and editing a contact on the person card
 ([`plans/contact_editing.md`](plans/contact_editing.md)).

@@ -1,6 +1,6 @@
 //! The search terms in the grid index: every term each `grid_rows` row
 //! answers to (`datalib_schema::search_terms`), in the `rows`, `vals`,
-//! `vals_fts` and `terms` tables. It is the grid's rows melted, one
+//! `vals_fts`, `vals_tri` and `terms` tables. It is the grid's rows melted, one
 //! indexed row per term: what each row's columns say (`search_terms_of`)
 //! and what its render supplied (`supplied_terms`). The index's writer
 //! rewrites a row's terms in the transaction that writes the row, so the
@@ -93,12 +93,12 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
-    sqlx::query(
+    for sql in [
         "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
-    )
-    .bind(floor)
-    .execute(&mut *conn)
-    .await?;
+        "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
+    ] {
+        sqlx::query(sql).bind(floor).execute(&mut *conn).await?;
+    }
     for sql in [
         "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
              SELECT v.val_id, i.kind, r.row_id FROM temp.incoming i \
@@ -107,6 +107,7 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
         "DELETE FROM temp.dropped WHERE EXISTS \
              (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)",
         "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)",
+        "DELETE FROM vals_tri WHERE rowid IN (SELECT val_id FROM temp.dropped)",
         "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)",
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
@@ -194,7 +195,14 @@ pub fn names_seen_under(
     let mut out: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
     let mut unread = 0usize;
     for (handle, name) in authors {
-        out.insert((handle, name.trim().to_string()));
+        // An author shown as another handle (a forged `From`) is not a
+        // name for this one; a source contact's names were settled at
+        // render (`crate::names`).
+        let anothers =
+            datalib_handle::Handle::spelled_by(&name).is_some_and(|h| h.as_str() != handle);
+        if !anothers {
+            out.insert((handle, name.trim().to_string()));
+        }
     }
     for (handle, json) in contacts {
         match serde_json::from_str::<datalib_contact_schema::NormalizedContact>(json) {
@@ -280,7 +288,7 @@ fn placeholders(rows: usize, per_row: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid_index::{apply_one, delete_markdown, open_index, RenderedMarkdown, WriteLock};
+    use crate::grid_index::{apply_one, delete_markdowns, open_index, RenderedMarkdown, WriteLock};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
@@ -368,6 +376,8 @@ mod tests {
             .build()
             .unwrap();
         RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,
@@ -409,7 +419,7 @@ mod tests {
                 apply_one(&lock, &self.root, md).await.unwrap();
             }
             for md in remove {
-                delete_markdown(&lock, md).await.unwrap();
+                delete_markdowns(&lock, &[md.to_string()]).await.unwrap();
             }
             crate::grid_index::seal(&lock).await.unwrap();
         }
@@ -448,6 +458,29 @@ mod tests {
 
     fn hit(uuid: &str, kind: &str) -> (String, String) {
         (uuid.to_string(), kind.to_string())
+    }
+
+    /// A forged `From: "picard@enterprise.org" <q@continuum.test>` made
+    /// the row's author Picard's address, and the index then knew Q by
+    /// that name. The row still shows what the message said.
+    #[tokio::test]
+    async fn an_author_that_is_another_handle_names_nobody() {
+        let g = Grid::new().await;
+        let q = "email:q@continuum.test";
+        let mut forged = doc(&g.root, "c-f", q, "Orders");
+        forged.rows[0].author = Some("picard@enterprise.org".into());
+        let mut own = doc(&g.root, "c-q", q, "Orders");
+        own.rows[0].author = Some("Q".into());
+        let mut bare = doc(&g.root, "c-b", q, "Orders");
+        bare.rows[0].author = Some("q@continuum.test".into());
+        g.seal(&[forged, own, bare], &[]).await;
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM names WHERE handle = ? ORDER BY name")
+                .bind(q)
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        assert_eq!(names, ["Q", "q@continuum.test"]);
     }
 
     #[tokio::test]

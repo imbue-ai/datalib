@@ -7,7 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
+use datalib_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig, WhenDeletedUpstream};
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_web::http::LatchkeySettings;
 
@@ -26,6 +26,7 @@ pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let export = config.export.map(|e| e.path());
+    let when_deleted_upstream = config.when_deleted_upstream;
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(input_path) = &export {
         procs.push(Box::new(ChatgptExportIngest {
@@ -37,6 +38,7 @@ pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
             } else {
                 ingest::export::Reading::Snapshot
             },
+            when_deleted_upstream,
         }));
     }
     if let Some(sync) = config.api {
@@ -46,6 +48,7 @@ pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
             sync,
             latchkey: config.latchkey_settings,
             export,
+            when_deleted_upstream,
         }));
     }
     Ok(procs)
@@ -59,6 +62,7 @@ struct ChatgptIngest {
     /// the source's `latchkey_settings:` block.
     latchkey: LatchkeySettings,
     export: Option<PathBuf>,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -100,6 +104,7 @@ impl DataProcessor for ChatgptIngest {
                 conv_uuids: self.sync.conv_uuids.clone(),
                 now: Some(ctx.now.to_string()),
                 export: self.export.clone(),
+                when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
                 sealer: Some(sealer),
@@ -107,13 +112,14 @@ impl DataProcessor for ChatgptIngest {
             .await?;
             Ok(format!(
                 "fetched={} skipped={} out_of_scope={} errors={} listing={} pruned={} \
-                 blobs_from_export={} requests={}",
+                 kept_deleted_upstream={} blobs_from_export={} requests={}",
                 s.fetched,
                 s.skipped,
                 s.out_of_scope,
                 s.errors,
                 s.listing,
                 s.pruned,
+                s.kept_deleted_upstream,
                 s.blobs_from_export,
                 s.requests,
             ))
@@ -129,6 +135,7 @@ struct ChatgptExportIngest {
     raw_path: PathBuf,
     input_path: PathBuf,
     reading: ingest::export::Reading,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -153,6 +160,7 @@ impl DataProcessor for ChatgptExportIngest {
                 db,
                 input_path: self.input_path.clone(),
                 reading: self.reading,
+                when_deleted_upstream: self.when_deleted_upstream,
                 cache: FingerprintCache::open(&fingerprint_cache::default_cache_path()?).await?,
                 now: ctx.now.to_string(),
                 progress: ctx.progress.clone(),
@@ -163,11 +171,12 @@ impl DataProcessor for ChatgptExportIngest {
                 return Ok("export unchanged since it was last read".to_string());
             }
             Ok(format!(
-                "conversations={} unchanged={} pruned={} new_blobs={} skipped_blobs={} \
-                 not_in_export={}",
+                "conversations={} unchanged={} pruned={} kept_deleted_upstream={} new_blobs={} \
+                 skipped_blobs={} not_in_export={}",
                 s.conversations,
                 s.unchanged,
                 s.pruned,
+                s.kept_deleted_upstream,
                 s.new_blobs,
                 s.skipped_blobs,
                 s.not_in_export,

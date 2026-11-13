@@ -70,6 +70,7 @@ async fn ingest_fixture(raw: &Path) {
         db: db.clone(),
         input_path: export.path().to_path_buf(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
+        when_deleted_upstream: Default::default(),
         progress: Default::default(),
         control: Default::default(),
     })

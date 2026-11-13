@@ -17,7 +17,8 @@
 // A click only selects a row (grid/rowIdioms.ts). A double-click, Enter
 // or the row menu opens the row's document as a new card via
 // ctx.host.openCards — structural changes never go through the bus —
-// and the menu can open it in a new tab instead.
+// and the menu can open it in a new tab instead. On the problems, the
+// menu also mutes or unmutes the rows it is about (`RowsResponse.mutes`).
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { timeView } from "@/config/timeView";
 // The grid is the framework-agnostic bundle, not the Vue wrapper: a
@@ -87,10 +88,11 @@ import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { isWebUrl, openExternal } from "@/externalLinks";
-import { oneAtATime, subscribeLive } from "@/live";
+import { changed, oneAtATime, subscribeLive } from "@/live";
 import { encodeColumns } from "@/router/columns";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { followFrame, isDarkTheme } from "@/grid/gridFrame";
+import { pictureRowHeight } from "@/grid/pictureRows";
 import {
   filterToken,
   keepExcludeEntries,
@@ -100,9 +102,14 @@ import {
   type FilterEntry,
 } from "@/grid/query";
 import { menuSlots, onAfterMenuShowFit, perOpening } from "@/grid/menu";
-import { newlyPicked } from "@/grid/selection";
+import { keptSelection, newlyPicked, rowsToRestore, withoutLeftOut } from "@/grid/selection";
 import { copySelectedRowsOnKey } from "@/grid/copyRows";
-import { openRowsOn, selectAllRowsOnKey } from "@/grid/rowIdioms";
+import {
+  openRowsOn,
+  selectAllRowsOnKey,
+  stepThroughSelection,
+  tabLeavesRows,
+} from "@/grid/rowIdioms";
 import { markdownsToAsk, widen } from "@/grid/qmdAsk";
 import { searchNotices, type SearchEcho } from "@/grid/searchCoverage";
 import { registerSearchCard } from "@/search/searchCards";
@@ -149,7 +156,7 @@ import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchV
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 
-const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows } = useApi();
+const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows, muteProblems } = useApi();
 
 /// A row of whichever table the card pages: a search row's fields where
 /// it is one, and nothing is assumed of any of them.
@@ -237,6 +244,9 @@ shows the same results with every column, sorting and grouping: a click selects 
 (⌘ and Shift add to the selection, ⌘A takes them all), and a double-click, Enter or
 <b>Open document</b> on its right-click menu opens it. A new search opens on the one you
 picked last.</p>
+<p>In either view, ↑ and ↓ move from result to result, Enter opens the one picked, and Tab
+moves on past the results. In the table, F6 reaches the column headers, and with several
+rows selected ↑ and ↓ move among them alone.</p>
 `
     : null,
 );
@@ -279,6 +289,8 @@ const columns = ref<ColumnSpec[]>([]);
 let rowsSpec: RowsSpec | null = null;
 /// qmd ranks this table's free text, and indexes its documents.
 const qmd = () => rowsSpec?.free_text === "qmd";
+/// The rows can be muted (the problems): each says whether it is.
+let mutable = false;
 // The query whose results are actually painted right now — not `query`
 // (what is typed) and not `!loading` (which flips in both directions
 // within one tick, so an observer can miss the transition entirely).
@@ -592,6 +604,22 @@ function applyColumns(cols: CurrentColumn[]) {
   restoring = true;
   vueGrid.gridStateService.applyColumnLayout([...cols, ...rest], false);
   restoring = false;
+  fitRowsToPictures();
+}
+
+/// Tall enough for two lines of clamped snippet text plus padding.
+const ROW_HEIGHT = 52;
+
+/// Rows as tall as the widest shown picture column, so a picture grows
+/// as its column is dragged wider.
+function fitRowsToPictures() {
+  if (!vueGrid) return;
+  const grid = vueGrid.slickGrid;
+  const pictures = new Set(columns.value.filter((c) => c.type === "image").map((c) => c.field));
+  const height = pictureRowHeight(grid.getColumns(), pictures, ROW_HEIGHT);
+  if (grid.getOptions().rowHeight === height) return;
+  grid.setOptions({ rowHeight: height });
+  grid.invalidate();
 }
 
 /// Hide or show columns by id, keeping their order and widths.
@@ -922,6 +950,7 @@ async function runSearch(q: string, refresh = false) {
     unfinished.value = r.refused?.[0] ?? null;
     if (unfinished.value !== null) return answered(q, "refused");
     rowsSpec = { row_key: r.row_key, document: r.document, free_text: r.free_text };
+    mutable = !!r.mutes;
     if (r.columns?.length && JSON.stringify(r.columns) !== JSON.stringify(columns.value)) {
       columns.value = r.columns;
     }
@@ -943,6 +972,7 @@ async function runSearch(q: string, refresh = false) {
     else {
       showNew();
       answered(q, "rows", { rows: win.rows.length, total: r.total });
+      void keepWhatTheSearchHolds();
     }
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
@@ -1168,7 +1198,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
   total.value = grouped.groups.reduce((n, g) => n + g.count, 0);
   if (kind === "new") {
     handed = handedOf(items, rowKey);
-    vueGrid.dataset = items;
+    asOwnChange(() => (vueGrid!.dataset = items));
     vueGrid.slickGrid.scrollRowIntoView(0);
     refreshQmdState();
   } else {
@@ -1181,6 +1211,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
       refreshQmdState();
     } else askAboutVisibleRows();
   }
+  restoreKept();
   tryRestoreSelection();
   loadGroupsInView();
 }
@@ -1251,7 +1282,7 @@ function tryRestoreSelection() {
   const row = vueGrid.dataView.getRowById(target_sel);
   if (row == null) return;
   restoring = true;
-  vueGrid.slickGrid.setSelectedRows([row]);
+  restoreKept();
   vueGrid.slickGrid.scrollRowIntoView(row);
   selectedRow.value = target;
   restoring = false;
@@ -1302,10 +1333,20 @@ function presetColumns(): Set<string> | null {
 // column worth reading.
 function adaptiveFields(): [string, keyof SearchRow][] {
   const allowed = presetColumns();
-  if (!allowed) return Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][];
-  return [...allowed]
-    .filter((c) => c !== "snippet")
-    .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)]);
+  const listed: [string, keyof SearchRow][] = allowed
+    ? [...allowed]
+        .filter((c) => c !== "snippet")
+        .map((c) => [c, ADAPTIVE_FIELDS[c] ?? (c as keyof SearchRow)])
+    : (Object.entries(ADAPTIVE_FIELDS) as [string, keyof SearchRow][]);
+  // A column its producer says repeats itself is compared on the value
+  // its search names, the id behind the label.
+  const declared = columns.value
+    .filter((c) => c.hide_when_uniform && !listed.some(([id]) => id === c.field))
+    .map((c): [string, keyof SearchRow] => [
+      c.field,
+      (c.search?.field ?? c.field) as keyof SearchRow,
+    ]);
+  return [...listed, ...declared];
 }
 
 function stringifyForCompare(v: unknown): string {
@@ -1324,6 +1365,8 @@ function applyAdaptiveVisibility() {
           rows.value.every((r) => r.image == null)
         : rows.value.every((r) => stringifyForCompare(r[field]) === first);
   }
+  // A photo's picture is what it says; its caption is in its card.
+  if (!presetColumns()) hidden.snippet = rows.value.every((r) => r.image != null);
   setHidden(hidden);
 }
 
@@ -1340,8 +1383,8 @@ function applyPresetColumns() {
     hidden: false,
     width: widths.get(columnId),
   }));
-  // …and hide everything else the grid offers. `snippet` is in every
-  // preset, so nothing here can hide the text column by accident.
+  // …and hide everything else the grid offers, the text column too
+  // when a preset leaves it out (a photo library's).
   const set = new Set(wanted);
   const rest: CurrentColumn[] = vueGrid.slickGrid
     .getColumns()
@@ -1359,7 +1402,7 @@ function showNew() {
   if (!vueGrid || !win) return;
   handed = handedOf(win.rows, rowKey);
   const shownRows = display(win.rows);
-  vueGrid.dataset = shownRows;
+  asOwnChange(() => (vueGrid!.dataset = shownRows));
   applyAdaptiveVisibility();
   // Newest at the bottom for the default order, the top row otherwise;
   // then at now, for an order by a date, unless a selection is wanted.
@@ -1367,6 +1410,7 @@ function showNew() {
     vueGrid.slickGrid.scrollRowIntoView(shown?.tail ? shownRows.length - 1 : 0);
   if (!seekingSelection) void goToNow();
   tryRestoreSelection();
+  restoreKept();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
   refreshQmdState();
@@ -1382,6 +1426,7 @@ function showChanged(indexMoved: boolean) {
   handed = next.handed;
   applyPatch(next.patch, display(win.rows));
   tryRestoreSelection();
+  restoreKept();
   if (indexMoved) refreshQmdState();
   else askAboutVisibleRows();
   loadWanted();
@@ -1398,14 +1443,16 @@ function applyPatch(patch: RowPatch<Row>, order: Row[]) {
   const anchor = anchorRow ? rowKey(anchorRow) : null;
   const position = new Map(order.map((r, i) => [rowKey(r), i]));
   keepActiveOnRecord(grid, dataView, () => {
-    redrawChanged(grid, dataView, () => {
-      dataView.beginUpdate();
-      for (const id of patch.removed) dataView.deleteItem(id);
-      for (const row of patch.changed) dataView.updateItem(rowKey(row), row);
-      for (const row of patch.added) dataView.addItem(row);
-      dataView.sort((a, b) => position.get(rowKey(a))! - position.get(rowKey(b))!);
-      dataView.endUpdate();
-    });
+    redrawChanged(grid, dataView, () =>
+      asOwnChange(() => {
+        dataView.beginUpdate();
+        for (const id of patch.removed) dataView.deleteItem(id);
+        for (const row of patch.changed) dataView.updateItem(rowKey(row), row);
+        for (const row of patch.added) dataView.addItem(row);
+        dataView.sort((a, b) => position.get(rowKey(a))! - position.get(rowKey(b))!);
+        dataView.endUpdate();
+      }),
+    );
     const moved = anchor ? dataView.getRowById(anchor) : undefined;
     if (moved != null && moved !== top) grid.scrollRowToTop(moved);
   });
@@ -1435,8 +1482,8 @@ onMounted(() => {
   unsubscribeLive = subscribeLive(
     {
       root: (e) => {
-        if (e.kind !== "index_changed") return;
-        refreshRows();
+        // A mute is in a store of its own, which says when it publishes.
+        if (e.kind === "index_changed" || (mutable && changed(e, "curated"))) refreshRows();
       },
     },
     { onScreen: cardEl.value ?? undefined },
@@ -1622,7 +1669,6 @@ watch(
     if (specs.length === 0) return;
     const typed = typedColumns<Row>(specs, {
       overrides: columnOverrides,
-      onOpenDocument: (_uuid, row) => pickAndOpen(row),
       picture: thumbnailUrl,
       groupable: true,
       chips: {
@@ -1777,6 +1823,24 @@ const scopeOf = (args: unknown) => scopes.read(args as MenuFromCellCallbackArgs)
 const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
 
+/// The rows a right-click aims at that are muted, or that are not.
+const mutedAmong = (m: MenuScope, muted: boolean) =>
+  mutable ? m.targets.filter((r) => (r.muted === "yes") === muted) : [];
+
+/// Mute the rows aimed at that are not muted yet, or unmute those that
+/// are. The table then reads again, since the store says so only once
+/// the gateway hears it.
+async function setMuted(m: MenuScope, mute: boolean) {
+  const ids = mutedAmong(m, !mute).map(rowKey);
+  try {
+    await muteProblems(url, ids, mute);
+  } catch (e) {
+    pushToast((e as Error).message);
+    return;
+  }
+  refreshRows();
+}
+
 function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
   const rowUuids = m.targets.map(rowKey);
   const anchor = m.cell?.el ?? null;
@@ -1838,6 +1902,23 @@ const menuItems: (MenuCommandItem | "divider")[] = [
     (m) => openInNewTab(m.anchor!),
   ),
   dividerAfter((m) => m.anchor !== null && documentOf(m.anchor) !== null),
+  entry(
+    "mute",
+    (m) => {
+      const n = mutedAmong(m, false).length;
+      return n ? `Mute${countSuffix(n)}` : null;
+    },
+    (m) => void setMuted(m, true),
+  ),
+  entry(
+    "unmute",
+    (m) => {
+      const n = mutedAmong(m, true).length;
+      return n ? `Unmute${countSuffix(n)}` : null;
+    },
+    (m) => void setMuted(m, false),
+  ),
+  dividerAfter((m) => mutedAmong(m, true).length + mutedAmong(m, false).length > 0),
   ...chipSlots.commandItems,
   dividerAfter((m) => m.chip !== null),
   entry(
@@ -1948,8 +2029,7 @@ function gridOptions(): GridOption {
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
     ...followFrame(boxEl.value!, 200),
-    // Tall enough for two lines of clamped snippet text plus padding.
-    rowHeight: 52,
+    rowHeight: ROW_HEIGHT,
     enableTextSelectionOnCells: true,
     // Rows select on click, several with a modifier — so right-click
     // "Copy UUID(s)" can target several rows, like Lightroom. Selecting
@@ -1958,6 +2038,10 @@ function gridOptions(): GridOption {
     enableSelection: true,
     multiSelect: true,
     selectionOptions: { selectActiveRow: true },
+    // The card keeps the selection across new rows itself (`kept`): the
+    // grid's own keeping holds on to a row a search hid even after a
+    // plain click asked for one row alone.
+    dataView: { syncGridSelection: false },
     // The server sorts: a shift-click adds a column, numbered by how it
     // ranks, and each breaks the ties of the one before.
     enableSorting: true,
@@ -2043,9 +2127,17 @@ const PLACEHOLDER_META = {
 function installRowMetadata(dataView: Grid["dataView"]) {
   const inner = dataView.getItemMetadata.bind(dataView);
   dataView.getItemMetadata = (row: number) => {
-    const meta = inner(row);
     const item = dataView.getItem(row) as Row | undefined;
     if (item && MORE in item) return PLACEHOLDER_META;
+    const own = inner(row);
+    // A muted problem stays, faded: seen, and counted nowhere.
+    const meta =
+      item?.muted === "yes"
+        ? {
+            ...(own ?? {}),
+            cssClasses: [own?.cssClasses, "datalib-muted"].filter(Boolean).join(" "),
+          }
+        : own;
     const status = item?.diff_status;
     if (!status || status === "unchanged") return meta;
     const columns: Record<string, { cssClass: string }> = {};
@@ -2188,12 +2280,95 @@ function installSearchDrop() {
 
 /// The records selected as of the last change the grid reported.
 let selectedIds = new Set<string>();
+/// The records the person selected, kept across a re-sort, another
+/// search or a refresh, and selected again wherever they turn up
+/// (`keptSelection`). Starts as the selection the card's state carries.
+let kept = new Set<string>(sel.value ? [sel.value] : []);
+/// The last press in the grid held ⌘, Ctrl or Shift: it adds to the
+/// selection rather than replacing it.
+let adds = false;
+/// A selection change of the card's own making, by new rows or a
+/// restore, not the person's.
+let ownChange = false;
+
+function noteAdds(e: KeyboardEvent | PointerEvent) {
+  adds = e.metaKey || e.ctrlKey || e.shiftKey;
+}
+
+/// Select again the kept records the grid holds now.
+function restoreKept() {
+  if (!vueGrid) return;
+  const { dataView, slickGrid: grid } = vueGrid;
+  const rows = rowsToRestore(kept, (id) => dataView.getRowById(id), grid.getSelectedRows());
+  if (!rows) return;
+  asOwnChange(() => grid.setSelectedRows(rows));
+}
+
+/// How many ids one `among` question names, so its URL stays short.
+const AMONG_BATCH = 100;
+
+/// A new search, or a new order, keeps the selected records still among
+/// its rows and drops the rest for good: a later, wider search does not
+/// bring back what a narrower one left out. The rows loaded answer for
+/// themselves; when the answer has more pages, the search is asked about
+/// the rest (`among`).
+async function keepWhatTheSearchHolds() {
+  const search = shown;
+  if (!vueGrid || !win || !search || !isSearch) return;
+  const { dataView } = vueGrid;
+  const asked = [...kept].filter((id) => dataView.getRowById(id) == null);
+  if (asked.length === 0) return;
+  let found: string[] = [];
+  if (win.next !== null) {
+    const batches: string[][] = [];
+    for (let i = 0; i < asked.length; i += AMONG_BATCH) {
+      batches.push(asked.slice(i, i + AMONG_BATCH));
+    }
+    try {
+      const answers = await Promise.all(
+        batches.map((among) =>
+          fetchRows<Row>(
+            url,
+            search.q,
+            1,
+            undefined,
+            { toast: false },
+            { sort: search.sort, among },
+          ),
+        ),
+      );
+      if (answers.some((a) => !a.among)) throw new Error("the search did not answer `among`");
+      found = answers.flatMap((a) => a.among!);
+    } catch (e) {
+      // Nothing is dropped on a question that went unanswered.
+      console.warn("could not ask which selected rows the search still holds", e);
+      return;
+    }
+  }
+  if (search !== shown) return;
+  kept = withoutLeftOut(kept, asked, found);
+}
+
+function asOwnChange(change: () => void) {
+  ownChange = true;
+  try {
+    change();
+  } finally {
+    ownChange = false;
+  }
+}
 
 function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEventArgs) {
   if (!vueGrid) return;
+  const { dataView } = vueGrid;
   const now = args.rows.map(rowData).filter((d): d is Row => d != null);
+  const fromPerson = !ownChange && !restoring;
+  if (fromPerson) {
+    kept = keptSelection(kept, now.map(rowKey), (id) => dataView.getRowById(id) != null, adds);
+  }
   const { picked, selected } = newlyPicked(selectedIds, now, rowKey);
   selectedIds = selected;
+  if (!fromPerson) return;
   const data = picked[picked.length - 1];
   if (!data) return;
   selectedRow.value = data;
@@ -2201,9 +2376,9 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   saveState();
 }
 
-/// A Document cell's link: a link opens on one click, so the row is
-/// picked, as a click on the row picks it, and its document opens
-/// beside the grid — again, too, when it has been closed.
+/// A Document chip's double-click: the row is picked, as a click on the
+/// row picks it, and its document opens beside the grid at the row's
+/// own section — again, too, when it has been closed.
 function pickAndOpen(data: Row) {
   if (!vueGrid) return;
   const selected = selectedRows();
@@ -2219,10 +2394,79 @@ function chipAt(e: SlickEventData): HTMLElement | null {
   return chipElAt(e.getNativeEvent<MouseEvent>()?.target);
 }
 
-function onClick(e: SlickEventData, args: OnClickEventArgs) {
-  // A chip is a link; a click on it selects the row and nothing more —
-  // the mail client its href would open is not what a click here asks.
-  if (chipAt(e)) e.getNativeEvent<MouseEvent>()?.preventDefault();
+/// A chip is a link, and a click on it selects its row and nothing more:
+/// the mail client its href would open is not what a click here asks.
+/// The grid has selected the row by the time the click bubbles up to its
+/// box; a click the grid sees already prevented selects nothing.
+function followNoChipLink(e: MouseEvent) {
+  if (chipElAt(e.target)) e.preventDefault();
+}
+
+// Zero-size stops either side of the grid. Tab from a row focuses one,
+// and the browser's own Tab goes on from there to what is past the grid.
+const beforeRows = ref<HTMLElement | null>(null);
+const afterRows = ref<HTMLElement | null>(null);
+
+/// The rows have the keyboard: a cell, or one of the grid's own focus
+/// holders, the box's only children that take focus.
+function inRows(target: EventTarget | null): boolean {
+  const el = target as Element | null;
+  if (!el?.closest) return false;
+  return !!el.closest(".slick-viewport") || el.parentElement === boxEl.value;
+}
+
+function onRowsKey(e: KeyboardEvent) {
+  noteAdds(e);
+  if (inRows(e.target) && stepAmongSelected(e)) return;
+  const exit = inRows(e.target) ? tabLeavesRows(e) : null;
+  if (!exit) return;
+  // In the capture phase, so the grid never sees the key to walk a cell.
+  e.stopPropagation();
+  (exit === "after" ? afterRows : beforeRows).value?.focus();
+}
+
+/// Several rows selected: ↑ and ↓ move among them and keep them all
+/// selected, so a selection a re-sort scattered is easy to walk. The
+/// row moved to is the one picked, and the one Enter opens.
+function stepAmongSelected(e: KeyboardEvent): boolean {
+  const grid = vueGrid?.slickGrid;
+  if (!grid) return false;
+  const active = grid.getActiveCell();
+  const to = stepThroughSelection(e, active?.row ?? null, grid.getSelectedRows());
+  if (to == null) return false;
+  // In the capture phase, so the grid never selects the next row alone.
+  e.stopPropagation();
+  e.preventDefault();
+  // The event is suppressed, or the grid would select this row alone.
+  grid.setActiveCell(to, active?.cell ?? 0, false, false, true);
+  grid.scrollRowIntoView(to);
+  const data = rowData(to);
+  if (data) {
+    selectedRow.value = data;
+    sel.value = rowKey(data);
+    saveState();
+  }
+  return true;
+}
+
+/// Tab into the grid lands on the rows, where the arrows move: on the
+/// selected row, or the first in view. Without this it stops on every column
+/// header and its menu button, then on every chip in a cell (a chip is a
+/// link). F6 from the rows still reaches the headers.
+function focusRowsOnEntry(e: FocusEvent) {
+  const el = e.target as HTMLElement;
+  const grid = vueGrid?.slickGrid;
+  if (!grid || !el.matches?.(":focus-visible")) return;
+  const fromOutside = !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null);
+  const ontoChip = inRows(el) && !!chipElAt(el);
+  if (!ontoChip && !(fromOutside && !inRows(el))) return;
+  if (!grid.getActiveCell() && grid.getDataLength() > 0) {
+    grid.setActiveCell(grid.getSelectedRows()[0] ?? grid.getViewport().top, 0);
+  }
+  grid.focus("internal");
+}
+
+function onClick(_e: SlickEventData, args: OnClickEventArgs) {
   // A data row that is already the one selected selects again as far
   // as the reader is concerned, though the selection model sees no
   // change: keep the persisted selection on it.
@@ -2236,22 +2480,19 @@ function onClick(e: SlickEventData, args: OnClickEventArgs) {
 }
 
 function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
-  // A document link's first click already opened the document beside
-  // the grid; the second is not a request to open it again.
-  const target = e.getNativeEvent<MouseEvent>()?.target as Element | null | undefined;
-  if (target?.closest?.("a.tg-link")) {
-    e.stopImmediatePropagation();
-    return;
-  }
   // Double-click on a chip opens its card: a person's, led by this
-  // row's source, or a group's dashboard or a step's log
-  // (docs/dev/chips.md § Clicks).
+  // row's source, a group's dashboard, a step's log, or the row's
+  // document at the row (docs/dev/chips.md § Clicks).
   const el = chipAt(e);
   const chip = el ? chipOf(el) : null;
   if (!chip) return;
   e.stopImmediatePropagation();
-  const seenIn = rowData(args.row)?.source_id || null;
-  const source = chipCardSource(chip.ref, seenIn);
+  const data = rowData(args.row);
+  if (chip.ref.kind === "document" && data) {
+    pickAndOpen(data);
+    return;
+  }
+  const source = chipCardSource(chip.ref, data?.source_id || null);
   if (source) props.ctx.host.openCards(source);
 }
 
@@ -2260,6 +2501,7 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
 // here, and only those — its own layout work (a fit to the card's
 // width, the adaptive visibility above) never does.
 function onGridStateChanged(change: GridStateChange) {
+  if (change.change?.type === "columns") fitRowsToPictures();
   if (restoring) return;
   const type = change.change?.type;
   if (type === "sorter" && vueGrid) {
@@ -2444,9 +2686,22 @@ onBeforeUnmount(() => {
              is built in (its theme's dark mode among them), and a Vue
              class binding on that same element would wipe them on every
              change. -->
-        <div class="grid" :class="{ 'grid--loading': loading, 'grid--stale': showingStale }">
-          <div ref="boxEl" class="grid-box" @contextmenu.capture="notePointedChip" />
+        <span ref="beforeRows" class="focus-edge" tabindex="-1" />
+        <div
+          class="grid"
+          :class="{ 'grid--loading': loading, 'grid--stale': showingStale }"
+          @keydown.capture="onRowsKey"
+          @pointerdown.capture="noteAdds"
+          @focusin="focusRowsOnEntry"
+        >
+          <div
+            ref="boxEl"
+            class="grid-box"
+            @click="followNoChipLink"
+            @contextmenu.capture="notePointedChip"
+          />
         </div>
+        <span ref="afterRows" class="focus-edge" tabindex="-1" />
         <div v-if="loading" class="grid-spinner" aria-label="searching">
           <div class="grid-spinner__ring" />
           <div class="grid-spinner__label">searching…</div>
@@ -2710,6 +2965,13 @@ onBeforeUnmount(() => {
 }
 .grid-box {
   height: 100%;
+}
+.focus-edge {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  outline: none;
 }
 .grid--loading {
   filter: blur(2px);

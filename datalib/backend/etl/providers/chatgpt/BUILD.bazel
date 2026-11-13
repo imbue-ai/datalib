@@ -81,6 +81,7 @@ rust_test(
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
         "//datalib/backend/problems:datalib_problems",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",

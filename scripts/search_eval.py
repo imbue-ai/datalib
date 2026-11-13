@@ -321,6 +321,7 @@ def run(args: argparse.Namespace) -> None:
                 continue
             for query in t["queries"]:
                 q = scoped(query["q"], t) if args.scope == "source" else query["q"]
+                q = left_out(q, t, args.leave_out_source)
                 by_mode = {}
                 for m in modes:
                     a = (
@@ -355,6 +356,7 @@ def run(args: argparse.Namespace) -> None:
         "depth": args.depth,
         "via": args.http or "applet",
         "scope": args.scope,
+        "leave_out_source": args.leave_out_source,
         "corpus": held,
         "first_ms": first_ms,
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -536,6 +538,15 @@ def scoped(q: str, target: dict[str, Any]) -> str:
     return q if "source:" in q else f"{q} source:{target['source_id']}"
 
 
+def left_out(q: str, target: dict[str, Any], sources: list[str]) -> str:
+    """`q` asked without each source in `sources` but the target's own, so a
+    source that quotes the eval set (the sessions that wrote it) cannot rank
+    above the target; a query that names a source already is asked as it is."""
+    if "source:" in q:
+        return q
+    return " ".join([q, *(f"-source:{s}" for s in sources if s != target["source_id"])])
+
+
 def corpus(get: Callable[[str], Any]) -> dict[str, int]:
     """How many rows each source holds: the haystack every query searches,
     so a score is read beside the corpus it was measured on."""
@@ -592,6 +603,10 @@ def report(record: dict[str, Any]) -> str:
             f"{len(results)} queries over {len({r['id'] for r in results})} targets, "
             f"top {record['depth']}, via {record['via']}"
             + (", each narrowed to its target's source" if record.get("scope") else "")
+            + "".join(
+                f", without {s} but for its own targets"
+                for s in record.get("leave_out_source") or []
+            )
         ),
         corpus_line(record.get("corpus") or {}),
         "",
@@ -717,7 +732,10 @@ def keep(args: argparse.Namespace) -> None:
         "note": args.note,
         "at": record["at"],
         "provenance": {**made, "commit": commit},
-        **{k: record.get(k) for k in ("depth", "via", "scope", "corpus", "first_ms")},
+        **{
+            k: record.get(k)
+            for k in ("depth", "via", "scope", "leave_out_source", "corpus", "first_ms")
+        },
         "results": [
             {
                 **{k: r.get(k) for k in ("id", "source_id", "q", "asked", "style")},
@@ -894,6 +912,14 @@ def main() -> None:
         "--scope",
         choices=["source"],
         help="narrow every query to its target's source, as `source:` would",
+    )
+    r.add_argument(
+        "--leave-out-source",
+        action="append",
+        default=[],
+        metavar="SOURCE",
+        help="ask every query whose target is elsewhere with `-source:SOURCE`; "
+        "repeatable",
     )
     r.add_argument(
         "--applet", default=DEFAULT_APPLET, help="the datalib-applet binary to start"

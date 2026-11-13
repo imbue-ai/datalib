@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
@@ -30,7 +30,9 @@ use crate::unsupported;
 /// v3: the account's own comments mark its address as the account's, so
 ///     search reads it as `me`.
 /// v4: the files that are not Docs are counted on record.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: a comment's time, which Drive stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+pub const RENDER_VERSION: u32 = 5;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
@@ -149,6 +151,8 @@ pub fn render_doc(
     }
 
     Ok(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -271,7 +275,7 @@ impl FileFacts {
 
     fn head(&self) -> String {
         let mut s = String::from("---\n");
-        s.push_str(&format!("title: {}\n", yaml_scalar(&self.title)));
+        s.push_str(&format!("title: {}\n", yaml_name(&self.title)));
         s.push_str(&format!("provider: {}\n", Provider::GoogleDrive));
         s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
         s.push_str(&format!("markdown_uuid: {}\n", self.id.uuid));

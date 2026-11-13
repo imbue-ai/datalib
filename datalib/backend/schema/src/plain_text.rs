@@ -154,7 +154,7 @@ fn line_text(line: &str, fence: &mut Option<Fence>) -> Option<String> {
     let line = without_images(&line);
     let line = without_link_targets(&line);
     let line = without_tags(&line);
-    Some(without_emphasis(&line))
+    Some(escaped_brackets_restored(&without_emphasis(&line)))
 }
 
 /// A horizontal rule: three or more of one of `-`, `*`, `_`, spaces
@@ -178,22 +178,58 @@ fn without_block_marks(line: &str) -> &str {
     rest
 }
 
-/// The rendered bodies carry escaped HTML (`&lt;br&gt;`) as well as real
-/// tags, and the line breaks and indents an escape writes as references;
-/// decoding first lets one pass strip both. `&amp;` goes last so
-/// `&amp;lt;` stays the text `&lt;`. Backslash escapes wait for
-/// [`without_emphasis`], so an escaped `*` is not read as emphasis.
+/// An escaped `<` or `>` (`&lt;`, `\<`) until [`escaped_brackets_restored`]:
+/// a character no text holds, so [`without_tags`] passes it by. What
+/// someone escaped is text — `&lt;TARGET_IP&gt;`, `\<unnamed>` — and reads
+/// as typed.
+const ESCAPED_LT: char = '\u{E000}';
+const ESCAPED_GT: char = '\u{E001}';
+
+/// Character references decoded, and the line breaks and indents an
+/// escape writes as references with them; an escaped bracket is held
+/// back ([`ESCAPED_LT`]). `&amp;` goes last so `&amp;lt;` stays the text
+/// `&lt;`. Other backslash escapes wait for [`without_emphasis`], so an
+/// escaped `*` is not read as emphasis.
 fn unescaped(line: &str) -> String {
-    line.replace("&lt;", "<")
-        .replace("&gt;", ">")
+    let named = line
+        .replace("\\<", "\u{E000}")
+        .replace("\\>", "\u{E001}")
+        .replace("&lt;", "\u{E000}")
+        .replace("&gt;", "\u{E001}")
         .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-        .replace("&#10;", " ")
-        .replace("&#13;", " ")
-        .replace("&#32;", " ")
-        .replace("&#9;", " ")
-        .replace("&amp;", "&")
+        .replace("&nbsp;", " ");
+    numeric_references_decoded(&named).replace("&amp;", "&")
+}
+
+/// `&#42;` and `&#x2A;` as the characters they name; whitespace is a
+/// space. A reference to no character stays as written.
+fn numeric_references_decoded(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find("&#") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let decoded = after.find(';').and_then(|end| {
+            let digits = &after[..end];
+            let code = match digits.strip_prefix(['x', 'X']) {
+                Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                None => digits.parse().ok(),
+            };
+            Some((char::from_u32(code?)?, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(if c.is_whitespace() { ' ' } else { c });
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str("&#");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `![alt](target)` says nothing in a cell — mostly a logo — and goes whole.
@@ -286,15 +322,50 @@ fn target_end(target: &str) -> Option<usize> {
     None
 }
 
+/// The escaped brackets [`unescaped`] held back, as typed. An escaped tag
+/// that breaks a line (`&lt;br&gt;`, which a plain-text source writes
+/// where it meant a new line) is a space, like the tag itself.
+fn escaped_brackets_restored(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find(ESCAPED_LT) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + ESCAPED_LT.len_utf8()..];
+        let close = after.find(ESCAPED_GT);
+        // One the line cut off (qmd's snippets end mid-word) goes too.
+        let tag = close.map_or(after, |end| &after[..end]);
+        let breaks = tag_name(&format!("{tag}>"))
+            .is_some_and(|name| BREAKS.contains(&name.to_ascii_lowercase().as_str()));
+        match close {
+            Some(end) if breaks => {
+                out.push(' ');
+                rest = &after[end + ESCAPED_GT.len_utf8()..];
+            }
+            None if breaks => {
+                out.push(' ');
+                rest = "";
+            }
+            _ => {
+                out.push('<');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace(ESCAPED_GT, ">")
+}
+
+/// The tags that break a line, so the words either side stay apart.
+const BREAKS: &[&str] = &[
+    "br", "p", "div", "li", "tr", "td", "th", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6",
+    "summary", "details",
+];
+
 /// Tags go; one that breaks a line (`<br>`, `</p>`, `<div …>`) leaves a
 /// space so the words either side do not run together. Only what reads as
 /// a tag — `<name`, `</name`, `<!` — so `Worf <worf@enterprise.test>`
 /// keeps its address.
 fn without_tags(line: &str) -> String {
-    const BREAKS: &[&str] = &[
-        "br", "p", "div", "li", "tr", "td", "th", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6",
-        "summary", "details",
-    ];
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(at) = rest.find('<') {
@@ -446,13 +517,30 @@ mod tests {
         );
     }
 
-    /// Plain text a renderer escaped reads as it was typed.
+    /// Plain text a renderer escaped reads as it was typed, a tag
+    /// included.
     #[test]
     fn an_escaped_character_reads_as_itself() {
         assert_eq!(
             text("\\# Ops \\[1\\] snake\\_case C:\\Users &lt;b&gt;"),
-            "# Ops [1] snake_case C:\\Users"
+            "# Ops [1] snake_case C:\\Users <b>"
         );
+    }
+
+    /// A placeholder someone escaped is text a quoted search finds: it was
+    /// stripped as a tag once decoded, so `"<TARGET_IP> with the target"`
+    /// and `\<unnamed>` found nothing.
+    #[test]
+    fn an_escaped_tag_is_text_and_an_escaped_break_a_space() {
+        assert_eq!(
+            text("Set &lt;TARGET_IP&gt; with &lt;unnamed&gt; or \\<tachyon-burst>."),
+            "Set <TARGET_IP> with <unnamed> or <tachyon-burst>."
+        );
+        assert_eq!(
+            text("Warp 9&lt;br&gt;engage &lt;br/&gt;now"),
+            "Warp 9 engage now"
+        );
+        assert_eq!(text("<b>bold</b> &lt;b&gt;"), "bold <b>");
     }
 
     /// Inside a code fence the text is what was typed: a shell command's
@@ -575,6 +663,16 @@ mod tests {
         assert_eq!(
             text("<summary>Tool use: a&#10;&#10;b</summary>\n&#32;   code &amp;#10;"),
             "Tool use: a b code &#10;"
+        );
+    }
+
+    /// Code an assistant wrote is drawn with its punctuation as numeric
+    /// references, and reads as the characters.
+    #[test]
+    fn a_numeric_reference_is_its_character() {
+        assert_eq!(
+            text("run <code>a&#42;b&#x7C;c</code> &#99999999; &#x;"),
+            "run a*b|c &#99999999; &#x;"
         );
     }
 

@@ -87,7 +87,7 @@ enum ExtractMode {
         input_path: PathBuf,
         account_config: MboxSync,
     },
-    /// One account of the Mail app on this Mac.
+    /// The accounts of the Mail app on this Mac.
     AppleMail(AppleMailSync),
 }
 

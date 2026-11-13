@@ -528,7 +528,11 @@ besides components:
   always does, so a search that should stay open beside another gets a tab of
   its own. The box shows its card's query, but never over text someone typed
   that they are still in the box with, or that a card arriving would replace:
-  the box is up before any card has mounted (`draftAfterMove`). A click
+  the box is up before any card has mounted (`draftAfterMove`). A card the
+  toolbar asks for then waits for the card view and its layout, and is shown
+  once they are there (`registerSurface` in `surface.ts`, `askedBeforeReady`
+  in `ContainersView.vue`), so an early Enter shows the pinned Search tab
+  rather than opening a second one. A click
   elsewhere followed by another tab shows that tab's query, and Escape puts
   back the card's. A source's own documents (`oneSource`) and a grid over any other
   table keep a box beside them, which asks as it is typed in. Either box is
@@ -552,12 +556,13 @@ besides components:
   `grid/searchSort.ts`). The card keeps one order, its `sort` state,
   which the control and the table's headers both write and both views
   read: the list shows before the grid exists, and Size is a hidden
-  column with no header to hold it. The list loads a page at a time with
-  **Show more**, on the table's `grid/pagedWindow.ts`; when the index
+  column with no header to hold it. The list loads a page at a time as
+  its end scrolls near (an `IntersectionObserver` on the last item), on
+  the table's `grid/pagedWindow.ts`; when the index
   moves it reads again as many rows as it holds, through the picked one,
   so a sync costs nobody their place. Its table is the grid below, over the search: row click
-  opens the row's document via `host.openCards`, as does one click on a
-  Document cell's link (the problems grid's); double-click on the row
+  opens the row's document via `host.openCards`, as does a double-click
+  on a Document cell's chip, at the row's own section; double-click on the row
   opens it as a standalone single-column page in a new tab. In an
   order newest first by a date (its own, or a Touched, Created or
   Modified sort going down) the table opens at now: the first page
@@ -858,6 +863,16 @@ again, and the only ones that should know the grid's DOM or options:
   as TSV, a header line first, in the columns shown; a text selection
   inside one selected row copies as the browser would. Each grid says
   what a cell copies as (`copyText` in `cards/typedColumns.ts` by type).
+- `grid/selection.ts` — what the search grid's selection keeps across
+  a re-sort, another search or a refresh: the records selected that the
+  answer still holds, found again wherever they land, those not loaded
+  yet included. A record a search leaves out is dropped for good, so a
+  wider search does not bring it back; for records past the loaded rows
+  the grid asks the search (`among`, a JSON array of ids, answered with
+  those it holds). A plain click or arrow replaces the selection; ⌘,
+  Ctrl or Shift adds. `GridCard` turns the grid's own keeping
+  (`syncGridSelection`) off for this, since that one keeps a row a
+  search hid even after a plain click.
 - `grid/rowHover.ts` — lights both halves of a row that pinned columns
   split in two; the theme's `:hover` reaches only the half under the
   pointer.
@@ -886,13 +901,21 @@ own layout shape and decodes to nothing when it cannot be read.
 | `datetime` | an ISO stamp that is the record's (when a message was sent) | a date chip in the clock's zone and format; sorts on the instant |
 | `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
 | `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
-| `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group or step (`datalib:group/slack`), draws as a chip instead, see below |
+| `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group, a step (`datalib:group/slack`) or a document (`datalib:doc/<uuid>`), draws as a chip instead, see below |
 | `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
 | `identities` | `[identity, …]` | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
-| `markdown_uuid` | a uuid or `{id, label}` | the title; click opens the document |
 | `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when settled, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
+
+Beside its type a column can say how it is laid out: `width`, the
+pixels it starts at where its type's usual width is wrong for what it
+holds (the problems grid's one-chip Severity, its Detail); and
+`hide_when_uniform`, which has `GridCard` hide it while every row it
+holds has the same value in it and show it again when they differ — the
+problems grid's Source, which a source's own problems would repeat on
+every line. It compares the value the column's search names (the id),
+not its label.
 
 The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the

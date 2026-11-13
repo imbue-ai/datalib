@@ -297,7 +297,6 @@
 .tg-btn:hover:not(:disabled) { background: var(--datalib-hover); }
 .tg-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .tg-btn.danger:hover:not(:disabled) { border-color: var(--datalib-log-error); color: var(--datalib-log-error); }
-.tg-link { color: inherit; text-decoration: underline dotted; }
 
 /* ── slickgrid cells ───────────────────────────────────────────── */
 /* The theme, brought closer to the app: its own font rather than
@@ -375,11 +374,19 @@
    right edge. */
 .slick-row.slick-group .slick-cell { text-align: left; }
 .slick-cell.tg-center { text-align: center; }
-/* A picture fills the row's height, whatever the density, and keeps its
-   shape. */
-.slick-cell.tg-thumb-cell { justify-content: center; padding-top: 2px; padding-bottom: 2px; }
+/* A picture fits its cell, keeps its shape and sits in the middle of it;
+   rows grow with the column's width (grid/pictureRows.ts). A group row
+   borrows the class too, and keeps its title at the start. */
+.slick-row:not(.slick-group) .slick-cell.tg-thumb-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
 .slick-cell .tg-thumb {
   display: block;
+  min-width: 0;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
@@ -404,6 +411,28 @@
 }
 .slick-row.datalib-diff-modified .slick-cell.datalib-diff-cell {
   background-color: rgba(234, 179, 8, 0.3);
+}
+
+/* ── a muted problem (GridCard's item metadata) ────────────────── */
+/* Still a row, faded: a person has seen it, and it counts toward nothing. */
+.slick-row.datalib-muted .slick-cell {
+  opacity: 0.55;
+}
+
+/* ── the selected rows ─────────────────────────────────────────── */
+/* The theme's selected grey is close to its hover grey, and in the dark
+   scheme close to the rows themselves. A selected row is tinted with
+   the accent instead, and marked by a bar down its left edge, as the
+   search list marks its pick: on the first cell drawn in the leftmost
+   pane, so a row that pinned columns split gets one bar. */
+.grid-pane .slick-row .slick-cell.selected {
+  background-color: color-mix(in srgb, var(--datalib-accent) 22%, var(--datalib-bg));
+}
+.grid-pane .slick-row:is(:hover, .datalib-row-hover) .slick-cell.selected {
+  background-color: color-mix(in srgb, var(--datalib-accent) 30%, var(--datalib-bg));
+}
+.grid-pane .grid-canvas-left .slick-row > .slick-cell.selected:first-child {
+  box-shadow: inset 3px 0 0 var(--datalib-accent);
 }
 
 /* ── the right-click menu's own entries (see grid/menu.ts) ─────── */

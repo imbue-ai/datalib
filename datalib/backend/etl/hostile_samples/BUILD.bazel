@@ -4,10 +4,16 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 # holds HTML and markdown, plus the escape helpers' output for generated
 # strings, as one JSON file. `//datalib/ui:unit_test` renders it through
 # the app's own markdown-it and sanitizer and checks every field reads as
-# typed (`datalib/ui/tests/hostile_text.test.ts`). Not shipped.
+# typed (`datalib/ui/tests/hostile_text.test.ts`). It also renders the
+# text-edge library (`//datalib/backend/etl/text_edges`) for
+# `text_edges.test.ts`. Not shipped.
 rust_binary(
     name = "render_hostile_samples",
-    srcs = ["src/main.rs"],
+    srcs = [
+        "src/edges.rs",
+        "src/main.rs",
+    ],
+    compile_data = ["//datalib/backend/etl/text_edges:cases.toml"],
     edition = "2021",
     visibility = ["//datalib/ui:__pkg__"],
     deps = [
@@ -17,6 +23,7 @@ rust_binary(
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
         "//datalib/backend/etl/forge-render-common:datalib_etl_forge_render_common",
+        "//datalib/backend/etl/providers/email_render:datalib_etl_email_render",
         "//datalib/backend/etl/providers/slack_render:datalib_etl_slack_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/handle:datalib_handle",
@@ -25,5 +32,6 @@ rust_binary(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",
+        "@datalib_crates//:toml",
     ],
 )

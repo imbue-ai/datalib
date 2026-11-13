@@ -330,9 +330,15 @@ a day. Ask the record of when the download looked instead:
 
 A first sync of a large source can take hours: a whole Gmail mailbox
 goes at about 80 messages a minute, which is Google's quota. To have
-something useful in minutes, sync a short window first, then widen it.
-Each record is still fetched once, because a source owes what its listing
+something useful in minutes, sync a short window first, then widen it in
+two or three stages: a few days, then a month, then everything. Each
+record is still fetched once, because a source owes what its listing
 names and its store does not hold.
+
+The middle stage is worth its extra step. A backfill fetches newest
+first either way, but a stage that ends gives your app a seal and a
+"done" it can check, so it knows when the last month is whole instead
+of guessing how far a long backfill has reached.
 
 This works for any source whose `since` backfills: Slack, Claude and
 ChatGPT, Gmail, Todoist and Garmin
@@ -360,10 +366,11 @@ the source still owes" for step 5, where it has one.
    mailbox's change history, so later syncs pick up new mail, archives
    and relabels for a few quota units.
 
-3. **Widen the window.** Set `since` to what you want in the end
-   (`"-365d"`, a date, or remove it for the whole mailbox). See "Changing
-   the config while a sync runs": with no app up, let the open requests
-   finish first, or the loop runs the old params.
+3. **Widen the window to the next stage.** Set `since` to `"-30d"`, and
+   on the last stage to what you want in the end (`"-365d"`, a date, or
+   remove it for the whole mailbox). See "Changing the config while a
+   sync runs": with no app up, let the open requests finish first, or
+   the loop runs the old params.
 
 4. **Backfill without waiting for it.** File the sync and go on; older
    mail arrives newest first while your app works from what is there:
@@ -381,14 +388,15 @@ the source still owes" for step 5, where it has one.
 5. **Know when it is done:** the newest `sync_runs` row is `ok` and
    started after your edit, and the count in "What the source still owes"
    above is zero. A `listed_whole` row says nothing here, since the short
-   window's walk already wrote it.
+   window's walk already wrote it. Then go back to step 3 for the next
+   stage.
 
 A few things to keep in mind:
 
-- **Start narrow.** Widening backfills, but narrowing does not cancel
-  what a wider listing already owes.
-- **What you compute from history is over the short window** until the
-  backfill finishes (who the account has written to, where a thread
+- **Start narrow, and only widen.** Widening backfills, but narrowing
+  does not cancel what a wider listing already owes.
+- **What you compute from history is over the current stage's window**
+  until the last stage finishes (who the account has written to, where a thread
   starts). Work it out again when the mirror moves, as you would anyway.
 - **A kept message brings its whole thread** with `only_extract_labels`
   and `whole_threads`, so a short window can still bring in older mail.
@@ -406,8 +414,8 @@ A few things to keep in mind:
 
 ## Reading from your program
 
-Stock SQLite cannot open a raw store, so your program needs one of two
-things, in this order:
+Stock SQLite cannot open a raw store, so your program needs one of
+three things, in this order:
 
 1. **A connection in your own process.** A query on an open connection
    takes about 0.01 ms. From Python, under any interpreter, uv's included,
@@ -421,6 +429,34 @@ things, in this order:
    costs a process start and a store open per query, about 15 ms. Use it
    where there is no library: outside Python on a musl tarball, or on an Intel
    Mac.
+3. **The app, over HTTP.** With the app up, `POST
+   /applet/unified_document_index/sql` runs one `SELECT` against any store,
+   its parameters bound by name (`:source`) or position, and answers a
+   page of rows as JSON, behind the API token
+   ([applets.md](applets.md#reading-any-store-with-sql)). It needs
+   nothing installed and no shell, so it suits an agent that can make
+   HTTP requests and run nothing else, or one in a container. It costs a
+   store open per page and works only while the app runs, so a step,
+   which may run with no app up, reads the store itself. It reads and
+   nothing else, and stops a query after 20 seconds.
+
+## Showing a rendered document
+
+The rendered documents (an email thread, a Slack channel's month) are
+markdown, served by `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+Two shapes in them are a contract your app can build on:
+
+- **A person** is a link whose href is their handle as a URI:
+  `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`.
+  Identify them by the href, never the text, and ask
+  `POST /applet/unified_document_index/people` who each handle is.
+- **A time** is `<time datetime="2026-01-05T09:00:00+01:00" …>…</time>`,
+  on the sender's clock where the source knows it, and in `Z` where it
+  does not. Format the `datetime` yourself, in your reader's zone.
+
+Attachments are linked at `/data/…` on the same server, behind the same
+token. [Showing a rendered document in your app](rendered_documents.md)
+has every shape, and what a viewer must sanitize.
 
 ## Your app's derived data as a step
 
@@ -583,7 +619,9 @@ serves the same rows a page at a time, in the search bar's grammar:
 `source:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
 and `field:` too. Each step's counts are its `problems` series in the
 run store's `metrics`, one per `severity=` label; they are the
-errors and warnings cell on the Manage screen. The copies lag the
+errors and warnings cell on the Manage screen, less the problems a
+person muted there (`muted:yes` lists those; `POST /problems/mute`,
+[applets.md](applets.md)). A muted problem is still in the table. The copies lag the
 download by a render and an index run. The raw store's own `problems`
 table is current at every seal.
 

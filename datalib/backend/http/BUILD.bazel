@@ -82,7 +82,7 @@ rust_library(
     # desktop app's version. Must match [package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.52.0",
+    version = "0.54.1",
     # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
@@ -112,6 +112,7 @@ rust_library(
         "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/problem_mutes:datalib_problem_mutes",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/core:datalib_core",
@@ -209,11 +210,15 @@ rust_test(
         "//datalib/backend/blob_store:datalib_blob_store",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/problem_mutes:datalib_problem_mutes",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:axum",
         "@datalib_crates//:blake3",

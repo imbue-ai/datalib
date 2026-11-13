@@ -11,7 +11,7 @@
 import { iconUrl } from "@/config/icons";
 import { STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { filterToken } from "@/grid/query";
-import { uriFromHandle } from "./chipLinks";
+import { handleNamedBy, uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
 import { UNIFIED_DOCUMENT_INDEX, appletAbsent } from "@/api";
@@ -136,12 +136,38 @@ export function todayPartialDate(now: Date = new Date()): string {
 /** What the source called the handle, without the identifier it may
  *  have carried: `Will Riker <riker@enterprise.org>` → `Will Riker`. The
  *  identifier itself when that is all the source showed. */
-export function sourceLabel(shownAs: string, handle: string): string {
-  return suggestedName(shownAs, handle) || shownAs.trim() || handleValue(handle);
+export function sourceLabel(shownAs: string, handle: string, who: Who = NOBODY): string {
+  const name = suggestedName(shownAs, handle) || shownAs.trim();
+  return name && !namesSomeoneElse(name, handle, who) ? name : handleValue(handle);
 }
 
 export function nameOf(c: NormalizedContact): string {
   return c.names[0] ?? c.key;
+}
+
+/** Whether `name` spells out a handle that is neither `handle` nor one
+ *  the records of who holds it list: `"picard@enterprise.org"
+ *  <q@continuum.test>` must not draw Q as Picard. */
+function namesSomeoneElse(name: string, handle: string, who: Who): boolean {
+  const named = handleNamedBy(name);
+  if (!named || named === handle) return false;
+  return ![who.mine, ...who.sourceContacts].some((c) => c?.handles.some((h) => h.handle === named));
+}
+
+/** What a source calls the person behind `handle`: its first name that is
+ *  not someone else's handle, else the identifier. */
+function sourceName(c: NormalizedContact, handle: string, who: Who): string {
+  return c.names.find((n) => !namesSomeoneElse(n, handle, who)) ?? handleValue(handle);
+}
+
+/** The name a chip draws when no contact of yours names the person: the
+ *  best-ranked source's, else what the source showed. In a message's own
+ *  header (`ownName`), what that message named its author, so one
+ *  message's name shows on that message and nowhere else. */
+function unlinkedName(handle: string, shownAs: string, who: Who, ownName: boolean): string {
+  const best = who.sourceContacts[0];
+  if (ownName && shownAs.trim()) return sourceLabel(shownAs, handle, who);
+  return best ? sourceName(best, handle, who) : sourceLabel(shownAs, handle, who);
 }
 
 /** A partial date by which `handle` had stopped working, as `c` records it. */
@@ -174,10 +200,16 @@ function photoOf(who: Who): string | null {
 }
 
 /** `canLink` is whether a contacts app is there to link the handle with. */
-export function chipLook(handle: string, shownAs: string, who: Who, canLink: boolean): ChipLook {
-  const { mine, sourceContacts } = who;
+export function chipLook(
+  handle: string,
+  shownAs: string,
+  who: Who,
+  canLink: boolean,
+  ownName = false,
+): ChipLook {
+  const { mine } = who;
   if (!mine) {
-    const text = sourceContacts[0] ? nameOf(sourceContacts[0]) : sourceLabel(shownAs, handle);
+    const text = unlinkedName(handle, shownAs, who, ownName);
     return {
       text,
       ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
@@ -185,7 +217,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
       initial: null,
       icon: handleIcon(handle),
       photo: photoOf(who),
-      title: chipTooltip(handle, shownAs, who, canLink),
+      title: chipTooltip(handle, shownAs, who, canLink, ownName),
     };
   }
   const name = nameOf(mine);
@@ -200,7 +232,7 @@ export function chipLook(handle: string, shownAs: string, who: Who, canLink: boo
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
     photo: photoOf(who),
-    title: chipTooltip(handle, shownAs, who, canLink),
+    title: chipTooltip(handle, shownAs, who, canLink, ownName),
   };
 }
 
@@ -258,13 +290,15 @@ export function searchQueryFor(handle: string): string {
 const MAX_SOURCE_CONTACTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
-export function chipTooltip(handle: string, shownAs: string, who: Who, canLink: boolean): string {
+export function chipTooltip(
+  handle: string,
+  shownAs: string,
+  who: Who,
+  canLink: boolean,
+  ownName = false,
+): string {
   const { mine, sourceContacts } = who;
-  const name = mine
-    ? nameOf(mine)
-    : sourceContacts[0]
-      ? nameOf(sourceContacts[0])
-      : sourceLabel(shownAs, handle);
+  const name = mine ? nameOf(mine) : unlinkedName(handle, shownAs, who, ownName);
   const value = handleValue(handle);
   const lines: string[] = value === name ? [name] : [name, value];
   const stopped = stoppedBy(mine, handle);
@@ -272,7 +306,7 @@ export function chipTooltip(handle: string, shownAs: string, who: Who, canLink: 
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
   for (const a of sourceContacts.slice(0, MAX_SOURCE_CONTACTS)) {
     const items = a.seen ? ` · ${a.seen.items} ${a.seen.items === 1 ? "item" : "items"}` : "";
-    lines.push(`${nameOf(a)} in ${a.source_id}${items}`);
+    lines.push(`${sourceName(a, handle, who)} in ${a.source_id}${items}`);
   }
   const others = [
     ...new Set(
@@ -721,8 +755,14 @@ export async function decorateHandles(root: HTMLElement): Promise<void> {
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
-    const look = s.closest(".chip-identifiers") ? identifierLook : chipLook;
-    drawChip(s, look(handle, s.dataset.shownAs ?? "", people.get(handle) ?? NOBODY, canLink));
+    const who = people.get(handle) ?? NOBODY;
+    const shown = s.dataset.shownAs ?? "";
+    drawChip(
+      s,
+      s.closest(".chip-identifiers")
+        ? identifierLook(handle, shown, who, canLink)
+        : chipLook(handle, shown, who, canLink, s.dataset.chipHeader !== undefined),
+    );
   }
 }
 

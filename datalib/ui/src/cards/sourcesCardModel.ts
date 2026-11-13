@@ -11,6 +11,7 @@ import {
   type PackageLookup,
   type PackageView,
 } from "@/api";
+import { builtinApplet, setApplet } from "@/config/builtinApplets";
 import {
   addPackage,
   addSourceApplets,
@@ -94,7 +95,9 @@ running if any step is, else waiting, failed, queued, off or stopped if any is, 
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+<p>Rows come in the order <code>config.toml</code> lists them, with <b>Applets</b> — the
+applets filed under no group, such as the Photos card — and then <b>System</b> after
+every group. Click a header to sort by
 that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
 at its left to move it: the move is written to <code>config.toml</code>, with everything
 under the group kept beside it. Groups move only while the table is in the config's
@@ -295,6 +298,11 @@ export function useSourcesCard(ctx: CardCtx) {
   /// id — the cost is that the group's measured folder then counts the
   /// custom tree too. An applet id lives in another namespace and may
   /// coincide.
+  /// Every `[[applets]]` entry's id, for the wizard's apps and offers.
+  const appletIds = computed(
+    () => new Set(sources.value.filter((s) => s.kind === "applet").map((s) => s.id)),
+  );
+
   const takenIds = computed(
     () =>
       new Set([
@@ -335,8 +343,8 @@ export function useSourcesCard(ctx: CardCtx) {
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
-    // `system/` is not a config entry: nothing to edit.
-    if (r.kind === "system") {
+    // `system/` and the Applets heading are not config entries: nothing to edit.
+    if (r.kind === "system" || r.kind === "section") {
       return { ...browsing, editBlocked: "Not a config entry.", editGroup: null };
     }
     if (r.kind === "group") {
@@ -550,7 +558,11 @@ export function useSourcesCard(ctx: CardCtx) {
     if (text === null) return;
     const name = (id: string) =>
       rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
-    const against = moveAgainstDataFlow(text, row.id, before?.id ?? null);
+    // Below the last group come rows no group can be put before — an
+    // entry outside any group, the Applets heading, System: dropping there
+    // is dropping at the bottom.
+    const beforeId = before?.kind === "group" ? before.id : null;
+    const against = moveAgainstDataFlow(text, row.id, beforeId);
     if (against) {
       say(
         false,
@@ -562,13 +574,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     let next: string;
     try {
-      next = moveGroup(text, row.id, before?.id ?? null);
+      next = moveGroup(text, row.id, beforeId);
     } catch (e) {
       say(false, (e as Error).message);
       return;
     }
     if (next === text) return;
-    const where = before ? `above ${before.name.label}` : "to the bottom";
+    const where = beforeId && before ? `above ${before.name.label}` : "to the bottom";
     await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 
@@ -758,6 +770,7 @@ export function useSourcesCard(ctx: CardCtx) {
     stepsBody: string;
     renderId: string | null;
     qmdIndexing: QmdIndexing;
+    applet: { id: string; on: boolean } | null;
   }) {
     const text = await configToEdit();
     if (text === null) return;
@@ -809,6 +822,10 @@ export function useSourcesCard(ctx: CardCtx) {
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);
+    if (payload.applet) {
+      const offered = builtinApplet(payload.applet.id);
+      if (offered) next = setApplet(next, offered, payload.applet.on);
+    }
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -816,6 +833,16 @@ export function useSourcesCard(ctx: CardCtx) {
     const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
     if (!ok) return;
     closeWizard();
+  }
+
+  /// An app from the picker turned on or off: its one `[[applets]]`
+  /// entry, added or taken out.
+  async function onWizardApp(payload: { id: string; on: boolean }) {
+    const app = builtinApplet(payload.id);
+    const text = await configToEdit();
+    if (!app || text === null) return;
+    const what = `${payload.on ? "Turned on" : "Turned off"} the ${app.label}.`;
+    if (await writeConfig(setApplet(text, app, payload.on), what)) closeWizard();
   }
 
   // ── Packages (docs/dev/packages.md). The build is fetched before the
@@ -1149,9 +1176,11 @@ export function useSourcesCard(ctx: CardCtx) {
     wizardOpen,
     wizardKey,
     takenIds,
+    appletIds,
     editing,
     closeWizard,
     onWizardSubmit,
+    onWizardApp,
     asking,
     packagesOpen,
     addPackageEntry,

@@ -102,6 +102,7 @@ sh_test(
     srcs = ["check_install.sh"],
     data = [
         "//:scripts/install.sh",
+        "//:scripts/release/check_glibc_floor.sh",
         "//:scripts/release/pin_release.py",
         "//:scripts/release/publish_release.py",
     ],
@@ -127,6 +128,22 @@ sh_test(
     name = "check_binaries_bash32_test",
     srcs = ["check_binaries_test.sh"],
     data = ["//:scripts/release/check_binaries.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_glibc_floor_test",
+    srcs = ["check_glibc_floor_test.sh"],
+    data = ["//:scripts/release/check_glibc_floor.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_glibc_floor_bash32_test",
+    srcs = ["check_glibc_floor_test.sh"],
+    data = ["//:scripts/release/check_glibc_floor.sh"],
     env = {"RELEASE_SHELL": "/bin/bash"},
     target_compatible_with = ["@platforms//os:macos"],
     deps = ["@bazel_tools//tools/bash/runfiles"],

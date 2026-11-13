@@ -132,8 +132,21 @@ pub struct Tape {
 }
 
 impl Tape {
+    /// A server whose session states no limits.
     pub fn new(out: &Path) -> Self {
-        let session_json = json!({
+        Self::with_session(out, json!({}))
+    }
+
+    /// A server whose session states `maxObjectsInGet`.
+    pub fn with_max_objects_in_get(out: &Path, max: usize) -> Self {
+        Self::with_session(
+            out,
+            json!({ "capabilities": { "urn:ietf:params:jmap:core": { "maxObjectsInGet": max } } }),
+        )
+    }
+
+    fn with_session(out: &Path, extra: Value) -> Self {
+        let mut session_json = json!({
             "apiUrl": "https://jmap.example.test/jmap/api/",
             "downloadUrl": "https://jmap.example.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
             "uploadUrl": "https://jmap.example.test/jmap/upload/{accountId}/",
@@ -141,6 +154,9 @@ impl Tape {
             "primaryAccounts": { "urn:ietf:params:jmap:mail": ACCOUNT },
             "accounts": { ACCOUNT: { "name": "t@example.test", "isPersonal": true } },
         });
+        for (key, value) in extra.as_object().expect("an object") {
+            session_json[key] = value.clone();
+        }
         write_fixture(
             out,
             &HttpRequest::get(

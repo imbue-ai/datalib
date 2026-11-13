@@ -273,9 +273,18 @@ impl QmdIndexReader {
         collections: Option<&[String]>,
         among: Option<&std::collections::HashMap<String, crate::qmd::vectors::Kept>>,
         limit: usize,
+        fresh: crate::qmd::vectors::Freshness,
     ) -> anyhow::Result<Vec<QmdHit>> {
-        crate::qmd::vectors::nearest_documents(&self.pool, cache, query, collections, among, limit)
-            .await
+        crate::qmd::vectors::nearest_documents(
+            &self.pool,
+            cache,
+            query,
+            collections,
+            among,
+            limit,
+            fresh,
+        )
+        .await
     }
 
     /// The documents with at least one vector, by document id. An index no
@@ -328,7 +337,9 @@ impl QmdIndexReader {
 /// What the qmd index files look like on disk: the size and modification
 /// time of `index.sqlite` and of its write-ahead log. qmd writes in WAL
 /// mode, so a commit grows the log and a checkpoint rewrites the main
-/// file; either moves this. A missing file reads as `None`.
+/// file; either moves this. A missing file reads as `None`, and so does
+/// an empty log: it holds nothing, and a reader that opens the file makes
+/// one, which would otherwise read as the index moving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexStamp([Option<(u64, std::time::SystemTime)>; 2]);
 
@@ -340,7 +351,14 @@ impl IndexStamp {
         };
         let mut wal = index.as_os_str().to_owned();
         wal.push("-wal");
-        Self([stamp(index), stamp(Path::new(&wal))])
+        let log = stamp(Path::new(&wal)).filter(|(len, _)| *len > 0);
+        Self([stamp(index), log])
+    }
+
+    /// When the index or its write-ahead log last changed; `None` when
+    /// neither file is there.
+    pub fn last_change(&self) -> Option<std::time::SystemTime> {
+        self.0.iter().flatten().map(|(_, at)| *at).max()
     }
 }
 

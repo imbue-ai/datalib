@@ -15,10 +15,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
+mod body_sections;
 pub(crate) mod columns;
 mod grouping;
+mod local_embedder;
 mod map;
 mod models;
+mod mutes;
 mod problems;
 #[cfg(test)]
 mod qmd_search_tests;
@@ -30,8 +33,10 @@ mod search_finds_itself_tests;
 mod search_terms;
 #[cfg(test)]
 mod serve_tests;
+mod sql;
 pub(crate) mod warm;
 
+use body_sections::{body_sections, BodySection};
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{markdown_uuid_of_path, GridRow, GridRowColumn};
 use datalib_unified_document_index::db::datalib_source_id;
@@ -40,6 +45,7 @@ use datalib_unified_document_index::group::Within;
 use datalib_unified_document_index::qmd::index_state::{
     resolve_markdown_states, DocReport, IndexStamp, SummaryCache,
 };
+use datalib_unified_document_index::qmd::vectors::Freshness;
 use datalib_unified_document_index::qmd::{
     display_snippet, CollectionScope, GridIndex, QmdIndexReader, QmdIndexSummary,
 };
@@ -68,15 +74,61 @@ struct Index {
     /// One read connection to qmd's index, and what Meaning has read
     /// through it, kept across searches.
     qmd_index: Arc<datalib_unified_document_index::qmd::HeldIndex>,
+    /// Which index Words and Meaning read.
+    reads: SearchReads,
+    /// Embeds a Meaning search's text in this process, for the search index.
+    local_embedder: Arc<local_embedder::LocalEmbedder>,
+    /// Every chunk's vector in the search index, kept across searches.
+    held_vectors: Arc<datalib_unified_document_index::search_index::HeldVectors>,
     qmd_summary: Arc<SummaryCache>,
     results: Arc<results::ResultCache>,
     keyed: Arc<tokio::sync::Mutex<results::KeyedCache>>,
     coverage: Arc<tokio::sync::Mutex<results::VectorCoverage>>,
     /// The sources the grid holds, and the commit they were read at.
     grid_sources: Arc<tokio::sync::Mutex<Option<GridSources>>>,
+    /// Turns for `/sql`'s queries, [`sql::AT_ONCE`] at a time.
+    sql_slots: Arc<tokio::sync::Semaphore>,
+    /// The problem rows a person muted: this applet is the store's one
+    /// writer (`problem_mutes/README.md`).
+    mutes: mutes::Mutes,
 }
 
 type GridSources = (Option<String>, Arc<Vec<String>>);
+
+/// Which index a search reads its words and meaning from: qmd's, or our
+/// own (`docs/dev/plans/search_index_from_ram.md`), named by
+/// `DATALIB_SEARCH_READS` while the two are compared.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr, strum::VariantArray,
+)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum SearchReads {
+    Qmd,
+    SearchIndex,
+}
+
+impl SearchReads {
+    pub(crate) fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// qmd's when the variable is unset; a spelling this build does not
+    /// know stops the applet rather than reading the other index.
+    fn from_env() -> Result<Self> {
+        let name = datalib_env::DATALIB_SEARCH_READS;
+        match std::env::var(name) {
+            Err(std::env::VarError::NotPresent) => Ok(SearchReads::Qmd),
+            Ok(value) => value.parse().map_err(|_| {
+                let known: Vec<&str> = <SearchReads as strum::VariantArray>::VARIANTS
+                    .iter()
+                    .map(|r| r.as_str())
+                    .collect();
+                anyhow::anyhow!("{name}={value:?} names no index; it is one of {known:?}")
+            }),
+            Err(e) => Err(anyhow::anyhow!("{name}: {e}")),
+        }
+    }
+}
 
 impl Index {
     /// `deadline` is how long one search may wait on qmd's embedder.
@@ -86,22 +138,29 @@ impl Index {
         deadline: std::time::Duration,
     ) -> Result<Index> {
         let root = Arc::new(root);
+        let reads = SearchReads::from_env()?;
         let repo = datalib_unified_document_index::dolt_repo::DoltRepo::open(root.clone())
             .await
             .with_context(|| format!("open the grid index under {}", root.display()))?;
+        let models: Arc<dyn datalib_qmd_indexer::VerifiedModels> = Arc::new(models);
         Ok(Index {
             embedder: Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
                 &root,
                 None,
-                Arc::new(models),
+                models.clone(),
                 deadline,
             )),
+            local_embedder: Arc::new(local_embedder::LocalEmbedder::new(models, deadline)),
+            reads,
+            held_vectors: Arc::default(),
             qmd_index: Arc::default(),
             qmd_summary: Arc::new(SummaryCache::default()),
             results: Arc::new(results::ResultCache::default()),
             keyed: Arc::default(),
             coverage: Arc::default(),
             grid_sources: Arc::default(),
+            sql_slots: Arc::new(tokio::sync::Semaphore::new(sql::AT_ONCE)),
+            mutes: mutes::Mutes::new(&root),
             repo: Arc::new(repo),
             root,
         })
@@ -212,7 +271,10 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/groups", get(problems::groups_handler))
             .route("/problems/keys", get(problems::keys_handler))
             .route("/problems/values", get(problems::values_handler))
+            .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
+            .route("/sql", post(sql::handler))
+            .route("/sql/stores", get(sql::stores_handler))
             .route(
                 "/health",
                 get(|| async { Json(serde_json::json!({"ok": true})) }),
@@ -264,6 +326,9 @@ pub struct SearchParams {
     /// A row's uuid the page must reach, however far past `offset` it is:
     /// see `results::reaching`.
     pub through: Option<String>,
+    /// Record ids as a JSON array: the answer says which of them are among
+    /// the search's rows, wherever they fall (`SearchResponse::among`).
+    pub among: Option<String>,
     /// The group whose rows to list, as `[[column, value], …]` (see
     /// `grouping`); none for the whole search.
     pub within: Option<String>,
@@ -282,6 +347,7 @@ struct PageSpec<'a> {
     offset: usize,
     limit: usize,
     through: Option<&'a str>,
+    among: &'a [String],
 }
 
 #[derive(Debug, Serialize)]
@@ -316,6 +382,10 @@ pub struct SearchResponse {
     /// UI keeps what it showed and says why beside the bar.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused: Vec<String>,
+    /// Which of the ids the request named in `among` are among the
+    /// search's rows; absent when it named none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub among: Option<Vec<String>>,
 }
 
 impl SearchResponse {
@@ -332,16 +402,17 @@ impl SearchResponse {
             at: None,
             errors,
             refused: Vec::new(),
+            among: None,
         }
     }
 }
 
 /// Response shape for `/applet/unified_document_index/chat/{markdown_uuid}`. The body is the raw
 /// QMD content minus the YAML frontmatter — the UI runs markdown-it on
-/// it directly. We do **not** ship a structured `messages[]` array;
-/// per-message scrolling uses the
-/// `<div id="m-{uuid}" data-section-uuid="…">` wrappers the renderer
-/// emits in the body.
+/// it, one section at a time where `sections` says where they lie. We do
+/// **not** ship a structured `messages[]` array; per-message scrolling
+/// uses the `<div id="m-{uuid}" data-section-uuid="…">` wrappers the
+/// renderer emits in the body.
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub markdown_uuid: String,
@@ -361,6 +432,11 @@ pub struct ChatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     pub body: String,
+    /// Where each section of `body` lies, so the UI renders each message
+    /// as a fragment of its own. Absent when the renderer declares no
+    /// sections, or the file changed since the index was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<BodySection>>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -430,12 +506,21 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
             return SearchResponse::unread(errors);
         }
     };
+    let among = match p.among.as_deref().map(serde_json::from_str::<Vec<String>>) {
+        None => Vec::new(),
+        Some(Ok(ids)) => ids,
+        Some(Err(e)) => {
+            errors.push(format!("`among` is not a JSON array of ids: {e}"));
+            return SearchResponse::unread(errors);
+        }
+    };
     let spec = PageSpec {
         sort: &sort,
         within: &within,
         offset,
         limit,
         through,
+        among: &among,
     };
     let answered = search_page(s, &q, &parsed, spec).await;
     let read = answered.is_ok();
@@ -512,6 +597,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         at: page.at,
         errors,
         refused: Vec::new(),
+        among: page.among,
     }
 }
 
@@ -713,6 +799,7 @@ struct Page {
     at: Option<String>,
     /// What part of the search could not answer, when the rest did.
     partial: Option<String>,
+    among: Option<Vec<String>>,
 }
 
 /// One page of the search, with qmd's score and matched words on each
@@ -726,12 +813,14 @@ async fn search_page(
     let (list, at, partial) = search_results(s, q, parsed, spec.sort, spec.within).await?;
     let limit = results::reaching(&list, spec.offset, spec.limit, spec.through);
     let (rows, next_offset) = page_rows(s, parsed, &list, spec.offset, limit).await?;
+    let among = (!spec.among.is_empty()).then(|| results::among(&list, spec.among));
     Ok(Page {
         rows,
         total: list.len(),
         next_offset,
         at,
         partial,
+        among,
     })
 }
 
@@ -775,17 +864,22 @@ async fn without_vectors(
     if !embeds(parsed) || search_terms::identifiers(&parsed.free_text).is_some() {
         return Ok(None);
     }
-    let Some(open) = s
-        .qmd_index
-        .open(&s.root)
-        .await
-        .map_err(|e| SearchFailure::Qmd(format!("open the qmd index: {e}")))?
-    else {
-        return Ok(None);
+    let stamp: Vec<IndexStamp> = match s.reads {
+        SearchReads::Qmd => {
+            let index = datalib_unified_document_index::qmd::qmd_index_path(&s.root);
+            if !index.exists() {
+                return Ok(None);
+            }
+            vec![IndexStamp::of(&index)]
+        }
+        SearchReads::SearchIndex => {
+            if !datalib_runtime::layout::grid_index_db(&s.root).exists() {
+                return Ok(None);
+            }
+            let (index, cache) = datalib_unified_document_index::search_index::stamps(&s.root);
+            vec![index, cache]
+        }
     };
-    let stamp = IndexStamp::of(&datalib_unified_document_index::qmd::qmd_index_path(
-        &s.root,
-    ));
     let key = (
         q.to_string(),
         s.repo.head().await.map_err(index)?,
@@ -795,23 +889,50 @@ async fn without_vectors(
     if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
         return Ok(Some(counted.clone()));
     }
-    let with_vectors = match coverage
-        .with_vectors
-        .as_ref()
-        .filter(|(at, _)| *at == stamp)
-    {
-        Some((_, read)) => read.clone(),
-        None => {
-            let read = open
-                .reader
-                .documents_with_vectors()
-                .await
-                .map_err(|e| SearchFailure::Qmd(format!("read qmd's vectors: {e}")))?;
-            let read = Arc::new(read);
-            coverage.with_vectors = Some((stamp, read.clone()));
-            read
-        }
-    };
+    let moving = index_moving(&stamp, std::time::SystemTime::now());
+    let with_vectors =
+        match coverage
+            .with_vectors
+            .as_ref()
+            .filter(|(at, _)| moving || *at == stamp)
+        {
+            Some((_, read)) => read.clone(),
+            None => {
+                let read =
+                    match s.reads {
+                        SearchReads::Qmd => {
+                            let Some(open) = s.qmd_index.open(&s.root).await.map_err(|e| {
+                                SearchFailure::Qmd(format!("open the qmd index: {e}"))
+                            })?
+                            else {
+                                return Ok(None);
+                            };
+                            open.reader.documents_with_vectors().await.map_err(|e| {
+                                SearchFailure::Qmd(format!("read qmd's vectors: {e}"))
+                            })?
+                        }
+                        SearchReads::SearchIndex => {
+                            let fresh = if moving {
+                                Freshness::AsHeld
+                            } else {
+                                Freshness::Current
+                            };
+                            let Some(read) = s
+                                .held_vectors
+                                .documents(&s.root, fresh)
+                                .await
+                                .map_err(embedding_failed)?
+                            else {
+                                return Ok(None);
+                            };
+                            read
+                        }
+                    };
+                let read = Arc::new(read);
+                coverage.with_vectors = Some((stamp, read.clone()));
+                read
+            }
+        };
     let candidates = s.repo.documents_with_pages(parsed).await.map_err(index)?;
     let counted = results::WithoutVectors::among(&candidates, &with_vectors);
     coverage.last = Some((key, counted.clone()));
@@ -854,6 +975,17 @@ async fn land(
         .grid_row_refs_for_documents(&documents)
         .await
         .map_err(index)?;
+    // A hit from the search index names its document, not its file.
+    let unfiled: Vec<String> = todo
+        .iter()
+        .filter(|(_, hit)| hit.path.is_empty())
+        .map(|(e, _)| e.uuid.clone())
+        .collect();
+    let files = if unfiled.is_empty() {
+        Default::default()
+    } else {
+        s.repo.md_paths_for(&unfiled).await.map_err(index)?
+    };
     let fetched = started.elapsed();
     // Every term, `source:` too: a source's file can hold rows filed
     // under another, which its collection's ranking does not drop.
@@ -886,7 +1018,13 @@ async fn land(
     let documents_only = parsed.documents() == Some(true);
     let work: Vec<_> = todo
         .iter()
-        .map(|(e, hit)| (e.uuid.clone(), (*hit).clone(), e.landed.clone()))
+        .map(|(e, hit)| {
+            let mut hit = (*hit).clone();
+            if let Some(file) = files.get(&e.uuid).filter(|_| hit.path.is_empty()) {
+                hit.path = file.display().to_string();
+            }
+            (e.uuid.clone(), hit, e.landed.clone())
+        })
         .collect();
     let n = work.len();
     tokio::task::spawn_blocking(move || {
@@ -1248,26 +1386,60 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
     fused
 }
 
-/// The words of every document: qmd's keyword index ranked by BM25, read from its own
-/// table so a source can answer with more than the 20 documents `qmd mcp`
-/// takes from each.
+/// The words of every document, ranked by BM25: from qmd's keyword index,
+/// read from its own table so a source can answer with more than the 20
+/// documents `qmd mcp` takes from each, or from the search index's
+/// messages ([`SearchReads`]).
 async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
     let hits = word_hits(s, parsed).await?;
     documents_of_hits(s, parsed, hits).await
 }
 
-async fn word_hits(
-    s: &Index,
-    parsed: &ParsedQuery,
-) -> Result<Vec<datalib_unified_document_index::qmd::QmdHit>, SearchFailure> {
-    let Some(query) = datalib_unified_document_index::qmd::lex::fts5_query(&parsed.free_text)
-    else {
+/// A ranked document, by its id, and its hit.
+type DocumentHit = datalib_unified_document_index::search_index::DocumentHit;
+
+async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, SearchFailure> {
+    use datalib_unified_document_index::qmd::lex;
+    let Some(query) = lex::fts5_query(&parsed.free_text) else {
         return Ok(Vec::new());
     };
     // Narrowed before the cut, as Meaning is: a common word's best
     // thousand documents rarely include the one the other terms ask for.
     let keyed = keyed(s, parsed).await?;
     let among = keyed.as_deref().map(|k| &k.documents);
+    let scope = search_scope(s, parsed).await?;
+    // The words as typed come first: BM25 alone ranks a place that says
+    // the sentence below short ones that merely hold each word.
+    let phrase = lex::fts5_phrase_query(&parsed.free_text);
+    let mut hits = Vec::new();
+    for query in phrase.iter().chain([&query]) {
+        let found = match s.reads {
+            SearchReads::Qmd => qmd_word_hits(s, query, scope.names(), among).await?,
+            SearchReads::SearchIndex => datalib_unified_document_index::search_index::word_hits(
+                &s.root,
+                query,
+                scope.names(),
+                among,
+                QMD_DEPTH,
+            )
+            .await
+            .map_err(|e| SearchFailure::Qmd(format!("the search index's words: {e:#}")))?
+            .ok_or(SearchFailure::NoIndex)?,
+        };
+        let seen: std::collections::HashSet<String> =
+            hits.iter().map(|(d, _): &DocumentHit| d.clone()).collect();
+        hits.extend(found.into_iter().filter(|(d, _)| !seen.contains(d)));
+    }
+    hits.truncate(QMD_DEPTH);
+    Ok(hits)
+}
+
+async fn qmd_word_hits(
+    s: &Index,
+    query: &datalib_unified_document_index::qmd::lex::Fts5Query,
+    collections: Option<&[String]>,
+    among: Option<&std::collections::HashSet<String>>,
+) -> Result<Vec<DocumentHit>, SearchFailure> {
     let Some(open) = s
         .qmd_index
         .open(&s.root)
@@ -1276,44 +1448,39 @@ async fn word_hits(
     else {
         return Err(SearchFailure::NoIndex);
     };
-    let reader = &open.reader;
-    let scope = search_scope(s, parsed).await?;
-    // The documents holding the words as typed come first: BM25 alone
-    // ranks a long thread that says the sentence below short ones that
-    // merely hold each word.
-    let phrase = datalib_unified_document_index::qmd::lex::fts5_phrase_query(&parsed.free_text);
-    let hits = async {
-        let mut hits = match &phrase {
-            Some(phrase) => {
-                reader
-                    .keyword_hits(phrase, scope.names(), among, QMD_DEPTH)
-                    .await?
-            }
-            None => Vec::new(),
-        };
-        let seen: std::collections::HashSet<String> = hits.iter().map(|h| h.path.clone()).collect();
-        let all = reader
-            .keyword_hits(&query, scope.names(), among, QMD_DEPTH)
-            .await?;
-        hits.extend(all.into_iter().filter(|h| !seen.contains(&h.path)));
-        hits.truncate(QMD_DEPTH);
-        Ok::<_, sqlx::Error>(hits)
-    }
-    .await;
-    hits.map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))
+    let hits = open
+        .reader
+        .keyword_hits(query, collections, among, QMD_DEPTH)
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("qmd's keyword index: {e}")))?;
+    Ok(qmd_documents(hits))
 }
 
-/// The documents nearest the free text by cosine, scored here over qmd's
-/// stored vectors, down to the search's cutoff, and none with `semantic:off`.
-/// Structured terms narrow the documents before any is scored, so a filter
-/// never empties a ranking cut too shallow to hold its rows; qmd only embeds
-/// the query.
+/// qmd's hits by their document's id, which their path names. A hit whose
+/// path names none is dropped, loudly, so its lost score is seen.
+fn qmd_documents(hits: Vec<datalib_unified_document_index::qmd::QmdHit>) -> Vec<DocumentHit> {
+    hits.into_iter()
+        .filter_map(|hit| match markdown_uuid_of_path(&hit.path) {
+            Some(document) => Some((document.to_string(), hit)),
+            None => {
+                tracing::error!(path = %hit.path, score = hit.score, "a qmd hit names no document");
+                None
+            }
+        })
+        .collect()
+}
+
+/// The documents nearest the free text by cosine, scored here over the
+/// stored vectors, down to the search's cutoff, and none with
+/// `semantic:off`. Structured terms narrow the documents before any is
+/// scored, so a filter never empties a ranking cut too shallow to hold its
+/// rows. qmd's vectors with the query embedded by qmd, or the search
+/// index's with the query embedded here ([`SearchReads`]).
 async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
     use datalib_unified_document_index::qmd::lex::{has_lex_syntax, strip_lex_syntax};
     let Some(cutoff) = parsed.semantic.cutoff() else {
         return Ok(Vec::new());
     };
-    let qmd = |e: anyhow::Error| SearchFailure::Qmd(format!("{e:#}"));
     let text = if has_lex_syntax(&parsed.free_text) {
         strip_lex_syntax(&parsed.free_text)
     } else {
@@ -1322,6 +1489,30 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let mut hits = match s.reads {
+        SearchReads::Qmd => qmd_nearest(s, parsed, text).await?,
+        SearchReads::SearchIndex => search_index_nearest(s, parsed, text).await?,
+    };
+    let found = hits.len();
+    hits.retain(|(_, h)| h.score >= cutoff);
+    tracing::info!(
+        found,
+        hits = hits.len(),
+        cutoff,
+        "ranked a search by meaning"
+    );
+    documents_of_hits(s, parsed, hits).await
+}
+
+fn embedding_failed(e: anyhow::Error) -> SearchFailure {
+    SearchFailure::Qmd(format!("{e:#}"))
+}
+
+async fn qmd_nearest(
+    s: &Index,
+    parsed: &ParsedQuery,
+    text: String,
+) -> Result<Vec<DocumentHit>, SearchFailure> {
     let Some(open) = s
         .qmd_index
         .open(&s.root)
@@ -1331,12 +1522,22 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
         return Err(SearchFailure::NoIndex);
     };
     let reader = &open.reader;
+    let fresh = if index_moving(
+        &[IndexStamp::of(
+            &datalib_unified_document_index::qmd::qmd_index_path(&s.root),
+        )],
+        std::time::SystemTime::now(),
+    ) {
+        Freshness::AsHeld
+    } else {
+        Freshness::Current
+    };
     let started = std::time::Instant::now();
     let embedder = s.embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
         .await
         .map_err(|e| SearchFailure::Qmd(format!("query embedder task: {e}")))?
-        .map_err(qmd)?;
+        .map_err(embedding_failed)?;
     let embedded = started.elapsed();
     let keyed = keyed(s, parsed).await?;
     let among = keyed.as_deref().map(|k| &k.kept);
@@ -1352,22 +1553,58 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
             scope.names(),
             among,
             QMD_DEPTH,
+            fresh,
         )
-        .await;
-    let mut hits = hits.map_err(qmd)?;
-    let found = hits.len();
-    hits.retain(|h| h.score >= cutoff);
+        .await
+        .map_err(embedding_failed)?;
     tracing::info!(
         embed_ms = embedded.as_millis() as u64,
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
         among = among.map(|a| a.len()),
-        found,
-        hits = hits.len(),
-        cutoff,
-        "ranked a search by meaning"
+        as_held = fresh == Freshness::AsHeld,
+        "scored qmd's vectors"
     );
-    documents_of_hits(s, parsed, hits).await
+    Ok(qmd_documents(hits))
+}
+
+async fn search_index_nearest(
+    s: &Index,
+    parsed: &ParsedQuery,
+    text: String,
+) -> Result<Vec<DocumentHit>, SearchFailure> {
+    let (index, cache) = datalib_unified_document_index::search_index::stamps(&s.root);
+    let fresh = if index_moving(&[index, cache], std::time::SystemTime::now()) {
+        Freshness::AsHeld
+    } else {
+        Freshness::Current
+    };
+    let started = std::time::Instant::now();
+    let embedder = s.local_embedder.clone();
+    let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
+        .await
+        .map_err(|e| SearchFailure::Qmd(format!("query embedder task: {e}")))?
+        .map_err(embedding_failed)?;
+    let embedded = started.elapsed();
+    let keyed = keyed(s, parsed).await?;
+    let among = keyed.as_deref().map(|k| &k.kept);
+    let narrowed = started.elapsed();
+    let scope = search_scope(s, parsed).await?;
+    let hits = s
+        .held_vectors
+        .nearest(&s.root, &query, scope.names(), among, QMD_DEPTH, fresh)
+        .await
+        .map_err(embedding_failed)?
+        .ok_or(SearchFailure::NoIndex)?;
+    tracing::info!(
+        embed_ms = embedded.as_millis() as u64,
+        narrow_ms = (narrowed - embedded).as_millis() as u64,
+        score_ms = (started.elapsed() - narrowed).as_millis() as u64,
+        among = among.map(|a| a.len()),
+        as_held = fresh == Freshness::AsHeld,
+        "scored the search index's vectors"
+    );
+    Ok(hits)
 }
 
 /// What the structured terms keep of each document they reach: the
@@ -1446,19 +1683,32 @@ fn narrows_documents(parsed: &ParsedQuery) -> bool {
 /// cut from these.
 const QMD_DEPTH: usize = 1_000;
 
-/// qmd's hits as one entry per document, best first, each landed on a
+/// How long the qmd index must sit still before a search reads what
+/// changed in it. A sync's embed step commits every few seconds, and on a
+/// large library reading the documents again at each commit took a search
+/// past its deadline; until then a search answers from what it last read,
+/// and the warm loop reads the rest once the sync is done.
+const INDEX_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Whether the index changed within [`INDEX_SETTLE`] of `now`. A change
+/// stamped after `now` is a clock that moved back, and counts as recent.
+fn index_moving(stamps: &[IndexStamp], now: std::time::SystemTime) -> bool {
+    stamps.iter().any(|stamp| {
+        stamp
+            .last_change()
+            .is_some_and(|at| now.duration_since(at).map_or(true, |d| d < INDEX_SETTLE))
+    })
+}
+
+/// A ranking's hits as one entry per document, best first, each landed on a
 /// message only when a page shows it, of the documents holding a row the
-/// search's terms keep. A hit on a document the grid does not have is
-/// dropped, loudly, so its lost score is seen.
+/// search's terms keep.
 async fn documents_of_hits(
     s: &Index,
     parsed: &ParsedQuery,
-    hits: Vec<datalib_unified_document_index::qmd::QmdHit>,
+    hits: Vec<DocumentHit>,
 ) -> Result<Ranking, SearchFailure> {
-    let documents: Vec<String> = hits
-        .iter()
-        .filter_map(|h| markdown_uuid_of_path(&h.path).map(String::from))
-        .collect();
+    let documents: Vec<String> = hits.iter().map(|(d, _)| d.clone()).collect();
     let present = match keyed(s, parsed).await? {
         Some(keyed) => documents
             .into_iter()
@@ -1472,14 +1722,10 @@ async fn documents_of_hits(
     };
     let mut ranking: Ranking = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for hit in hits {
-        let Some(document) = markdown_uuid_of_path(&hit.path).map(String::from) else {
-            tracing::error!(path = %hit.path, score = hit.score, "a qmd hit names no document");
-            continue;
-        };
+    for (document, hit) in hits {
         if !present.contains(&document) {
             if parsed.terms.is_empty() {
-                tracing::error!(path = %hit.path, score = hit.score, "a qmd hit resolved to no grid rows");
+                tracing::error!(document = %document, score = hit.score, "a hit resolved to no grid rows");
             }
             continue;
         }
@@ -1922,11 +2168,14 @@ async fn chat(
     // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
     // let the UI scroll-and-highlight without a structured chat schema.
     // One UUID → one file: no enumeration, no fallbacks.
-    let path = s
+    let file = s
         .repo
-        .qmd_path_for_markdown(&markdown_uuid)
+        .document_file(&markdown_uuid)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|e| {
+            tracing::error!(document = %markdown_uuid, error = %e, "could not find the document's file");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::NOT_FOUND)?;
     let meta = s
         .repo
@@ -1935,11 +2184,35 @@ async fn chat(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let body = match std::fs::read_to_string(&path) {
-        Ok(raw) => strip_frontmatter(&raw).to_string(),
+    let (body, sections) = match std::fs::read_to_string(&file.path) {
+        Ok(raw) => {
+            let body = strip_frontmatter(&raw);
+            let sections = file.section_layout.as_deref().and_then(|layout| {
+                let found = body_sections(&raw, raw.len() - body.len(), layout);
+                if found.is_none() {
+                    tracing::warn!(
+                        document = %markdown_uuid,
+                        "the stored section layout does not spell the file; \
+                         the body goes out without one",
+                    );
+                }
+                found
+            });
+            (body.to_string(), sections)
+        }
         // A picture's document is drawn by its applet, not from a page.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => String::new(),
-        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => {
+            (String::new(), None)
+        }
+        Err(e) => {
+            tracing::error!(
+                document = %markdown_uuid,
+                path = %file.path.display(),
+                error = %e,
+                "could not read the document's file",
+            );
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
     };
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly
@@ -1969,9 +2242,23 @@ async fn chat(
     let (problems, errors) = match s.repo.document_problems(&markdown_uuid).await {
         Ok(mut rows) => {
             problems::sort_for_banner(&mut rows);
+            // A muted line stays, marked; a store that will not read
+            // leaves every line unmarked and says so.
+            let (mutes, errors) = match s.mutes.all().await {
+                Ok(mutes) => (mutes, Vec::new()),
+                Err(e) => (
+                    Default::default(),
+                    vec![format!("could not read which problems are muted: {e:#}")],
+                ),
+            };
             (
-                rows.into_iter().map(problems::DocProblem::of).collect(),
-                Vec::new(),
+                rows.into_iter()
+                    .map(|row| {
+                        let muted = mutes.contains_key(&row.problem_uuid);
+                        problems::DocProblem::of(row, muted)
+                    })
+                    .collect(),
+                errors,
             )
         }
         Err(e) => (
@@ -1991,6 +2278,7 @@ async fn chat(
         source_ref,
         image: meta.image,
         body,
+        sections,
         outgoing_edges,
         problems,
         errors,
@@ -2017,6 +2305,46 @@ fn strip_frontmatter(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A search reads what changed in the qmd index only once the index has
+    /// sat still for `INDEX_SETTLE`: during a sync it answers from what it
+    /// holds rather than re-reading the index at every embed commit.
+    #[test]
+    fn an_index_written_within_the_settle_time_is_moving() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index = tmp.path().join("index.sqlite");
+        assert!(
+            !index_moving(&[IndexStamp::of(&index)], std::time::SystemTime::now()),
+            "no index is not moving"
+        );
+        std::fs::write(&index, b"").unwrap();
+        let stamp = IndexStamp::of(&index);
+        let at = stamp.last_change().unwrap();
+        let second = std::time::Duration::from_secs(1);
+        assert!(index_moving(std::slice::from_ref(&stamp), at));
+        assert!(index_moving(
+            std::slice::from_ref(&stamp),
+            at + INDEX_SETTLE - second
+        ));
+        assert!(!index_moving(
+            std::slice::from_ref(&stamp),
+            at + INDEX_SETTLE
+        ));
+        assert!(
+            index_moving(std::slice::from_ref(&stamp), at - second),
+            "a clock that moved back"
+        );
+
+        let mut wal = index.clone().into_os_string();
+        wal.push("-wal");
+        std::fs::write(&wal, b"a frame").unwrap();
+        let later = std::fs::File::options().write(true).open(&wal).unwrap();
+        later.set_modified(at + INDEX_SETTLE * 2).unwrap();
+        assert!(
+            index_moving(&[IndexStamp::of(&index)], at + INDEX_SETTLE * 2 + second),
+            "a commit lands in the write-ahead log, not the index file"
+        );
+    }
 
     /// What `source:` hands qmd: every positive id; nothing for a
     /// negated one or for `datalib`, which has no collection.
@@ -2144,6 +2472,8 @@ mod tests {
         );
         row.qmd_path = Some(rel.clone());
         datalib_etl_render::grid_index::RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid: row.uuid.clone(),
             source_id: source,
             upstream_cursor: None,
@@ -2174,6 +2504,192 @@ mod tests {
         }
         datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;
+    }
+
+    /// The route says where each message of the body begins, from the
+    /// sections the renderer handed over, so the UI can render each as a
+    /// fragment of its own; and says nothing once a render has rewritten
+    /// the file since the index was read, rather than cut it wrongly.
+    #[tokio::test]
+    async fn the_document_route_sends_where_each_message_lies() {
+        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
+        use datalib_etl_render::section::{join, Section};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uuid = "00000000-0000-4000-8000-0000000000d1";
+        let wrapper = |m: &str, text: &str| {
+            format!(
+                "<div id=\"m-{m}\" data-section-uuid=\"{m}\" class=\"msg msg--claude\">\n\n{text}\n\n</div>\n\n"
+            )
+        };
+        let sections = vec![
+            Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
+            Section::keyed(
+                "m1",
+                wrapper("m1", "Tea, Earl Grey 🫖 <div style=\"display:none\">"),
+            ),
+            Section::keyed("m2", wrapper("m2", "Make it so.")),
+        ];
+        let mut doc = own_document(
+            root,
+            document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
+                .build()
+                .unwrap(),
+        );
+        std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&doc.md_path, join(&sections)).unwrap();
+        doc.sections = sections.clone();
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::for_index(pool.clone());
+        apply_one(&lock, root, &doc).await.unwrap();
+        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
+        pool.close().await;
+
+        let s = index_over(root).await;
+        let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
+            .await
+            .unwrap();
+        let sent = got.sections.expect("the route sends the sections");
+        assert_eq!(
+            sent.iter().map(|b| b.uuid.as_deref()).collect::<Vec<_>>(),
+            [None, Some("m1"), Some("m2")]
+        );
+        let units: Vec<u16> = got.body.encode_utf16().collect();
+        let mut at = 0;
+        let pieces: Vec<String> = sent
+            .iter()
+            .map(|b| {
+                let piece = String::from_utf16(&units[at..at + b.len]).unwrap();
+                at += b.len;
+                piece
+            })
+            .collect();
+        assert_eq!(at, units.len(), "the sections cover the body");
+        assert_eq!(pieces[0], "\n# Ten Forward\n\n", "front matter dropped");
+        assert_eq!(pieces[1], sections[1].md);
+        assert_eq!(pieces[2], sections[2].md);
+
+        std::fs::write(&doc.md_path, "---\n---\n\nrewritten since\n").unwrap();
+        let Json(got) = chat(State(s), Path(uuid.to_string())).await.unwrap();
+        assert_eq!(got.body, "\nrewritten since\n");
+        assert!(got.sections.is_none(), "a stale layout is not sent");
+    }
+
+    /// Read from the search index, a hit is the message holding the words,
+    /// and lands there, quoted from it. A word only the thread's title
+    /// holds finds it too, and an excluded word drops a message, not the
+    /// thread.
+    #[tokio::test]
+    async fn a_words_search_reads_the_search_index_and_lands_on_the_message() {
+        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
+        use datalib_etl_render::section::{join, Section};
+        use datalib_search_index::{IndexDoc, IndexSection};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uuid = "00000000-0000-4000-8000-0000000000e1";
+        let wrapper = |m: &str, text: &str| {
+            format!(
+                "<div id=\"m-{m}\" data-section-uuid=\"{m}\" class=\"msg msg--claude\">\n\n{text}\n\n</div>\n\n"
+            )
+        };
+        let (m1, m2, m3) = (
+            "00000000-0000-4000-8000-0000000000f1",
+            "00000000-0000-4000-8000-0000000000f2",
+            "00000000-0000-4000-8000-0000000000f3",
+        );
+        let sections = vec![
+            Section::unkeyed("---\ntitle: \"Engineering\"\n---\n\n# Engineering\n\n".into()),
+            Section::keyed(m1, wrapper(m1, "The warp core is stable.")),
+            Section::keyed(m2, wrapper(m2, "Deck twelve reports a coolant leak.")),
+            Section::keyed(
+                m3,
+                wrapper(m3, "Seal the warp core, the coolant is venting."),
+            ),
+        ];
+        let mut doc = own_document(
+            root,
+            document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
+                .build()
+                .unwrap(),
+        );
+        for m in [m1, m2, m3] {
+            let mut message = document_row(m, "2026-01-01T00:00:00Z", "Message")
+                .markdown_uuid(Some(uuid.to_string()))
+                .conversation_uuid(uuid)
+                .build()
+                .unwrap();
+            message.is_document = false;
+            message.qmd_path = doc.rows[0].qmd_path.clone();
+            doc.rows.push(message);
+        }
+        std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();
+        std::fs::write(&doc.md_path, join(&sections)).unwrap();
+        doc.sections = sections.clone();
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::for_index(pool.clone());
+        apply_one(&lock, root, &doc).await.unwrap();
+        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
+        pool.close().await;
+
+        let index =
+            datalib_search_index::Index::open(&datalib_runtime::layout::grid_index_db(root))
+                .await
+                .unwrap();
+        index
+            .put(&[IndexDoc {
+                source_id: doc.source_id.clone(),
+                markdown_uuid: uuid.into(),
+                content_hash: "h".into(),
+                title: "Engineering".into(),
+                sections: sections
+                    .iter()
+                    .map(|s| IndexSection {
+                        uuid: s.uuid.clone(),
+                        text: s.md.clone(),
+                    })
+                    .collect(),
+            }])
+            .await
+            .unwrap();
+        index.close().await;
+
+        let mut s = index_over(root).await;
+        s.reads = SearchReads::SearchIndex;
+        let found = search(&s, "warp coolant semantic:off", None, 10, None).await;
+        assert_eq!(found.rows.len(), 1, "{:?}", found.query_echo);
+        assert_eq!(found.rows[0].uuid, m3, "the message holding both words");
+        assert!(
+            found.rows[0].snippet.contains("venting"),
+            "{:?}",
+            found.rows[0].snippet
+        );
+
+        let titled = search(&s, "engineering semantic:off", None, 10, None).await;
+        assert_eq!(titled.rows.len(), 1, "{:?}", titled.query_echo);
+        let without = search(&s, "warp -coolant semantic:off", None, 10, None).await;
+        assert_eq!(without.rows.len(), 1, "{:?}", without.query_echo);
+        assert_eq!(without.rows[0].uuid, m1, "the message without the word");
+    }
+
+    /// The switch reads the two spellings it knows and refuses any other,
+    /// rather than quietly reading qmd's index.
+    #[test]
+    fn the_search_reads_switch_names_one_index_or_stops() {
+        assert_eq!("qmd".parse::<SearchReads>().ok(), Some(SearchReads::Qmd));
+        assert_eq!(
+            "search_index".parse::<SearchReads>().ok(),
+            Some(SearchReads::SearchIndex)
+        );
+        assert!("qdrant".parse::<SearchReads>().is_err());
+        for r in <SearchReads as strum::VariantArray>::VARIANTS {
+            assert_eq!(r.as_str().parse::<SearchReads>().ok(), Some(*r));
+        }
     }
 
     /// Whether this process has a file open whose inode is `ino` and,
@@ -2268,6 +2784,49 @@ mod tests {
         assert_eq!(uuids(&kept), [a]);
         let narrowed = search(&s, &format!("{a} kind:Email"), None, 10, None).await;
         assert_eq!(uuids(&narrowed), Vec::<&str>::new());
+    }
+
+    /// A grid that holds one page asks whether its selected rows are still
+    /// in a new search, wherever they fall in it: `among` answers for every
+    /// row the search holds, not just the page.
+    #[tokio::test]
+    async fn among_says_which_named_rows_are_in_the_search_past_the_page() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            "00000000-0000-4000-8000-0000000000a1",
+            "00000000-0000-4000-8000-0000000000b2",
+            "00000000-0000-4000-8000-0000000000c3",
+        );
+        index_rows(
+            tmp.path(),
+            vec![
+                document_row(a, "2026-01-01T09:00:00+00:00", "Chat")
+                    .build()
+                    .unwrap(),
+                document_row(b, "2026-01-02T09:00:00+00:00", "Chat")
+                    .build()
+                    .unwrap(),
+                document_row(c, "2026-01-03T09:00:00+00:00", "Email")
+                    .build()
+                    .unwrap(),
+            ],
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+        let params = SearchParams {
+            q: Some("kind:Chat".to_string()),
+            limit: Some(1),
+            offset: None,
+            sort: None,
+            through: None,
+            among: Some(serde_json::json!([c, a, b]).to_string()),
+            within: None,
+            tab: None,
+        };
+        let r = search_handler(State(s.clone()), Query(params)).await.0;
+        assert_eq!(r.rows.len(), 1, "one page of one row");
+        assert_eq!(r.among, Some(vec![a.to_string(), b.to_string()]));
+        assert_eq!(search(&s, "kind:Chat", None, 1, None).await.among, None);
     }
 
     /// Commits each row as a document of its own, with the search terms a
@@ -2521,6 +3080,16 @@ mod tests {
             values("to", "", "from:bo@example.com").await,
             ["email:ann@example.com"]
         );
+        // Any part of a value, case-blind, by trigram or, shorter, by
+        // reading every value.
+        assert_eq!(
+            values("from", "XAMPLE.c", "").await,
+            ["email:ann@example.com", "email:bo@example.com"]
+        );
+        assert_eq!(
+            values("from", "nn", "").await,
+            ["Ann", "email:ann@example.com"]
+        );
     }
 
     /// Picard writes as "Jean-Luc" by email and Slack; Riker, as "Will",
@@ -2713,6 +3282,7 @@ mod tests {
             offset,
             sort: sort.map(String::from),
             through: None,
+            among: None,
             within: None,
             tab: None,
         };
@@ -2981,6 +3551,7 @@ mod tests {
             offset: None,
             sort: None,
             through: None,
+            among: None,
             within: Some(within.to_string()),
             tab: None,
         };

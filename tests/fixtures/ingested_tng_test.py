@@ -201,10 +201,6 @@ FACEBOOK_TABLES_NOT_READ = (
     "logged_information_search_your_search_history, "
     "your_facebook_activity_posts_your_videos"
 )
-LINKEDIN_TABLES_NOT_READ = (
-    "01d8f641-ba65-5430-9cd4-67c6aae0387d|warning|render|entity|unrendered_tables:all|||"
-    "deliberate_loss|Stored and not searchable, 3 rows in table(s): skills"
-)
 PDFS_WITH_NO_TEXT = (
     "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
     "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
@@ -324,7 +320,6 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
-    "linkedin": [LINKEDIN_TABLES_NOT_READ],
     "facebook": sorted(
         [
             FACEBOOK_TABLES_NOT_READ,
@@ -1567,6 +1562,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "linkedin:wriker|William Riker",
             ],
             "a LinkedIn connection and a message sender by their profile",
+        )
+        # The skills on a LinkedIn profile are one page, a row per skill,
+        # where they were once stored and never shown.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT kind || '|' || preview FROM grid_rows "
+                "WHERE provider = 'linkedin' AND kind LIKE 'LinkedIn Skill%' ORDER BY 1;",
+            ),
+            [
+                "LinkedIn Skills|Diplomacy Starship Command Tactical Analysis",
+                "LinkedIn Skill|Diplomacy",
+                "LinkedIn Skill|Starship Command",
+                "LinkedIn Skill|Tactical Analysis",
+            ],
+            "a LinkedIn export's skills are searchable",
         )
         # Drive names a comment's author and nothing else, so a comment
         # author is a `google:name/` handle; the account's own comments

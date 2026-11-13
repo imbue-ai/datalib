@@ -1,9 +1,10 @@
-"""The order check `search_eval.py first-pages` trusts: a check that cannot fail
-would report a wrong order as a pass."""
+"""The checks `search_eval.py` trusts: an order check that cannot fail would
+report a wrong order as a pass, and a left-out source that hid a target would
+report a miss the search never made."""
 
 import unittest
 
-from search_eval import out_of_order
+from search_eval import left_out, out_of_order
 
 
 def rows(field, *values):
@@ -54,6 +55,28 @@ class OutOfOrder(unittest.TestCase):
             is None
         )
         self.assertIsNone(out_of_order(rows("channel", "b", "a"), "channel:asc"))
+
+
+class LeftOut(unittest.TestCase):
+    def test_a_query_leaves_out_every_source_but_its_targets_own(self):
+        target = {"source_id": "gmail"}
+        self.assertEqual(
+            left_out("lunch friday", target, ["claude-code", "codex"]),
+            "lunch friday -source:claude-code -source:codex",
+        )
+        self.assertEqual(
+            left_out("lunch friday", {"source_id": "codex"}, ["claude-code", "codex"]),
+            "lunch friday -source:claude-code",
+        )
+
+    def test_a_query_that_names_a_source_is_asked_as_written(self):
+        q = "lunch source:gmail"
+        self.assertEqual(left_out(q, {"source_id": "gmail"}, ["claude-code"]), q)
+        q = "lunch -source:slack"
+        self.assertEqual(left_out(q, {"source_id": "gmail"}, ["claude-code"]), q)
+
+    def test_nothing_left_out_asks_the_query_unchanged(self):
+        self.assertEqual(left_out("lunch", {"source_id": "gmail"}, []), "lunch")
 
 
 if __name__ == "__main__":

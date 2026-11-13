@@ -11,7 +11,7 @@ function deferred<T>() {
 const settled = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("newestAnswer", () => {
-  /// The launch's migrate pass sends an `upgrade_changed` per step state
+  /// The launch's migrate pass sends a `pass_changed` per step state
   /// change, ~150 on the TNG root in about a second, and the page asked
   /// for `/api/config` on every one of them.
   it("fetches at most twice for a burst of asks", async () => {

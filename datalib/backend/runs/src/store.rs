@@ -1,5 +1,6 @@
 //! Writing the store, and reading it.
 
+use datalib_time::RunClock;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -1262,7 +1263,12 @@ impl RunWriter {
     ) -> Option<Self> {
         // The start stamp arrives as the runner wrote it, offset and
         // all; the store keeps UTC and the offset apart. The runner's
-        // process starts when its run does.
+        // process starts when its run does. A start that is not a stamp
+        // is kept as written, and the run's clock is the wall clock's.
+        let clock = RunClock::starting_at(
+            datalib_time::parse_strict(started_at_utc)
+                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
+        );
         let (started_at_utc, tz_offset) = split_stamp(started_at_utc);
         let process = ProcessRow {
             process_id: mint_process_id(),
@@ -1285,6 +1291,7 @@ impl RunWriter {
                 process,
                 run: Some(run),
                 retention,
+                clock,
             },
         )
         .map(Self)
@@ -1365,7 +1372,9 @@ impl ProcessLogWriter {
         git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
-        let (started_at_utc, tz_offset) = now_split();
+        let clock = RunClock::starting_at(datalib_time::IsoOffsetTimestamp::now_local());
+        let (started_at_utc, tz_offset) = clock.now().to_utc_and_offset();
+        let tz_offset = Some(tz_offset);
         let process = ProcessRow {
             process_id: mint_process_id(),
             process: process.as_str().into(),
@@ -1380,6 +1389,7 @@ impl ProcessLogWriter {
                 process,
                 run: None,
                 retention,
+                clock,
             },
         )
         .map(Self)
@@ -1433,6 +1443,8 @@ struct Scope {
     process: ProcessRow,
     run: Option<RunInfo>,
     retention: Retention,
+    /// What the process's and its run's ends are stamped from.
+    clock: RunClock,
 }
 
 impl Scope {
@@ -1755,7 +1767,11 @@ async fn close_abandoned_run_in(
     let mut tx = pool.begin().await?;
 
     let run_was_open = sqlx::query(
-        "UPDATE runs SET finished_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
+        // `max`: a run begun under a pinned `--now` may have begun after
+        // the wall clock's now, and it cannot end before it began
+        // (`datalib_time::closed_now` is the same rule for one run).
+        "UPDATE runs SET finished_at_utc = max(?, started_at_utc), \
+           tz_offset = coalesce(tz_offset, ?) \
          WHERE run_id = ? AND finished_at_utc IS NULL",
     )
     .bind(&at)
@@ -1880,7 +1896,7 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 /// for: it was not part of this run, and its row goes rather than
 /// reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
-    let (finished_at_utc, _) = now_split();
+    let (finished_at_utc, _) = scope.clock.now().to_utc_and_offset();
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE processes SET finished_at_utc = ? WHERE process_id = ?")
         .bind(&finished_at_utc)

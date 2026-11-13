@@ -15,6 +15,7 @@ pub enum GridColumn {
     Kind,
     ConversationName,
     SubjectRef,
+    DocumentRef,
     Project,
     Channel,
     CreatedAt,
@@ -64,6 +65,10 @@ impl View for GridColumn {
                 SortBy::Column(G::ConversationName),
                 Some(G::ConversationUuid),
             ),
+            // A document's title is not in `grid_rows`; its conversation's
+            // name is the same words for most documents, so it sorts by
+            // that. No key names a document, so nothing filters on it.
+            GridColumn::DocumentRef => (SortBy::Column(G::ConversationName), None),
             GridColumn::Project => same(G::Project),
             GridColumn::Channel => same(G::Channel),
             GridColumn::CreatedAt => same(G::CreatedAt),

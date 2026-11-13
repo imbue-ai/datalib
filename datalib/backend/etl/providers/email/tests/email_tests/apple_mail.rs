@@ -187,15 +187,31 @@ fn write_emlx(path: &Path, message: &str) {
     std::fs::write(path, out).unwrap();
 }
 
+/// The one account the single-account tests copy, under a name of its own.
+fn enterprise() -> AppleMailAccountConfig {
+    AppleMailAccountConfig {
+        account: Some(ACCOUNT.to_string()),
+        account_id: Some(ACCOUNT_ID.to_string()),
+        ..AppleMailAccountConfig::default()
+    }
+}
+
 /// One sync of `folder` into the store in `work`, committed the way the
 /// processor commits it.
 async fn sync(folder: &MailFolder, work: &Path) -> FetchSummary {
-    sync_with(folder, work, datalib_etl::progress::Progress::noop()).await
+    sync_with(
+        folder,
+        work,
+        enterprise(),
+        datalib_etl::progress::Progress::noop(),
+    )
+    .await
 }
 
 async fn sync_with(
     folder: &MailFolder,
     work: &Path,
+    account: AppleMailAccountConfig,
     progress: datalib_etl::progress::Progress,
 ) -> FetchSummary {
     let db = RawDb::open(&work.join("e.doltlite_db")).await.unwrap();
@@ -205,11 +221,7 @@ async fn sync_with(
     let summary = apple_mail::fetch(apple_mail::FetchOptions {
         db: db.clone(),
         path: folder.root.clone(),
-        account: AppleMailAccountConfig {
-            account: Some(ACCOUNT.to_string()),
-            account_id: Some(ACCOUNT_ID.to_string()),
-            ..AppleMailAccountConfig::default()
-        },
+        account,
         only_labels: Vec::new(),
         whole_threads: true,
         cache,
@@ -276,6 +288,7 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     let first = sync_with(
         &folder,
         work.path(),
+        enterprise(),
         datalib_etl::progress::Progress::new(bar.clone()),
     )
     .await;
@@ -297,18 +310,18 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
         emails,
         [
             (
-                "briefing@enterprise.example",
-                "briefing@enterprise.example",
+                "enterprise:briefing@enterprise.example",
+                "enterprise:briefing@enterprise.example",
                 ACCOUNT_ID
             ),
             (
-                "reply@enterprise.example",
-                "briefing@enterprise.example",
+                "enterprise:reply@enterprise.example",
+                "enterprise:briefing@enterprise.example",
                 ACCOUNT_ID
             ),
             (
-                "report@enterprise.example",
-                "report@enterprise.example",
+                "enterprise:report@enterprise.example",
+                "enterprise:report@enterprise.example",
                 ACCOUNT_ID
             ),
         ]
@@ -327,12 +340,12 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     assert_eq!(
         filed,
         [
-            ("briefing@enterprise.example", "Inbox"),
-            ("briefing@enterprise.example", "[Gmail]/All Mail"),
-            ("reply@enterprise.example", "Inbox"),
-            ("reply@enterprise.example", "[Gmail]/All Mail"),
-            ("report@enterprise.example", "Away Team"),
-            ("report@enterprise.example", "[Gmail]/All Mail"),
+            ("enterprise:briefing@enterprise.example", "Inbox"),
+            ("enterprise:briefing@enterprise.example", "[Gmail]/All Mail"),
+            ("enterprise:reply@enterprise.example", "Inbox"),
+            ("enterprise:reply@enterprise.example", "[Gmail]/All Mail"),
+            ("enterprise:report@enterprise.example", "Away Team"),
+            ("enterprise:report@enterprise.example", "[Gmail]/All Mail"),
         ]
     );
     let read: Vec<(String, i64)> =
@@ -347,10 +360,13 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
         "SELECT email_id FROM email_keywords WHERE keyword = '$answered'",
     )
     .await;
-    assert_eq!(answered, [("report@enterprise.example".to_string(),)]);
+    assert_eq!(
+        answered,
+        [("enterprise:report@enterprise.example".to_string(),)]
+    );
     let expected_problems = [
         "phase:apple_mail_files warning",
-        "record:emails:report@enterprise.example warning",
+        "record:emails:enterprise:report@enterprise.example warning",
     ];
     assert_eq!(problems(work.path()).await, expected_problems);
 
@@ -358,7 +374,7 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     // Mail kept beside the partial file.
     let blobs: Vec<(String,)> = rows(
         work.path(),
-        "SELECT blob_id FROM emails WHERE id = 'report@enterprise.example'",
+        "SELECT blob_id FROM emails WHERE id = 'enterprise:report@enterprise.example'",
     )
     .await;
     let db = RawDb::open(&work.path().join("e.doltlite_db"))
@@ -409,8 +425,8 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     assert_eq!(
         read,
         [
-            ("briefing@enterprise.example".to_string(), 1),
-            ("reply@enterprise.example".to_string(), 1),
+            ("enterprise:briefing@enterprise.example".to_string(), 1),
+            ("enterprise:reply@enterprise.example".to_string(), 1),
         ]
     );
 }
@@ -499,7 +515,7 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
         &db_path_for(&db_path),
         "star-trek-mbox",
         RawRange::cold(),
-        false,
+        &[],
     )
     .expect("open")
     .expect("a committed store");
@@ -507,7 +523,6 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
         pages.path(),
-        &[],
         PageSize {
             buckets: 10,
             bytes: 1 << 30,
@@ -539,5 +554,122 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     assert!(
         !md.contains("cid:conduit"),
         "a cid: reference is left:\n{md}"
+    );
+}
+
+/// A Fastmail account beside the Gmail one: folders, not labels, so a
+/// message filed in two folders is a file in each.
+const FASTMAIL: &str = "5D3C9E70-0000-4000-8000-0000000000FA";
+
+const RISA: &str = "From: Deanna Troi <troi@enterprise.example>\n\
+To: William Riker <riker@enterprise.example>\n\
+Subject: Shore leave on Risa\n\
+Date: Thu, 08 Jan 2026 18:00:00 +0000\n\
+Message-ID: <risa@enterprise.example>\n\
+\n\
+The jamaharon is booked.\n";
+
+/// With no account named, every account in Mail is copied, each under its
+/// own id: one message in both accounts is an email in each, a message in
+/// two folders of one account is one email in both, and a message deleted
+/// in one account leaves only that account.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_account_is_copied_under_its_own_id() {
+    let folder = MailFolder::new().await;
+    let fastmail = |mailbox: &str| {
+        folder
+            .root
+            .join("V10")
+            .join(FASTMAIL)
+            .join(format!("{mailbox}.mbox"))
+            .join(STORE)
+            .join("Data/Messages")
+    };
+    for mailbox in ["INBOX", "travel", "travel.mbox/portugal"] {
+        std::fs::create_dir_all(fastmail(mailbox)).unwrap();
+    }
+    write_emlx(&fastmail("INBOX").join("20.emlx"), BRIEFING);
+    write_emlx(&fastmail("travel").join("21.emlx"), RISA);
+    write_emlx(&fastmail("travel.mbox/portugal").join("22.emlx"), RISA);
+    folder
+        .index(&[
+            &format!(
+                "INSERT INTO mailboxes (ROWID, url) VALUES
+                (10, 'imap://{FASTMAIL}/INBOX'),
+                (11, 'imap://{FASTMAIL}/travel'),
+                (12, 'imap://{FASTMAIL}/travel/portugal')"
+            ),
+            "INSERT INTO message_global_data (ROWID, message_id_header) VALUES
+                (20, '<briefing@enterprise.example>'),
+                (21, '<risa@enterprise.example>')",
+            "INSERT INTO messages (ROWID, global_message_id, mailbox, read, conversation_id,
+                date_received) VALUES
+                (20, 20, 10, 1, 30, 1767603600),
+                (21, 21, 11, 0, 31, 1767895200),
+                (22, 21, 12, 0, 31, 1767895200)",
+        ])
+        .await;
+    let work = tempfile::tempdir().unwrap();
+    let every = AppleMailAccountConfig::default();
+    sync_with(
+        &folder,
+        work.path(),
+        every.clone(),
+        datalib_etl::progress::Progress::noop(),
+    )
+    .await;
+
+    let gmail = "apple_mail_1f0b8a52";
+    let fm = "apple_mail_5d3c9e70";
+    let emails: Vec<(String, String)> =
+        rows(work.path(), "SELECT id, account_id FROM emails ORDER BY id").await;
+    let expected = |ids: &[(&str, &str)]| -> Vec<(String, String)> {
+        ids.iter()
+            .map(|(id, a)| (format!("{a}:{id}"), a.to_string()))
+            .collect()
+    };
+    assert_eq!(
+        emails,
+        expected(&[
+            ("briefing@enterprise.example", gmail),
+            ("reply@enterprise.example", gmail),
+            ("report@enterprise.example", gmail),
+            ("briefing@enterprise.example", fm),
+            ("risa@enterprise.example", fm),
+        ])
+    );
+    let risa: Vec<(String,)> = rows(
+        work.path(),
+        "SELECT m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
+         WHERE j.email_id = 'apple_mail_5d3c9e70:risa@enterprise.example' ORDER BY m.name",
+    )
+    .await;
+    assert_eq!(
+        risa,
+        [("travel".to_string(),), ("travel/portugal".to_string(),)]
+    );
+    let accounts: Vec<(String,)> = rows(work.path(), "SELECT id FROM accounts ORDER BY id").await;
+    assert_eq!(accounts, [(gmail.to_string(),), (fm.to_string(),)]);
+
+    // Deleted in the Fastmail account only.
+    folder
+        .index(&["DELETE FROM messages WHERE ROWID = 20"])
+        .await;
+    let after = sync_with(
+        &folder,
+        work.path(),
+        every,
+        datalib_etl::progress::Progress::noop(),
+    )
+    .await;
+    assert_eq!(after.emails_removed, 1, "{after:?}");
+    let briefings: Vec<(String,)> = rows(
+        work.path(),
+        "SELECT id FROM emails WHERE message_id = 'briefing@enterprise.example'",
+    )
+    .await;
+    assert_eq!(
+        briefings,
+        [(format!("{gmail}:briefing@enterprise.example"),)]
     );
 }

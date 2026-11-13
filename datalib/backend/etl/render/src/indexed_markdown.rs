@@ -41,6 +41,13 @@ use datalib_etl::bulk::BulkUpsertable;
 /// File name inside a source's `render_markdown/`.
 pub const STORE_FILE: &str = "indexed_markdown.doltlite_db";
 
+/// What `remove_documents` reads and deletes beside the rows
+/// `grid_index::delete_document_rows` takes, the set bound as one JSON array.
+const REMOVED_MD_PATHS: &str = "SELECT md_path FROM markdowns \
+     WHERE markdown_uuid IN (SELECT value FROM json_each(?)) AND md_path IS NOT NULL";
+const REMOVED_PROBLEMS: &str = "DELETE FROM problems \
+     WHERE scope_kind = ? AND scope_key IN (SELECT value FROM json_each(?))";
+
 pub fn path_for(rendered_root: &Path) -> PathBuf {
     rendered_root.join(STORE_FILE)
 }
@@ -352,7 +359,7 @@ impl IndexedMarkdownStore {
     /// Write one document: its rows here and, when the document moved —
     /// a re-keyed path prefix, a chat re-periodized under another
     /// directory — the `.md` it used to be at goes, for the same reason
-    /// [`Self::remove_document`] unlinks: a file nothing names is still
+    /// [`Self::remove_documents`] unlinks: a file nothing names is still
     /// served and still indexed. A document with no rows is removed the
     /// same way, the `.md` just written included; its problems stay.
     pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
@@ -400,7 +407,9 @@ impl IndexedMarkdownStore {
         Ok(())
     }
 
-    /// Drop one document: its rows here, and the `.md` file itself.
+    /// Drop documents: their rows here, and their `.md` files. However
+    /// many there are, the rows go in a handful of statements, each
+    /// binding the whole set once.
     ///
     /// The file matters as much as the rows. `md_path` is what
     /// `/applet/unified_document_index/chat/{uuid}` serves and what qmd indexed, so a
@@ -408,32 +417,34 @@ impl IndexedMarkdownStore {
     /// still resolves — a deletion the user can still read. The unlink
     /// follows the rows; inside a batch that later rolls back it leaves
     /// rows for a file that is gone, which the next run's removal of the
-    /// same document repairs (an absent file is the state wanted).
-    pub fn remove_document(&self, out_dir: &Path, markdown_uuid: &str) -> Result<()> {
-        let md_path = self.transaction(|| {
+    /// same documents repairs (an absent file is the state wanted).
+    pub fn remove_documents(&self, out_dir: &Path, markdown_uuids: &[String]) -> Result<()> {
+        if markdown_uuids.is_empty() {
+            return Ok(());
+        }
+        let md_paths = self.transaction(|| {
             blocking(async {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
-                let md_path: Option<String> =
-                    sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
-                        .bind(markdown_uuid)
-                        .fetch_optional(&mut **conn)
-                        .await
-                        .with_context(|| format!("read md_path for {markdown_uuid}"))?
-                        .flatten();
-                crate::grid_index::delete_document_rows(conn, markdown_uuid)
+                let set = serde_json::to_string(markdown_uuids)?;
+                let md_paths: Vec<String> = sqlx::query_scalar(REMOVED_MD_PATHS)
+                    .bind(&set)
+                    .fetch_all(&mut **conn)
                     .await
-                    .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-                sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
+                    .context("read the md_paths of the documents to remove")?;
+                crate::grid_index::delete_document_rows(conn, markdown_uuids)
+                    .await
+                    .context("remove documents from the store")?;
+                sqlx::query(REMOVED_PROBLEMS)
                     .bind(ScopeKind::Markdown.as_str())
-                    .bind(markdown_uuid)
+                    .bind(&set)
                     .execute(&mut **conn)
                     .await
-                    .with_context(|| format!("remove {markdown_uuid} from the store"))?;
-                Ok(md_path)
+                    .context("remove the problems of documents removed from the store")?;
+                Ok(md_paths)
             })
         })?;
-        if let Some(rel) = md_path {
+        for rel in md_paths {
             unlink_rendered(out_dir, &rel);
         }
         Ok(())
@@ -601,6 +612,50 @@ impl IndexedMarkdownStore {
                 );
             }
             Ok(out)
+        })
+    }
+
+    /// The buckets that declared any input from `table`, a whole-table
+    /// one included.
+    pub fn buckets_reading_table(&self, table: &str) -> Result<HashSet<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let buckets = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT bucket_key FROM render_inputs WHERE input_table = ?",
+            )
+            .bind(table)
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("the buckets that read one table")?;
+            Ok(buckets.into_iter().collect())
+        })
+    }
+
+    /// Up to `limit` of the row ids `bucket_key` declared from `table`,
+    /// in order, after `after`; a whole-table input is not a row.
+    pub fn ids_read_from(
+        &self,
+        bucket_key: &str,
+        table: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            sqlx::query_scalar::<_, String>(
+                "SELECT input_id FROM render_inputs \
+                  WHERE bucket_key = ?1 AND input_table = ?2 AND input_id <> ?3 \
+                    AND (?4 IS NULL OR input_id > ?4) \
+                  ORDER BY input_id LIMIT ?5",
+            )
+            .bind(bucket_key)
+            .bind(table)
+            .bind(WHOLE_TABLE)
+            .bind(after)
+            .bind(limit as i64)
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("the rows a bucket read from one table")
         })
     }
 
@@ -780,6 +835,17 @@ impl IndexedMarkdownStore {
             .await
             .context("count the store's documents and items")?;
             Ok(Holdings { documents, items })
+        })
+    }
+
+    /// Every `markdowns` row, ordered by id: what the search index reads to
+    /// learn which documents it owes and where their sections lie.
+    pub fn markdown_rows(&self) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
+        blocking(async {
+            sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
+                .fetch_all(&self.pool)
+                .await
+                .context("read markdowns")
         })
     }
 
@@ -1132,7 +1198,7 @@ impl IndexedMarkdownStore {
                 // `users` / `channels`, whose rename shows up inside
                 // every rendered doc; by the time rows reach here that
                 // fan-out has already happened, on the render side.
-                global_fanout_tables: &[],
+                fanout_query: None,
                 bucket_query: "
                     SELECT DISTINCT markdown_uuid FROM (
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
@@ -1284,6 +1350,11 @@ impl IndexedMarkdownStore {
                     render_version,
                     rows,
                     sections: Vec::new(),
+                    section_layout: md
+                        .section_layout
+                        .as_deref()
+                        .and_then(datalib_schema::markdowns::parse_layout),
+                    content_hash: md.content_hash.clone(),
                     edges,
                     contacts,
                     photos,
@@ -1375,19 +1446,23 @@ mod tests {
         IndexedMarkdownStore::open(dir).expect("open store")
     }
 
-    /// Every per-document lookup `put_document` makes goes through an
-    /// index: without them a full render is quadratic in the store's size.
+    /// Every per-document lookup `put_document` and `remove_documents`
+    /// make goes through an index: without them a full render is
+    /// quadratic in the store's size.
     #[test]
     fn replacing_a_document_finds_its_old_rows_by_index() {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
+        let mut statements = vec![
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
+            crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
+            REMOVED_MD_PATHS,
+            REMOVED_PROBLEMS,
+        ];
+        statements.extend(crate::grid_index::DELETE_DOCUMENTS);
         blocking(crate::grid_index::assert_searched_by_index(
             &st.pool,
-            &[
-                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
-                "DELETE FROM edges WHERE src_markdown_uuid = ?",
-                "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
-            ],
+            &statements,
         ));
         st.close();
     }
@@ -1537,6 +1612,8 @@ mod tests {
         problems: Vec<ProblemRow>,
     ) -> RenderedMarkdown {
         RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
             upstream_cursor: None,

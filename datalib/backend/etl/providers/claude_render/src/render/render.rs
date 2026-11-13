@@ -62,7 +62,11 @@ use datalib_schema::providers::Provider;
 ///     `bash_tool` and search results readable rather than JSON.
 /// v11: an answer's author is its model's chip (`ai_model:` handle).
 /// v12: the account's address is tied to "Me", so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: an HTML tag in a message, a project's text or a document shows
+///     as typed.
+/// v14: a message, a project's text or a document is markdown as
+///     written again, HTML included.
+pub const RENDER_VERSION: u32 = 14;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -363,6 +367,7 @@ fn build_chat(
                 author_kind: AuthorKind::Named,
                 author_display: block_author,
                 date_ms: block_ms,
+                date_offset_secs: None,
                 text: filter_nonempty(body),
                 kind: ItemKind::Text,
                 attachments: Vec::new(),
@@ -401,6 +406,7 @@ fn build_chat(
             author_kind,
             author_display: author_display.clone(),
             date_ms: msg_ms,
+            date_offset_secs: None,
             text: filter_nonempty(body),
             kind,
             attachments: norm_atts,
@@ -551,6 +557,7 @@ fn build_project_page(
             author_kind: AuthorKind::Unknown,
             author_display: label,
             date_ms: ms,
+            date_offset_secs: None,
             text: body,
             kind: ItemKind::Text,
             attachments: Vec::new(),
@@ -645,6 +652,7 @@ fn project_item(id: Identity, heading: &str, kind_label: &str, text: String) -> 
         author_kind: AuthorKind::Unknown,
         author_display: heading.to_string(),
         date_ms: id.at,
+        date_offset_secs: None,
         text: Some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),

@@ -48,7 +48,13 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v21: so is a person's photo.
 /// v22: the account's own messages are "Me", a chip of the `me:self`
 /// handle, whatever stand-in the source used ("User", "Human").
-pub const LAYOUT_VERSION: u32 = 22;
+/// v23: a message's time is on the clock its source wrote it on, and a
+/// time whose source names no clock says so (`Z`), in the header
+/// and in the row's `created_at`.
+/// v24: a `Markdown` body that leaves a fence or an HTML block open is
+/// closed at its end, so the messages after it are not swallowed.
+/// v25: titles, names, filenames and labels lose their bidi controls.
+pub const LAYOUT_VERSION: u32 = 25;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -82,11 +88,12 @@ use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
 use crate::types::{
-    AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
+    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
 };
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::html::{
-    escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
+    close_open_blocks, escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
+    without_bidi_controls,
 };
 
 /// What a provider's [`NormalizedChatItem::text`] is: what a person
@@ -225,10 +232,11 @@ impl<'a> ChatRenderer<'a> {
             key: chat.chat_uuid.clone(),
             inputs: chat.inputs.clone(),
         });
+        let shown = chat_names_shown(chat);
         for doc in &chat.buckets {
             let (items, reactions) = render_one(
                 self.profile,
-                chat,
+                &shown,
                 doc,
                 self.out_dir,
                 self.source_id,
@@ -260,6 +268,58 @@ impl<'a> ChatRenderer<'a> {
 /// WhatsApp user …0108").
 fn chat_heading(chat: &NormalizedChat) -> String {
     chat.title.clone().unwrap_or_else(|| chat.display.clone())
+}
+
+/// `chat` without its documents, its title and names without bidi
+/// controls ([`without_bidi_controls`]): every page and row reads them
+/// from here.
+fn chat_names_shown(chat: &NormalizedChat) -> NormalizedChat {
+    let shown = |s: &Option<String>| s.as_deref().map(without_bidi_controls);
+    NormalizedChat {
+        id: chat.id.clone(),
+        chat_uuid: chat.chat_uuid.clone(),
+        display: without_bidi_controls(&chat.display),
+        title: shown(&chat.title),
+        account: shown(&chat.account),
+        author: shown(&chat.author),
+        project: shown(&chat.project),
+        external_id: chat.external_id.clone(),
+        upstream_account: chat.upstream_account.clone(),
+        source_url: chat.source_url.clone(),
+        org_uuid: chat.org_uuid.clone(),
+        org_name: shown(&chat.org_name),
+        buckets: Vec::new(),
+        named_after: chat
+            .named_after
+            .iter()
+            .map(|p| NamedPerson {
+                shown: without_bidi_controls(&p.shown),
+                handle: p.handle.clone(),
+            })
+            .collect(),
+        contacts: chat.contacts.clone(),
+        inputs: chat.inputs.clone(),
+    }
+}
+
+/// The names in a document — authors, recipients, reactors, attachment
+/// filenames, labels — without bidi controls.
+fn doc_names_shown(doc: &mut NormalizedDoc) {
+    for item in &mut doc.items {
+        item.author_display = without_bidi_controls(&item.author_display);
+        for r in &mut item.recipients {
+            r.display = without_bidi_controls(&r.display);
+        }
+        for r in &mut item.reactions {
+            r.reactor_display = without_bidi_controls(&r.reactor_display);
+        }
+        for a in &mut item.attachments {
+            a.file_name = a.file_name.as_deref().map(without_bidi_controls);
+        }
+        for label in &mut item.labels {
+            *label = without_bidi_controls(label);
+        }
+    }
 }
 
 /// The account's own messages and reactions, under whatever stand-in
@@ -305,6 +365,7 @@ fn render_one(
     // the same chat may be re-rendered into another bucket later.
     let mut resolved_doc = link_attachments(doc, blobs);
     the_account_as_me(&mut resolved_doc);
+    doc_names_shown(&mut resolved_doc);
     let doc = &resolved_doc;
 
     let chat_title = chat_heading(chat);
@@ -337,6 +398,8 @@ fn render_one(
     let reactions_rendered = doc.items.iter().map(|i| i.reactions.len()).sum();
 
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: doc.markdown_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -425,7 +488,7 @@ fn render_markdown(
     };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_scalar(&title)));
+    s.push_str(&format!("title: {}\n", yaml_name(&title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
     s.push_str(&format!(
         "source_label: {}\n",
@@ -556,7 +619,7 @@ fn render_orphan_reactions(doc: &NormalizedDoc) -> Option<String> {
                 uuid = r.reaction_uuid,
                 emoji = escape_md_inline(&r.emoji),
                 who = reactor(r),
-                ts = timestamp_html(r.date_ms),
+                ts = timestamp_html(r.date_ms, None),
             ));
         }
     }
@@ -614,7 +677,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .unwrap_or("(system event)");
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = timestamp_html(item.date_ms),
+                ts = timestamp_html(item.date_ms, item.date_offset_secs),
                 summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
@@ -626,6 +689,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                     author: &item.author_display,
                     handle: item.author_handle.as_ref(),
                     date_ms: item.date_ms,
+                    offset_secs: item.date_offset_secs,
                     source_url: item.source_url.as_deref(),
                 }
                 .render(),
@@ -641,7 +705,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
 
     let body = |text: &str| match profile.text_format {
         TextFormat::Plain => escape_md_block(text),
-        TextFormat::Markdown => text.to_string(),
+        TextFormat::Markdown => close_open_blocks(text),
     };
     let labelled = |text: String| {
         if item.labels.is_empty() {
@@ -863,17 +927,25 @@ fn build_grid_rows(
     // `sort_by_key`), and a bucket with no dated item at all — including
     // the empty bucket `render_markdown` renders as "_(no messages)_" —
     // then gets `None` rather than a 1970 stamp.
-    let dated = || doc.items.iter().filter_map(|i| i.date_ms);
-    let first_ts = stamp_from_ms(dated().min(), profile.stamp_precision);
-    let last_ts = stamp_from_ms(
+    // Each on the clock its own message was written on; a reaction names none.
+    let dated = || {
+        doc.items
+            .iter()
+            .filter_map(|i| Some((i.date_ms?, i.date_offset_secs)))
+    };
+    let stamp = |at: Option<(i64, Option<i32>)>| {
+        let (ms, offset) = at?;
+        record_stamp_from_unix_millis_at(Some(ms), offset, profile.stamp_precision)
+    };
+    let first_ts = stamp(dated().min_by_key(|(ms, _)| *ms));
+    let last_ts = stamp(
         dated()
             .chain(
                 doc.items
                     .iter()
-                    .flat_map(|i| i.reactions.iter().filter_map(|r| r.date_ms)),
+                    .flat_map(|i| i.reactions.iter().filter_map(|r| Some((r.date_ms?, None)))),
             )
-            .max(),
-        profile.stamp_precision,
+            .max_by_key(|(ms, _)| *ms),
     );
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
@@ -967,7 +1039,11 @@ fn build_grid_rows(
                 // exactly one workspace/account, and every row inside
                 // it was minted under that same one.
                 .upstream_account(chat.upstream_account.clone())
-                .created_at(stamp_from_ms(item.date_ms, profile.stamp_precision))
+                .created_at(record_stamp_from_unix_millis_at(
+                    item.date_ms,
+                    item.date_offset_secs,
+                    profile.stamp_precision,
+                ))
                 .byte_size(Some(text.len() as i64))
                 .item_count(item.is_message().then_some(1))
                 // An empty display is "upstream named nobody", which is a
@@ -1172,7 +1248,12 @@ fn reaction_row(
         .upstream_id(r.source_ref.as_ref().map(|s| s.native_id.clone()))
         .upstream_entity_kind(r.source_ref.as_ref().map(|s| s.entity_kind.clone()))
         .upstream_account(chat.upstream_account.clone())
-        .created_at(stamp_from_ms(r.date_ms, profile.stamp_precision))
+        // A reaction names no clock of its own.
+        .created_at(record_stamp_from_unix_millis_at(
+            r.date_ms,
+            None,
+            profile.stamp_precision,
+        ))
         .author(non_empty(&r.reactor_display))
         .author_handle(r.reactor_handle.as_ref().map(|h| h.as_str().to_string()))
         .account(chat.account.clone())
@@ -1228,14 +1309,10 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 }
 
 // Format helpers
-use datalib_time::{record_stamp_from_unix_millis, RecordStampPrecision};
+use datalib_time::{record_stamp_from_unix_millis_at, RecordStampPrecision};
 
 /// Seconds precision, as this renderer has always emitted. Changing it
 /// would re-render every document chat-common has written.
-fn stamp_from_ms(ms: Option<i64>, precision: RecordStampPrecision) -> Option<String> {
-    record_stamp_from_unix_millis(ms, precision)
-}
-
 fn human_bytes(n: i64) -> String {
     let n = n as f64;
     if n < 1024.0 {
@@ -1314,6 +1391,7 @@ mod tests {
                     author_kind: AuthorKind::Named,
                     author_display: "Picard".to_string(),
                     date_ms: Some(12442118400000),
+                    date_offset_secs: None,
                     text: Some("Make it so.".to_string()),
                     kind: ItemKind::Text,
                     attachments: vec![],
@@ -1644,6 +1722,7 @@ mod tests {
             author_kind: AuthorKind::Named,
             author_display: "Worf".to_string(),
             date_ms: Some(12442118420000),
+            date_offset_secs: None,
             text: None,
             kind: ItemKind::System,
             attachments: vec![],
@@ -1735,11 +1814,79 @@ mod tests {
         );
         assert!(
             md.contains(
-                "<time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                "<time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00Z\" \
                  title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>"
             ),
             "{md}"
         );
+    }
+
+    /// A right-to-left override showed `evil.exe` as `exe.live`. Every
+    /// chat source's titles, names, filenames and labels reach the page
+    /// and the rows without one.
+    #[test]
+    fn bidi_controls_are_dropped_from_every_name_a_chat_shows() {
+        const RLO: &str = "\u{202E}";
+        let mut chat = mk_chat();
+        chat.display = format!("Bridge {RLO}werC");
+        chat.title = Some(format!("Orders {RLO}exe.live"));
+        chat.named_after = vec![NamedPerson {
+            shown: format!("Q{RLO}"),
+            handle: None,
+        }];
+        let item = &mut chat.buckets[0].items[0];
+        item.author_display = format!("Pic{RLO}ard");
+        item.labels = vec!["\u{2067}Away\u{2069}".to_string()];
+        item.reactions[0].reactor_display = format!("Will {RLO}Riker");
+        item.recipients = vec![crate::types::Recipient {
+            role: crate::types::RecipientRole::To,
+            display: format!("Wo{RLO}rf"),
+            handle: None,
+            drawn: true,
+        }];
+        item.kind = ItemKind::Attachment;
+        item.attachments = vec![NormalizedAttachment {
+            href: None,
+            file_name: Some(format!("orders{RLO}fdp.exe")),
+            mime_type: None,
+            byte_len: None,
+            source_url: None,
+            ref_id: None,
+        }];
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &test_profile(),
+            &[chat],
+            out.path(),
+            "test",
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |doc| {
+                docs.push(doc);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rows = serde_json::to_string(&docs[0].rows).unwrap();
+        let md = std::fs::read_to_string(out.path().join(&docs[0].md_path)).unwrap();
+        for text in [&md, &rows] {
+            assert!(
+                !text.contains(['\u{202E}', '\u{2067}', '\u{2069}']),
+                "{text:?}"
+            );
+        }
+        for shown in [
+            "Orders exe.live",
+            "Picard",
+            "Away",
+            "Will Riker",
+            "Worf",
+            "ordersfdp.exe",
+        ] {
+            assert!(md.contains(shown), "{shown:?} is missing: {md}");
+        }
+        assert!(rows.contains("Bridge werC"), "{rows}");
     }
 
     #[test]
@@ -1883,7 +2030,7 @@ mod tests {
 
         assert!(
             md.contains(
-                "*<small><time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+                "*<small><time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00Z\" \
                  title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time> \
                  \u{2014} system: Worf joined</small>*"
             ),
@@ -1902,6 +2049,7 @@ mod tests {
             author_kind: AuthorKind::Named,
             author_display: "tool".to_string(),
             date_ms: Some(12442118400000),
+            date_offset_secs: None,
             text: Some(text.to_string()),
             kind: ItemKind::Text,
             attachments: vec![],
@@ -2290,6 +2438,36 @@ mod tests {
         );
     }
 
+    /// A message whose code block never closes, typed or cut short,
+    /// turned every message after it into that code.
+    #[test]
+    fn a_block_one_message_leaves_open_stays_in_that_message() {
+        let profile = RenderProfile {
+            provider: Provider::Test,
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            chat_entity_kind: ENTITY_KIND_CONVERSATION,
+            stamp_precision: RecordStampPrecision::Seconds,
+            render_version: 1,
+            text_format: TextFormat::Markdown,
+        };
+        let mut chat = mk_chat();
+        let mut next = chat.buckets[0].items[0].clone();
+        next.message_uuid = "55555555-5555-5555-5555-555555555555".to_string();
+        chat.buckets[0].items[0].text = Some("```rust\nfn main() {".to_string());
+        chat.buckets[0].items.push(next);
+
+        let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
+        let (first, second) = md
+            .split_once("id=\"m-55555555")
+            .expect("the second message's wrapper");
+        let fences = first.lines().filter(|l| l.starts_with("```")).count();
+        assert_eq!(fences % 2, 0, "every fence before it is closed: {md}");
+        assert!(second.contains("Make it so."), "{md}");
+    }
+
     /// A chat with no title of its own is headed by its name alone, not
     /// "WhatsApp · WhatsApp user …0108"; a provider's title wins.
     #[test]
@@ -2441,14 +2619,8 @@ mod tests {
         assert_eq!(docs.len(), 1, "{rows:?}");
         let chat = docs[0];
         assert_eq!(chat.kind, profile.chat_kind);
-        assert_eq!(
-            chat.created_at.as_deref(),
-            Some("2364-04-11T00:00:00+00:00")
-        );
-        assert_eq!(
-            chat.modified_at.as_deref(),
-            Some("2364-04-11T00:00:10+00:00")
-        );
+        assert_eq!(chat.created_at.as_deref(), Some("2364-04-11T00:00:00Z"));
+        assert_eq!(chat.modified_at.as_deref(), Some("2364-04-11T00:00:10Z"));
         for r in rows.iter().filter(|r| !r.is_document) {
             assert!(
                 r.modified_at.is_none(),
@@ -2457,6 +2629,27 @@ mod tests {
                 r.modified_at
             );
         }
+    }
+
+    /// The document's row and its message's row wrote `+00:00` whatever
+    /// clock the message was written on; a reaction names none.
+    #[test]
+    fn rows_keep_the_clock_their_message_was_written_on() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].date_offset_secs = Some(3600);
+        let rows = rows_of(&profile, &chat);
+        let doc = rows.iter().find(|r| r.is_document).unwrap();
+        assert_eq!(doc.created_at.as_deref(), Some("2364-04-11T01:00:00+01:00"));
+        assert_eq!(doc.modified_at.as_deref(), Some("2364-04-11T00:00:10Z"));
+        let message = rows
+            .iter()
+            .find(|r| r.uuid == chat.buckets[0].items[0].message_uuid)
+            .unwrap();
+        assert_eq!(
+            message.created_at.as_deref(),
+            Some("2364-04-11T01:00:00+01:00")
+        );
     }
 
     /// An empty bucket is reachable — `render_markdown` renders it as
@@ -2491,7 +2684,7 @@ mod tests {
         let rows = rows_of(&profile, &chat);
         assert_eq!(
             rows[0].created_at.as_deref(),
-            Some("2364-04-11T00:00:00+00:00"),
+            Some("2364-04-11T00:00:00Z"),
             "chat row keeps the bucket's earliest real stamp",
         );
     }

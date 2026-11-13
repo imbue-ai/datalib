@@ -23,6 +23,7 @@ mod pipeline_disk;
 mod pipeline_history;
 mod pipeline_storage;
 mod record_json;
+mod referrer_policy;
 mod remote_media;
 mod request_log;
 mod runs_endpoints;

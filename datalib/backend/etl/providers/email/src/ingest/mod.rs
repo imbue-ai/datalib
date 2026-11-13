@@ -172,10 +172,19 @@ async fn upsert_emails(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[EmailRow]) 
 }
 use session::Session;
 
-/// Batch size for `Email/get` detail fetches. JMAP servers typically
-/// cap a single `Email/get` at ~500 ids; we stay well below to keep
-/// per-call latency bounded.
-const EMAIL_GET_BATCH: usize = 50;
+/// Ids per `Email/get` of whole envelopes, at most: the least RFC 8620
+/// suggests a server allow (`maxObjectsInGet`). A request's time is mostly
+/// the server's wait, not its bytes (INGEST.md §"Incrementality").
+const EMAIL_GET_MAX: usize = 500;
+/// Ids per `Email/get` for a server that states no `maxObjectsInGet`,
+/// which RFC 8620 requires it to.
+const EMAIL_GET_UNSTATED: usize = 50;
+
+/// Ids per `Email/get`: what the server allows, up to [`EMAIL_GET_MAX`].
+fn email_get_batch(max_objects_in_get: Option<usize>) -> usize {
+    max_objects_in_get.map_or(EMAIL_GET_UNSTATED, |n| n.clamp(1, EMAIL_GET_MAX))
+}
+
 /// Ids asked of `Email/query` per page of an enumeration.
 const EMAIL_QUERY_PAGE: usize = 500;
 /// `Email/changes` `maxChanges` ceiling — large enough to drain a
@@ -994,9 +1003,10 @@ impl EmailListing<'_> {
     }
 
     /// Fetch, with `Email/get`, every listed email the store does not
-    /// hold at its listed stamp: `owed::drain`, fifty to a batch. An
-    /// email the server no longer has, or that a label filter keeps out,
-    /// is gone: its listing, its row and whatever was held for it go.
+    /// hold at its listed stamp: `owed::drain`, [`email_get_batch`] to a
+    /// batch. An email the server no longer has, or that a label filter
+    /// keeps out, is gone: its listing, its row and whatever was held for
+    /// it go.
     /// Under `whole_threads` the filter keeps every email of a thread
     /// one it admits is in.
     async fn fetch_owed(
@@ -1014,6 +1024,15 @@ impl EmailListing<'_> {
         }
         bar.expect(owed.len() as u64);
         bar.doing("fetching emails");
+        let stated = self.session.core_limit("maxObjectsInGet");
+        if stated.is_none() {
+            warn!(
+                event = "jmap_no_max_objects_in_get",
+                batch = EMAIL_GET_UNSTATED,
+                "the JMAP server states no maxObjectsInGet; asking for a few emails at a time"
+            );
+        }
+        let batch = email_get_batch(stated);
         let kept_threads = match whole_threads {
             Some(keeps) => Some(Mutex::new(
                 listed::kept_threads(pool, self.account_id, Keeps::Mailboxes(keeps)).await?,
@@ -1039,9 +1058,9 @@ impl EmailListing<'_> {
             stop: &self.opts.control.stop,
             found,
             sealer: self.opts.sealer.as_ref(),
-            batch: EMAIL_GET_BATCH,
+            batch,
             concurrency: 1,
-            flush: EMAIL_GET_BATCH,
+            flush: batch,
             flush_bytes: 0,
             failures_in_a_row: GET_FAILURE_BUDGET,
         };
@@ -1435,6 +1454,17 @@ fn string_array(v: &Value, key: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guards the batch that made re-listing a 277k-email Fastmail
+    /// account an hour of 50-id requests: the server's stated limit is
+    /// used, up to 500.
+    #[test]
+    fn email_get_batch_takes_the_servers_limit_up_to_500() {
+        assert_eq!(email_get_batch(Some(4096)), 500);
+        assert_eq!(email_get_batch(Some(200)), 200);
+        assert_eq!(email_get_batch(Some(0)), 1);
+        assert_eq!(email_get_batch(None), 50);
+    }
 
     async fn tmp_db() -> (tempfile::TempDir, RawDb) {
         let d = tempfile::tempdir().unwrap();

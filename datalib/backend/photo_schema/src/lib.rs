@@ -35,6 +35,8 @@ pub struct NormalizedPhoto {
     /// keyword itself last. People are not here: they are in `people`.
     pub keywords: Vec<Vec<String>>,
     pub people: Vec<Person>,
+    /// Each collection or album it is in, named as its source shows it:
+    /// a nested one by its path, joined with ` › `.
     pub albums: Vec<String>,
     pub place: Place,
     pub geo: Option<Geo>,

@@ -7,7 +7,9 @@ import type {
   ConnectPhase,
   ConnectState,
   DagRunState,
+  PassState,
   RunKind,
+  WipeKind,
 } from "./generated/enums";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
@@ -17,7 +19,7 @@ import { pushToast } from "./toasts";
 // Rust enums into `./generated/enums`, and re-exported here so callers
 // keep one import. A variant added in Rust reaches these without a hand
 // edit; `bazel run //datalib/backend/http:ui_enums.update` regenerates.
-export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState };
+export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState, PassState, WipeKind };
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -191,6 +193,12 @@ export type RowsResponse<Row> = RowsSpec & {
   // Why the query cannot be read as typed (the search's alone). Not an
   // error: mid-keystroke it is usually a filter not finished yet.
   refused?: string[];
+  // The search's alone: which of the ids the request named in `among` are
+  // among its rows. Absent when it named none.
+  among?: string[];
+  // The problems' alone: each row carries `muted` (`yes` or `no`), and
+  // `POST <url>/mute` mutes or unmutes rows (`muteProblems`).
+  mutes?: boolean;
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
@@ -255,7 +263,14 @@ export type DocProblem = {
   /// dropped record has no section to jump to.
   item_uuid: string | null;
   first_seen_at_utc: string;
+  /// A person muted it: still listed, and counted nowhere.
+  muted: boolean;
 };
+
+/// One section of a document's body: the `data-section-uuid` it wraps,
+/// or null for a piece of the page's frame (title, a `<details>` opener),
+/// and its length in UTF-16 code units, as a JavaScript string counts.
+export type BodySection = { uuid: string | null; len: number };
 
 export type ChatResponse = {
   markdown_uuid: string;
@@ -273,6 +288,10 @@ export type ChatResponse = {
   /// such a document has no page, and `body` is empty.
   image?: string | null;
   body: string;
+  /// Where each section of `body` lies, so each message renders as a
+  /// fragment of its own (`renderDocument.ts`). Absent when the renderer
+  /// declares no sections.
+  sections?: BodySection[];
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];
@@ -651,6 +670,9 @@ export type SearchPageSpec = {
   sort?: string | null;
   through?: string | null;
   within?: string | null;
+  /// Record ids the answer says are or are not among the search's rows,
+  /// wherever they fall (`RowsResponse.among`).
+  among?: string[];
 };
 
 export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
@@ -680,6 +702,7 @@ export async function fetchRows<Row>(
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
+  if (spec.among?.length) params.set("among", JSON.stringify(spec.among));
   const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
@@ -689,6 +712,18 @@ export async function fetchRows<Row>(
     for (const e of r.errors) pushToast(e);
   }
   return r;
+}
+
+/// Mutes or unmutes problem rows, by id, at a problems table's `url`
+/// (`RowsResponse.mutes`). A muted row stays in the table and counts
+/// toward nothing: not a Manage row's count, not the Dashboard's Needs you.
+export async function muteProblems(url: string, ids: string[], muted: boolean): Promise<void> {
+  const r = await fetch(`${url}/mute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ problem_uuids: ids, muted }),
+  });
+  if (!r.ok) throw new Error(`POST ${url}/mute → ${r.status}: ${await r.text()}`);
 }
 
 /// One group of a table's rows: its value in each grouped column, how
@@ -802,10 +837,19 @@ export type ConfigResponse = {
   // The launch's upgrade (dag/README.md §"Upgrading a root"): the raw
   // stores being migrated, then what is offered for a re-render.
   upgrade: Upgrade;
+  // The newest "Free up disk space" since the server started, while it
+  // runs and after; null when there has been none.
+  free_space: FreeSpace | null;
 };
 
-/// Mirrors `supervisor::MigrateState`.
-export type MigrateState = "waiting" | "running" | "done" | "failed";
+/// How a pass over the steps stands with one of them. A step that shrank
+/// its store says how big it was before and after.
+export type PassRow = {
+  step: string;
+  state: PassState;
+  error: string | null;
+  store_bytes?: { before: number; after: number };
+};
 
 export type Upgrade = {
   // The migrate pass is running: nothing syncs until it is done.
@@ -813,10 +857,23 @@ export type Upgrade = {
   // The server has run its pass, or found it had none to run.
   settled: boolean;
   // Every step the pass asks, in the order it asks them.
-  steps: { step: string; state: MigrateState; error: string | null }[];
+  steps: PassRow[];
   // The steps that answered that they need to run again: the roots of
   // the re-render the app offers. Empty while migrating.
   rerender: string[];
+};
+
+/// Mirrors `supervisor::FreeSpace` (dag/README.md §"Resets and purges").
+export type FreeSpace = {
+  id: string;
+  // `compact` when old versions of rendered documents go too.
+  kind: WipeKind;
+  // The loop is still on it.
+  running: boolean;
+  // Why it was not done, once it is over.
+  error: string | null;
+  // Every step it asks, in order; empty until the loop takes it up.
+  steps: PassRow[];
 };
 
 export type NewerRoot = {
@@ -1165,9 +1222,10 @@ export function fetchPipelineDisk(signal?: AbortSignal): Promise<DiskFree> {
   return getJson<DiskFree>("/api/pipeline/disk", signal);
 }
 
-// `system` is the one row the config never named: `system/`, the run
-// log and the app's own stores.
-export type ManageRowKind = "group" | "step" | "applet" | "system";
+// `system` and `section` are the rows the config never named: `system/`,
+// the run log and the app's own stores; and the Applets heading over the
+// applets filed under no group.
+export type ManageRowKind = "group" | "step" | "applet" | "system" | "section";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
 // ── The column-type vocabulary ─────────────────────────────────────
@@ -1190,6 +1248,12 @@ export type ColumnSpec = {
   // On an identity column: the row field of chips drawn after the label,
   // as bare counts. Double-clicking them is a double-click on that field.
   badges?: string;
+  // Pixels the column starts at, where its type's usual width is wrong.
+  width?: number;
+  // Hidden while every row holds the same value in it.
+  hide_when_uniform?: boolean;
+  // The producer cannot order its rows by it, so it offers no sort.
+  unsorted?: boolean;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -1200,8 +1264,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
-  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
-  /// when the viewer should draw it as a chip it can resolve and open.
+  /// The group, step or document this names, as a chip's URI
+  /// (`datalib:group/slack`, `datalib:doc/<uuid>`), when the viewer should
+  /// draw it as a chip it can open.
   entity?: string | null;
 };
 

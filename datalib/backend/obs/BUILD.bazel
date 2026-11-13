@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # Shared observability init for every datalib Rust binary: stderr
 # fmt layer (pretty or JSON), an `IndicatifWriter` that coordinates
@@ -8,13 +8,17 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # their clap parser and call `init`.
 rust_library(
     name = "datalib_obs",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     crate_name = "datalib_obs",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/log_filter:datalib_log_filter",
         "//datalib/backend/status_line:datalib_status_line",
+        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:indicatif",
@@ -27,6 +31,21 @@ rust_library(
         "@datalib_crates//:tracing-indicatif",
         "@datalib_crates//:tracing-opentelemetry",
         "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+# A step that logs one line through `init` and exits, for the runner's
+# test of how a built-in step's line is filed.
+rust_binary(
+    name = "log_probe",
+    testonly = True,
+    srcs = ["src/bin/log_probe.rs"],
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":datalib_obs",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:tracing",
     ],
 )
 

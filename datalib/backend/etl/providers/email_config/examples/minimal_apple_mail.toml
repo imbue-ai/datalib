@@ -1,4 +1,4 @@
-# The Mail app on this Mac: the one account in it that holds mail, read
+# The Mail app on this Mac: every account in it that holds mail, read
 # from ~/Library/Mail. No sign-in; macOS asks you to choose the folder, or
 # to give the app Full Disk Access, before anything can read it.
 [[groups]]

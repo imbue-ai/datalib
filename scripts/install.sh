@@ -25,7 +25,8 @@
 #                             `latest` also means that one). Any other tag is
 #                             checked only against the checksum beside it
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
-#                             auto-detected; see libc detection below)
+#                             auto-detected; see libc detection below).
+#                             Set, it is used as given
 #
 # Supported platforms (one published release tarball each):
 #   macOS arm64          -> aarch64-apple-darwin
@@ -46,14 +47,14 @@ VERSION="${DATALIB_VERSION:-latest}"
 # their own (docs/dev/security_posture.md). So this is as trusted as a merge to
 # `main`, and nothing later can change what it installs.
 # scripts/release/pin_release.py writes these.
-PINNED_VERSION="v0.52.0"
+PINNED_VERSION="v0.54.1"
 pinned_sha256() {
     case "$1" in
-        aarch64-apple-darwin) echo a7c12227c0a87cf25d4dfa611d1004c5d9353413fa3d47fa2c7101de63bd4918 ;;
-        aarch64-unknown-linux-gnu) echo 64372760045b9b2ea491b0d639329b03cab1514062812b0ef1e4a3cf8eb266c7 ;;
-        aarch64-unknown-linux-musl) echo 232c0b143a20c90bd8bc0ee8b1c9db39bd827203703a2091addcad5b2035bec5 ;;
-        x86_64-unknown-linux-gnu) echo 44e0b6919e7f4181e9d56a47362d81d3c21c00aa7fd15618e0d2695d80d154df ;;
-        x86_64-unknown-linux-musl) echo 5fd245c3b0dcd45bb837ee2fbf85cb8e7de9568da27acdbbc326ddc68ba65cd8 ;;
+        aarch64-apple-darwin) echo 6c3fb44aacee2ff2a4ae51f3f9ca9cb4f8c40f35a33ca0189bc833ea3ba6b223 ;;
+        aarch64-unknown-linux-gnu) echo 94c4197e90561d8ed437e55d3c90030335bee7a885e2b601cfee8212043b17fc ;;
+        aarch64-unknown-linux-musl) echo 37ac1089611de7f65a67262cb80a7fdfb2ba97b921cce753c6b7e6d5673bb9f9 ;;
+        x86_64-unknown-linux-gnu) echo eaa50bfb845a58c05cf4bb447fe0eab4280973b168d59f44f5b9f9e9e1b609e6 ;;
+        x86_64-unknown-linux-musl) echo 419769b4d8ef53327db15aacbb40680cde7e17904907721d564d117b848b71bb ;;
         *) echo "" ;;
     esac
 }
@@ -70,9 +71,12 @@ err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 # can't run the gnu builds, so pick the fully-static musl tarball
 # there. Every musl system ships its dynamic loader at
 # /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
-# glibc hosts default to the gnu build (the long-standing default);
-# set DATALIB_LIBC=musl to force the static build anywhere — it
-# runs on any Linux of the right arch regardless of libc.
+# A glibc host gets the gnu build when its glibc is at least
+# GLIBC_FLOOR, the oldest the gnu builds run on (Ubuntu 24.04's;
+# docs/dev/release_steps.md §"The Linux floor"), and the musl build
+# below it. Set DATALIB_LIBC=musl to force the static build anywhere —
+# it runs on any Linux of the right arch regardless of libc.
+GLIBC_FLOOR="2.39"
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
@@ -91,6 +95,31 @@ case "${os}/${arch}" in
                     break
                 fi
             done
+        fi
+        if [ -z "${DATALIB_LIBC:-}" ] && [ "${libc}" = "gnu" ]; then
+            # `getconf GNU_LIBC_VERSION` prints `glibc 2.39`.
+            host_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+            host_glibc="${host_glibc#glibc }"
+            host_major="${host_glibc%%.*}"
+            host_minor="${host_glibc#*.}"
+            host_minor="${host_minor%%.*}"
+            case "${host_major}.${host_minor}" in
+                *[!0-9.]* | .* | *.)
+                    say "could not tell this host's glibc version; installing the glibc build,"
+                    say "which needs glibc ${GLIBC_FLOOR} or newer. If datalib-step then fails with"
+                    say "'GLIBC_2.xx not found', install again with DATALIB_LIBC=musl."
+                    ;;
+                *)
+                    if [ "${host_major}" -lt "${GLIBC_FLOOR%%.*}" ] || {
+                        [ "${host_major}" -eq "${GLIBC_FLOOR%%.*}" ] \
+                            && [ "${host_minor}" -lt "${GLIBC_FLOOR#*.}" ]
+                    }; then
+                        say "this host has glibc ${host_major}.${host_minor}, older than the ${GLIBC_FLOOR} the glibc build"
+                        say "needs; installing the fully-static musl build instead"
+                        libc="musl"
+                    fi
+                    ;;
+            esac
         fi
         case "${libc}" in
             gnu | musl) ;;

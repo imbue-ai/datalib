@@ -28,6 +28,9 @@ pub struct TermsKey {
     pub person: bool,
     /// What a value that names an H3 cell matches, in place of a term.
     pub cells: Cells,
+    /// Its values are the whole numbers from `.0` to `.1`, so a value may
+    /// compare: `rating:>=3` is any of 3, 4 and 5.
+    pub counts: Option<(u8, u8)>,
 }
 
 /// What a key makes of a value that is an H3 cell (`datalib_h3`).
@@ -54,7 +57,11 @@ impl TermsKey {
                     k.is_person()
                         || matches!(
                             k,
-                            Kind::Author | Kind::About | Kind::Participant | Kind::Subject
+                            Kind::Author
+                                | Kind::About
+                                | Kind::Participant
+                                | Kind::Subject
+                                | Kind::Pictured
                         )
                 })
                 .collect(),
@@ -69,6 +76,22 @@ const fn person(key: &'static str, aliases: &'static [&'static str], kinds: Kind
         kinds,
         person: true,
         cells: Cells::AsTerm,
+        counts: None,
+    }
+}
+
+const fn plain(
+    key: &'static str,
+    aliases: &'static [&'static str],
+    kind: &'static [Kind],
+) -> TermsKey {
+    TermsKey {
+        key,
+        aliases,
+        kinds: Kinds::These(kind),
+        person: false,
+        cells: Cells::AsTerm,
+        counts: None,
     }
 }
 
@@ -90,34 +113,27 @@ pub const TERMS_KEYS: &[TermsKey] = &[
     ),
     person("mention", &[], Kinds::These(&[Kind::Mention])),
     person("with", &["involves"], Kinds::AnyPerson),
+    // `in:` is Gmail's spelling (`in:sent`, `in:inbox`); a mailbox is
+    // a label here.
+    plain("label", &["in"], &[Kind::Label]),
     TermsKey {
-        key: "label",
-        aliases: &[],
-        kinds: Kinds::These(&[Kind::Label]),
-        person: false,
-        cells: Cells::AsTerm,
-    },
-    TermsKey {
-        key: "place",
-        aliases: &[],
-        kinds: Kinds::These(&[Kind::Place]),
-        person: false,
         cells: Cells::Inside,
+        ..plain("place", &[], &[Kind::Place])
     },
     TermsKey {
-        key: "near",
-        aliases: &[],
-        kinds: Kinds::These(&[Kind::Place]),
-        person: false,
         cells: Cells::Near,
+        ..plain("near", &[], &[Kind::Place])
     },
+    plain("caption", &[], &[Kind::Caption]),
+    plain("keyword", &["tag"], &[Kind::Keyword]),
+    // A face is not a handle: `pictured:` matches it by name, and so does
+    // `with:`, which reads every person kind.
+    plain("pictured", &[], &[Kind::Pictured]),
     TermsKey {
-        key: "caption",
-        aliases: &[],
-        kinds: Kinds::These(&[Kind::Caption]),
-        person: false,
-        cells: Cells::AsTerm,
+        counts: Some((1, 5)),
+        ..plain("rating", &[], &[Kind::Rating])
     },
+    plain("collection", &["album"], &[Kind::Collection]),
 ];
 
 /// The terms key a person typed, by its name or an alias.
@@ -179,6 +195,12 @@ pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsVa
     if key.person && !quoted && value.eq_ignore_ascii_case(ME) {
         return TermsValue::Me;
     }
+    if let Some(wanted) = key.counts.and_then(|range| counts(value, range)) {
+        return TermsValue::Exact {
+            values: wanted.iter().map(u8::to_string).collect(),
+            by_name: None,
+        };
+    }
     if let Some(id) = value.strip_prefix(CONTACT).filter(|_| key.person) {
         return TermsValue::Contact(id.to_string());
     }
@@ -200,6 +222,24 @@ pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsVa
             by_name: key.person,
         },
     }
+}
+
+/// The whole numbers in `lo..=hi` that `value` names: `3`, `=3`, `>=3`,
+/// `>3`, `<=3` or `<3`. `None` when it is none of those.
+fn counts(value: &str, (lo, hi): (u8, u8)) -> Option<Vec<u8>> {
+    let (op, number) = [">=", "<=", ">", "<", "="]
+        .into_iter()
+        .find_map(|op| value.strip_prefix(op).map(|rest| (op, rest)))
+        .unwrap_or(("=", value));
+    let v: u8 = number.trim().parse().ok()?;
+    let keep = |n: &u8| match op {
+        ">=" => *n >= v,
+        "<=" => *n <= v,
+        ">" => *n > v,
+        "<" => *n < v,
+        _ => *n == v,
+    };
+    Some((lo..=hi).filter(keep).collect())
 }
 
 /// `word` as a handle, when it is one: spelled as one (`email:…`,
@@ -227,6 +267,7 @@ mod tests {
             assert_eq!(key(typed).map(|k| k.key), Some("from"), "{typed}");
         }
         assert_eq!(key("involves").map(|k| k.key), Some("with"));
+        assert_eq!(key("in").map(|k| k.key), Some("label"), "Gmail's `in:sent`");
         assert_eq!(key("channel"), None);
     }
 
@@ -240,6 +281,8 @@ mod tests {
         assert!(!key("from").unwrap().kinds().contains(&Kind::About));
         assert!(!kinds.contains(&Kind::Label) && !kinds.contains(&Kind::Name));
         assert!(kinds.contains(&Kind::Bcc) && kinds.contains(&Kind::Mention));
+        assert!(kinds.contains(&Kind::Pictured), "someone in a photo");
+        assert!(!kinds.contains(&Kind::Keyword) && !kinds.contains(&Kind::Collection));
         assert_eq!(
             key("recipient").unwrap().kinds(),
             [Kind::To, Kind::Cc, Kind::Bcc]
@@ -321,5 +364,53 @@ mod tests {
                 by_name: false
             }
         );
+    }
+
+    /// `rating:>=3` compares, within the one to five stars a rating can
+    /// be; a value that is not a comparison is matched as text.
+    #[test]
+    fn a_rating_compares() {
+        let rating = key("rating").unwrap();
+        let exact = |v: &[&str]| TermsValue::Exact {
+            values: v.iter().map(|s| s.to_string()).collect(),
+            by_name: None,
+        };
+        for (typed, want) in [
+            ("4", exact(&["4"])),
+            ("=4", exact(&["4"])),
+            (">=3", exact(&["3", "4", "5"])),
+            (">3", exact(&["4", "5"])),
+            ("<=2", exact(&["1", "2"])),
+            ("<2", exact(&["1"])),
+            (">5", exact(&[])),
+        ] {
+            assert_eq!(value_of(rating, typed, false, "*"), want, "{typed}");
+        }
+        assert_eq!(value_of(rating, "4", true, "*"), exact(&["4"]), "quoted");
+        assert_eq!(value_of(rating, "*", false, "*"), TermsValue::Any);
+        assert_eq!(
+            value_of(rating, "high", false, "*"),
+            TermsValue::Partial {
+                text: "high".into(),
+                by_name: false
+            }
+        );
+        assert_eq!(
+            value_of(key("label").unwrap(), ">=3", false, "*"),
+            TermsValue::Partial {
+                text: ">=3".into(),
+                by_name: false
+            },
+            "only a key of counts compares"
+        );
+    }
+
+    #[test]
+    fn the_photo_keys_read_their_own_kinds() {
+        assert_eq!(key("keyword").unwrap().kinds(), [Kind::Keyword]);
+        assert_eq!(key("tag").map(|k| k.key), Some("keyword"));
+        assert_eq!(key("pictured").unwrap().kinds(), [Kind::Pictured]);
+        assert_eq!(key("collection").unwrap().kinds(), [Kind::Collection]);
+        assert_eq!(key("album").map(|k| k.key), Some("collection"));
     }
 }

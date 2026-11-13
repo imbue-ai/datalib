@@ -22,6 +22,10 @@ genrule(
         "//third-party/doltlite:licenses",
         "//third-party/emoji-data:LICENSE",
         "//third-party/latchkey-garmin:LICENSE",
+        "@llama_cpp//:LICENSE",
+        # llamafile's matrix kernels, Mozilla's copyright, carry their
+        # notice in the file's header.
+        "@llama_cpp//:ggml/src/ggml-cpu/llamafile/sgemm.cpp",
         # The whole Node distribution: its BUILD exports the binaries and
         # nothing else, so LICENSE is only reachable through this
         # filegroup. Inputs are hashed, not copied; the cost is one pass.
@@ -32,11 +36,16 @@ genrule(
         "bundled_licenses/doltlite/LICENSE.md",
         "bundled_licenses/emoji-data/LICENSE",
         "bundled_licenses/latchkey-garmin/LICENSE",
+        "bundled_licenses/llama.cpp/LICENSE",
+        "bundled_licenses/llama.cpp/LICENSE-llamafile-sgemm",
         "bundled_licenses/node/LICENSE",
     ],
     cmd = """
         out=$(RULEDIR)/bundled_licenses
-        mkdir -p $$out/curl-impersonate $$out/doltlite $$out/emoji-data $$out/latchkey-garmin $$out/node
+        mkdir -p $$out/curl-impersonate $$out/doltlite $$out/emoji-data $$out/latchkey-garmin $$out/llama.cpp $$out/node
+        cp $(location @llama_cpp//:LICENSE) $$out/llama.cpp/LICENSE
+        awk 'NR==1,/^$$/' $(location @llama_cpp//:ggml/src/ggml-cpu/llamafile/sgemm.cpp) > $$out/llama.cpp/LICENSE-llamafile-sgemm
+        grep -q Copyright $$out/llama.cpp/LICENSE-llamafile-sgemm
         cp $(location //third-party/emoji-data:LICENSE) $$out/emoji-data/LICENSE
         cp $(location //third-party/latchkey-garmin:LICENSE) $$out/latchkey-garmin/LICENSE
         for f in $(locations //third-party/latchkey-curl-shims:licenses); do

@@ -91,6 +91,9 @@ pub const ENV_RENDER_PAGES: &str = datalib_env::DATALIB_DAG_RENDER_PAGES;
 /// How many embedding contexts an embed step gives qmd — see
 /// `config::DagConfig::embed_contexts`.
 pub const ENV_EMBED_CONTEXTS: &str = datalib_env::DATALIB_DAG_EMBED_CONTEXTS;
+/// Set to `1` when an embed step also fills the search index's inference
+/// cache — see `config::DagConfig::embed_search_index`.
+pub const ENV_EMBED_SEARCH_INDEX: &str = datalib_env::DATALIB_DAG_EMBED_SEARCH_INDEX;
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because
@@ -142,6 +145,9 @@ struct WireOutcome {
     /// reach in place, so it has to run again.
     #[serde(default)]
     needs_rerun: bool,
+    /// A `--collect` or `--compact` answer: the store's size before and after.
+    #[serde(default)]
+    store_bytes: Option<crate::step::StoreBytes>,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
@@ -474,6 +480,7 @@ pub(crate) async fn run_subprocess(
         let w = outcome.unwrap_or_default();
         Ok(StepOutcome {
             needs_rerun: w.needs_rerun,
+            store_bytes: w.store_bytes,
             outputs: w.into_outputs(sink, &ctx.step_id),
             exit: Some(status.into()),
         })

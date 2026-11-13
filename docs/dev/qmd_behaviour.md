@@ -20,8 +20,11 @@ and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
 which drives the real qmd through `Index`. Search reads qmd's index
 itself (its keyword table and stored vectors) and asks qmd only to
 embed a query, so nothing here is about qmd's own search. The search
-applet reads the vectors into memory at launch and again after a sync
-moves them (`applets/src/unified_document_index/warm.rs`).
+applet reads the vectors into memory at launch, ranks against what it
+holds while a sync is writing the index, and once the index is still reads
+only the vectors added since (`INDEX_SETTLE` and `warm.rs` in
+`applets/src/unified_document_index/`, `VectorCache` in
+`unified_document_index/src/qmd/vectors.rs`).
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -252,6 +255,13 @@ does not carry over to `createStore()` without being re-measured.
     in `config.toml` is for.
 
 ## What the shipped steps do with these
+
+The same steps also fill the search index that is to replace qmd's
+(`docs/dev/plans/search_index_from_ram.md`): `keyword_index` after qmd's
+update, and `embed` after qmd's embed when the config sets
+`embed_search_index`, and the aggregator sweeps it. The search applet
+reads it instead of qmd's where its entry sets `DATALIB_SEARCH_READS =
+"search_index"`. Nothing below is about that index.
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
 indexes nothing. Each source has a `keyword_index` step (registers its

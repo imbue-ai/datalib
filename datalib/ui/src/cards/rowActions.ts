@@ -88,6 +88,7 @@ export function withBrowse<R extends ManageRow>(
   if (r.kind === "system") {
     return { ...r, browseSource: browseAction(r)?.enabled ? "logView()" : null, rawStore: null };
   }
+  if (r.kind === "section") return { ...r, browseSource: null, rawStore: null };
   if (r.kind === "group") {
     // Which step's path the group's button re-picks is settled on click.
     const actions = canReveal ? r.actions : r.actions.filter((a) => a.id !== CHOOSE_AGAIN);
@@ -246,7 +247,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
       url: problemsUrl,
       q,
       name,
-      placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
+      placeholder: "search problems…  (try: severity:error, -stage:fetch, muted:no)",
     };
     h.host.openCards(`gridView(${JSON.stringify(opts)})`);
   }

@@ -10,7 +10,7 @@ use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_document_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_document_index::grid_columns::GridColumn;
-use datalib_unified_document_index::problems::ProblemsQuery;
+use datalib_unified_document_index::problems::{Ids, ProblemsQuery};
 use datalib_unified_document_index::query::parse_query;
 use datalib_unified_document_index::repo::{IndexRepo, LocatedProblem};
 use datalib_unified_document_index::sort::Sort;
@@ -139,7 +139,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .unwrap()
         .is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
-    assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
+    assert!(repo.document_file("c-1").await.unwrap().is_none());
     assert!(repo
         .md_paths_for(&["c-1".to_string()])
         .await
@@ -238,8 +238,8 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     insert_rows(&writer, &[chat_row("c-1", "chats/c-1.md"), message]).await;
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
+         renderer_version, title) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1','Test conv')",
     )
     .execute(&writer)
     .await
@@ -248,6 +248,12 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
+    // The chat's row and its message's both carry the document's title.
+    assert!(
+        rows.iter()
+            .all(|r| r.document_title.as_deref() == Some("Test conv")),
+        "{rows:?}"
+    );
     // Newest first: the message came a minute after the chat began.
     assert_eq!(rows[0].kind, "User Input");
     assert_eq!(rows[1].kind, "Chat");
@@ -274,7 +280,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(meta.project, None, "project was NULL");
     assert_eq!(meta.channel, None, "channel was NULL");
 
-    let qmd = repo.qmd_path_for_markdown("c-1").await.unwrap();
+    let qmd = repo.document_file("c-1").await.unwrap().map(|f| f.path);
     assert!(qmd.is_some());
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
@@ -289,6 +295,44 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap();
     assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
     assert_eq!(batch.get("c-1"), Some(&qmd));
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
+/// An index an older build wrote has no `markdowns.section_layout` until
+/// `grid_index` rebuilds it, and opening any document there was a 500
+/// for the whole re-render an upgrade starts.
+#[tokio::test]
+async fn a_document_opens_in_an_index_without_section_layouts() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(root.clone()).await.unwrap();
+    let writer = writer(&root).await;
+    for (_t, ddl) in MARKDOWNS_DDL {
+        sqlx::query(*ddl).execute(&writer).await.unwrap();
+    }
+    sqlx::query("ALTER TABLE markdowns DROP COLUMN section_layout")
+        .execute(&writer)
+        .await
+        .expect("take the index back to its 0.52 shape");
+    sqlx::query(
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+         renderer_version) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
+    )
+    .execute(&writer)
+    .await
+    .unwrap();
+    commit(&writer, "rows").await;
+
+    let file = repo
+        .document_file("c-1")
+        .await
+        .expect("an older shape is not an error")
+        .expect("the document is there");
+    assert!(file.path.ends_with("chats/c-1.md"), "{:?}", file.path);
+    assert!(file.section_layout.is_none());
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
@@ -864,9 +908,21 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
+    for (_t, ddl) in GRID_DDL
+        .iter()
+        .chain(MARKDOWNS_DDL.iter())
+        .chain(PROBLEMS_DDL.iter())
+    {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
+    sqlx::query(
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+         renderer_version, title) \
+         VALUES ('md-1','slack','slack','thread','slack/md-1.md','test-v1','Away team')",
+    )
+    .execute(&writer)
+    .await
+    .expect("insert markdown row");
     let row = ProblemRow::new(
         "slack",
         Stage::GridRow,
@@ -880,7 +936,7 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     commit(&writer, "problems").await;
 
     let listing = repo
-        .problem_keys(&ProblemsQuery::parse(""), &[], &[])
+        .problem_keys(&ProblemsQuery::parse(""), &Ids::Any, &[], &[])
         .await
         .unwrap();
     let all = repo.problems_by_keys(&listing.uuids).await.unwrap();
@@ -888,7 +944,8 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         all,
         vec![LocatedProblem {
             row: row.clone(),
-            markdown_uuid: Some("md-1".into())
+            markdown_uuid: Some("md-1".into()),
+            document_title: Some("Away team".into()),
         }]
     );
     assert_eq!(repo.document_problems("md-1").await.unwrap(), vec![row]);

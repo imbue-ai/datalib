@@ -240,6 +240,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
             author_kind: AuthorKind::Named,
             author_display: m.sender_label.clone().unwrap_or_default(),
             date_ms: Some(m.timestamp_ms),
+            date_offset_secs: None,
             text: None,
             kind: ItemKind::System,
             attachments: Vec::new(),
@@ -265,6 +266,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         author_kind: AuthorKind::Named,
         author_display: m.sender_label.clone().unwrap_or_default(),
         date_ms: Some(m.timestamp_ms),
+        date_offset_secs: None,
         text: body,
         kind: if attachments.is_empty() {
             ItemKind::Text

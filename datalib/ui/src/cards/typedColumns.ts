@@ -8,6 +8,7 @@
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
 import { contactFromUri, entityFromUri, handleFromUri } from "./chipLinks";
+import { documentCell } from "./documentChip";
 import { entityCell, type EntityView } from "./entities";
 import { chipCell, contactCell, type NormalizedContact, type Who } from "./contacts";
 import { CELL_MEASURE, fitChips } from "./chipFit";
@@ -52,8 +53,6 @@ export type SlickColumnOptions<T> = {
   /// Where the picture an `image` cell names is served, small, or null
   /// when nothing serves it. Absent, an `image` column draws nothing.
   picture?: (name: string) => string | null;
-  /// A `markdown_uuid` cell was clicked.
-  onOpenDocument?: (uuid: string, row: T) => void;
   /// Every column can be dragged into the grouping bar. Off, no column
   /// carries a `grouping`, and the bar accepts none.
   groupable?: boolean;
@@ -327,13 +326,16 @@ function text(value: unknown): string {
 
 const plain: Formatter = (_r, _c, value) => ({ text: text(value), toolTip: text(value) });
 
-/// An identity as the chip it names — a group or step, else a person by
-/// handle — or null for one that names neither, or when the grid draws
-/// no chips.
+/// An identity as the chip it names — a document, a group or step, else
+/// a person by handle — or null for one that names none of them, or, for
+/// any but a document, when the grid draws no chips. A document's chip
+/// needs nothing resolved: its label is its title.
 function identityChip<T>(
   v: Identity,
   chips: SlickColumnOptions<T>["chips"],
 ): HTMLAnchorElement | null {
+  const doc = v.entity ? documentCell(v.entity, v.label, v.icon ?? null, v.detail ?? null) : null;
+  if (doc) return doc;
   if (chips?.entity && v.entity && entityFromUri(v.entity)) {
     return entityCell(v.entity, v.label, chips.entity(v.entity), v.icon ?? null, {
       keepShown: chips.keepLabels === true,
@@ -408,8 +410,6 @@ export function copyText(type: ColumnType, value: unknown): string {
       return (value as Identity).label ?? "";
     case "identities":
       return identitiesText(value);
-    case "markdown_uuid":
-      return typeof value === "string" ? value : ((value as Identity).label ?? "");
     case "status": {
       const s = value as StatusView;
       return s.at ? `${s.label} ${s.at}` : s.label;
@@ -463,9 +463,9 @@ export function typedColumns<T extends Record<string, unknown>>(
       field: f as Column<T>["field"],
       name: spec.header,
       toolTip: spec.description,
-      width: WIDTH[spec.type],
+      width: spec.width ?? WIDTH[spec.type],
       hidden: !spec.default_visible,
-      sortable: true,
+      sortable: !spec.unsorted,
       resizable: true,
       reorderable: true,
       // The tests, and anyone reading the DOM, find a cell by the
@@ -638,23 +638,6 @@ export function typedColumns<T extends Record<string, unknown>>(
                   : "",
             }),
             sortComparer: (a, b, dir) => compareNumber(a, b, dir ?? 1),
-          };
-        case "markdown_uuid":
-          return {
-            formatter: (_r, _c, value, _col, row) => {
-              const v = value as Identity | string | null;
-              const id = typeof v === "string" ? v : v?.id;
-              const a = document.createElement("a");
-              a.className = "tg-link";
-              a.textContent = typeof v === "string" ? v : (v?.label ?? "");
-              a.href = "#";
-              a.addEventListener("click", (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (id) opts.onOpenDocument?.(id, row);
-              });
-              return a;
-            },
           };
         case "actions":
           return { sortable: false, resizable: false, filterable: false, formatter: Actions };

@@ -10,15 +10,17 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use crate::db::{build_where, ChatMeta};
+use crate::db::{build_where, vals_holding, ChatMeta};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
-use crate::problems::ProblemsQuery;
+use crate::problems::{Ids, ProblemsQuery};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{DocRow, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow};
+use crate::repo::{
+    DocRow, DocumentFile, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,
+};
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
@@ -26,6 +28,7 @@ use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::markdowns::parse_layout;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
@@ -62,6 +65,22 @@ struct At {
     problems: &'static str,
 }
 
+async fn document_file_row(
+    at: &mut At,
+    markdown_uuid: &str,
+    layout_column: &'static str,
+) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
+    // Audited: `at.markdowns` and `layout_column` are literals; the uuid is bound.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT md_path, {layout_column} FROM {} \
+         WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
+        at.markdowns
+    )))
+    .bind(markdown_uuid)
+    .fetch_optional(&mut *at.tx)
+    .await
+}
+
 /// The rows `uuids` name, in that order, read inside `at`'s snapshot; one
 /// the snapshot lacks is left out.
 async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoError> {
@@ -90,6 +109,17 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
     }
     add_contact_handles(at, by_uuid.values_mut()).await?;
     add_subject_people(at, by_uuid.values_mut()).await?;
+    let docs: Vec<String> = by_uuid
+        .values()
+        .filter_map(|r| r.markdown_uuid.clone())
+        .collect();
+    let titles = at.document_titles(&docs).await?;
+    for row in by_uuid.values_mut() {
+        row.document_title = row
+            .markdown_uuid
+            .as_ref()
+            .and_then(|d| titles.get(d).cloned());
+    }
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
 }
 
@@ -263,7 +293,15 @@ fn ordered_sql<C: Column>(
     sort: &[Sort<C>],
     within: &[Within<C>],
 ) -> (String, Vec<String>) {
-    let (where_sql, params) = where_within(q, within);
+    ordered_sql_where(table, where_within(q, within), sort)
+}
+
+/// [`ordered_sql`] over a `WHERE` already built.
+fn ordered_sql_where<C: Column>(
+    table: &str,
+    (where_sql, params): (String, Vec<String>),
+    sort: &[Sort<C>],
+) -> (String, Vec<String>) {
     let order = order_by(sort).unwrap_or_else(default_order::<C::Table>);
     let key = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     (
@@ -338,6 +376,8 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
         contact_ref: None,
         subject_people: Vec::new(),
         subject_ref: Vec::new(),
+        document_title: None,
+        document_ref: None,
         author_term: None,
         channel: r.try_get(G::Channel.as_str()).unwrap_or_default(),
         source_url: r.try_get(G::SourceUrl.as_str()).unwrap_or_default(),
@@ -463,12 +503,18 @@ impl DoltRepo {
     }
 }
 
-/// The values the search terms of `kinds` hold, holding one bound `LIKE`
-/// pattern (or, `by_name`, a handle seen under a name holding it, the
-/// pattern bound again), among the rows `where_sql` keeps in `grid_rows`
-/// (its values bound after the patterns): each with how many rows hold
-/// it, most first.
-pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: bool) -> String {
+/// The values the search terms of `kinds` hold, holding `held`
+/// ([`vals_holding`]'s clause, its value bound first) or, `by_name`, a
+/// handle seen under a name holding one bound `LIKE` pattern, among the
+/// rows `where_sql` keeps in `grid_rows` (its values bound after those):
+/// each with how many rows hold it, most first.
+pub fn term_values_sql(
+    grid_rows: &str,
+    where_sql: &str,
+    kinds: &[u8],
+    held: &str,
+    by_name: bool,
+) -> String {
     let names = if by_name {
         " OR v.value IN (SELECT handle FROM names \
              WHERE LOWER(name) LIKE ? ESCAPE '\\')"
@@ -488,7 +534,7 @@ pub fn term_values_sql(grid_rows: &str, where_sql: &str, kinds: &[u8], by_name: 
     format!(
         "SELECT v.value, count(DISTINCT t.row_id) FROM terms t \
          JOIN vals v ON v.val_id = t.val_id \
-         WHERE t.kind IN ({}) AND (LOWER(v.value) LIKE ? ESCAPE '\\'{names}){among} \
+         WHERE t.kind IN ({}) AND ({held}{names}){among} \
          GROUP BY v.val_id ORDER BY 2 DESC, 1 LIMIT {MAX_VALUES}",
         codes.join(", ")
     )
@@ -531,7 +577,17 @@ impl At {
         sort: &[Sort<C>],
         within: &[Within<C>],
     ) -> Result<Vec<String>, RepoError> {
-        let (sql, params) = ordered_sql(table, q, sort, within);
+        self.keys_where(table, where_within(q, within), sort).await
+    }
+
+    /// [`Self::ordered_keys`] over a `WHERE` already built.
+    async fn keys_where<C: Column>(
+        &mut self,
+        table: &str,
+        where_params: (String, Vec<String>),
+        sort: &[Sort<C>],
+    ) -> Result<Vec<String>, RepoError> {
+        let (sql, params) = ordered_sql_where(table, where_params, sort);
         // Audited: the table name is a literal on `At`, every column name
         // a column enum's `as_str`, and every value bound.
         let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
@@ -634,7 +690,7 @@ impl At {
             .filter_map(|r| r.item_uuid.clone())
             .collect();
         let documents = self.documents_of(&items).await?;
-        Ok(rows
+        let located: Vec<(ProblemRow, Option<String>)> = rows
             .into_iter()
             .map(|row| {
                 let markdown_uuid = match row.scope_kind {
@@ -644,9 +700,47 @@ impl At {
                         .as_ref()
                         .and_then(|item| documents.get(item).cloned()),
                 };
-                LocatedProblem { row, markdown_uuid }
+                (row, markdown_uuid)
+            })
+            .collect();
+        let docs: Vec<String> = located.iter().filter_map(|(_, d)| d.clone()).collect();
+        let titles = self.document_titles(&docs).await?;
+        Ok(located
+            .into_iter()
+            .map(|(row, markdown_uuid)| LocatedProblem {
+                document_title: markdown_uuid.as_ref().and_then(|d| titles.get(d).cloned()),
+                row,
+                markdown_uuid,
             })
             .collect())
+    }
+
+    /// The title of each of `documents` that has one (`markdowns.title`).
+    async fn document_titles(
+        &mut self,
+        documents: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, RepoError> {
+        if documents.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted = serde_json::to_string(documents)
+            .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
+        let sql = format!(
+            "SELECT markdown_uuid, title FROM {} \
+             WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+               AND title IS NOT NULL AND title != ''",
+            self.markdowns
+        );
+        // Audited: the table name is a literal; the uuids are one bound array.
+        match sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+            .bind(wanted)
+            .fetch_all(&mut *self.tx)
+            .await
+        {
+            Ok(rows) => Ok(rows.into_iter().collect()),
+            Err(e) if is_missing_table(&e, "markdowns") => Ok(std::collections::HashMap::new()),
+            Err(e) => Err(RepoError::Internal(format!("read document titles: {e}"))),
+        }
     }
 
     /// The document each of `uuids` is a row of, for the ones the
@@ -900,13 +994,13 @@ impl IndexRepo for DoltRepo {
             return Ok(Vec::new());
         }
         let (where_sql, params) = where_within(q, &[]);
-        let sql = term_values_sql(at.grid_rows, &where_sql, kinds, by_name);
+        let (held, needle) = vals_holding("v.val_id", typed);
+        let sql = term_values_sql(at.grid_rows, &where_sql, kinds, &held, by_name);
         // Audited: the kinds are the enum's codes, the table names are
         // `&'static str`, and every value is bound.
-        let pattern = like_pattern(typed);
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&pattern);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(needle);
         if by_name {
-            query = query.bind(&pattern);
+            query = query.bind(like_pattern(typed));
         }
         for p in &params {
             query = query.bind(p);
@@ -1021,13 +1115,16 @@ impl IndexRepo for DoltRepo {
     async fn problem_keys(
         &self,
         q: &ProblemsQuery,
+        ids: &Ids,
         sort: &[Sort<ProblemRowColumn>],
         within: &[Within<ProblemRowColumn>],
     ) -> Result<Listing, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let uuids = at.ordered_keys(at.problems, q, sort, within).await?;
+        let uuids = at
+            .keys_where(at.problems, ids.narrow(where_within(q, within)), sort)
+            .await?;
         Ok(Listing {
             uuids,
             at: Some(at.commit),
@@ -1045,12 +1142,13 @@ impl IndexRepo for DoltRepo {
     async fn problem_groups(
         &self,
         q: &ProblemsQuery,
+        ids: &Ids,
         by: &[ProblemRowColumn],
     ) -> Result<Grouping<LocatedProblem>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
-        let (where_sql, params) = where_within(q, &[]);
+        let (where_sql, params) = ids.narrow(where_within(q, &[]));
         let (keys, truncated) = at.group_keys(at.problems, &where_sql, &params, by).await?;
         let sample_keys: Vec<String> = keys.iter().map(|(_, _, key)| key.clone()).collect();
         let samples = at.problems_in(&sample_keys).await?;
@@ -1415,30 +1513,39 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
-    async fn qmd_path_for_markdown(
-        &self,
-        markdown_uuid: &str,
-    ) -> Result<Option<PathBuf>, RepoError> {
+    async fn document_file(&self, markdown_uuid: &str) -> Result<Option<DocumentFile>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(None);
         };
-        // Audited: `at.markdowns` is a literal; the uuid is bound.
-        let row = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT md_path FROM {} WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
-            at.markdowns
-        )))
-        .bind(markdown_uuid)
-        .fetch_optional(&mut *at.tx)
-        .await
-        {
+        let lacks_layouts = |e: &sqlx::Error| matches!(missing_schema(e), Some(Missing::Column(c)) if c.ends_with("section_layout"));
+        let row = match document_file_row(&mut at, markdown_uuid, "section_layout").await {
+            // An index an older build wrote, until `grid_index` rebuilds it:
+            // the document goes out as one piece.
+            Err(e) if lacks_layouts(&e) => {
+                tracing::info!(
+                    document = %markdown_uuid,
+                    "the grid index has no section layouts yet; \
+                     the document goes out without one until grid_index rebuilds it",
+                );
+                document_file_row(&mut at, markdown_uuid, "NULL AS section_layout").await
+            }
+            other => other,
+        };
+        let row = match row {
             Ok(row) => row,
             Err(e) if is_missing_table(&e, "markdowns") => return Ok(None),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
+            Err(e) => return Err(RepoError::Internal(format!("read the file: {e}"))),
         };
         let Some(r) = row else { return Ok(None) };
         let rel: String = r
             .try_get("md_path")
             .map_err(|e| RepoError::Internal(format!("decode md_path: {e}")))?;
-        Ok(Some(self.root.as_ref().join(rel)))
+        let layout: Option<String> = r
+            .try_get("section_layout")
+            .map_err(|e| RepoError::Internal(format!("decode section_layout: {e}")))?;
+        Ok(Some(DocumentFile {
+            path: self.root.as_ref().join(rel),
+            section_layout: layout.as_deref().and_then(parse_layout),
+        }))
     }
 }
