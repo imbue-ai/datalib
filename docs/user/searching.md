@@ -132,11 +132,15 @@ A person is found by the part they played:
 | `to:`, `cc:`, `bcc:` | was in that header |
 | `recipient:` | was in any of them |
 | `mention:` | was mentioned, where the source marks mentions up |
-| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about |
+| `with:` (also `involves:`) | played any of those parts, or took part in the conversation the row is or is named after (a direct message's other party, even where only you wrote), or is who an address-book card is about, or is tagged in a photo |
+| `pictured:` | is tagged in a photo, on a face or by a person keyword. A tag is a name and no address, so the value matches the name |
 | `label:` (also `in:`, as Gmail writes `in:sent`) | (not a person) an email's labels and mailboxes; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
 | `place:` | (not a person) where a photo was taken: a city or a landmark; or, given an [H3](https://h3geo.org) cell at any resolution (`place:86283082fffffff`), every row whose location falls in it |
 | `near:` | (not a person) given an H3 cell, every row in it or in one of its six neighbours: what the photo card's "photos in this area" writes. `place:` with a cell can miss a row just inside the cell's edge, because H3's coarse cells do not exactly hold their finer ones; `near:` never does, and also finds some rows just outside |
 | `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |
+| `keyword:` (also `tag:`) | (not a person) a photo's keywords, and the keywords above them in the keyword tree |
+| `rating:` | (not a person) a photo's stars, `1` to `5`: `rating:4` exactly, or compared, `rating:>=3`, `rating:<2` (`>`, `>=`, `<`, `<=`). `-rating:*` is the unrated ones |
+| `collection:` (also `album:`) | (not a person) the collections a photo is in: in Lightroom its collections, the Quick Collection, a saved book, slideshow, print or web gallery, and a publish service's collections (Flickr, Hard Drive, …). A collection inside a set answers to its own name, each set's name above it, and its whole path, `"Trips › Japan"`. A smart collection is a saved search, not a list of photos, and is not one |
 
 The value can be:
 

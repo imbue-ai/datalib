@@ -19,8 +19,12 @@ use crate::read::ImageRow;
 use crate::xmp::{self, XmpFields};
 
 /// Bump when what a photo's row or terms say changes.
-/// v4: the text a diff shows escapes the title, caption and keywords.
-pub const RENDER_VERSION: u32 = 4;
+/// v5: keyword, pictured, rating and collection terms; every collection
+/// with members, the quick collection and publish collections included.
+pub const RENDER_VERSION: u32 = 5;
+
+/// How a nested collection's path is shown.
+pub const PATH_SEPARATOR: &str = " › ";
 
 /// The H3 cells a photo's card names: about a region, a town, a
 /// neighbourhood and a block. Search does not need them; it reads the
@@ -122,7 +126,11 @@ pub fn build(image: &ImageRow, ctx: &Context<'_>) -> Built {
         color_label: image.color_label.clone(),
         keywords: image.keywords.clone(),
         people: image.people.clone(),
-        albums: image.albums.clone(),
+        albums: image
+            .albums
+            .iter()
+            .map(|a| a.join(PATH_SEPARATOR))
+            .collect(),
         place: image.place.clone(),
         geo,
         h3: geo
@@ -199,16 +207,37 @@ fn grid_row(
 }
 
 /// What a photo answers to in search: its keywords and every keyword
-/// above them, its people and albums as labels; its place names; its
+/// above them; the people in it; its rating; its collections, each by
+/// its name, the sets above it and its whole path; its place names; its
 /// caption, title and Lightroom's own id. Its location is the row's own
-/// column, which `place:<cell>` reads.
+/// column, which `place:<cell>` reads. Keywords, people and albums are
+/// labels too, which is how `label:` found them first.
 pub fn terms(photo: &NormalizedPhoto, image: &ImageRow) -> Vec<SearchTerm> {
-    let label = |v: &str| SearchTerm::new(SearchTermKind::Label, v);
-    let place = |v: &str| SearchTerm::new(SearchTermKind::Place, v);
+    let term = |kind, value: &str| SearchTerm::new(kind, value);
+    let label = |v: &str| term(SearchTermKind::Label, v);
+    let place = |v: &str| term(SearchTermKind::Place, v);
     let mut out: Vec<SearchTerm> = Vec::new();
-    out.extend(photo.keywords.iter().flatten().map(|k| label(k)));
-    out.extend(photo.people.iter().map(|p| label(&p.name)));
+    for keyword in photo.keywords.iter().flatten() {
+        out.push(label(keyword));
+        out.push(term(SearchTermKind::Keyword, keyword));
+    }
+    for person in &photo.people {
+        out.push(label(&person.name));
+        out.push(term(SearchTermKind::Pictured, &person.name));
+    }
     out.extend(photo.albums.iter().map(|a| label(a)));
+    for path in &image.albums {
+        out.extend(path.iter().map(|a| term(SearchTermKind::Collection, a)));
+        if path.len() > 1 {
+            out.push(term(SearchTermKind::Collection, &path.join(PATH_SEPARATOR)));
+        }
+    }
+    out.extend(
+        photo
+            .rating
+            .filter(|r| (1..=5).contains(r))
+            .map(|r| term(SearchTermKind::Rating, &r.to_string())),
+    );
     out.extend(photo.place.names().map(place));
     out.extend(
         photo
@@ -410,7 +439,7 @@ mod tests {
             base_name: format!("{hide}warp"),
             caption: Some(format!("Engage.\n{hide}\n\nhidden")),
             keywords: vec![vec![hide.to_string()]],
-            albums: vec![hide.to_string()],
+            albums: vec![vec![hide.to_string()]],
             ..ImageRow::default()
         };
         let built = build(
@@ -427,6 +456,74 @@ mod tests {
         assert!(
             md.starts_with("# &lt;div style=\"display:none\"&gt;warp\n\nEngage.\n"),
             "{md}"
+        );
+    }
+
+    /// `keyword:`, `with:`/`pictured:`, `rating:` and `collection:` each
+    /// read a kind of their own, and `label:` still finds all but the
+    /// rating, as it did before they had one.
+    #[test]
+    fn a_photo_answers_to_its_keywords_people_rating_and_collections() {
+        let image = ImageRow {
+            id_global: "G1".into(),
+            base_name: "away-team.jpg".into(),
+            rating: Some(4.0),
+            keywords: vec![vec!["Places".into(), "Risa".into()]],
+            people: vec![datalib_photo_schema::Person {
+                name: "Deanna Troi".into(),
+                face: None,
+            }],
+            albums: vec![
+                vec!["Shore leave".into(), "Risa".into()],
+                vec!["Quick Collection".into()],
+            ],
+            ..ImageRow::default()
+        };
+        let built = build(
+            &image,
+            &Context {
+                source_id: "lr",
+                qmd_path: "lr/doc.md",
+                catalog: None,
+                zone: None,
+            },
+        );
+        assert_eq!(
+            built.photo.albums,
+            ["Shore leave › Risa", "Quick Collection"]
+        );
+        let terms = terms(&built.photo, &image);
+        let of = |kind: SearchTermKind| -> Vec<&str> {
+            let mut v: Vec<&str> = terms
+                .iter()
+                .filter(|t| t.kind == kind)
+                .map(|t| t.value.as_str())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert_eq!(of(SearchTermKind::Keyword), ["Places", "Risa"]);
+        assert_eq!(of(SearchTermKind::Pictured), ["Deanna Troi"]);
+        assert_eq!(of(SearchTermKind::Rating), ["4"]);
+        assert_eq!(
+            of(SearchTermKind::Collection),
+            [
+                "Quick Collection",
+                "Risa",
+                "Shore leave",
+                "Shore leave › Risa"
+            ]
+        );
+        assert_eq!(
+            of(SearchTermKind::Label),
+            [
+                "Deanna Troi",
+                "Places",
+                "Quick Collection",
+                "Risa",
+                "Shore leave › Risa"
+            ]
         );
     }
 

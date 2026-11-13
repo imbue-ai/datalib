@@ -182,8 +182,9 @@ async fn the_golden_gate_photo_says_what_the_catalog_holds() {
         .is_some_and(|r| r.ends_with("test_photos/GoldenGateBridge-001.jpg")));
 }
 
-/// People tagged on faces carry their rectangles; a keyword's parents
-/// are labels too; the quick collection is not an album.
+/// People tagged on faces carry their rectangles and are pictured; a
+/// keyword's parents are keywords and labels too; the quick collection
+/// is a collection; the rating is a term.
 #[tokio::test(flavor = "multi_thread")]
 async fn faces_keyword_trees_and_albums() {
     let photos = photos(None).await;
@@ -203,7 +204,22 @@ async fn faces_keyword_trees_and_albums() {
     assert!(band.people.iter().all(|p| p.face.is_some()));
     assert_eq!(band.creator.as_deref(), Some("Schlappal"));
     assert_eq!(band.offset_from, Some(OffsetFrom::CreateDate));
-    assert_eq!(band.albums, ["Helden"], "the quick collection is left out");
+    assert_eq!(band.albums, ["Helden", "Quick Collection"]);
+    let band_row = &photos["1_Live_Krone_2013_dth_1.jpg"];
+    assert_eq!(
+        terms(band_row, SearchTermKind::Pictured),
+        names.iter().map(|n| n.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        terms(band_row, SearchTermKind::Collection),
+        ["Helden", "Quick Collection"]
+    );
+    assert_eq!(terms(band_row, SearchTermKind::Rating), ["3"]);
+    assert_eq!(
+        terms(&photos["GoldenGateBridge-001.jpg"], SearchTermKind::Rating),
+        Vec::<String>::new(),
+        "unrated"
+    );
 
     let king = &photos["Martin_Luther_King,_Jr..jpg"];
     assert!(king.photo.keywords.contains(&vec![
@@ -215,6 +231,18 @@ async fn faces_keyword_trees_and_albums() {
     for label in ["Nobelpris", "Fred", "Martin Luther King Jr.", "Helden"] {
         assert!(labels.contains(&label.to_string()), "{label}: {labels:?}");
     }
+    let keywords = terms(king, SearchTermKind::Keyword);
+    for keyword in ["Nobelpris", "Nobelpristagare", "Fred"] {
+        assert!(
+            keywords.contains(&keyword.to_string()),
+            "{keyword}: {keywords:?}"
+        );
+    }
+    assert!(
+        !keywords.contains(&"Martin Luther King Jr.".to_string()),
+        "a person is pictured, not a keyword: {keywords:?}"
+    );
+    assert_eq!(terms(king, SearchTermKind::Rating), ["5"]);
 }
 
 /// A photo whose metadata records no offset is read as UTC and carries a

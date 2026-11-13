@@ -149,7 +149,7 @@ export default function photos(appletId, uuid) {
         row("Taken", p.captured_at + assumed);
       }
       if (p.people.length) {
-        const r = row("People", ...p.people.map((x) => chip(x.name, `label:${quoted(x.name)}`)));
+        const r = row("People", ...p.people.map((x) => chip(x.name, `pictured:${quoted(x.name)}`)));
         if (boxes.length) {
           const t = el("span", "ph-toggle", "hide faces");
           t.addEventListener("click", () => {
@@ -162,9 +162,9 @@ export default function photos(appletId, uuid) {
         void r;
       }
       if (p.keywords.length) {
-        row("Keywords", ...p.keywords.map((k) => chip(k.join(" › "), `label:${quoted(k[k.length - 1])}`)));
+        row("Keywords", ...p.keywords.map((k) => chip(k.join(" › "), `keyword:${quoted(k[k.length - 1])}`)));
       }
-      if (p.albums.length) row("Albums", ...p.albums.map((a) => chip(a, `label:${quoted(a)}`)));
+      if (p.albums.length) row("Albums", ...p.albums.map((a) => chip(a, `collection:${quoted(a)}`)));
       const places = [p.place.location, p.place.city, p.place.state, p.place.country].filter(Boolean);
       if (places.length) row("Place", ...places.map((n) => chip(n, `place:${quoted(n)}`)));
       if (p.h3.length) {
@@ -179,7 +179,7 @@ export default function photos(appletId, uuid) {
       ].filter(Boolean);
       if (p.camera || p.lens) row("Camera", [p.camera, p.lens].filter(Boolean).join(" · "));
       if (exposure.length) row("Exposure", exposure.join(", "));
-      if (p.rating) row("Rating", "★".repeat(p.rating));
+      if (p.rating) row("Rating", chip("★".repeat(p.rating), `rating:>=${p.rating}`));
       if (p.color_label) row("Label", p.color_label);
       if (p.creator) row("By", p.creator);
       if (p.copyright) row("Copyright", p.copyright);
