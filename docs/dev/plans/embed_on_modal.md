@@ -1,7 +1,8 @@
 # Embedding a source on Modal's GPUs
 
-**Status: proposal (2026-11-12), nothing built. Facts marked _to check_
-have not been measured or read from source yet.**
+**Status: proposal (2026-11-12). Built so far: the CUDA module under
+Bazel (#1750) and the embedder loading it (#1752); the rest is not. Facts
+marked _to check_ have not been measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
 hours on an M-series Mac for one large library (710k chunks at ~12 a
@@ -93,7 +94,7 @@ x86_64, as a module the one gnu build loads when it can:
   (which way, _to check_).
 - **The module is fetched, like the runtime's CUDA overlay.** Without
   cuBLAS it is about llama.cpp's GPU code alone (node-llama-cpp's is
-  156 MB for more GPU models; ours is measured in #1750), still more than
+  156 MB for more GPU models; ours is 122 MB for five), still more than
   everyone else should carry. It ships as one more release asset,
   fetched on first use under the probe `datalib_fetch::runtime` already
   makes for node-llama-cpp's CUDA overlay (`QMD_LLAMA_GPU=cuda` or
