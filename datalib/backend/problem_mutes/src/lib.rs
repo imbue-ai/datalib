@@ -329,6 +329,8 @@ mod tests {
     async fn plain(path: &Path) -> SqlitePool {
         sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::new()
                     .filename(path)

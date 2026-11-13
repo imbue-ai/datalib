@@ -20,17 +20,22 @@ use super::Index;
 
 /// The store, opened on the first mute — or at the first read, when an
 /// earlier one made it — and held, with its writer lock, from then on.
-/// A root nobody muted anything in never gets the file.
+/// A root nobody muted anything in never gets the file. Whether it is
+/// there is asked once, at startup: this applet is its one writer, so
+/// nothing else makes it later, and no request reaches the filesystem.
 #[derive(Clone)]
 pub struct Mutes {
     path: Arc<PathBuf>,
+    present_at_start: bool,
     pool: Arc<tokio::sync::Mutex<Option<SqlitePool>>>,
 }
 
 impl Mutes {
     pub fn new(data_root: &Path) -> Self {
+        let path = datalib_problem_mutes::store_path(data_root);
         Mutes {
-            path: Arc::new(datalib_problem_mutes::store_path(data_root)),
+            present_at_start: path.exists(),
+            path: Arc::new(path),
             pool: Arc::default(),
         }
     }
@@ -42,11 +47,8 @@ impl Mutes {
         if let Some(pool) = held.as_ref() {
             return Ok(Some(pool.clone()));
         }
-        if !create && !self.path.exists() {
+        if !create && !self.present_at_start {
             return Ok(None);
-        }
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
         }
         let pool = datalib_etl::doltlite_raw::open_curated(
             &self.path,
