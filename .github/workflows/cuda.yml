@@ -80,6 +80,19 @@ jobs:
             exit 1
           fi
 
+      - name: why not (temporary)
+        if: failure()
+        run: |
+          cd "$RUNNER_TEMP/cuda"
+          echo "dynsym defined: $(nm -D --defined-only datalib_step | wc -l)"
+          nm datalib_step | grep -E ' ggml_(abort|nbytes|init)$' || echo "no ggml_abort/nbytes/init in symtab"
+          nm -D datalib_step | grep -c ggml_ || true
+          readelf -h datalib_step | grep Type
+          cd "$GITHUB_WORKSPACE"
+          bazelisk aquery -c opt --config=release --config=cuda --nostamp \
+            'mnemonic("Rustc", //datalib/backend/datalib_step:datalib_step)' --output=text > "$RUNNER_TEMP/aq.txt" 2>&1 || true
+          tr ' ' '\n' < "$RUNNER_TEMP/aq.txt" | grep -E 'export|version-script|dynamic-list|strip|lto|exclude-libs|ggml|fuse-ld|-s$' | sort | uniq -c
+
       # What the module's bytes are: each ELF section, the GPU code per GPU
       # model (uncompressed, so it sums past the file), and the file
       # stripped of host symbols.
