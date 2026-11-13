@@ -49,6 +49,26 @@ impl Held {
         &self.vectors[chunk * self.dim..(chunk + 1) * self.dim]
     }
 
+    /// Each embedded document's place in meaning: the mean of its chunks'
+    /// unit vectors, scaled to unit length, laid end to end, with its id.
+    pub fn document_vectors(&self) -> (Vec<String>, Vec<f32>) {
+        let mut ids = Vec::with_capacity(self.docs.len());
+        let mut out = Vec::with_capacity(self.docs.len() * self.dim);
+        for doc in &self.docs {
+            let mut sum = vec![0f32; self.dim];
+            for chunk in doc.chunks.clone() {
+                for (s, x) in sum.iter_mut().zip(self.vector(chunk)) {
+                    *s += x;
+                }
+            }
+            if unit(&mut sum) {
+                ids.push(doc.markdown_uuid.clone());
+                out.extend(sum);
+            }
+        }
+        (ids, out)
+    }
+
     /// The message uuids chunk `chunk` of `doc` covers.
     pub fn covered<'a>(&self, doc: &'a HeldDoc, chunk: usize) -> impl Iterator<Item = &'a str> {
         let c = &self.chunks[chunk];
@@ -100,6 +120,89 @@ impl Reader {
         if let Some(cache) = self.cache {
             cache.close().await;
         }
+    }
+
+    /// How many documents the index holds, embedded or not.
+    pub async fn documents(&self) -> Result<usize> {
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM search_documents")
+            .fetch_one(&self.index)
+            .await
+            .context("count the indexed documents")?;
+        Ok(usize::try_from(n)?)
+    }
+
+    /// Of `uuids`, the ones the index holds, each with whether every one of
+    /// its chunks has a vector under `model`.
+    pub async fn states(&self, model: &str, uuids: &[String]) -> Result<HashMap<String, bool>> {
+        let mut chunks_of: HashMap<String, Vec<String>> = HashMap::new();
+        for batch in uuids.chunks(BATCH) {
+            let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+                "SELECT d.markdown_uuid, c.hash FROM search_documents d \
+                   LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
+                  WHERE d.markdown_uuid IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(batch)?)
+            .fetch_all(&self.index)
+            .await
+            .context("read the documents' chunks")?;
+            for (uuid, hash) in rows {
+                let hashes = chunks_of.entry(uuid).or_default();
+                hashes.extend(hash);
+            }
+        }
+        let all: Vec<&str> = chunks_of.values().flatten().map(String::as_str).collect();
+        let have = self.vectors_held(model, &all).await?;
+        Ok(chunks_of
+            .into_iter()
+            .map(|(uuid, hashes)| {
+                let embedded = hashes.iter().all(|h| have.contains(h.as_str()));
+                (uuid, embedded)
+            })
+            .collect())
+    }
+
+    /// How many documents the index holds, and of them how many have a
+    /// vector under `model` for every chunk.
+    pub async fn coverage(&self, model: &str) -> Result<(u64, u64)> {
+        let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT d.doc_id, c.hash FROM search_documents d \
+               LEFT JOIN search_chunks c ON c.doc_id = d.doc_id",
+        )
+        .fetch_all(&self.index)
+        .await
+        .context("read every document's chunks")?;
+        let mut hashes: Vec<&str> = rows.iter().filter_map(|r| r.1.as_deref()).collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let have = self.vectors_held(model, &hashes).await?;
+        let mut whole: HashMap<i64, bool> = HashMap::new();
+        for (doc, hash) in &rows {
+            let ok = hash.as_deref().is_none_or(|h| have.contains(h));
+            *whole.entry(*doc).or_insert(true) &= ok;
+        }
+        let embedded = whole.values().filter(|ok| **ok).count();
+        Ok((whole.len() as u64, embedded as u64))
+    }
+
+    /// Which of `hashes` the cache has a vector for under `model`.
+    async fn vectors_held(&self, model: &str, hashes: &[&str]) -> Result<HashSet<String>> {
+        let Some(cache) = &self.cache else {
+            return Ok(HashSet::new());
+        };
+        let mut out = HashSet::with_capacity(hashes.len());
+        for batch in hashes.chunks(BATCH) {
+            let rows: Vec<String> = sqlx::query_scalar(
+                "SELECT hash FROM vectors WHERE model = ? \
+                   AND hash IN (SELECT value FROM json_each(?))",
+            )
+            .bind(model)
+            .bind(serde_json::to_string(batch)?)
+            .fetch_all(cache)
+            .await
+            .context("look up the cached vectors")?;
+            out.extend(rows);
+        }
+        Ok(out)
     }
 
     /// Raised by every write that changes what the index holds.
@@ -336,4 +439,44 @@ async fn connect(path: &Path) -> Result<SqlitePool> {
         .connect_with(opts)
         .await
         .with_context(|| format!("open {} to read", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc(id: &str, chunks: std::ops::Range<usize>) -> HeldDoc {
+        HeldDoc {
+            markdown_uuid: id.into(),
+            source_id: "s".into(),
+            sections: Vec::new(),
+            chunks,
+        }
+    }
+
+    fn chunk() -> HeldChunk {
+        HeldChunk {
+            start: 0,
+            end: 1,
+            first_section: 0,
+            last_section: 0,
+        }
+    }
+
+    /// A document's place is the direction its chunks share, at unit
+    /// length; one whose chunks cancel out has none and is left off.
+    #[test]
+    fn a_document_is_the_mean_of_its_chunks() {
+        let held = Held {
+            dim: 2,
+            docs: vec![doc("a", 0..2), doc("b", 2..3), doc("c", 3..5)],
+            chunks: vec![chunk(); 5],
+            vectors: vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0],
+        };
+        let (ids, vectors) = held.document_vectors();
+        assert_eq!(ids, ["a", "b"]);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((vectors[0] - h).abs() < 1e-6 && (vectors[1] - h).abs() < 1e-6);
+        assert_eq!(&vectors[2..], [0.0, 1.0]);
+    }
 }

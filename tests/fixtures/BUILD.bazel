@@ -557,6 +557,65 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
+# The search index over the TNG fixture, built as a sync builds it: each
+# source's `keyword_index` (the real `datalib-step`) over `:ingested_tng`'s
+# rendered tree, then every chunk embedded into an inference cache. Two
+# actions, because the first's inputs change on every run (wall-clock
+# stamps in the render stores, tar_qmd.py) and the second is the slow
+# one: it reads only the prompts, so Bazel embeds again only when one of
+# them changes.
+genrule(
+    name = "ingested_tng_search_index",
+    srcs = [
+        "ingested/qmd.tar",
+        "ingested/backend_index.sqlite",
+        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/search_index:search_prompts",
+    ],
+    outs = [
+        "ingested/search_index.sqlite",
+        "ingested/search_prompts.tsv",
+    ],
+    tools = [
+        "build_search_index.py",
+        "quiet.sh",
+    ],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/search_index.log",
+        "python3 $(execpath build_search_index.py)",
+        "$(execpath //datalib/backend/datalib_step:datalib_step)",
+        "$(execpath //datalib/backend/search_index:search_prompts)",
+        "$(execpath ingested/qmd.tar)",
+        "$(execpath ingested/backend_index.sqlite)",
+        "$(execpath ingested/search_index.sqlite)",
+        "$(execpath ingested/search_prompts.tsv)",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "ingested_tng_vectors",
+    srcs = [
+        "ingested/search_prompts.tsv",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
+    outs = ["ingested/inference_cache.sqlite"],
+    tools = [
+        "quiet.sh",
+        "//datalib/backend/search_index:embed_prompts",
+    ],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/vectors.log",
+        "$(execpath //datalib/backend/search_index:embed_prompts)",
+        "$(execpath ingested/search_prompts.tsv)",
+        "$(execpath //third-party/qmd_models:embeddinggemma)",
+        "$(execpath ingested/inference_cache.sqlite)",
+    ]),
+    # Cached remotely, never run there: see `:ingested_tng_qmd`'s note.
+    tags = ["no-remote-exec"],
+    visibility = ["//visibility:public"],
+)
+
 # The run store, end to end, read by an engine that is not ours.
 #
 # Runs the real runner and opens `system/runs/runs.sqlite` with Python's

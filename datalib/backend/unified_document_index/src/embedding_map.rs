@@ -1,11 +1,11 @@
 //! The embedding map: every embedded document placed on a plane, so that
-//! documents qmd embeds alike sit near each other. Written by the
+//! documents the model embeds alike sit near each other. Written by the
 //! `embedding_map` step, read by the `unified_document_index` applet and by the
 //! step's next run, which starts from it.
 //!
 //! One JSON file, replaced whole by a rename, so a reader sees the last
 //! map or the next one and never half of either. It is a cache: every
-//! byte of it can be computed again from the qmd index, and a reset
+//! byte of it can be computed again from the search index, and a reset
 //! deletes it, which is how a person asks for a map laid out afresh.
 
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ pub struct EmbeddingMap {
     pub dim: usize,
     pub epochs: usize,
     pub seed: SeedCounts,
-    /// Active documents qmd has not embedded yet, so not on the map.
+    /// Indexed documents not embedded yet, so not on the map.
     pub unembedded: usize,
     pub points: Vec<MapPoint>,
 }
@@ -52,18 +52,28 @@ pub struct SeedCounts {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapPoint {
-    /// The document's path under the data root, as qmd and the grid's
-    /// `qmd_path` both name it.
-    pub path: String,
+    /// The document's `markdown_uuid`. A map an earlier build wrote named
+    /// it by its file's path instead ([`MapPoint::markdown_uuid`]).
+    #[serde(alias = "path")]
+    pub document: String,
     pub x: f32,
     pub y: f32,
 }
 
+impl MapPoint {
+    /// The document this point is, whether named by id or, in a map an
+    /// earlier build wrote, by the path of its file.
+    pub fn markdown_uuid(&self) -> &str {
+        datalib_schema::grid_rows::markdown_uuid_of_path(&self.document).unwrap_or(&self.document)
+    }
+}
+
 impl EmbeddingMap {
+    /// Each point's position, by its document's id.
     pub fn positions(&self) -> HashMap<String, [f32; 2]> {
         self.points
             .iter()
-            .map(|p| (p.path.clone(), [p.x, p.y]))
+            .map(|p| (p.markdown_uuid().to_string(), [p.x, p.y]))
             .collect()
     }
 }
@@ -121,12 +131,12 @@ mod tests {
             unembedded: 3,
             points: vec![
                 MapPoint {
-                    path: "slack/render_markdown/a.md".into(),
+                    document: "a".into(),
                     x: 1.5,
                     y: -2.0,
                 },
                 MapPoint {
-                    path: "gmail/render_markdown/b.md".into(),
+                    document: "b".into(),
                     x: 0.0,
                     y: 4.25,
                 },
@@ -141,12 +151,30 @@ mod tests {
         write(td.path(), &map()).unwrap();
         assert_eq!(read(td.path()).unwrap(), Some(map()));
         assert_eq!(
-            read(td.path()).unwrap().unwrap().positions()["gmail/render_markdown/b.md"],
+            read(td.path()).unwrap().unwrap().positions()["b"],
             [0.0, 4.25]
         );
         remove(td.path()).unwrap();
         assert_eq!(read(td.path()).unwrap(), None);
         remove(td.path()).unwrap();
+    }
+
+    /// A map an earlier build wrote named each point by its file's path;
+    /// it still reads, and its points keep their places under their ids.
+    #[test]
+    fn a_map_that_names_points_by_path_keeps_their_places() {
+        let td = tempfile::tempdir().unwrap();
+        let path = path(td.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old = serde_json::json!({
+            "made_at": "2026-09-25T10:00:00-07:00", "dim": 768, "epochs": 200,
+            "seed": {"kept": 0, "near_neighbours": 0, "fresh": 1}, "unembedded": 0,
+            "points": [{"path": "slack/render_markdown/1a/c-1a.md", "x": 1.0, "y": 2.0}],
+        });
+        std::fs::write(&path, old.to_string()).unwrap();
+        let map = read(td.path()).unwrap().unwrap();
+        assert_eq!(map.points[0].markdown_uuid(), "c-1a");
+        assert_eq!(map.positions()["c-1a"], [1.0, 2.0]);
     }
 
     /// A reader must never see a partial file: the write goes through a

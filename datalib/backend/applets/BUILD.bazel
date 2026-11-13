@@ -1,6 +1,6 @@
 load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
-load("//datalib/backend/unified_document_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
+load("//datalib/backend/unified_document_index:search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
@@ -65,27 +65,27 @@ rust_binary(
     ],
 )
 
-# The unified_document_index applet's searches run a real `qmd mcp` over the TNG
-# fixture, so this carries the fixture and a staged qmd; and the applet
-# binary itself, which serve_tests.rs starts the way the gateway does.
+# The unified_document_index applet's searches run over the TNG fixture's
+# search index with the real embedding model, so this carries both; and the
+# applet binary itself, which serve_tests.rs starts the way the gateway does.
 rust_test(
     name = "applet_unittests",
     size = "medium",
     crate = ":datalib_applet",
     data = glob(["src/unified_document_index/snapshots/*.snap"], allow_empty = True) +
-           QMD_FIXTURE_DATA + [":datalib_applet"],
+           SEARCH_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
-    env = QMD_FIXTURE_ENV | {
+    env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "INSTA_WORKSPACE_ROOT": ".",
-        # The qmd tests share `DATALIB_RUNTIME_DIR` (qmd_search_tests.rs).
+        # Each search test loads the embedding model, which is large.
         "RUST_TEST_THREADS": "1",
     },
     deps = [
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
-        "//datalib/backend/unified_document_index:qmd_fixture",
+        "//datalib/backend/unified_document_index:search_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
@@ -98,8 +98,8 @@ rust_test(
 
 insta_update(
     name = "applet_unittests.update",
-    extra_data = QMD_FIXTURE_DATA + [":datalib_applet"],
-    extra_env = QMD_FIXTURE_ENV | {
+    extra_data = SEARCH_FIXTURE_DATA + [":datalib_applet"],
+    extra_env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "RUST_TEST_THREADS": "1",
     },

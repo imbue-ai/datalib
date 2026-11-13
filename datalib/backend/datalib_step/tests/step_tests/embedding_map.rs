@@ -1,5 +1,5 @@
-//! The `embedding_map` function end to end, the real binary over the qmd
-//! index the TNG fixture builds: a first run lays every embedded
+//! The `embedding_map` function end to end, the real binary over the
+//! search index the TNG fixture builds: a first run lays every embedded
 //! document out afresh, a second starts from the first, and a reset
 //! deletes the map so the next run starts over.
 use std::path::Path;
@@ -10,17 +10,24 @@ use serde_json::Value;
 const STEP: &str = "unified_document_index/embedding_map";
 
 fn materialize(root: &Path) {
-    let tar = std::env::var_os("QMD_INDEX_TAR").expect("QMD_INDEX_TAR");
-    std::fs::create_dir_all(root).unwrap();
-    let status = Command::new("tar")
-        .arg("-xf")
-        .arg(tar)
-        .arg("-C")
-        .arg(root)
-        .arg("--strip-components=1")
-        .status()
-        .expect("spawn tar");
-    assert!(status.success(), "extracting the qmd index: {status}");
+    for (var, at) in [
+        (
+            "SEARCH_INDEX_GRID",
+            datalib_runtime::layout::grid_index_db(root),
+        ),
+        (
+            "SEARCH_INDEX_CACHE",
+            datalib_runtime::layout::inference_cache_db(root),
+        ),
+    ] {
+        let from = std::env::var_os(var).unwrap_or_else(|| panic!("{var}"));
+        std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+        std::fs::copy(from, &at).unwrap();
+        let mut perms = std::fs::metadata(&at).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(&at, perms).unwrap();
+    }
 }
 
 /// Run the step and return its outcome line.
@@ -80,10 +87,7 @@ fn a_map_is_laid_out_then_kept_then_reset() {
     assert_eq!(first["seed"]["kept"], 0);
     assert_eq!(first["unembedded"], 0);
     for p in first["points"].as_array().unwrap() {
-        assert!(
-            p["path"].as_str().unwrap().contains("/render_markdown/"),
-            "{p}"
-        );
+        assert!(!p["document"].as_str().unwrap().is_empty(), "{p}");
         assert!(p["x"].as_f64().unwrap().is_finite());
     }
 

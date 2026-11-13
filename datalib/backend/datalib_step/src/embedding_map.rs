@@ -1,4 +1,4 @@
-//! The `embedding_map` function: qmd's document embeddings laid out on a
+//! The `embedding_map` function: the search index's document embeddings laid out on a
 //! plane by UMAP, written to `unified_document_index/embedding_map`. Each run
 //! starts from the map the last one wrote, so documents already on it
 //! stay where they were; a reset deletes the map and the next run lays
@@ -26,9 +26,7 @@ pub fn out_rel() -> String {
 pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("reading the embeddings");
-    let vectors = datalib_unified_document_index::qmd::vectors::read_document_vectors(data_root)
-        .await?
-        .unwrap_or_default();
+    let vectors = document_vectors(data_root).await?;
     // A map that will not parse is a map this build cannot start from.
     // Saying so and starting afresh loses the old positions, which is the
     // one thing the file is for, so the step fails and a reset is the
@@ -38,14 +36,14 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
         .map(|m| m.positions())
         .unwrap_or_default();
     tracing::info!(
-        documents = vectors.paths.len(),
+        documents = vectors.ids.len(),
         unembedded = vectors.unembedded,
         dim = vectors.dim,
         previous = prior.len(),
         "laying out the embedding map"
     );
     let corpus = Corpus {
-        keys: vectors.paths,
+        keys: vectors.ids,
         dim: vectors.dim,
         vectors: vectors.vectors,
     };
@@ -84,7 +82,7 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
             .keys
             .into_iter()
             .zip(layout.points)
-            .map(|(path, [x, y])| MapPoint { path, x, y })
+            .map(|(document, [x, y])| MapPoint { document, x, y })
             .collect(),
     };
     let bytes = map_file::write(data_root, &map)?;
@@ -117,6 +115,42 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
         version: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
         rows: None,
     }])
+}
+
+/// Every embedded document's vector, by id, and how many indexed
+/// documents have none yet.
+#[derive(Default)]
+struct DocumentVectors {
+    ids: Vec<String>,
+    dim: usize,
+    vectors: Vec<f32>,
+    unembedded: usize,
+}
+
+async fn document_vectors(root: &Path) -> Result<DocumentVectors> {
+    let Some(reader) = datalib_search_index::read::Reader::open(
+        &datalib_runtime::layout::grid_index_db(root),
+        &datalib_runtime::layout::inference_cache_db(root),
+    )
+    .await?
+    else {
+        return Ok(DocumentVectors::default());
+    };
+    let read = async {
+        let held = reader.held(&datalib_search_index::model_key()).await?;
+        let documents = reader.documents().await?;
+        anyhow::Ok((held, documents))
+    }
+    .await;
+    reader.close().await;
+    let (held, documents) = read?;
+    let (ids, vectors) = held.document_vectors();
+    Ok(DocumentVectors {
+        unembedded: documents.saturating_sub(ids.len()),
+        dim: held.dim,
+        ids,
+        vectors,
+    })
 }
 
 pub fn reset(data_root: &Path) -> Result<()> {

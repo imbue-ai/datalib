@@ -88,12 +88,6 @@ impl Shrink {
 pub const ENV_CHECKPOINT_CADENCE: &str = datalib_env::DATALIB_DAG_CHECKPOINT_CADENCE;
 /// How much a render reads at once — see `config::RenderPages`.
 pub const ENV_RENDER_PAGES: &str = datalib_env::DATALIB_DAG_RENDER_PAGES;
-/// How many embedding contexts an embed step gives qmd — see
-/// `config::DagConfig::embed_contexts`.
-pub const ENV_EMBED_CONTEXTS: &str = datalib_env::DATALIB_DAG_EMBED_CONTEXTS;
-/// Set to `1` when an embed step also fills the search index's inference
-/// cache — see `config::DagConfig::embed_search_index`.
-pub const ENV_EMBED_SEARCH_INDEX: &str = datalib_env::DATALIB_DAG_EMBED_SEARCH_INDEX;
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because

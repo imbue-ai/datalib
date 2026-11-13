@@ -10,7 +10,6 @@ use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Query, State};
 use axum::response::Json;
-use datalib_schema::grid_rows::markdown_uuid_of_path;
 use datalib_unified_document_index::embedding_map::{self, SeedCounts};
 use datalib_unified_document_index::query::parse_query;
 use datalib_unified_document_index::repo::MapDocRow;
@@ -168,7 +167,7 @@ pub fn join(
     let mut unplaced = 0;
     let mut out = Vec::with_capacity(points.len());
     for p in points {
-        let Some(doc) = markdown_uuid_of_path(&p.path).and_then(|id| by_id.remove(id)) else {
+        let Some(doc) = by_id.remove(p.markdown_uuid()) else {
             unplaced += 1;
             continue;
         };
@@ -226,7 +225,7 @@ mod tests {
 
     fn point(path: &str, x: f32) -> MapPoint {
         MapPoint {
-            path: path.into(),
+            document: path.into(),
             x,
             y: -x,
         }
