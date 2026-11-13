@@ -253,7 +253,11 @@ LINUX_X86_64 = [
 
 cc_library(
     name = "ggml_base_objs",
-    srcs = GGML_BASE_SRCS + glob(["ggml/src/*.h"]),
+    # ggml-quants.c includes ggml-cpu/ggml-cpu-impl.h.
+    srcs = GGML_BASE_SRCS + glob([
+        "ggml/src/*.h",
+        "ggml/src/ggml-cpu/*.h",
+    ]),
     hdrs = glob(["ggml/include/*.h"]),
     conlyopts = ["-std=gnu11"],
     copts = COMMON_COPTS + [
