@@ -1,10 +1,10 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 to 8 of "Order of work" are
-built (`//datalib/backend/search_index`, `//datalib/backend/embedder`);
-the index's tables are in the grid index's file, and search reads them
-only where the search applet's entry sets
-`DATALIB_SEARCH_READS = "search_index"`. Step 9 is not built.** Numbers were
+**Status: proposal (2026-11-11). Steps 1 to 8 of "Order of work" and
+the first half of step 9 are built (`//datalib/backend/search_index`,
+`//datalib/backend/embedder`): search reads only the search index, the
+steps no longer run qmd, and the aggregator deletes qmd's index. The
+second half, deleting qmd's code, runtime and names, is not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
@@ -269,9 +269,8 @@ long-lived query embedder.
 
 ### Search moving over
 
-Built behind a switch, so both can be measured on one root: the search
-applet reads qmd's index unless its config entry sets
-`env = { DATALIB_SEARCH_READS = "search_index" }`
+Built, first behind a switch so both could be measured on one root,
+and now the only index search reads
 (`unified_document_index/src/search_index.rs`). Words is BM25 over
 messages (`search_index::read`).
 Meaning holds every chunk's vector from the inference cache in memory,
@@ -399,8 +398,8 @@ sync after the upgrade builds the new index from the files and
 re-embeds every document: about 21 hours on this mac for its 930k
 chunks, at the ~12 chunks/s qmd measured, and the Meaning tab answers
 for what is embedded so far. Words search is whole within the first
-`keyword_index` of each source. Once the new index serves, the step that
-replaces `qmd_aggregator` deletes qmd's directory.
+`keyword_index` of each source. The aggregator, `qmd_aggregator` still
+by its id, deletes qmd's directory on its first run.
 
 **What a person notices:** the 6.9 GB index becomes roughly the vectors
 plus a smaller keyword index (about 3.8 GB here, less if the vectors are
@@ -428,10 +427,20 @@ that matched. Meaning search fills back in over the first day.
    search does not read it yet); the aggregator drops a source it no
    longer reads and sweeps the cache (`datalib_step/src/search_index.rs`).
 8. Built: search reads the new index and embeds a query in process,
-   where the applet's entry sets `DATALIB_SEARCH_READS`;
+   where the applet's entry set `DATALIB_SEARCH_READS`;
    `search_eval.py` against qmd (below).
-9. Retire qmd's update and embed, `qmd_sdk.mjs`, its tables and the
-   `qmd_keyword` lock.
+9. Retire qmd. Built: search reads only the new index; `keyword_index`
+   and `embed` write only it, embedding every source (the config keys
+   `embed_search_index` and `embed_contexts` only warn now); the
+   aggregator deletes qmd's directory; the embedding map lays out the
+   inference cache's vectors; the TNG fixture builds the search index by
+   running `keyword_index`, and its vectors in an action of their own
+   that reruns only when a chunk's prompt changes. Not built: deleting
+   `qmd_indexer`, `qmd_sdk.mjs`, the qmd code under
+   `unified_document_index/src/qmd/`, qmd in the Node runtime and the
+   release, `third-party/qmd`, and the names that still say qmd (the
+   `qmd_aggregator` step id, the `qmd_keyword` and `qmd_embed` locks,
+   `/qmd_state` and the `qmd_*` fields of a search's answer).
 
 ## Later
 

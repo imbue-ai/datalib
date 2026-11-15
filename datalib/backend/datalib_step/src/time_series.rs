@@ -89,7 +89,7 @@ pub async fn run_index(
     data_root: &Path,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
+    let sources = crate::index_steps::groups_from_inputs(&env.inputs);
     let mut stores = Vec::with_capacity(sources.len());
     for source in &sources {
         let db = datalib_etl::layout::render_time_series_db(data_root, source);

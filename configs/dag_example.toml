@@ -64,17 +64,6 @@ data_root = "~/tmp/dr-dag"
 log_level = "trace"
 
 
-# How many embedding contexts an embed step uses, each holding about
-# 520 MiB once used. On an Apple Silicon mac more of them cost memory and
-# earn almost no speed, so the default is 1. A machine with its own GPU may
-# gain from more; qmd uses at most 8. Changing this re-embeds nothing.
-embed_contexts = 1
-
-# Whether each embed step also embeds into the search index that will
-# replace qmd's (docs/dev/plans/search_index_from_ram.md). Off by default:
-# search does not read it yet, so turning it on costs a second embed.
-embed_search_index = false
-
 # The free space the data root's disk must keep. Under `pause_below`
 # no step starts and running ones are stopped; they carry on once the
 # disk is back to `resume_at`, and the status bar turns red meanwhile.

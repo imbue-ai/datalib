@@ -1,11 +1,9 @@
 //! Free-text searches through the applet's handlers, against the TNG
-//! fixture's grid and qmd indexes and qmd's real embedder: the rank order
-//! and paging, the structured terms narrowing the ranking, and what a
-//! search says when qmd cannot answer.
+//! fixture's grid and search indexes and the real embedding model: the
+//! rank order and paging, the structured terms narrowing the ranking, and
+//! what a search says when the index cannot answer.
 
 use std::collections::HashSet;
-use std::path::Path;
-use std::sync::OnceLock;
 
 use super::tests::{groups, index_over, search, search_part, search_within, uuids, Part};
 use super::*;
@@ -14,36 +12,18 @@ use sqlx::ConnectOptions;
 /// A word the fixture's corpus uses across several sources.
 const QUERY: &str = "the enterprise";
 
-/// qmd finds its node and package through `DATALIB_RUNTIME_DIR`, which
-/// every test in this binary shares; the BUILD rule runs them one at a
-/// time (`RUST_TEST_THREADS=1`), so setting it once, before any qmd runs,
-/// races nothing. Answers the directory the runtime is staged in.
-fn stage_runtime_once() -> &'static Path {
-    static WORK: OnceLock<PathBuf> = OnceLock::new();
-    WORK.get_or_init(|| {
-        let work = tempfile::tempdir().unwrap().keep();
-        let runtime = datalib_qmd_fixture::stage_runtime(&work);
-        // SAFETY: see above; no other thread is running a test.
-        unsafe { std::env::set_var("DATALIB_RUNTIME_DIR", &runtime) };
-        work
-    })
-}
-
-/// The fixture's root: its grid index, its qmd index and qmd's model. The
-/// roots share one models directory, so the stamp the first verification
-/// leaves there spares every later test from hashing 300 MB.
+/// The fixture's root: its rendered documents, grid and search indexes,
+/// vectors and embedding model.
 pub(super) fn fixture_root() -> tempfile::TempDir {
-    let work = stage_runtime_once();
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::materialize_root_with_grid(root.path());
-    datalib_qmd_fixture::stage_models(root.path(), work);
+    datalib_search_fixture::materialize_root(root.path());
     root
 }
 
 fn scores(r: &SearchResponse) -> Vec<f64> {
     r.rows
         .iter()
-        .map(|row| row.score.expect("every free-text row has qmd's score"))
+        .map(|row| row.score.expect("every free-text row has a score"))
         .collect()
 }
 
@@ -57,11 +37,11 @@ fn qmd_index_missing(r: &SearchResponse) -> bool {
         .expect("query_echo always says whether the qmd index is missing")
 }
 
-/// A free-text search comes best first by qmd's score, and its pages are
+/// A free-text search comes best first by its score, and its pages are
 /// consecutive slices of that one ranking; each row shows the words its
 /// hit matched.
 #[tokio::test]
-async fn free_text_pages_follow_qmd_rank_and_show_the_matched_words() {
+async fn free_text_pages_follow_the_rank_and_show_the_matched_words() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
 
@@ -89,7 +69,7 @@ async fn free_text_pages_follow_qmd_rank_and_show_the_matched_words() {
     assert!(first.rows.iter().all(|row| !row.snippet.is_empty()));
 }
 
-/// Structured terms narrow qmd's hits, over the whole ranking rather than
+/// Structured terms narrow the hits, over the whole ranking rather than
 /// one page of it, and a sort reorders what is left.
 #[tokio::test]
 async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
@@ -119,26 +99,22 @@ async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     assert_eq!(uuids(&worst_first), best_first);
 }
 
-/// Warming reads every vector before anyone searches, and the messages of
-/// what `from:me` reaches, so neither first search waits for them.
+/// Warming reads every vector before anyone searches, so the first search
+/// does not wait for them.
 #[tokio::test]
 async fn warming_reads_what_the_first_searches_would_wait_for() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let open = s.qmd_index.open(&s.root).await.unwrap().unwrap();
-    assert_eq!(open.vectors.held().await, (0, 0));
+    assert_eq!(s.held_vectors.held().await, 0);
 
     super::warm::warm_once(&s).await;
 
-    let (vectors, messages) = open.vectors.held().await;
-    assert!(vectors > 0, "no vector was read");
-    assert!(messages > 0, "no document's messages were read");
+    assert!(s.held_vectors.held().await > 0, "no vector was read");
 }
 
-/// A source the qmd index holds and the grid does not, as a turned-off one
-/// is once its render store falls behind a change of shape: a search draws
-/// nothing from it, so its hits take no place in the ranking's cut and its
-/// vectors are neither held nor scored.
+/// A source the search index holds and the grid does not, as a turned-off
+/// one is once its render store falls behind a change of shape: a search
+/// draws nothing from it, so its hits take no place in the ranking's cut.
 #[tokio::test]
 async fn a_search_reads_only_the_sources_the_grid_holds() {
     let root = fixture_root();
@@ -152,9 +128,6 @@ async fn a_search_reads_only_the_sources_the_grid_holds() {
         !word_hits(&s, &named).await.unwrap().is_empty(),
         "the source has hits to lose"
     );
-    meaning_ranking(&s, &plain).await.unwrap();
-    let open = s.qmd_index.open(&s.root).await.unwrap().unwrap();
-    let (every_vector, _) = open.vectors.held().await;
 
     let db = datalib_runtime::layout::grid_index_db(root.path());
     let pool = datalib_etl_render::grid_index::open_index(&db)
@@ -189,14 +162,8 @@ async fn a_search_reads_only_the_sources_the_grid_holds() {
     );
 
     let fresh = index_over(root.path()).await;
-    meaning_ranking(&fresh, &plain).await.unwrap();
-    let open = fresh.qmd_index.open(&fresh.root).await.unwrap().unwrap();
-    let (vectors, _) = open.vectors.held().await;
-    assert!(vectors > 0, "the other sources' vectors are read");
-    assert!(
-        vectors < every_vector,
-        "{vectors} of {every_vector} vectors held with a source out of the grid"
-    );
+    let near = meaning_ranking(&fresh, &plain).await.unwrap();
+    assert!(!near.is_empty(), "the other sources answer by meaning");
 }
 
 /// `source:` scopes the ranking, not only the rows the grid keeps: a
@@ -219,7 +186,7 @@ async fn source_id_scopes_the_ranking_before_its_cut() {
     assert_eq!(&scoped.rows[0].source_id, other);
 }
 
-/// A free-text search groups the rows qmd ranked, and nothing else: the
+/// A free-text search groups the rows it ranked, and nothing else: the
 /// groups' counts add up to the ranking, and a group's rows are its own.
 #[tokio::test]
 async fn free_text_groups_the_ranked_rows() {
@@ -243,7 +210,7 @@ async fn free_text_groups_the_ranked_rows() {
     assert!(rows.rows.iter().all(|r| r.source_id == source));
     assert!(
         rows.rows.iter().all(|r| r.score.is_some()),
-        "a group keeps qmd's scores"
+        "a group keeps the ranking's scores"
     );
 }
 
@@ -290,12 +257,12 @@ async fn the_old_spellings_of_free_text_answer_as_free_text() {
     }
 }
 
-/// Structured terms alone light up the map without asking qmd, which a
-/// root without a qmd index shows.
+/// Structured terms alone light up the map without a search index, which
+/// a root no `keyword_index` has run on shows.
 #[tokio::test]
-async fn the_map_matches_structured_terms_without_qmd() {
+async fn the_map_matches_structured_terms_without_a_search_index() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::copy_grid_index(root.path());
+    datalib_search_fixture::copy_grid_index(root.path());
     let s = index_over(root.path()).await;
     let params = map::MatchParams {
         q: Some("source:slack".to_string()),
@@ -305,20 +272,19 @@ async fn the_map_matches_structured_terms_without_qmd() {
     assert!(!matched.markdown_uuids.is_empty());
 }
 
-/// A root no sync has built a qmd index for still answers what the grid's
+/// A root no sync has built a search index for still answers what the grid's
 /// own terms hold, and says the rest is missing. Words the terms do not hold
 /// get no rows and `qmd_index_missing`, on the grid and its groups: a state
 /// the grid explains, not a failure it shows as an error, and not an empty
 /// result that reads as "no matches". The map says why in its errors.
 #[tokio::test]
-async fn free_text_without_a_qmd_index_says_it_is_not_built() {
-    stage_runtime_once();
+async fn free_text_without_a_search_index_says_it_is_not_built() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::copy_grid_index(root.path());
+    datalib_search_fixture::copy_grid_index(root.path());
     let s = index_over(root.path()).await;
 
     let named = search(&s, "enterprise", None, 10, None).await;
-    assert!(!named.rows.is_empty(), "the terms answer without qmd");
+    assert!(!named.rows.is_empty(), "the terms answer without the index");
     assert!(
         named.query_echo["partial"]
             .as_str()
@@ -354,8 +320,8 @@ async fn free_text_without_a_qmd_index_says_it_is_not_built() {
 
 /// Each part of a search answers the same words its own way: fields from the
 /// search terms, each row saying which of its terms matched unless its title
-/// did; words by BM25 from qmd's keyword index, best first; meaning from
-/// qmd's vectors alone.
+/// did; words by BM25 over the search index's messages, best first;
+/// meaning from its vectors alone.
 #[tokio::test]
 async fn each_part_answers_free_text_its_own_way() {
     let root = fixture_root();
@@ -573,7 +539,7 @@ async fn a_search_says_how_many_candidates_have_no_vectors() {
 }
 
 /// A document filed for the grid alone, Notion's table of contents, is kept
-/// out of qmd on purpose, so it must not read as vectors still owed: every
+/// out of the search index on purpose, so it must not read as vectors still owed: every
 /// Notion library would carry a warning nothing could clear. A document that
 /// did lose its vectors is counted, under its source.
 #[tokio::test]
@@ -588,40 +554,36 @@ async fn only_a_document_meant_to_have_vectors_counts_as_lacking_them() {
     );
     drop(s);
 
-    // A Slack document the grid files under `slack`: the qmd collection
-    // also holds documents filed under another source (a Source Size
-    // page), so the first of the collection may not be one.
+    // A Slack document's chunks, forgotten by the inference cache.
     let mut grid = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(datalib_runtime::layout::grid_index_db(root.path()))
         .connect()
         .await
         .unwrap();
-    let (slack_doc,): (String,) = sqlx::query_as(
-        "SELECT uuid FROM grid_rows WHERE source_id = 'slack' AND is_document = 1 \
-         ORDER BY uuid LIMIT 1",
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT c.hash FROM search_chunks c JOIN search_documents d ON d.doc_id = c.doc_id \
+          WHERE d.markdown_uuid = (SELECT d2.markdown_uuid FROM search_documents d2 \
+            JOIN grid_rows g ON g.uuid = d2.markdown_uuid \
+           WHERE d2.source_id = 'slack' AND g.is_document = 1 ORDER BY 1 LIMIT 1)",
     )
-    .fetch_one(&mut grid)
+    .fetch_all(&mut grid)
     .await
     .unwrap();
     sqlx::Connection::close(grid).await.unwrap();
+    assert!(!hashes.is_empty(), "the fixture indexes its slack");
 
-    let index = datalib_unified_document_index::qmd::qmd_index_path(root.path());
-    let mut index = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&index)
+    let mut cache = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_runtime::layout::inference_cache_db(root.path()))
         .connect()
         .await
         .unwrap();
-    let removed = sqlx::query(
-        "DELETE FROM content_vectors WHERE hash = \
-           (SELECT hash FROM documents WHERE active = 1 AND collection = 'slack' \
-            AND path LIKE '%/' || ? || '.md')",
-    )
-    .bind(&slack_doc)
-    .execute(&mut index)
-    .await
-    .unwrap();
+    let removed = sqlx::query("DELETE FROM vectors WHERE hash IN (SELECT value FROM json_each(?))")
+        .bind(serde_json::to_string(&hashes).unwrap())
+        .execute(&mut cache)
+        .await
+        .unwrap();
     assert!(removed.rows_affected() > 0, "the fixture embeds its slack");
-    sqlx::Connection::close(index).await.unwrap();
+    sqlx::Connection::close(cache).await.unwrap();
 
     let s = index_over(root.path()).await;
     let r = search(&s, QUERY, None, 1, None).await;
@@ -637,9 +599,7 @@ async fn a_search_keeps_its_words_when_meaning_cannot_answer_and_says_so() {
     let root = fixture_root();
     let mut s = index_over(root.path()).await;
     let elsewhere = tempfile::tempdir().unwrap();
-    s.embedder = std::sync::Arc::new(datalib_qmd_indexer::QueryEmbedder::new(
-        elsewhere.path(),
-        None,
+    s.local_embedder = std::sync::Arc::new(super::local_embedder::LocalEmbedder::new(
         std::sync::Arc::new(super::models::ModelGate::new(elsewhere.path())),
         std::time::Duration::from_millis(1),
     ));

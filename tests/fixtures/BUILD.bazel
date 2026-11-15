@@ -32,61 +32,32 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# qmd's three GGUF models, fetched by bazel (//third-party/qmd_models)
-# rather than downloaded by qmd at run time. Only `:materialize_tng_root`
-# takes all three: `:ingested_tng_qmd` embeds and nothing else, so it
-# names the embedding model alone rather than dragging 1.8 GB of inputs
-# it never opens through every action key.
-filegroup(
-    name = "qmd_models",
-    srcs = ["//third-party/qmd_models:all"],
+# Materialize a datalib data root from :ingested_tng and its search index
+# into a caller-provided directory. One script for `//datalib:dev_tng`
+# (interactive eyeballing) and the UI e2e suite (fixture setup), so the
+# two can't drift apart. It carries the embedding model, which a search
+# by meaning loads, and nothing else a root would fetch.
+sh_binary(
+    name = "materialize_tng_root",
+    srcs = ["materialize_tng_root.sh"],
+    data = [
+        ":ingested_tng",
+        ":ingested_tng_search_index",
+        ":ingested_tng_vectors",
+        # TNG-themed scan tree dropped into the root as `file_inventory_scan/` — a
+        # directory the `file_inventory` (Unison-style) scanner can index. It's not
+        # rendered (file_inventory is extract-only), so it just sits in the root.
+        "//datalib/backend/etl/providers/file_inventory:tng_fixture",
+        # The generated config declares the `unified_document_index` applet, and
+        # the gateway spawns it by the command written there. Naming the
+        # binary's runfiles path keeps that resolvable without a
+        # `binary_dir` or a PATH assumption.
+        "//datalib/backend/applets:datalib_applet",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
     visibility = ["//visibility:public"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
-
-# Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
-# into a caller-provided directory. One script, two targets that differ
-# only in which models ride in the runfiles, so `//datalib:dev_tng`
-# (interactive eyeballing) and the UI e2e test (fixture setup) can't
-# drift apart:
-#
-#   materialize_tng_root             all three models — a root that
-#                                    holds what a real one does.
-#   materialize_tng_root_embed_only  the embedding model alone, for the
-#                                    e2e suite. The suite runs on the CI
-#                                    runner itself, so every runfile is
-#                                    downloaded from the remote cache
-#                                    before it starts, serially, after
-#                                    every other test has finished; the
-#                                    two models it never loads were
-#                                    1.8 GB of that. The suite sets
-#                                    DATALIB_QMD_MODELS_NO_FETCH so the
-#                                    applet reports them absent rather
-#                                    than fetching them.
-[
-    sh_binary(
-        name = name,
-        srcs = ["materialize_tng_root.sh"],
-        data = [
-            ":ingested_tng",
-            ":ingested_tng_qmd",
-            # TNG-themed scan tree dropped into the root as `file_inventory_scan/` — a
-            # directory the `file_inventory` (Unison-style) scanner can index. It's not
-            # rendered (file_inventory is extract-only), so it just sits in the root.
-            "//datalib/backend/etl/providers/file_inventory:tng_fixture",
-            # The generated config declares the `unified_document_index` applet, and
-            # the gateway spawns it by the command written there. Naming the
-            # binary's runfiles path keeps that resolvable without a
-            # `binary_dir` or a PATH assumption.
-            "//datalib/backend/applets:datalib_applet",
-        ] + models,
-        visibility = ["//visibility:public"],
-        deps = ["@bazel_tools//tools/bash/runfiles"],
-    )
-    for name, models in [
-        ("materialize_tng_root", [":qmd_models"]),
-        ("materialize_tng_root_embed_only", ["//third-party/qmd_models:embeddinggemma"]),
-    ]
-]
 
 # Cacheable, ingested-fixture artifact.
 #
@@ -554,6 +525,63 @@ genrule(
         # BuildBuddy usage graph, not against a hunch.
         "no-remote-exec",
     ],
+    visibility = ["//visibility:public"],
+)
+
+# The search index over the TNG fixture, built as a sync builds it: each
+# source's `keyword_index` (the real `datalib-step`) over `:ingested_tng`'s
+# rendered tree, then every chunk embedded into an inference cache. Two
+# actions, because the first's inputs change on every run (wall-clock
+# stamps in the render stores, tar_qmd.py) and the second is the slow
+# one: it reads only the prompts, so Bazel embeds again only when one of
+# them changes.
+genrule(
+    name = "ingested_tng_search_index",
+    srcs = [
+        "ingested/qmd.tar",
+        "ingested/backend_index.sqlite",
+        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/search_index:search_prompts",
+    ],
+    outs = [
+        "ingested/search_index.sqlite",
+        "ingested/search_prompts.tsv",
+    ],
+    tools = [
+        "build_search_index.py",
+        "quiet.sh",
+    ],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/search_index.log",
+        "python3 $(execpath build_search_index.py)",
+        "$(execpath //datalib/backend/datalib_step:datalib_step)",
+        "$(execpath //datalib/backend/search_index:search_prompts)",
+        "$(execpath ingested/qmd.tar)",
+        "$(execpath ingested/backend_index.sqlite)",
+        "$(execpath ingested/search_index.sqlite)",
+        "$(execpath ingested/search_prompts.tsv)",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "ingested_tng_vectors",
+    srcs = [
+        "ingested/search_prompts.tsv",
+        "//datalib/backend/search_index:embed_prompts",
+        "//third-party/qmd_models:embeddinggemma",
+    ],
+    outs = ["ingested/inference_cache.sqlite"],
+    tools = ["quiet.sh"],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/vectors.log",
+        "$(execpath //datalib/backend/search_index:embed_prompts)",
+        "$(execpath ingested/search_prompts.tsv)",
+        "$(execpath //third-party/qmd_models:embeddinggemma)",
+        "$(execpath ingested/inference_cache.sqlite)",
+    ]),
+    # Cached remotely, never run there: see `:ingested_tng_qmd`'s note.
+    tags = ["no-remote-exec"],
     visibility = ["//visibility:public"],
 )
 

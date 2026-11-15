@@ -47,7 +47,7 @@ pub async fn run(
     // The stores to read come from the graph, not from a directory scan:
     // the same rule the qmd step follows, so the two indexes agree on
     // what a source is.
-    let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
+    let sources = crate::index_steps::groups_from_inputs(&env.inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
     let summary = build_grid_index_for(

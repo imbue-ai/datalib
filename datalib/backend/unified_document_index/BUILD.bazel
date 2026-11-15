@@ -70,6 +70,21 @@ rust_library(
     ],
 )
 
+# The TNG fixture's data root with its search index, vectors and model,
+# for the applet's tests that search it.
+rust_library(
+    name = "search_fixture",
+    testonly = True,
+    srcs = ["tests/search_fixture/lib.rs"],
+    crate_name = "datalib_search_fixture",
+    edition = "2021",
+    visibility = ["//datalib/backend/applets:__pkg__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
 # Every hermetic document-index test in one binary; the modules are listed in
 # its `main.rs`. One binary, because a `rust_test` is a whole opt-mode
 # link of the provider stack and that is most of what a test here costs.
