@@ -1,4 +1,4 @@
-//! Provision qmd's GGUF models from the pinned table
+//! Provision the pinned GGUF models
 //! (`datalib_runtime::qmd::PINNED_MODELS`): verify what is on disk by
 //! sha256, fetch what is missing or wrong from the pinned revision, and
 //! leave the files under the names node-llama-cpp looks for — so qmd
@@ -22,6 +22,39 @@ pub use datalib_fetch::sha256_file;
 pub use datalib_runtime::qmd::PINNED_MODELS;
 
 const TAG: &str = "[qmd-models]";
+
+/// Where the models are for a search of, or an embed into, the data root
+/// at `root`: its own `unified_document_index/models` when it has one (the
+/// test fixtures stage the model there), else the cache every root on
+/// this machine shares ([`shared_models_dir`]).
+pub fn models_dir_for(root: &Path) -> PathBuf {
+    let own = datalib_runtime::layout::unified_document_index_dir(root).join("models");
+    if own.is_dir() {
+        own
+    } else {
+        shared_models_dir()
+    }
+}
+
+/// The cache every data root on this machine shares:
+/// `$XDG_CACHE_HOME/qmd/models`, else `~/.cache/qmd/models`. qmd chose the
+/// place, and the models already downloaded there are kept.
+pub fn shared_models_dir() -> PathBuf {
+    models_dir_under(std::env::var_os("XDG_CACHE_HOME"), std::env::var_os("HOME"))
+}
+
+fn models_dir_under(
+    xdg_cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(xdg) = xdg_cache_home {
+        return PathBuf::from(xdg).join("qmd").join("models");
+    }
+    PathBuf::from(home.unwrap_or_else(|| ".".into()))
+        .join(".cache")
+        .join("qmd")
+        .join("models")
+}
 
 /// What `ensure_models` did for each model, for the caller's log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +251,35 @@ fn write_stamp(path: &Path, sha: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared cache is where qmd kept its models, so the ones it
+    /// downloaded are reused: `$XDG_CACHE_HOME` first, then `$HOME`.
+    #[test]
+    fn the_shared_cache_is_where_qmd_kept_its_models() {
+        assert_eq!(
+            models_dir_under(Some("/x/cache".into()), Some("/home/u".into())),
+            PathBuf::from("/x/cache/qmd/models")
+        );
+        assert_eq!(
+            models_dir_under(None, Some("/home/u".into())),
+            PathBuf::from("/home/u/.cache/qmd/models")
+        );
+        assert_eq!(
+            models_dir_under(None, None),
+            PathBuf::from("./.cache/qmd/models")
+        );
+    }
+
+    /// A root that carries its own models is searched with them; one
+    /// that does not uses the shared cache.
+    #[test]
+    fn a_root_with_its_own_models_uses_them() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(models_dir_for(root.path()), shared_models_dir());
+        let own = root.path().join("unified_document_index/models");
+        std::fs::create_dir_all(&own).unwrap();
+        assert_eq!(models_dir_for(root.path()), own);
+    }
 
     const HELLO_SHA: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 

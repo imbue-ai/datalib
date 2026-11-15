@@ -110,7 +110,7 @@ fn exit_code_within_deadline(child: &mut Child) -> Option<i32> {
 #[test]
 fn it_serves_the_root_it_was_started_on_and_leaves_with_its_parent() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::copy_grid_index(root.path());
+    datalib_search_fixture::copy_grid_index(root.path());
     let mut child = applet()
         .env(super::DATA_ROOT_ENV, root.path())
         .env("DATALIB_PARENT_PIPE", "0")
@@ -149,7 +149,7 @@ fn without_a_data_root_it_says_so_and_stops() {
 #[test]
 fn people_by_handle_gives_each_sources_account() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::copy_grid_index(root.path());
+    datalib_search_fixture::copy_grid_index(root.path());
     let mut child = applet()
         .env(super::DATA_ROOT_ENV, root.path())
         .current_dir(root.path())
@@ -198,7 +198,7 @@ fn people_by_handle_gives_each_sources_account() {
 #[test]
 fn sql_reads_a_store_it_lists() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::copy_grid_index(root.path());
+    datalib_search_fixture::copy_grid_index(root.path());
     let mut child = applet()
         .env(super::DATA_ROOT_ENV, root.path())
         .current_dir(root.path())
@@ -261,7 +261,7 @@ fn percent_encoded(s: &str) -> String {
 #[test]
 fn the_search_command_answers_what_the_search_box_gets() {
     let root = tempfile::tempdir().unwrap();
-    datalib_qmd_fixture::materialize_root_with_grid(root.path());
+    datalib_search_fixture::materialize_root(root.path());
     let mut server = applet()
         .env(super::DATA_ROOT_ENV, root.path())
         .current_dir(root.path())

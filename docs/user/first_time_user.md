@@ -615,8 +615,8 @@ faster.
 ├── gmail-takeout/
 │   └── …
 ├── unified_document_index/                  # the shared indexes, rebuildable
-│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges
-│   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
+│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges + the search index
+│   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
@@ -695,20 +695,16 @@ whenever you want to pull in what's new. Downloads are incremental and
 the semantic index is content-hashed, so a re-run over an unchanged
 corpus is a fast no-op.
 
-## 7. Querying the search index directly with qmd
+## 7. Searching from the command line
 
-You can also query the semantic index from the command line, by
-pointing the fetched `qmd` at the sqlite file under your data root via
-the `INDEX_PATH` env var:
+`datalib-applet search` answers a search exactly as the app's search box
+does, by words and by meaning, with no server running:
 
 ```sh
-rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_document_index/qmd_aggregator/qmd/index.sqlite \
-    "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
+datalib-applet search ~/datalib "hello"
 ```
 
-`qmd status` against the same `INDEX_PATH` shows collections and
-document counts.
+[Searching your mirror](searching.md) has the query language.
 
 ## 8. Getting your data back out
 

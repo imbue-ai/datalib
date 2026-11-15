@@ -9,13 +9,13 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
 #                                      (from qmd.tar; no raw store beside it).
-#   unified_document_index/grid_index/db.sqlite  the plain SQLite grid index the backend reads.
-#   unified_document_index/qmd_aggregator/qmd/index.sqlite QMD index (from qmd-index.tar).
-#   unified_document_index/qmd_models/          the qmd GGUFs this target carries,
-#                                      linked in from bazel outputs (all
-#                                      three, or the embedding model alone
-#                                      — see the two targets in BUILD.bazel).
-#   unified_document_index/qmd_aggregator/qmd/models -> ../../qmd_models
+#   unified_document_index/grid_index/db.sqlite  the plain SQLite grid index the
+#                                      backend reads, with the search index's
+#                                      tables (`:ingested_tng_search_index`).
+#   unified_document_index/search_index/inference_cache.sqlite  every chunk's
+#                                      vector (`:ingested_tng_vectors`).
+#   unified_document_index/models/     the embedding model, linked in from
+#                                      bazel outputs.
 #   <stanza>/render_time_series/...    each time-series source's store, and
 #   unified_time_series_index/time_series_index/...  the index over them
 #                                      (from time_series.tar).
@@ -29,12 +29,7 @@
 # Usage: materialize_tng_root.sh <out-root>
 #
 # Requires python3 on PATH. Nothing about the host's home directory: the
-# qmd GGUFs arrive as bazel inputs, so this runs on a machine that has
-# never run qmd. It used to read `~/.cache/qmd/models` (or
-# `CLAUDE_MIRROR_HOST_HOME`, which CI set because GitHub forces
-# `HOME=/github/home` while the image bakes under `/root`) and refuse to
-# run when that cache was empty, rather than let a silent multi-GB
-# download masquerade as a hang.
+# embedding model arrives as a bazel input.
 
 set -eo pipefail
 
@@ -51,15 +46,15 @@ OUT_ROOT="${1:-}"
 [[ -n "$OUT_ROOT" ]] || { echo "usage: $0 <out-root>" >&2; exit 2; }
 
 APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
-DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.sqlite)"
+DB_FILE="$(rlocation _main/tests/fixtures/ingested/search_index.sqlite)"
+VECTORS_FILE="$(rlocation _main/tests/fixtures/ingested/inference_cache.sqlite)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
-QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
 TIME_SERIES_TAR="$(rlocation _main/tests/fixtures/ingested/time_series.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
-[[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.sqlite not found at $DB_FILE" >&2; exit 1; }
+[[ -f "$DB_FILE" ]]       || { echo "ERROR: search_index.sqlite not found at $DB_FILE" >&2; exit 1; }
+[[ -f "$VECTORS_FILE" ]]  || { echo "ERROR: inference_cache.sqlite not found at $VECTORS_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
-[[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
 [[ -f "$TIME_SERIES_TAR" ]] || { echo "ERROR: time_series.tar not found at $TIME_SERIES_TAR" >&2; exit 1; }
 [[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
 
@@ -67,21 +62,22 @@ command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1
 
 mkdir -p "$OUT_ROOT"
 
-# Both archives are rooted at `qmd/` (the genrule's staging dir name);
-# strip that one component so the per-stanza markdown trees land at
-# `<root>/<stanza>/render_markdown/...` and the index at
-# `<root>/unified_document_index/qmd_aggregator/qmd/`, where the backend's scanners look.
+# The archive is rooted at `qmd/` (the genrule's staging dir name); strip
+# that one component so the per-stanza markdown trees land at
+# `<root>/<stanza>/render_markdown/...`.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
-tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 # The index names each source's store by its path under the root and the
 # commit it read, so the stores land where they were written.
 tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
 
-# Drop the grid index into the `grid_index` step's tree; the backend
-# opens it directly via `<data_root>/unified_document_index/grid_index/db.sqlite`.
-mkdir -p "$OUT_ROOT/unified_document_index/grid_index"
+# Drop the grid index, with the search index's tables, into the
+# `grid_index` step's tree, and the vectors beside it, where the backend
+# opens them.
+mkdir -p "$OUT_ROOT/unified_document_index/grid_index" "$OUT_ROOT/unified_document_index/search_index"
 cp "$DB_FILE" "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
 chmod u+w "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
+cp "$VECTORS_FILE" "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
+chmod u+w "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
 
 # The grid is served by the `unified_document_index` applet, so the config has to
 # declare it or the app comes up with no search. An absolute command
@@ -121,52 +117,20 @@ command = "'$APPLET_BIN' unified_time_series_index"
 EOF
 } > "$OUT_ROOT/config.toml"
 
-# qmd's GGUF models. They arrive as bazel inputs (fetched by
-# //third-party/qmd_models), so this no longer depends on the developer having run
-# qmd at least once — which it used to, refusing with a "populate the
-# shared cache first" message. That check existed because letting qmd
-# download 2.2 GB silently is a multi-minute stall that masquerades as a
-# hang; taking the models from bazel removes the stall instead of
-# reporting it.
-#
-# The embedding model is required: every search embeds the query. The
-# other two are staged when this target carries them and reported when
-# it does not; `materialize_tng_root_embed_only` leaves them out on
-# purpose, and its caller sets DATALIB_QMD_MODELS_NO_FETCH so nothing
-# fetches them into the root behind its back.
-#
-# Two details, both deliberate:
-#
-#   * The links point INTO the runfiles tree rather than copying 2.2 GB
-#     into every root. Same assumption the applet `command` above already
-#     makes — a runfiles path outlives the run that wrote it, up to a
-#     `bazel clean`.
-#   * `unified_document_index/qmd_aggregator/qmd/models` has to be a SYMLINK, not the directory
-#     itself. A later sync against this root calls
-#     `qmd_indexer::ensure_models_symlink`, which errors out when it
-#     finds a real directory at that path. So the real directory is a
-#     sibling and the expected path points at it.
-MODELS_DIR="$OUT_ROOT/unified_document_index/qmd_models"
-mkdir -p "$MODELS_DIR" "$OUT_ROOT/unified_document_index/qmd_aggregator/qmd"
+# The embedding model, where a search of this root looks for it
+# (`datalib_qmd_models::models_dir_for`): every search by meaning embeds
+# the query. A link INTO the runfiles tree rather than a copy in every
+# root, the same assumption the applet `command` above already makes.
+MODELS_DIR="$OUT_ROOT/unified_document_index/models"
+mkdir -p "$MODELS_DIR"
 EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""
 if [[ -z "$src" || ! -s "$src" ]]; then
-  echo "ERROR: qmd embedding model not found in runfiles: $EMBED_MODEL" >&2
+  echo "ERROR: embedding model not found in runfiles: $EMBED_MODEL" >&2
   echo "  (is //third-party/qmd_models:embeddinggemma still in this target's \`data\`?)" >&2
   exit 3
 fi
 ln -sfn "$src" "$MODELS_DIR/$(basename "$EMBED_MODEL")"
-for entry in \
-  "_main/third-party/qmd_models/hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf" \
-  "_main/third-party/qmd_models/hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf"; do
-  src="$(rlocation "$entry")" || src=""
-  if [[ -z "$src" || ! -s "$src" ]]; then
-    echo "note: $(basename "$entry") is not in this target's runfiles; not staged" >&2
-    continue
-  fi
-  ln -sfn "$src" "$MODELS_DIR/$(basename "$entry")"
-done
-ln -sfn "$MODELS_DIR" "$OUT_ROOT/unified_document_index/qmd_aggregator/qmd/models"
 
 # Drop the TNG-themed scan tree into the root as `file_inventory_scan/`. It's a plain
 # directory the `file_inventory` (Unison-style) scanner can index; nothing renders it

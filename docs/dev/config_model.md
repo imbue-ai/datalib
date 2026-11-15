@@ -418,7 +418,7 @@ fingerprint. The rules are the dag README's "What keeps steps apart";
 `grid_index` and `qmd_aggregator` take the groups they index from the
 `inputs` they declare — `<group>/render_markdown` for the grid,
 `<group>/keyword_index` and `<group>/embed` for the aggregator — and
-the group is each input's first segment (`qmd_index::groups_from_inputs`,
+the group is each input's first segment (`index_steps::groups_from_inputs`,
 shared by `grid_index.rs`). `grid_index` also reads each source's
 `render_time_series` and `render_occurrences`, for their problem rows
 alone (`etl/README.md` §"Problems flow downstream with the data").

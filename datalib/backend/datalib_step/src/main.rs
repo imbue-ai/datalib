@@ -18,6 +18,7 @@ mod function;
 mod grid_index;
 mod help;
 mod hints;
+mod index_steps;
 mod ingest;
 mod introspect;
 mod methods;
@@ -25,7 +26,6 @@ mod migrate;
 mod occurrences;
 mod probe;
 mod published;
-mod qmd_index;
 mod render;
 mod render_diff;
 #[cfg(test)]
@@ -729,14 +729,14 @@ async fn run_function(
             grid_index::run(data_root, &env, Some(now), emitter, &control.stop).await
         }
         Function::QmdAggregator => {
-            writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
-            qmd_index::run_aggregator(data_root, &env, emitter, &control.stop).await
+            writes_the_index_tree(&env, &index_steps::aggregator_rel())?;
+            index_steps::run_aggregator(data_root, &env, emitter, &control.stop).await
         }
         Function::KeywordIndex => {
-            qmd_index::run_keyword(data_root, &env, emitter, &control.stop).await
+            index_steps::run_keyword(data_root, &env, emitter, &control.stop).await
         }
         Function::Embed => {
-            qmd_index::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
+            index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
         }
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;

@@ -16,7 +16,7 @@ use datalib_unified_document_index::terms_keys::{self, TermsValue, TERMS_KEYS};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, SqliteConnection};
 
-use super::qmd_search_tests::fixture_root;
+use super::search_tests::fixture_root;
 use super::tests::{index_over, search, search_part, Part};
 use super::*;
 

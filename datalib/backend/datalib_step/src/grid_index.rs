@@ -81,7 +81,7 @@ pub async fn run(
     // what a source is. A `render_time_series` or `render_occurrences`
     // input is read for its problem rows alone.
     let (render_inputs, own_stores) = split_inputs(data_root, &env.inputs);
-    let sources = crate::qmd_index::groups_from_inputs(&render_inputs);
+    let sources = crate::index_steps::groups_from_inputs(&render_inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
     let summary = build_grid_index_for(

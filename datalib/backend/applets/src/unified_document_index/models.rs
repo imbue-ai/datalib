@@ -1,7 +1,6 @@
-//! Whether qmd's pinned models are in place for a search by meaning. The
-//! query embedder asks here before it starts qmd, and starts nothing
-//! until the embedding model is verified, because qmd fetches a model it
-//! does not find, unpinned.
+//! Whether the pinned embedding model is in place for a search by meaning.
+//! The query embedder asks here before it loads the model, and loads
+//! nothing until it is verified.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -22,7 +21,7 @@ struct Inner {
 
 #[derive(Clone)]
 enum State {
-    /// Nothing has asked yet, or there was no qmd index to provision for.
+    /// Nothing has asked yet, or there was no index to provision for.
     Idle,
     Provisioning,
     Verified(PathBuf),
@@ -158,7 +157,7 @@ impl Inner {
                 tracing::error!(
                     dir = %dir.display(),
                     error = %format!("{e:#}"),
-                    "could not provision qmd's embedding model; nothing searches by meaning until it is in place"
+                    "could not provision the embedding model; nothing searches by meaning until it is in place"
                 );
                 self.set(State::Failed(format!("{e:#}")));
             }
@@ -174,27 +173,15 @@ fn ensure<'a>(dir: &Path, models: &'a [datalib_runtime::qmd::PinnedModel]) -> Re
     Ok(datalib_qmd_models::missing(models, &outcomes))
 }
 
-/// Points the root's qmd state at the shared model cache, and answers the
-/// directory the pinned models belong in. None when there is nothing to
-/// point: no index means no sync has run, and no search to warm.
+/// The directory the pinned models belong in for `root`. None when there
+/// is nothing to search: no grid index means no sync has run, and no
+/// search to warm.
 fn link_models(root: &Path) -> Result<Option<PathBuf>> {
-    // The first sync creates the directory and the indexer links it;
-    // this call is the belt for a root the indexer has not touched in
-    // this incarnation.
-    if !datalib_unified_document_index::qmd::qmd_index_path(root).exists() {
-        tracing::info!(
-            "no qmd index yet; free-text search finds nothing until the first sync builds one"
-        );
+    if !datalib_runtime::layout::grid_index_db(root).exists() {
+        tracing::info!("no grid index yet; nothing searches by meaning until the first sync");
         return Ok(None);
     }
-    let qmd_dir = datalib_unified_document_index::qmd::qmd_state_dir(root);
-    let models_dir = datalib_qmd_indexer::default_models_dir();
-    std::fs::create_dir_all(&models_dir)?;
-    datalib_qmd_indexer::ensure_models_symlink(&qmd_dir, &models_dir)?;
-    Ok(Some(datalib_qmd_models::effective_models_dir(
-        &qmd_dir,
-        &models_dir,
-    )))
+    Ok(Some(datalib_qmd_models::models_dir_for(root)))
 }
 
 #[cfg(test)]
