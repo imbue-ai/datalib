@@ -166,7 +166,11 @@ upstream_id)`. A download problem about a container ("could not list
 channel C01") then reaches the container's row the same way an item's
 reaches the item. A container's uuid is minted by the one rule in
 [`entity_ids.md`](../entity_ids.md) from its kind and upstream key, with
-no stamp, as documents are minted today. A kind that is both a place
+no stamp, as documents are minted today. Its upstream values are spelled
+by the same per-provider recipe in the ingest crate that the download's
+problems and the render's rows both call
+([`problems_as_step_events.md`](problems_as_step_events.md)), so a
+container's key is upstream's real id, not one composed at render. A kind that is both a place
 and read together (a WhatsApp chat) is one row with both roles, not
 two rows with one uuid each.
 
@@ -276,7 +280,14 @@ against the eval before the next.
 1. **The tree.** Render gives every container a row of its own and
    fills each node's parent, its sort key among its siblings, and its
    nearest ancestor that is read together and that is a place; reply-to
-   and the other relations go in as edges. `grid_index`
+   and the other relations go in as edges. Containers' upstream values
+   come from the ingest crate's recipe. The few sections that are not
+   their row today become rows or lose their anchor: GitHub's and
+   GitLab's description (keyed by the document row), Notion's table of
+   contents and Perseus's sentence spans (no rows); everywhere else a
+   section's uuid is already its row's
+   ([`problems_as_step_events.md`](problems_as_step_events.md)
+   §"What the tree does today"). `grid_index`
    carries the columns and an index on `(parent, sort key, uuid)`. A re-render
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
@@ -342,11 +353,6 @@ against the eval before the next.
   If it is large, a render-version bump can write the new text on a
   fresh branch and move `main` to it, then drop the old branch's
   history, so two full copies never stay.
-- **Is a section's uuid always its row's uuid?** In `chat-common` the
-  `data-section-uuid` wrapper and the message's grid row share one uuid.
-  That has not been checked for every renderer outside it (email,
-  Notion, Drive, GitHub); step 1 checks it, since the problems plan
-  rests on it too.
 - **Reactions.** An item of their own (they have an author and a time)
   or an attribute of the item they react to?
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
