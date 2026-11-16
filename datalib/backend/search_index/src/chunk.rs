@@ -35,6 +35,48 @@ pub fn chunk_hash(title: &str, text: &str) -> String {
     blake3::hash(prompt.as_bytes()).to_hex().to_string()
 }
 
+/// A chunk with exactly what the model is shown for it, and that prompt's
+/// [`chunk_hash`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompted {
+    pub chunk: Chunk,
+    pub hash: String,
+    pub prompt: String,
+}
+
+/// Each chunk of a document's sections with its prompt: the chunk's text,
+/// after the lead of the item it starts inside, so a piece cut from the
+/// middle of a long message still says who wrote it and when. The keyword
+/// pass files chunks by these hashes and the embed pass embeds these
+/// prompts, so the two never disagree.
+pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> {
+    let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
+    let whole = texts.concat();
+    let mut starts = Vec::with_capacity(texts.len());
+    let mut at = 0;
+    for t in &texts {
+        starts.push(at);
+        at += t.len();
+    }
+    chunks(&texts)
+        .into_iter()
+        .map(|chunk| {
+            let span = &whole[chunk.start..chunk.end];
+            let text = match &sections[chunk.first_section].lead {
+                Some(lead) if chunk.start > starts[chunk.first_section] => {
+                    format!("{lead}\n\n{span}")
+                }
+                _ => span.to_string(),
+            };
+            Prompted {
+                chunk,
+                hash: chunk_hash(title, &text),
+                prompt: crate::prompt::document(&text, Some(title)),
+            }
+        })
+        .collect()
+}
+
 pub fn chunks(sections: &[&str]) -> Vec<Chunk> {
     chunks_within(sections, MAX_BYTES, OVERLAP_BYTES)
 }
@@ -167,6 +209,27 @@ mod tests {
             .into_iter()
             .map(|c| (c.start, c.end, c.first_section, c.last_section))
             .collect()
+    }
+
+    /// A long message cut into several chunks: each piece after the first
+    /// repeats who wrote it and when, and the first does not say it twice.
+    #[test]
+    fn a_chunk_cut_from_inside_an_item_repeats_its_envelope() {
+        let lead = "Will Riker — Tue 3 Mar 2026 14:05".to_string();
+        let body = "The away team reports all clear. ".repeat(300);
+        let sections = vec![crate::IndexSection {
+            uuid: Some("m1".into()),
+            text: format!("{lead}\n\n{body}\n\n"),
+            lead: Some(lead.clone()),
+        }];
+        let got = prompted("Ten Forward", &sections);
+        assert!(got.len() > 1, "{} chunks", got.len());
+        for (i, p) in got.iter().enumerate() {
+            let text = p.prompt.split(" | text: ").nth(1).unwrap();
+            assert!(text.starts_with(&lead), "chunk {i}: {text:.80}");
+            assert_eq!(text.matches(lead.as_str()).count(), 1, "chunk {i}");
+            assert_eq!(p.hash, chunk_hash("Ten Forward", text));
+        }
     }
 
     #[test]

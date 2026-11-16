@@ -1,0 +1,228 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_contacts-diff 00000000-0000-8195-8ee2-d14cb601f004 Worf
+--- -
+---
+markdown_uuid: 00000000-0000-8195-8ee2-d14cb601f004
+source_id: tng_contacts-diff
+provider: contacts
+group: "Bridge"
+external_id: "Bridge#tng-worf"
+title: "Worf"
+created_at: "2371-01-01T09:00:00+00:00"
+modified_at: "2371-01-02T00:00:00+00:00"
+---
+
+--- 00000000-0000-8195-8ee2-d14cb601f004
+<div class="diff-added">
+
+<div class="contact-head" data-page-title-uuid="00000000-0000-8195-8ee2-d14cb601f004">
+
+<div class="contact-photo">
+
+![Worf](/data/tng_contacts/ingest/blob/2d9e4ad303d6425c603c7a3331786ede74f907ef0666c8838f32bb8ee8a91e8f)
+
+</div>
+
+<div class="contact-who">
+
+# [Worf](mailto:worf@enterprise.starfleet "Worf <worf@enterprise.starfleet>")
+
+<p class="contact-role">Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security</p>
+
+</div>
+</div>
+
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+
+[worf@enterprise.starfleet](mailto:worf@enterprise.starfleet "worf@enterprise.starfleet")
+
+</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+
+[+1-202-555-0102](tel:+12025550102 "+1-202-555-0102 (+12025550102)")
+
+</dd>
+<dt>Note</dt><dd>Son of Mogh. Prefers prune juice.</dd>
+</dl>
+
+</div>
+
+=== tng_contacts-diff 00000000-0000-819d-aad9-cb628fc3bec0 Kalita
+--- -
+---
+markdown_uuid: 00000000-0000-819d-aad9-cb628fc3bec0
+source_id: tng_contacts-diff
+provider: contacts
+group: "Maquis"
+external_id: "Maquis#tng-kalita"
+title: "Kalita"
+---
+
+--- 00000000-0000-819d-aad9-cb628fc3bec0
+<div class="diff-removed">
+
+<div class="contact-head" data-page-title-uuid="00000000-0000-819d-aad9-cb628fc3bec0">
+
+<div class="contact-who">
+
+# Kalita
+
+<p class="contact-role">Maquis pilot</p>
+
+</div>
+</div>
+
+<dl class="contact-fields">
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-BADLANDS</dd>
+</dl>
+
+</div>
+
+=== tng_contacts-diff 00000000-0000-825c-a3c4-1fb84e9bfce6 Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-825c-a3c4-1fb84e9bfce6
+source_id: tng_contacts-diff
+provider: contacts
+group: "Bridge"
+external_id: "Bridge#tng-picard"
+title: "Jean-Luc Picard"
+created_at: "2370-01-02T09:00:00+00:00"
+modified_at: "2371-01-09T00:00:00+00:00"
+---
+
+--- 00000000-0000-825c-a3c4-1fb84e9bfce6
+<div class="diff-modified">
+
+<div class="contact-head" data-page-title-uuid="00000000-0000-825c-a3c4-1fb84e9bfce6">
+
+<div class="contact-photo">
+
+![Jean-Luc Picard](/data/tng_contacts/ingest/blob/1c42de715f8d5864999f75b7223a8f312472e3b5faf08c7cd830c27c26a9ecd2)
+
+</div>
+
+<div class="contact-who">
+
+# [Jean-Luc Picard](mailto:jlpicard@enterprise.starfleet "Jean-Luc Picard <jlpicard@enterprise.starfleet>")
+
+<p class="contact-role">Captain · Starfleet — USS Enterprise <del>NCC-1701-D</del><ins>NCC-1701-E</ins></p>
+
+<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+
+</div>
+</div>
+
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+
+[jlpicard@enterprise.starfleet](mailto:jlpicard@enterprise.starfleet "jlpicard@enterprise.starfleet")
+
+</dd>
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+
+[picard@enterprise.starfleet](mailto:picard@enterprise.starfleet "picard@enterprise.starfleet")
+
+</dd>
+<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-NCC-1701</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
+
+[+1-202-555-0101](tel:+12025550101 "+1-202-555-0101 (+12025550101)")
+
+</dd>
+<dt><ins>Phone</ins> <span class="contact-qualifier"><ins>home</ins></span></dt><dd><ins>+33-555-LABARRE</ins></dd>
+<dt>Address <span class="contact-qualifier">work</span></dt><dd>Ready Room, Deck 1, Saucer Section</dd>
+<dt>Note</dt><dd>Make it so.</dd>
+</dl>
+
+</div>
+
+=== tng_contacts-diff 00000000-0000-8429-b938-7d1e51384182 Ro Laren
+--- -
+---
+markdown_uuid: 00000000-0000-8429-b938-7d1e51384182
+source_id: tng_contacts-diff
+provider: contacts
+group: "Maquis"
+external_id: "Maquis#tng-ro"
+title: "Ro Laren"
+---
+
+--- 00000000-0000-8429-b938-7d1e51384182
+<div class="diff-removed">
+
+<div class="contact-head" data-page-title-uuid="00000000-0000-8429-b938-7d1e51384182">
+
+<div class="contact-photo">
+
+![Ro Laren](/data/tng_contacts/ingest/blob/d237bbf531223bab009c8e092e4b09cfc1e859d4b38412288d179256bd1e2028)
+
+</div>
+
+<div class="contact-who">
+
+# [Ro Laren](mailto:ro.laren@maquis.badlands "Ro Laren <ro.laren@maquis.badlands>")
+
+<p class="contact-role">Maquis cell leader</p>
+
+</div>
+</div>
+
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+
+[ro.laren@maquis.badlands](mailto:ro.laren@maquis.badlands "ro.laren@maquis.badlands")
+
+</dd>
+<dt>Note</dt><dd>Resigned her commission. Last seen in the Badlands.</dd>
+</dl>
+
+</div>
+
+=== tng_contacts-diff 00000000-0000-86be-a0a0-341fa48bbc80 Data
+--- -
+---
+markdown_uuid: 00000000-0000-86be-a0a0-341fa48bbc80
+source_id: tng_contacts-diff
+provider: contacts
+group: "Bridge"
+external_id: "Bridge#tng-data"
+title: "Data"
+created_at: "2370-01-04T09:00:00+00:00"
+modified_at: "2370-02-11T00:00:00+00:00"
+---
+
+--- 00000000-0000-86be-a0a0-341fa48bbc80
+<div class="diff-removed">
+
+<div class="contact-head" data-page-title-uuid="00000000-0000-86be-a0a0-341fa48bbc80">
+
+<div class="contact-photo">
+
+![Data](/data/tng_contacts/ingest/blob/a548fb2601e905ca75742c117138cd511be28bb1194671413283e9cd8c5e0c0f)
+
+</div>
+
+<div class="contact-who">
+
+# [Data](mailto:data@enterprise.starfleet "Data <data@enterprise.starfleet>")
+
+<p class="contact-role">Operations Officer · Starfleet — USS Enterprise NCC-1701-D — Operations</p>
+
+</div>
+</div>
+
+<dl class="contact-fields">
+<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+
+[data@enterprise.starfleet](mailto:data@enterprise.starfleet "data@enterprise.starfleet")
+
+</dd>
+<dt>Note</dt><dd>Soong-type android. Positronic. Probability of friendship: 1.0.</dd>
+</dl>
+
+</div>

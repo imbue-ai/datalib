@@ -11,6 +11,9 @@ use sqlx::ConnectOptions;
 
 /// A word the fixture's corpus uses across several sources.
 const QUERY: &str = "the enterprise";
+/// A word several of the fixture's Slack messages say, as do other
+/// sources' (the Slack messages never say [`QUERY`]).
+const SLACK_QUERY: &str = "captain";
 
 /// The fixture's root: its rendered documents, grid and search indexes,
 /// vectors and embedding model.
@@ -75,9 +78,9 @@ async fn free_text_pages_follow_the_rank_and_show_the_matched_words() {
 async fn structured_terms_narrow_the_ranking_and_a_sort_reorders_it() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let everything = search(&s, QUERY, None, 1_000, None).await;
+    let everything = search(&s, SLACK_QUERY, None, 1_000, None).await;
 
-    let narrowed = format!("{QUERY} source:slack");
+    let narrowed = format!("{SLACK_QUERY} source:slack");
     let slack = search(&s, &narrowed, None, 1_000, None).await;
     assert!(slack.total > 0, "the fixture's slack source matches");
     assert!(
@@ -420,13 +423,33 @@ async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
     }
 }
 
+/// The words find an item by a word of its labels, beside `label:`, which
+/// matches a label exactly: the index text draws an item's labels
+/// (`search_index/src/text.rs`; the addresses it draws are pinned there).
+#[tokio::test]
+async fn the_words_find_an_item_by_its_labels() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let found = tests::search_part(&s, "patrol", tests::Part::Words, 0, 1_000).await;
+    assert!(
+        found.rows.iter().any(|r| r.source_id == "google-takeout"
+            && r.markdown_uuid.as_deref() == Some("00000000-0000-8911-b4f4-e7022a921136")),
+        "{:?}",
+        found
+            .rows
+            .iter()
+            .map(|r| (&r.source_id, &r.markdown_uuid))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// With meaning left out, a search is scoped by `source:` like any other,
 /// and its groups count the same rows its pages list.
 #[tokio::test]
 async fn a_search_narrows_and_groups_with_meaning_left_out() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let words = format!("{QUERY} semantic:off");
+    let words = format!("{SLACK_QUERY} semantic:off");
     let slack = search(&s, &format!("{words} source:slack"), None, 1_000, None).await;
     assert!(slack.total > 0, "the fixture's slack source has the words");
     assert!(slack.rows.iter().all(|r| r.source_id == "slack"));

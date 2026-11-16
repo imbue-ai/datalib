@@ -3098,6 +3098,7 @@ mod shape_tests {
             sections: vec![datalib_search_index::IndexSection {
                 uuid: Some("m1".into()),
                 text: "the warp core is stable".into(),
+                lead: None,
             }],
         }
     }

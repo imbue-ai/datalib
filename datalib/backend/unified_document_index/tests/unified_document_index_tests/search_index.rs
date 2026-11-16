@@ -22,6 +22,7 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
             .map(|(m, text)| IndexSection {
                 uuid: Some(m.to_string()),
                 text: format!("{text}\n"),
+                lead: None,
             })
             .collect(),
     }

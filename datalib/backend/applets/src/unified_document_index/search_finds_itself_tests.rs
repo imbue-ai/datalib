@@ -98,8 +98,8 @@ fn is_unindexed(qmd_path: &str) -> bool {
         .any(|part| part == datalib_runtime::layout::UNINDEXED_DIR)
 }
 
-/// Every grid row, and each document's text: its rendered file, which is
-/// what qmd indexed.
+/// Every grid row, and each document's text: what the search index draws
+/// of it from its render store, the same call the keyword pass makes.
 async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<String, String>) {
     let mut grid = open_read_only(&datalib_runtime::layout::grid_index_db(root)).await;
     #[derive(sqlx::FromRow)]
@@ -118,14 +118,14 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
     .unwrap();
     grid.close().await.unwrap();
     let mut rows = HashMap::new();
-    let mut texts: HashMap<String, String> = HashMap::new();
+    let mut searched: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for r in read {
         if let (true, Some(md), Some(path)) = (r.is_document, &r.markdown_uuid, &r.qmd_path) {
             if !is_unindexed(path) {
-                let file = root.join(path);
-                let text = std::fs::read_to_string(&file)
-                    .unwrap_or_else(|e| panic!("read {}: {e}", file.display()));
-                texts.insert(md.clone(), text);
+                // The group whose store holds it, which for a storage
+                // report is not the source its row is filed under.
+                let group = path.split('/').next().unwrap_or_default().to_string();
+                searched.entry(group).or_default().push(md.clone());
             }
         }
         rows.insert(
@@ -136,7 +136,33 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
             },
         );
     }
+    let root = root.to_path_buf();
+    let texts = tokio::task::spawn_blocking(move || drawn_texts(&root, &searched))
+        .await
+        .unwrap();
     (rows, texts)
+}
+
+fn drawn_texts(
+    root: &std::path::Path,
+    searched: &BTreeMap<String, Vec<String>>,
+) -> HashMap<String, String> {
+    let mut texts = HashMap::new();
+    for (source, uuids) in searched {
+        let render_root = datalib_etl::layout::render_markdown_root(root, source);
+        let store = datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(
+            &render_root,
+            None,
+        )
+        .unwrap()
+        .unwrap_or_else(|| panic!("{source}'s render store has a commit"));
+        for doc in store.index_docs(source, uuids).unwrap() {
+            let text: String = doc.sections.iter().map(|s| s.text.as_str()).collect();
+            texts.insert(doc.markdown_uuid, text);
+        }
+        store.close();
+    }
+    texts
 }
 
 /// Each value a key's column holds, with the rows holding it.

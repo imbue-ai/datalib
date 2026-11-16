@@ -72,6 +72,14 @@ does a link that ends in one: paste a Notion page's link to find the page.
 A source's words are searchable once its `keyword_index` step has run;
 until then free text finds nothing there and the answer says why.
 
+What the words and the meaning search over is each item drawn plainly:
+who wrote it (with their address, where it is an email or a phone
+number), to whom, when, its labels, then what it says, with links as
+their text. `datalib-step index-text <data root> --source <id>` prints it
+for every document of a source; `--document <id>` for one, `--at
+<commit>` as it was at a commit of the source's render store, and
+`--chunks` as the pieces the meaning embeds.
+
 ## Keys
 
 | you write | finds |
