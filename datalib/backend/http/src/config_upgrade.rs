@@ -1,6 +1,6 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, on a save
-//! through the API, and whenever the file changes. Eight rewrites, in
+//! through the API, and whenever the file changes. Nine rewrites, in
 //! order: an id that names a folder and has capitals in it
 //! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
@@ -15,7 +15,9 @@
 //! ingest whose window is still named `completed_since`
 //! (`datalib_migrate_config::upgrade_todoist_since`), and a `grid_index`
 //! that does not read a `render_time_series` or `render_occurrences` step
-//! (`datalib_migrate_config::upgrade_problem_inputs`), all listed once in
+//! (`datalib_migrate_config::upgrade_problem_inputs`), and a ChatGPT or
+//! Claude ingest whose API settings have their old names
+//! (`datalib_migrate_config::upgrade_conversation_settings`), all listed once in
 //! `datalib_migrate_config::UNATTENDED`. The text they replaced is kept
 //! as `config.toml.bak`.
 //!
