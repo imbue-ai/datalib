@@ -40,12 +40,20 @@ pub struct About {
     pub path: Option<String>,
 }
 
+/// The record of the step's own store a problem is about, which is what
+/// a `records` [`Covered`] matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Record {
+    pub table: String,
+    pub id: String,
+}
+
 /// One problem as a step reports it: the body of a `problem` event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
     /// The step's own name for the problem, the same on every run that
-    /// finds it. By convention `listing:<name>`, `phase:<name>` or
-    /// `record:<table>:<id>`, which is what [`Covered`] matches.
+    /// finds it. A key starting `listing:` or `phase:` is what a
+    /// `listings` [`Covered`] matches.
     pub key: String,
     pub severity: Severity,
     pub outcome: String,
@@ -54,11 +62,13 @@ pub struct Found {
     pub sample: String,
     #[serde(default)]
     pub about: About,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<Record>,
 }
 
 /// What a run re-checked, and so may clear: the body of a `covered`
-/// event. A record or file kind with no `all_but` vouches for every one
-/// of them, which only a run that succeeds can.
+/// event. A record or file kind that names neither `all_but` nor `only`
+/// vouches for every one of them, which only a run that succeeds can.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Covered {
@@ -66,11 +76,13 @@ pub enum Covered {
     All,
     /// Every `listing:` and `phase:` key.
     Listings,
-    /// Every `record:<table>:` key, but the ids named.
+    /// The records of `table`: every one but `all_but`, or exactly `only`.
     Records {
         table: String,
         #[serde(default)]
         all_but: Option<Vec<String>>,
+        #[serde(default)]
+        only: Option<Vec<String>>,
     },
     /// Every problem about a file under `under`, but the paths named.
     Files {
@@ -99,6 +111,7 @@ pub struct Row {
     pub reason: String,
     pub sample: String,
     pub about: About,
+    pub record: Option<Record>,
     pub first_seen_at_utc: String,
     pub changed_at_utc: String,
     pub tz_offset: Option<String>,
@@ -122,6 +135,7 @@ pub fn stamped(
             && h.reason == found.reason
             && h.sample == found.sample
             && h.about == found.about
+            && h.record == found.record
     });
     let (first_seen_at_utc, changed_at_utc, tz_offset) = match held {
         Some(h) if same => (
@@ -144,6 +158,7 @@ pub fn stamped(
         reason: found.reason,
         sample: found.sample,
         about: found.about,
+        record: found.record,
         first_seen_at_utc,
         changed_at_utc,
         tz_offset,
@@ -164,12 +179,18 @@ pub fn clears(row: &Row, covered: &[Covered], ended: Ended) -> bool {
         Covered::Listings => {
             whole && (row.key.starts_with("listing:") || row.key.starts_with("phase:"))
         }
-        Covered::Records { table, all_but } => row
-            .key
-            .strip_prefix("record:")
-            .and_then(|rest| rest.strip_prefix(table.as_str()))
-            .and_then(|rest| rest.strip_prefix(':'))
-            .is_some_and(|id| but(all_but, id)),
+        Covered::Records {
+            table,
+            all_but,
+            only,
+        } => row
+            .record
+            .as_ref()
+            .filter(|r| &r.table == table)
+            .is_some_and(|r| match only {
+                Some(only) => only.iter().any(|x| x == &r.id),
+                None => but(all_but, &r.id),
+            }),
         Covered::Files { under, all_but } => row
             .about
             .path
@@ -200,6 +221,8 @@ const DDL: &str = "CREATE TABLE IF NOT EXISTS problems (
     about_account TEXT,
     about_node TEXT,
     about_path TEXT,
+    record_table TEXT,
+    record_id TEXT,
     first_seen_at_utc TEXT NOT NULL,
     changed_at_utc TEXT NOT NULL,
     tz_offset TEXT,
@@ -208,8 +231,8 @@ const DDL: &str = "CREATE TABLE IF NOT EXISTS problems (
 
 const INSERT: &str = "INSERT OR REPLACE INTO problems (key, problem_uuid, severity, outcome, \
      reason, sample, about_kind, about_id, about_account, about_node, about_path, \
-     first_seen_at_utc, changed_at_utc, tz_offset, run) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+     record_table, record_id, first_seen_at_utc, changed_at_utc, tz_offset, run) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 fn row_of(r: &SqliteRow) -> Result<Row> {
     let severity: String = r.try_get("severity")?;
@@ -227,6 +250,13 @@ fn row_of(r: &SqliteRow) -> Result<Row> {
             account: r.try_get("about_account")?,
             node: r.try_get("about_node")?,
             path: r.try_get("about_path")?,
+        },
+        record: match (
+            r.try_get::<Option<String>, _>("record_table")?,
+            r.try_get::<Option<String>, _>("record_id")?,
+        ) {
+            (Some(table), Some(id)) => Some(Record { table, id }),
+            _ => None,
         },
         first_seen_at_utc: r.try_get("first_seen_at_utc")?,
         changed_at_utc: r.try_get("changed_at_utc")?,
@@ -314,6 +344,8 @@ impl StepFile {
                 .bind(&row.about.account)
                 .bind(&row.about.node)
                 .bind(&row.about.path)
+                .bind(row.record.as_ref().map(|r| &r.table))
+                .bind(row.record.as_ref().map(|r| &r.id))
                 .bind(&row.first_seen_at_utc)
                 .bind(&row.changed_at_utc)
                 .bind(&row.tz_offset)

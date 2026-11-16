@@ -374,14 +374,17 @@ yourself through `datalib_step_problems::StepFile`, as `datalib-step`
 will, or send two lines and let the runner write it for you:
 
 ```json
-{"event":"problem","key":"record:messages:C01/1712345678.000100","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"HTTP 404","about":{"kind":"message","id":"C01/1712345678.000100"}}
+{"event":"problem","key":"record:messages:C01/1712345678.000100","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"HTTP 404","about":{"kind":"message","id":"C01/1712345678.000100"},"record":{"table":"messages","id":"C01/1712345678.000100"}}
 {"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
 ```
 
 - **`key`** is your name for the problem, the same on every run that
   finds it; the problem's id is minted from your step id and the key.
-  `listing:<name>`, `phase:<name>` and `record:<table>:<id>` are the
-  spellings `covered` matches.
+  A key starting `listing:` or `phase:` is a listing or phase your run
+  could not do.
+- **`record`** names the record of your own output the problem is
+  about, by `table` and `id`; it is what a `records` coverage matches.
+  A record may have several problems, each with its own key.
 - **`severity`** is `error`, `warning` or `info`. **`outcome`** and
   **`reason`** are words of your own (datalib's steps use
   `datalib_problems::Outcome` and `Reason`); **`sample`** says what
@@ -393,9 +396,11 @@ will, or send two lines and let the runner write it for you:
 - **`covered`** says what this run checked again, so what it covered
   and did not find again can go: `all`, `listings` (every `listing:`
   and `phase:` key), `records` of one `table`, or `files` `under` a
-  folder. A `records` or `files` line with `all_but` vouches for every
-  one but those, and counts even when your run fails; without it, and
-  for `all` and `listings`, only a run that succeeds clears anything.
+  folder. A `records` line with `only` vouches for exactly those
+  records, as a render that drew some documents again does; one with
+  `all_but`, and a `files` line with it, for every one but those. Both
+  count even when your run fails. Without either, and for `all` and
+  `listings`, only a run that succeeds clears anything.
 
 The runner writes the problems as they arrive, at most a second after
 a line, so they show while you run, and clears when you end. A step

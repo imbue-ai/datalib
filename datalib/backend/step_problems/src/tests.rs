@@ -10,6 +10,13 @@ fn found(key: &str, sample: &str) -> Found {
         reason: "fetch_failed".into(),
         sample: sample.to_string(),
         about: About::default(),
+        record: key.strip_prefix("record:").and_then(|rest| {
+            let (table, id) = rest.split_once(':')?;
+            Some(Record {
+                table: table.into(),
+                id: id.into(),
+            })
+        }),
     }
 }
 
@@ -67,10 +74,17 @@ fn a_short_run_clears_only_what_it_named() {
     let named = Covered::Records {
         table: "t".into(),
         all_but: Some(vec!["2".into()]),
+        only: None,
     };
     let every = Covered::Records {
         table: "t".into(),
         all_but: None,
+        only: None,
+    };
+    let rendered = Covered::Records {
+        table: "t".into(),
+        all_but: None,
+        only: Some(vec!["3".into()]),
     };
     for (row, covered, short, whole) in [
         (row("record:t:1"), named.clone(), true, true),
@@ -82,6 +96,8 @@ fn a_short_run_clears_only_what_it_named() {
         (row("phase:attachments"), Covered::Listings, false, true),
         (row("record:t:1"), Covered::Listings, false, false),
         (row("anything"), Covered::All, false, true),
+        (row("record:t:3"), rendered.clone(), true, true),
+        (row("record:t:4"), rendered.clone(), false, false),
     ] {
         let c = std::slice::from_ref(&covered);
         assert_eq!(
@@ -200,7 +216,8 @@ fn the_events_read_as_the_protocol_spells_them() {
         c,
         Covered::Records {
             table: "messages".into(),
-            all_but: Some(vec!["C01/2".into()])
+            all_but: Some(vec!["C01/2".into()]),
+            only: None,
         }
     );
     let all: Covered = serde_json::from_str(r#"{"kind":"all"}"#).unwrap();
