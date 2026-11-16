@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
 use datalib_etl_render::message::{chip_link, message_stamp_text_html, source_link};
 use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
@@ -33,31 +33,30 @@ pub(crate) fn write(
     Ok(sections)
 }
 
+/// The document's front matter.
+pub(crate) fn front(profile: &ForgeProfile, cr: &ChangeRequest) -> Front {
+    Front::new()
+        .plain("provider", profile.tag)
+        .text(profile.container_key, &cr.container)
+        .plain(profile.number_key, cr.number)
+        .name("title", &cr.title)
+        .text_or_null("state", cr.state.as_deref())
+        .text_or_null("author", cr.author.as_deref())
+        .text_or_null("created_at", cr.created_at.as_deref())
+        .text_or_null("updated_at", cr.updated_at.as_deref())
+        .text_or_null("merged_at", cr.merged_at.as_deref())
+        .text_or_null("head_sha", cr.head_sha.as_deref())
+        .text_or_null("base_sha", cr.base_sha.as_deref())
+        .text_or_null(profile.from_ref_key, cr.from_ref.as_deref())
+        .text_or_null(profile.to_ref_key, cr.to_ref.as_deref())
+}
+
 /// The document as sections: the frame (front matter, title, the part
 /// headings) unkeyed, and each message keyed by its uuid.
 fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> Vec<Section> {
     let mut sections = Vec::new();
     let mut out = String::new();
-    out.push_str("---\n");
-    out.push_str(&format!("provider: {}\n", profile.tag));
-    let front: [(&str, String); 12] = [
-        (profile.container_key, yaml_scalar(&cr.container)),
-        (profile.number_key, cr.number.to_string()),
-        ("title", yaml_name(&cr.title)),
-        ("state", yaml_opt(cr.state.as_deref())),
-        ("author", yaml_opt(cr.author.as_deref())),
-        ("created_at", yaml_opt(cr.created_at.as_deref())),
-        ("updated_at", yaml_opt(cr.updated_at.as_deref())),
-        ("merged_at", yaml_opt(cr.merged_at.as_deref())),
-        ("head_sha", yaml_opt(cr.head_sha.as_deref())),
-        ("base_sha", yaml_opt(cr.base_sha.as_deref())),
-        (profile.from_ref_key, yaml_opt(cr.from_ref.as_deref())),
-        (profile.to_ref_key, yaml_opt(cr.to_ref.as_deref())),
-    ];
-    for (key, value) in front {
-        out.push_str(&format!("{key}: {value}\n"));
-    }
-    out.push_str("---\n\n");
+    out.push_str(&front(profile, cr).draw());
 
     let title_text = format!("{} ({}{})", cr.title, profile.number_sigil, cr.number);
     out.push_str(
@@ -197,10 +196,6 @@ fn header(c: &Comment) -> String {
         ""
     };
     format!("{who}{state}{reply} · {when}{link}")
-}
-
-fn yaml_opt(s: Option<&str>) -> String {
-    s.map(yaml_scalar).unwrap_or_else(|| "null".into())
 }
 
 #[cfg(test)]

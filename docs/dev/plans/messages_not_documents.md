@@ -1,7 +1,8 @@
 # Messages, not documents: grouping chosen when a search runs
 
 **Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
-#1770); nothing else is built.** Facts about
+#1770); step 3a is being built on branch `tree-step-3`; nothing else
+is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 
@@ -461,7 +462,45 @@ against the eval before the next.
    switch for meaning. After the fold it is the source's absence from
    the aggregator's inputs, which already drops any source it does not
    name, and the config upgrade rewrites every existing root's
-   `keyword_index` steps into that.
+   `keyword_index` steps into that. In three parts:
+   - **3a. Bodies.** A `sections` table in the render store: every
+     piece of a document in order, keyed or not. chat-common hands each
+     item's body and who it was addressed to, and marks its layout as
+     frame, which is not kept; every other renderer's pieces are kept
+     whole and marked `framed`, unkeyed ones too (a PDF's text is
+     unkeyed), and each splits its own bodies off later. Every renderer
+     also hands its front matter as facts (`Front`), drawn by one
+     function and kept on `markdowns.front`, and its document as
+     sections, those that handed none (Notion, Perseus, Garmin, the
+     time-series pages, the storage report) included. A re-render, and
+     nothing a person sees.
+   - **3b. Index text from the store.** The search index draws each
+     item's index text from its body and its row, and stops reading
+     files. A framed body is drawn as it is, so its chunks' text and
+     hashes do not move; only chat-common's sources re-embed. An
+     unframed item is drawn as one plain envelope line, then its body:
+     `Will Riker to Jean-Luc Picard — Tue 3 Mar 2026 14:05`. Names, not
+     addresses (the search terms already match those exactly);
+     recipients only where the item has its own, as an email's To and
+     Cc, not a chat's members on every line; no labels, which a person
+     moves, and no URLs. A chunk that starts inside an item repeats its
+     envelope line, so every chunk says who and when. The title stays in
+     the prompt's frame.
+
+     The text is never stored: a chunk keeps its hash, and its vector is
+     filed under it, so a chunk re-embeds exactly when its text changes.
+     The text is drawn again whenever it is needed, so the function must
+     be deterministic: a date in the item's own offset, never the
+     machine's clock, and a test draws one item under two `TZ` settings
+     and gets the same bytes. Which items to draw is the render store's
+     diff since the commit the index last read. `INDEX_TEXT_VERSION`
+     beside the function says when the function itself changed: the
+     index keeps the version it drew with, and a mismatch redraws every
+     item, re-embedding only the chunks whose hash moved. A golden test
+     draws chat-common's and the hostile samples and fails when the
+     output changes and the version does not.
+   - **3c. The fold.** `keyword_index` into `grid_index`, with the
+     config upgrade above.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.

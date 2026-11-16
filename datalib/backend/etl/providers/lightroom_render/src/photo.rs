@@ -3,6 +3,7 @@
 //! reads the rows and emits what this returns.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{escape_md_block, escape_name_inline};
 use datalib_etl_render::section::Section;
 use datalib_id::{IdNamespace, Identity};
@@ -39,6 +40,8 @@ pub const ENTITY_KIND: &str = "image";
 pub struct Built {
     pub photo: NormalizedPhoto,
     pub row: Option<GridRow>,
+    /// What identifies it; drawn nowhere, since it has no file.
+    pub front: Front,
     pub section: Section,
     pub problems: Vec<ProblemRow>,
 }
@@ -155,13 +158,35 @@ pub fn build(image: &ImageRow, ctx: &Context<'_>) -> Built {
         },
     };
     let row = grid_row(&photo, image, ctx, &mut problems);
+    let front = front(&photo, image);
     let section = Section::keyed(&uuid, summary(&photo));
     Built {
         photo,
         row,
+        front,
         section,
         problems,
     }
+}
+
+fn front(photo: &NormalizedPhoto, image: &ImageRow) -> Front {
+    Front::new()
+        .plain("markdown_uuid", &photo.uuid)
+        .plain("source_id", &photo.source_id)
+        .plain("provider", Provider::Lightroom)
+        .plain("kind", photo.kind.as_str())
+        .name("title", subject(photo))
+        .text("upstream_id", &image.id_global)
+        .text_if("captured_at", photo.captured_at.as_deref())
+}
+
+/// Its title, else its headline, else its file's name.
+fn subject(photo: &NormalizedPhoto) -> String {
+    photo
+        .title
+        .clone()
+        .or_else(|| photo.headline.clone())
+        .unwrap_or_else(|| photo.file_name.clone())
 }
 
 fn grid_row(
@@ -170,11 +195,6 @@ fn grid_row(
     ctx: &Context<'_>,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
-    let subject = photo
-        .title
-        .clone()
-        .or_else(|| photo.headline.clone())
-        .unwrap_or_else(|| photo.file_name.clone());
     let mut row = GridRow::builder()
         .uuid(photo.uuid.clone())
         .provider(Provider::Lightroom)
@@ -191,7 +211,7 @@ fn grid_row(
         .touched_at(photo.captured_at.clone().or(photo.edited_at_utc.clone()))
         .author(photo.creator.clone())
         .channel(photo.folder.clone())
-        .conversation_name(Some(subject))
+        .conversation_name(Some(subject(photo)))
         .conversation_uuid(photo.uuid.clone())
         .entire_chat(format!("/chat/{}", photo.uuid))
         .body(photo.caption.clone().unwrap_or_default())

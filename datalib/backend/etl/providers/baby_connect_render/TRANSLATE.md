@@ -1,12 +1,13 @@
 # Baby Connect: what becomes what
 
-One document per child per month, from the `kids`, `users` and `entries`
-tables (`../baby_connect/INGEST.md`). A month with no entry for a child
-has no document.
+One document per child, from the `kids`, `users` and `entries` tables
+(`../baby_connect/INGEST.md`). A child with no entry has no document.
+Months are a grouping a search chooses, not a document of their own
+(`docs/dev/plans/messages_not_documents.md`).
 
 ## The document
 
-- **Title**: the child's name and the month, `Wesley — October 2048`.
+- **Title**: the child's name, `Wesley`.
 - **Days**: a `##` heading per day, a `<time>` of the date, in order.
 - **Entries**: one `msg` block each, in clock order, keyed by the
   entry's uuid. Its first line is the time, the kind of entry in bold
@@ -29,16 +30,16 @@ each document carries a warning problem row
 
 | row | kind | notes |
 |---|---|---|
-| the month | `Baby Connect Month` | the document; created and modified are its first and last entry |
+| the child | `Child` | the document; created and modified are its first and last entry |
 | an entry | the kind's name (`Nursing`, `Diary`, …) | `author` who logged it, with an `email:` handle when the account names their address; `channel` the child; the body is the sentence and the note |
 
 ## The tree
 
-A child is a place (`Child`), on every month's document. Its months are
-read-together containers under it, sorted by month; a month's entries
-sit in the month, sorted by their time.
+A child (`Child`) is the document's one container, both a place and
+what is read together, as a chat is. Its entries sit in it, sorted by
+their time.
 
 ## Ids
 
-A child and an entry are keyed by Baby Connect's id; a month by
-`<child id>#YYYY-MM`. An entry's uuid carries its time.
+A child and an entry are keyed by Baby Connect's id. An entry's uuid
+carries its time.

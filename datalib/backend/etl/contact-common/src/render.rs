@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{
     escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
@@ -197,6 +197,7 @@ fn render_one(
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front: front(profile, doc, source_id),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
@@ -394,6 +395,26 @@ fn summary(contact: &NormalizedContact) -> String {
     lines.join("\n")
 }
 
+/// The document's front matter. A stamp we don't have is omitted, never
+/// written empty; the grid row is `None` to match.
+fn front(profile: &ContactRenderProfile, doc: &ContactDoc, source_id: &str) -> Front {
+    let contact = &doc.contact;
+    let mut front = Front::new()
+        .plain("markdown_uuid", &doc.doc_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.provider)
+        .text("group", &doc.group_label);
+    if !contact.key.is_empty() {
+        front = front.text("external_id", &contact.key);
+    }
+    if let Some(dn) = contact.name() {
+        front = front.name("title", dn);
+    }
+    front
+        .text_if("created_at", contact.created_at.as_deref())
+        .text_if("modified_at", contact.modified_at.as_deref())
+}
+
 fn render_markdown(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
@@ -402,29 +423,7 @@ fn render_markdown(
 ) -> Vec<Section> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let mut out = String::with_capacity(512);
-
-    out.push_str("---\n");
-    out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
-    out.push_str(&format!("source_id: {source_id}\n"));
-    out.push_str(&format!("provider: {}\n", profile.provider));
-    out.push_str(&format!("group: {}\n", yaml_scalar(&doc.group_label)));
-    if !contact.key.is_empty() {
-        out.push_str(&format!("external_id: {}\n", yaml_scalar(&contact.key)));
-    }
-    if let Some(dn) = contact.name() {
-        out.push_str(&format!("title: {}\n", yaml_name(dn)));
-    }
-    // A stamp we don't have is omitted, never written empty; the grid
-    // row is `None` to match.
-    if let Some(ts) = &contact.created_at {
-        out.push_str(&format!("created_at: {}\n", yaml_scalar(ts)));
-    }
-    if let Some(ts) = &contact.modified_at {
-        out.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
-    }
-    out.push_str("---\n\n");
-    let frontmatter = Section::unkeyed(out);
+    let frontmatter = Section::unkeyed(front(profile, doc, source_id).draw());
 
     // The page body — the head, the fields, a group's members — is the
     // one section the contact's grid row names.

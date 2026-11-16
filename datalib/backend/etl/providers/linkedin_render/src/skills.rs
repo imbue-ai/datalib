@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
@@ -221,18 +221,23 @@ pub fn build(
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
+            front: front(&doc_id),
         },
         inputs: inputs.declared(),
     })
 }
 
+/// The document's front matter.
+fn front(doc_id: &datalib_id::Identity) -> Front {
+    Front::new()
+        .name("title", TITLE)
+        .plain("provider", Provider::Linkedin)
+        .text("source_label", SOURCE_LABEL)
+        .plain("markdown_uuid", &doc_id.uuid)
+}
+
 fn head(doc_id: &datalib_id::Identity) -> String {
-    let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(TITLE)));
-    s.push_str(&format!("provider: {}\n", Provider::Linkedin));
-    s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-    s.push_str(&format!("markdown_uuid: {}\n", doc_id.uuid));
-    s.push_str("---\n\n");
+    let mut s = front(doc_id).draw();
     s.push_str(
         &Title {
             text: TITLE,

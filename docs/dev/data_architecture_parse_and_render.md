@@ -81,7 +81,12 @@ database per source, at
     (the primary key for the `.md`), its `renderer_version`, its
     `md_path` and the `bucket_key` it was rendered from. Nothing on it
     is stamped per run — a re-render of an unchanged document writes
-    an identical row.
+    an identical row. Its `front` is the document's front
+    matter as its renderer handed it: facts in order
+    (`etl/render/src/front_matter.rs`'s `Front`), which one function
+    draws as the YAML block the document opens with. Every renderer
+    hands its front matter this way and its document as sections, and
+    the fixture test refuses a provider that does not.
   - `grid_rows` — the document's projected rows. Each carries, in its
     `supplied_terms` column, what it answers to in search beyond its
     other columns: an email's To, Cc and Bcc by handle, the people a
@@ -95,6 +100,16 @@ database per source, at
     own up to the top of the source, and what they are filed under
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.
+  - `sections` — what each piece of the document says, in order, kept
+    apart from how it is drawn. An item a renderer has split (chat-common
+    does) keeps its body alone, with no header or wrapper, and who it was
+    addressed to by name; the store draws its header again from its row.
+    Any other piece is kept whole and marked `framed`, so whatever reads
+    it draws nothing around it; a piece that is layout alone (front
+    matter, a `<details>` opener) the renderer marks as frame, and it is
+    not kept. The grid index does not copy it
+    ([`messages_not_documents.md`](plans/messages_not_documents.md)
+    §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach

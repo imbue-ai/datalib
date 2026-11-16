@@ -1943,6 +1943,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._scalar(self._index_db, "SELECT COUNT(*) FROM markdowns;"),
             "the document rows and the markdowns are the same set",
         )
+        # Every renderer hands a document the one way: as sections, the
+        # first opening with its front matter, which it hands as facts the
+        # render store keeps (`etl/render/src/front_matter.rs`). Without
+        # sections the store keeps none of what the document says.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT provider, COUNT(*) FROM markdowns "
+                "WHERE front IS NULL OR section_layout IS NULL "
+                "GROUP BY provider ORDER BY provider;",
+            ),
+            [],
+            "these providers hand documents without front matter or sections",
+        )
         # A document's stamps are the document row's, on every provider:
         # created no later than modified, and `markdowns` a copy of them.
         self.assertEqual(

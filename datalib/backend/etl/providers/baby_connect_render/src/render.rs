@@ -1,6 +1,7 @@
-//! One document per child per month: the month's days in order, every
-//! entry logged for the child under its day, with who logged it and the
-//! note typed with it. A grid row for the month and for each entry.
+//! One document per child: the days in order, every entry logged for the
+//! child under its day, with who logged it and the note typed with it. A
+//! grid row for the child and for each entry. Months are a grouping a
+//! search chooses, not a document.
 //! TRANSLATE.md says what becomes what.
 
 use std::collections::BTreeMap;
@@ -10,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, NaiveTime};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::Inputs;
@@ -28,13 +29,12 @@ use serde_json::Value;
 
 use crate::categories;
 use crate::ids;
-use crate::store::{id_of, month_of, str_of, Store};
+use crate::store::{id_of, str_of, Store};
 
-/// v1: one document per child per month.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: one document per child, where v1 had one per child per month.
+pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "Baby Connect";
-const KIND_MONTH: &str = "Baby Connect Month";
 const KIND_KID: &str = "Child";
 
 /// When an entry was logged for: its day (`Pdt`) and its clock time
@@ -109,24 +109,17 @@ fn person(store: &Store, inputs: &Inputs, by: Option<String>) -> Option<Person> 
 }
 
 /// `2068-10` as "October 2068".
-fn month_title(month: &str) -> String {
-    NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
-        .map(|d| d.format("%B %Y").to_string())
-        .unwrap_or_else(|_| month.to_string())
-}
-
-/// One child's month: what the store holds of it, written to its `.md`
-/// under `root`. `inputs` gets every raw row it read.
-pub fn render_month(
+/// One child: what the store holds of them, written to its `.md` under
+/// `root`. `inputs` gets every raw row it read.
+pub fn render_child(
     root: &Path,
     source_id: &str,
     store: &Store,
     kid: &str,
-    month: &str,
     zone: Option<&NamedZone>,
     inputs: &Inputs,
 ) -> Result<RenderedMarkdown> {
-    let doc = build(source_id, store, kid, month, zone, inputs);
+    let doc = build(source_id, store, kid, zone, inputs);
     let md_path = root.join(&doc.md_path);
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
@@ -135,13 +128,12 @@ pub fn render_month(
     Ok(RenderedMarkdown { md_path, ..doc })
 }
 
-/// [`render_month`] without the file: the document as it would be
+/// [`render_child`] without the file: the document as it would be
 /// stored, its `md_path` relative to the data root.
 pub fn build(
     source_id: &str,
     store: &Store,
     kid: &str,
-    month: &str,
     zone: Option<&NamedZone>,
     inputs: &Inputs,
 ) -> RenderedMarkdown {
@@ -151,35 +143,28 @@ pub fn build(
         .and_then(|k| str_of(k, "Name"))
         .map(String::from)
         .unwrap_or_else(|| format!("Child {kid}"));
-    let id = ids::month(source_id, kid, month);
+    let id = ids::kid(source_id, kid);
     let rel = doc_md_path(&render_markdown_root(Path::new(""), source_id), &id.uuid)
         .to_string_lossy()
         .into_owned();
-    let title = format!("{kid_name} — {}", month_title(month));
+    let title = kid_name.clone();
+    let front = front(&id, &title, kid);
 
     let mut entries: Vec<(&String, &Value)> = store
         .entries
         .iter()
-        .filter(|(_, e)| {
-            id_of(e, "Kid").as_deref() == Some(kid) && month_of(e).as_deref() == Some(month)
-        })
+        .filter(|(_, e)| id_of(e, "Kid").as_deref() == Some(kid))
         .collect();
     entries.sort_by_key(|(id, e)| (wall_clock(e), id.to_string()));
 
-    let kid_id = ids::kid(source_id, kid);
-    let kid_node = DataNodeRow::new(&id.uuid, kid_id.uuid.clone(), source_id, KIND_KID)
+    // The child is both the place and what is read together, as a chat is.
+    let kid_node = DataNodeRow::new(&id.uuid, id.uuid.clone(), source_id, KIND_KID)
         .named(Some(kid_name.clone()))
         .upstream(ids::KIND_KID, kid, None)
         .place()
+        .read_together()
         .under(&Lineage::top());
     let in_kid = Lineage::top().below(&kid_node);
-    let month_node = DataNodeRow::new(&id.uuid, id.uuid.clone(), source_id, KIND_MONTH)
-        .named(Some(title.clone()))
-        .upstream(ids::KIND_MONTH, id.natural_key.clone(), None)
-        .sort_key(Some(month.to_string()))
-        .read_together()
-        .under(&in_kid);
-    let in_month = in_kid.below(&month_node);
 
     let mut out = Out {
         source_id,
@@ -187,8 +172,8 @@ pub fn build(
         md_rel: &rel,
         title: &title,
         kid_name: &kid_name,
-        in_month,
-        sections: vec![Section::unkeyed(head(&id, &title, kid, month, zone))],
+        in_kid,
+        sections: vec![Section::unkeyed(head(&front, &id, &title, zone))],
         rows: Vec::new(),
         problems: Vec::new(),
         stamps: Vec::new(),
@@ -230,7 +215,7 @@ pub fn build(
     let doc_row = GridRow::builder()
         .uuid(id.uuid.clone())
         .provider(Provider::BabyConnect)
-        .kind(KIND_MONTH)
+        .kind(KIND_KID)
         .source_label(SOURCE_LABEL)
         .is_document(true)
         .item_count(Some(items))
@@ -245,7 +230,7 @@ pub fn build(
         .upstream_id(Some(id.natural_key.clone()))
         .upstream_entity_kind(Some(id.entity_kind.to_string()))
         .markdown_uuid(Some(id.uuid.clone()))
-        .lineage(&in_kid)
+        .lineage(&Lineage::top())
         .build_or_record(source_id, &id.natural_key, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
@@ -254,29 +239,32 @@ pub fn build(
         markdown_uuid: id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(crate::store::bucket(kid, month)),
+        bucket_key: Some(kid.to_string()),
         md_path: PathBuf::from(&rel),
         render_version: RENDER_VERSION,
         rows,
         sections,
+        front,
         edges: Vec::new(),
         contacts: Vec::new(),
-        data_nodes: vec![kid_node, month_node],
+        data_nodes: vec![kid_node],
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
     }
 }
 
-fn head(id: &Identity, title: &str, kid: &str, month: &str, zone: Option<&NamedZone>) -> String {
-    let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(title)));
-    s.push_str(&format!("provider: {}\n", Provider::BabyConnect));
-    s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-    s.push_str(&format!("markdown_uuid: {}\n", id.uuid));
-    s.push_str(&format!("kid_id: {}\n", yaml_scalar(kid)));
-    s.push_str(&format!("month: {}\n", yaml_scalar(month)));
-    s.push_str("---\n\n");
+fn front(id: &Identity, title: &str, kid: &str) -> Front {
+    Front::new()
+        .name("title", title)
+        .plain("provider", Provider::BabyConnect)
+        .text("source_label", SOURCE_LABEL)
+        .plain("markdown_uuid", &id.uuid)
+        .text("kid_id", kid)
+}
+
+fn head(front: &Front, id: &Identity, title: &str, zone: Option<&NamedZone>) -> String {
+    let mut s = front.draw();
     s.push_str(
         &Title {
             text: title,
@@ -319,7 +307,7 @@ struct Out<'a> {
     md_rel: &'a str,
     title: &'a str,
     kid_name: &'a str,
-    in_month: Lineage,
+    in_kid: Lineage,
     sections: Vec<Section>,
     rows: Vec<GridRow>,
     problems: Vec<ProblemRow>,
@@ -393,7 +381,7 @@ impl Out<'_> {
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
             .markdown_uuid(Some(self.doc.uuid.clone()))
-            .lineage(&self.in_month)
+            .lineage(&self.in_kid)
             .build_or_record(self.source_id, entry_id, RENDER_VERSION, &mut self.problems);
         self.rows.extend(built);
     }
@@ -468,18 +456,35 @@ mod tests {
         s
     }
 
+    /// A child is one document holding all their entries, across months,
+    /// in time order; the child is its one container, both place and read
+    /// together, and the month is no container at all.
     #[test]
-    fn a_month_holds_one_childs_entries_in_time_order_with_their_notes() {
-        let doc = build(
-            "bc",
-            &store(),
-            "11",
-            "2048-10",
-            Some(&la()),
-            &Inputs::default(),
+    fn a_child_holds_their_entries_in_time_order_with_their_notes() {
+        let mut s = store();
+        s.entries.insert(
+            "4".into(),
+            json!({"Id": 4, "Kid": 11, "Pdt": 481104, "Utm": 800, "Cat": 2600, "By": 7,
+                   "Txt": "Diary", "n": "First word: warp."}),
         );
+        let doc = build("bc", &s, "11", Some(&la()), &Inputs::default());
         let md = join(&doc.sections);
-        assert!(md.contains("Wesley — October 2048"), "{md}");
+        assert!(md.contains("Wesley"), "{md}");
+        assert!(
+            md.find("grabbed").unwrap() < md.find("First word").unwrap(),
+            "{md}"
+        );
+        let [node] = doc.data_nodes.as_slice() else {
+            panic!("{:?}", doc.data_nodes)
+        };
+        assert!(node.is_place && node.read_together, "{node:?}");
+        assert_eq!(node.uuid, doc.markdown_uuid);
+        assert_eq!(doc.bucket_key.as_deref(), Some("11"));
+        assert!(doc
+            .rows
+            .iter()
+            .filter(|r| !r.is_document)
+            .all(|r| r.parent_uuid.as_deref() == Some(doc.markdown_uuid.as_str())));
         let nursed = md.find("nursed").unwrap();
         let diary = md.find("grabbed").unwrap();
         assert!(nursed < diary, "{md}");
@@ -492,7 +497,7 @@ mod tests {
 
         assert_eq!(doc.rows.iter().filter(|r| r.is_document).count(), 1);
         let entry_rows: Vec<&GridRow> = doc.rows.iter().filter(|r| !r.is_document).collect();
-        assert_eq!(entry_rows.len(), 2);
+        assert_eq!(entry_rows.len(), 3);
         assert_eq!(entry_rows[0].kind, "Nursing");
         assert_eq!(entry_rows[1].kind, "Diary");
         assert!(
@@ -509,8 +514,8 @@ mod tests {
     }
 
     #[test]
-    fn a_month_with_no_zone_says_its_times_are_read_as_utc() {
-        let doc = build("bc", &store(), "11", "2048-10", None, &Inputs::default());
+    fn a_child_with_no_zone_says_their_times_are_read_as_utc() {
+        let doc = build("bc", &store(), "11", None, &Inputs::default());
         assert_eq!(doc.problems.len(), 1);
         assert!(join(&doc.sections).contains("read as UTC"));
     }

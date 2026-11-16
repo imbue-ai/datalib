@@ -414,7 +414,7 @@ account = "beverly@enterprise.test"
 since = "2368-01-01"
 until = "2372-12-31"
 
-# One document per child per month: every entry, with its notes. Baby
+# One document per child: every entry, with its notes. Baby
 # Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
 # name) says where the clock was, daylight saving included. Unset reads the
 # times as UTC, and the Manage row says so.

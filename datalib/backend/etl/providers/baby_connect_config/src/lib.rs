@@ -63,8 +63,8 @@ pub struct BabyConnectSync {
     pub until: Option<String>,
 }
 
-/// Params for the render step, which makes one document per child per
-/// month (`datalib_etl_baby_connect_render`).
+/// Params for the render step, which makes one document per child
+/// (`datalib_etl_baby_connect_render`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BabyConnectRenderConfig {

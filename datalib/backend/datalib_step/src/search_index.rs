@@ -449,6 +449,7 @@ mod tests {
             render_version: 1,
             rows: vec![row],
             sections,
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),
@@ -652,6 +653,7 @@ mod tests {
             bucket_key: None,
             section_layout: layout.map(str::to_string),
             content_hash: hash,
+            front: None,
         }
     }
 
