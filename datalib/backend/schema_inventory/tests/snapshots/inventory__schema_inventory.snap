@@ -28,6 +28,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 sync_runs
     run_id
     started_at_utc
@@ -1967,6 +1970,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 render_cursor
     source_id
     raw_commit
