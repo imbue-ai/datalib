@@ -54,6 +54,17 @@ machinery:
   two writes. The text commits with its row, so a reader pinned to a
   commit sees the text that commit had.
 
+Render writes each item's text on its own, and whatever shows a thread
+or a conversation joins its items in position order when it is read.
+Nothing needs to know where one message starts inside a larger text,
+so the backpointers that answer that go too: a section's byte span
+and index within its document, and a chunk's `first_section` and
+`last_section` counted in that index. A chunk instead records the
+items it covers, by uuid, in a table of its own; "which messages does
+this vector speak for" is then a lookup, not arithmetic over a file's
+layout. The one offset left is inside a single item too long for one
+chunk, which is cut in pieces as it is today.
+
 ## What a document is today
 
 Measured in the code, not the docs. One document is:
