@@ -359,6 +359,8 @@ fn build_chat(
     NormalizedChat {
         named_after,
         id: thread_uuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: thread_uuid.clone(),
         display: cname,
         title: Some(title),
@@ -486,6 +488,7 @@ fn build_item(
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: msg_id.uuid.clone(),
         author_handle: m
             .user_id

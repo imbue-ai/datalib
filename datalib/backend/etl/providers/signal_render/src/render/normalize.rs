@@ -78,6 +78,8 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
         chats.push(NormalizedChat {
             named_after: named_after(recipients, chat),
             id: bundle_key.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: chat_id.uuid,
             display: recipient_display(recipients, chat),
             // `None`, so chat-common derives the familiar
@@ -146,6 +148,7 @@ fn to_item(
         None => (None, Vec::new()),
     };
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: author_handle(recipients, item),
         author_kind: author_kind(recipients, item),

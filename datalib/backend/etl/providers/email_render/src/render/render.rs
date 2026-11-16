@@ -615,6 +615,7 @@ fn build_chat(
             |_, _| None,
         );
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
             author_kind: AuthorKind::Named,
@@ -659,6 +660,8 @@ fn build_chat(
             .collect(),
         inputs: Vec::new(),
         id: tuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: tuid.clone(),
         display: subject.clone(),
         title: Some(subject),

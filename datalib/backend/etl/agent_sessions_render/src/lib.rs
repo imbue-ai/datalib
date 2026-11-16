@@ -39,6 +39,7 @@ pub fn item(
     is_aside: bool,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Named,

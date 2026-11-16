@@ -174,6 +174,7 @@ pub fn chat_item(
     attachments: Vec<NormalizedAttachment>,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: item_id.uuid,
         author_handle,
         author_kind,

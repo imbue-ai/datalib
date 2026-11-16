@@ -309,6 +309,8 @@ fn build_chats(
             contacts: account(source_id, &rows).into_iter().collect(),
             inputs: inputs.declared(),
             id: id.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: conversation.uuid,
             display,
             author: None,
@@ -382,6 +384,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
             let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(0);
             let number = v.get("number").and_then(Value::as_str).unwrap_or("");
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: Handle::tel(number),
                 author_kind: AuthorKind::Named,
@@ -452,6 +455,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
                 .collect();
 
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle,
                 author_kind: if is_me {

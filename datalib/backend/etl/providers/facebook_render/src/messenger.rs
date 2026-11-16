@@ -200,6 +200,8 @@ fn conversation(
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         id: format!("conversation:{row_id}"),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: chat.uuid,
         display: display(row_id, thread, &participants, owner),
         title: None,

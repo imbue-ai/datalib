@@ -80,6 +80,7 @@ pub fn item(
     problems: Vec<Problem>,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Named,
@@ -246,6 +247,8 @@ fn chat(
         contacts: Vec::new(),
         inputs: inputs.declared(),
         id: chat_id.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: feed.uuid,
         display: display.to_string(),
         title: None,

@@ -218,6 +218,7 @@ fn build_chat(
 
         let msg_id = ids::message(source_id, &conv_id, &m.message_id, ms);
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: msg_id.uuid.clone(),
             author_handle,
             author_kind,
@@ -263,6 +264,8 @@ fn build_chat(
             .collect(),
         inputs: Vec::new(),
         id: chat_uuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),

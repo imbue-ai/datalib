@@ -183,6 +183,8 @@ fn to_chat(
             .collect(),
         inputs: inputs.declared(),
         id: bundle_key(doc),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: ids::room(source_id, &room.native_room_id).uuid,
         display,
         // `None`, so chat-common derives the same
@@ -235,6 +237,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         // the small italic line every provider's system events get, and
         // kept out of the chat row's search text.
         return NormalizedChatItem {
+            reply_to: None,
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
             author_handle: m.sender_handle.clone(),
             author_kind: AuthorKind::Named,
@@ -261,6 +264,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
     }
 
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
         author_handle: m.sender_handle.clone(),
         author_kind: AuthorKind::Named,

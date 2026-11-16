@@ -421,6 +421,7 @@ async fn load(
         let mut problems = Vec::new();
         let text = body_text(r.get("text"), r.get("attributedBody"), &mut problems);
         chat.items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: message_uuid(source_id, &guid, date_ms),
             author_handle,
             author_kind,
@@ -574,6 +575,8 @@ impl ChatBuild {
             named_after,
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: chat_uuid(source_id, &self.guid),
             external_id: Some(self.guid.clone()),
             id: self.guid,

@@ -283,6 +283,8 @@ fn build_chat(
     NormalizedChat {
         named_after: Vec::new(),
         id: tid.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: id.uuid.clone(),
         display,
         title: Some(own_title),

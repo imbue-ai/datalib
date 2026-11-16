@@ -488,6 +488,8 @@ async fn parse_async(
                 .collect(),
             inputs: ch.inputs.declared(),
             id: ch.chat_jid.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: chat_id.uuid,
             display: ch.display,
             named_after: ch.named_after,
@@ -589,6 +591,7 @@ fn build_item(
         timestamp,
     );
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle,
         author_kind,

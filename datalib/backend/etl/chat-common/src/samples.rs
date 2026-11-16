@@ -71,6 +71,7 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
@@ -111,6 +112,8 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: id.to_string(),
         display: display.to_string(),
         title: Some(display.to_string()),

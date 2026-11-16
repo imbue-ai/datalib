@@ -360,6 +360,8 @@ fn yearly_chat(
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         id: id.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: feed.uuid,
         display: display.to_string(),
         title: None,

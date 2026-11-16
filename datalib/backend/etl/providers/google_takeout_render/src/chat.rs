@@ -387,6 +387,8 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
             .collect(),
         inputs: inputs.declared(),
         id: space.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: chat_id.uuid,
         display,
         author: None,
@@ -536,6 +538,7 @@ fn message_items(
     let body = (!parts.is_empty()).then(|| parts.join("\n\n"));
     let id = ids::message(ctx.source_id, ctx.message_id, date_ms);
     let mut item = NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid.clone(),
         author_handle: handle,
         author_kind: match name {
@@ -673,6 +676,7 @@ fn versions(
         }
         let id = ids::message_version(ctx.source_id, ctx.message_id, n, date_ms);
         out.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: id.uuid,
             date_ms,
             date_offset_secs: stamp.and_then(parse_date_offset_secs),

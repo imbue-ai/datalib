@@ -525,6 +525,8 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             contacts: Vec::new(),
             inputs: inputs.declared(),
             id: chat_id.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: conversation.uuid,
             display,
             author: None,
@@ -585,6 +587,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 .filter(|s| !s.is_empty())
                 .map(escape_md_block);
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle,
                 author_kind,
@@ -627,6 +630,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 _ => format!("**{label}**"),
             };
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: party_handle(party),
                 author_kind,
@@ -667,6 +671,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             let (author_display, author_kind) = shown(party);
             let system_note = Some(format!("{note} — {author_display}"));
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: party_handle(party),
                 author_kind,

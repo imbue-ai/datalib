@@ -504,6 +504,8 @@ fn one_item_chat(
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         id: format!("post:{row_id}"),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: post.uuid.clone(),
         display,
         title: None,

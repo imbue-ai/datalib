@@ -220,6 +220,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         text_format: TextFormat::Plain,
     };
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
@@ -296,6 +297,8 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "hostile-chat".into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: "00000000-0000-8000-8000-0000000000c1".into(),
         display: f.hostile("chat display"),
         title: Some(f.hostile("chat title")),

@@ -362,6 +362,7 @@ fn build_chat(
             let block_author = block_model.unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
+                reply_to: None,
                 message_uuid: block_id.uuid.clone(),
                 author_handle: block_handle,
                 author_kind: AuthorKind::Named,
@@ -401,6 +402,7 @@ fn build_chat(
             ItemKind::Attachment
         };
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: msg_id.uuid.clone(),
             author_handle: author_handle.clone(),
             author_kind,
@@ -447,6 +449,8 @@ fn build_chat(
     NormalizedChat {
         named_after: Vec::new(),
         id: chat_uuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
@@ -552,6 +556,7 @@ fn build_project_page(
             .and_then(filter_nonempty);
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: doc_id.uuid.clone(),
             author_handle: None,
             author_kind: AuthorKind::Unknown,
@@ -587,6 +592,8 @@ fn build_project_page(
     NormalizedChat {
         named_after: Vec::new(),
         id: page_uuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: page_uuid.clone(),
         display: name.clone(),
         // Distinguishes a project page from a chat page at a glance;
@@ -647,6 +654,7 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
 
 fn project_item(id: Identity, heading: &str, kind_label: &str, text: String) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Unknown,

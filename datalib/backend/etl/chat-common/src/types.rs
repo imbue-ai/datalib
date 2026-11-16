@@ -158,6 +158,10 @@ pub struct NormalizedChatItem {
     /// Stable per-item UUID minted by the provider. Used as the section
     /// anchor (`id="m-{uuid}"`) and the message-level grid_row PK.
     pub message_uuid: String,
+    /// The item this one answers, where the source says (a quote-reply,
+    /// an email's `In-Reply-To`): its `message_uuid`. Stored as a reply
+    /// edge when that item is in the same document.
+    pub reply_to: Option<String>,
     /// Who it was addressed to, where the source says: an email's To, Cc
     /// and Bcc, the number a text was sent to. Empty for a chat, whose
     /// members are the conversation's.
@@ -384,6 +388,16 @@ pub struct NormalizedChat {
     /// Stable per-chat UUID minted by the provider. Same value across
     /// every bucket of this chat.
     pub chat_uuid: String,
+    /// The containers above the chat, top first: a Slack thread's
+    /// workspace and channel. Each document of the chat carries them, with
+    /// its own `markdown_uuid`; their places in the tree are filled from
+    /// this order. Empty for a chat with nothing above it.
+    pub containers: Vec<datalib_schema::nodes::NodeRow>,
+    /// What the chat is filed under besides its containers: an email
+    /// thread's labels. Each is a path of containers, top first (a nested
+    /// label's parents, then the label); the chat is filed under the last.
+    /// Paths may share their top: one container, carried once.
+    pub filed_under: Vec<Vec<datalib_schema::nodes::NodeRow>>,
     /// Human-readable label that goes into the chat-level grid_row's
     /// `conversation_name` (and the page title when `title` is unset).
     /// E.g. "Will Riker" or "Bridge Crew".
