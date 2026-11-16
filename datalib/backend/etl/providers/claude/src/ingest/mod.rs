@@ -1142,6 +1142,7 @@ impl Ctx<'_> {
                 continue;
             };
             let mut found = false;
+            let mut refused = false;
             for org in orgs {
                 let Some((org_uuid, org_name)) = org_identity(org) else {
                     continue;
@@ -1169,6 +1170,11 @@ impl Ctx<'_> {
                     // whose sessions this credential may not read.
                     Err(ClaudeError::Forbidden(..)) => continue,
                     Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 404") => continue,
+                    // claude.ai refuses the id's shape, so every org would.
+                    Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 400") => {
+                        refused = true;
+                        break;
+                    }
                     Err(e) => {
                         self.found
                             .phase("cowork", format!("looking up {id} in {org_name:?}: {e}"));
@@ -1179,16 +1185,21 @@ impl Ctx<'_> {
                 }
             }
             if !found {
+                let detail = if refused {
+                    "claude.ai does not accept this as a Cowork task id (HTTP 400)".to_string()
+                } else {
+                    format!(
+                        "no Cowork task with this id in any of {} org(s)",
+                        orgs.len()
+                    )
+                };
                 self.config_problems
                     .lock()
                     .unwrap()
                     .push(DownloadProblem::not_found(
                         "cowork_session_ids",
                         raw,
-                        format!(
-                            "no Cowork task with this id in any of {} org(s)",
-                            orgs.len()
-                        ),
+                        detail,
                     ));
             }
         }
