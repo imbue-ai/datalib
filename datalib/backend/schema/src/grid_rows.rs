@@ -187,8 +187,12 @@ pub struct GridRow {
     /// `created_at_utc` where it has a time, upstream's own order where
     /// the source orders children without one. Never a position we count,
     /// so a row that arrives late lands without moving its siblings.
+    /// `""` when it has neither, which sorts first. Never null: a page of
+    /// children is read past a `(sort_key, uuid)` row value, and a
+    /// comparison with a null in it is never true, so the row would be
+    /// on no page.
     #[col(sql = "VARCHAR(40)")]
-    pub sort_key: Option<String>,
+    pub sort_key: String,
     /// The nearest container above it that is read together (a thread, a
     /// chat, a page): what a search groups it under and the viewer opens.
     #[col(sql = "VARCHAR(96)")]

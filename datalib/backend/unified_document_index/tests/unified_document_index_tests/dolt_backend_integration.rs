@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// plain WAL file with its generation row, as `open_index` makes it. The
 /// repo under test opens its own, read-only, once the file exists — which
 /// is exactly how the applet reads what the step wrote.
-async fn writer(root: &Path) -> sqlx::SqlitePool {
+pub(crate) async fn writer(root: &Path) -> sqlx::SqlitePool {
     let pool = datalib_core::store::open_plain_pool(&datalib_core::layout::grid_index_db(root))
         .await
         .expect("open a writer on the grid index");
@@ -41,7 +41,7 @@ async fn writer(root: &Path) -> sqlx::SqlitePool {
 
 /// What the step does at the end of each transaction that changed what a
 /// reader sees: raise the generation.
-async fn commit(writer: &sqlx::SqlitePool, _what: &str) {
+pub(crate) async fn commit(writer: &sqlx::SqlitePool, _what: &str) {
     sqlx::query("UPDATE store_generation SET generation = generation + 1")
         .execute(writer)
         .await
@@ -51,7 +51,7 @@ async fn commit(writer: &sqlx::SqlitePool, _what: &str) {
 /// The INSERT the index itself uses, from the derived column list, so the
 /// load-time columns (`touched_at_utc`, `source_id`, …) are computed as
 /// the step computes them and the test cannot drift from the DDL.
-async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
+pub(crate) async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
     let columns = std::iter::once(GridRow::ID_COLUMN)
         .chain(GridRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
@@ -97,7 +97,7 @@ fn order(spelled: &str) -> Vec<Sort> {
     view::order::<GridColumn>(spelled).unwrap()
 }
 
-fn unique_db_path() -> PathBuf {
+pub(crate) fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("datalib-dolt-itest-")
         .expect("create tempdir")
         .keep()
@@ -782,7 +782,10 @@ async fn every_filter_key_is_served_by_an_index() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
+    // Every index the grid index has, so a filter is planned among them
+    // all: the children's indexes too.
+    crate::children::create_tree(&writer).await;
+    for (_t, ddl) in GRID_INDEXES.iter() {
         sqlx::query(*ddl).execute(&writer).await.expect("create");
     }
     let key_queries: Vec<(String, bool)> = GridRow::KEYS
