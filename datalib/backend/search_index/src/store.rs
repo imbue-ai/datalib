@@ -15,7 +15,6 @@ use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::SqliteConnection;
 
-use crate::chunk::{chunk_hash, chunks};
 use crate::IndexDoc;
 
 const DDL: [&str; 7] = [
@@ -302,9 +301,8 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
             .await?;
         at = end;
     }
-    let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
-    let whole = texts.concat();
-    for (seq, c) in chunks(&texts).iter().enumerate() {
+    for (seq, p) in doc.prompted().iter().enumerate() {
+        let c = &p.chunk;
         sqlx::query(
             "INSERT INTO search_chunks \
              (doc_id, seq, start_byte, end_byte, first_section, last_section, hash) \
@@ -316,7 +314,7 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
         .bind(c.end as i64)
         .bind(c.first_section as i64)
         .bind(c.last_section as i64)
-        .bind(chunk_hash(&doc.title, &whole[c.start..c.end]))
+        .bind(&p.hash)
         .execute(&mut *conn)
         .await?;
     }

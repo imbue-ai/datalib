@@ -107,7 +107,9 @@ database per source, at
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and it is
-    not kept. The grid index does not copy it
+    not kept. The search index draws its text from it, each item as an
+    envelope line (who, to whom, when) and its body
+    (`search_index/src/text.rs`). The grid index does not copy it
     ([`messages_not_documents.md`](plans/messages_not_documents.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it

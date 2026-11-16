@@ -17,6 +17,7 @@ fn doc(source: &str, uuid: &str, sections: &[(Option<&str>, &str)]) -> IndexDoc 
             .map(|(uuid, text)| IndexSection {
                 uuid: uuid.map(str::to_string),
                 text: text.to_string(),
+                lead: None,
             })
             .collect(),
     }

@@ -1,8 +1,8 @@
 # Messages, not documents: grouping chosen when a search runs
 
 **Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
-#1770); step 3a is being built on branch `tree-step-3`; nothing else
-is.** Facts about
+#1770); step 3a is in review (#1775) and 3b is being built on branch
+`tree-step-3b`; nothing else is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 

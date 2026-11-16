@@ -51,6 +51,19 @@ const REMOVED_SECTIONS: &str =
     "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
 
+/// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct KeptSection {
+    pub markdown_uuid: String,
+    pub seq: i64,
+    pub uuid: Option<String>,
+    pub text: String,
+    pub framed: bool,
+    pub addressed: Option<String>,
+    pub author: Option<String>,
+    pub created_at: Option<String>,
+}
+
 /// Replace what the store keeps of `md`'s sections. The grid index keeps
 /// none, so this is the render store's own write beside
 /// `grid_index::apply_one`. A document read back from the store has no
@@ -894,6 +907,43 @@ impl IndexedMarkdownStore {
                 .fetch_all(&self.pool)
                 .await
                 .context("read markdowns")
+        })
+    }
+
+    /// The `markdowns` rows of these documents, ordered by id.
+    pub fn markdown_rows_in(
+        &self,
+        markdown_uuids: &[String],
+    ) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT * FROM markdowns \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 ORDER BY markdown_uuid",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read markdowns")
+        })
+    }
+
+    /// What the store keeps of these documents' sections, in order, each
+    /// with the author and time of the row it is: what the search index
+    /// draws a document's text from.
+    pub fn kept_sections(&self, markdown_uuids: &[String]) -> Result<Vec<KeptSection>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT s.markdown_uuid, s.seq, s.uuid, s.text, s.framed, s.addressed, \
+                        g.author, g.created_at \
+                 FROM sections s LEFT JOIN grid_rows g ON g.uuid = s.uuid \
+                 WHERE s.markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 ORDER BY s.markdown_uuid, s.seq",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read kept sections")
         })
     }
 
@@ -1923,6 +1973,54 @@ mod tests {
         st.remove_documents(td.path(), &["a".to_string()]).unwrap();
         assert_eq!(kept(&st), vec![b]);
         st.close();
+    }
+
+    /// The search index reads a document's kept sections with the author
+    /// and time of the row each is, in order, and only the documents it
+    /// asks for, at the commit the reader opened.
+    #[test]
+    fn a_reader_gets_kept_sections_with_their_rows_facts() {
+        use crate::section::Section;
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        for id in ["a", "b"] {
+            let d = RenderedMarkdown {
+                sections: vec![
+                    Section::unkeyed("Page text\n".into()),
+                    Section::item(id, format!("<div>{id}</div>\n"), "hi".into(), Vec::new()),
+                ],
+                ..doc(td.path(), id, "fp")
+            };
+            st.put_document(td.path(), &d).unwrap();
+        }
+        st.commit("two documents").unwrap();
+        st.close();
+
+        let rd = IndexedMarkdownStore::open_for_reading(td.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let got = rd.kept_sections(&["a".to_string()]).unwrap();
+        let shape: Vec<_> = got
+            .iter()
+            .map(|k| {
+                (
+                    k.seq,
+                    k.uuid.as_deref(),
+                    k.framed,
+                    k.author.as_deref(),
+                    k.created_at.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (0, None, true, None, None),
+                (1, Some("a"), false, None, Some("2026-01-01T00:00:00+00:00")),
+            ]
+        );
+        assert_eq!(rd.markdown_rows_in(&["b".to_string()]).unwrap().len(), 1);
+        rd.close();
     }
 
     /// A renderer that hands a container under another document's id has

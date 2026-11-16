@@ -15,6 +15,7 @@ rust_library(
         "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tracing",

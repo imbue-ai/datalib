@@ -158,8 +158,10 @@ write what datalib's own render steps write, in the same place:
 
 - **`<group>/render_markdown/indexed_markdown.doltlite_db`** and the
   `.md` files beside it. `grid_index` reads the store into the grid,
-  and the source's `keyword_index` and `embed` read the files for
-  search. The step reports the store's tree hash as its version.
+  and the source's `keyword_index` and `embed` draw what search sees
+  from its `sections` table alone: a document whose pieces it does not
+  keep there is found by its title and nothing else. The viewer serves
+  the files. The step reports the store's tree hash as its version.
 - **`<group>/render_time_series/time_series.doltlite_db`**, which
   `time_series_index` lists and the Time series card charts. The step
   reports the store's commit hash as its version.
