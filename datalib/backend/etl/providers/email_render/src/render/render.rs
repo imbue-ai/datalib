@@ -68,7 +68,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v22: a body part is HTML only when its Content-Type says so: a
 ///     plain-text email went through the HTML converter, losing every
 ///     `<…>` and running its lines together.
-pub const RENDER_VERSION: u32 = 22;
+/// v23: a sender's hover title names their address once, not twice.
+pub const RENDER_VERSION: u32 = 23;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
