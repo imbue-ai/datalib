@@ -12,6 +12,7 @@ import {
   GRID,
   type GridApi,
   gridSettled,
+  groupByDragging,
   SEARCH_ROWS,
   searchGrid,
   shownCards,
@@ -55,9 +56,7 @@ test("the grid follows the card's width, wider and narrower", async ({ page }) =
 
 test("clicking a group header folds the group and opens nothing", async ({ page }) => {
   await openGrid(page);
-  await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(["kind"]),
-  );
+  await groupByDragging(page, "kind");
   await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
   );

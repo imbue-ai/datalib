@@ -2206,8 +2206,6 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     // Load pages until the row is held, as scrolling to it would.
     seek,
-    // What a header dropped on the search bar does, without the mouse.
-    dropOnSearch,
     // A search, a page, or a group's page on its way.
     busy: () =>
       loading.value ||
@@ -2234,12 +2232,11 @@ function createGrid() {
         .getColumns()
         .filter((c) => c.hidden)
         .map((c) => String(c.id)),
-    // What the column picker and the group bar do, without the mouse.
+    // What the column picker does, without the mouse.
     showColumns: (ids: string[]) => {
       setHidden(Object.fromEntries(ids.map((id) => [id, false])));
       onColumnsShown();
     },
-    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
   };
   applyInitialLayout();
   // The rows are already loaded by the time the grid exists — the

@@ -46,6 +46,14 @@ export const syncAllButton = (page: Page) =>
 /// One of its column headers.
 export const searchHeader = (page: Page, colId: string) =>
   page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
+/// Group the search grid by a column the way a person does: its header
+/// dragged onto the row-group bar, with the browser's own drag-and-drop.
+export async function groupByDragging(page: Page, colId: string) {
+  await searchHeader(page, colId).dragTo(
+    page.locator(".grid-box .slick-preheader-panel .slick-dropzone"),
+  );
+  await expect(page.locator(".grid-box .slick-dropped-grouping")).toHaveCount(1);
+}
 /// The grid itself, for a "did it paint" check.
 export const searchGrid = (page: Page) => page.locator(".grid-box .slickgrid-container");
 /// The right-click menu the grid appends to <body>.
@@ -60,8 +68,6 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
-  /// What a header dropped on the search bar does.
-  dropOnSearch: (colId: string) => void;
   /// A search, a page, or a group's page on its way.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
@@ -73,7 +79,6 @@ export type GridApi = {
   activeUuid: () => string | null;
   hiddenColumns: () => string[];
   showColumns: (ids: string[]) => void;
-  groupBy: (ids: string[]) => void;
 };
 
 /// Wait until nothing the grid asked for is still on its way.

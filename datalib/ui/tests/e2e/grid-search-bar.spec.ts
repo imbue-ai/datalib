@@ -44,8 +44,10 @@ test("a shift-click sorts by a second column too", async ({ page, request }) => 
   expect(await topRows(page, 10)).toEqual(expected);
 });
 
-/// A column dropped on the search bar keeps the rows with a value in it,
-/// as a term a person can read and edit: the Author column's is `from:*`.
+/// A column header dropped on the search bar keeps the rows with a value
+/// in it, as a term a person can read and edit: the Author column's is
+/// `from:*`. The search card's box is in the toolbar, out of the card's
+/// reach, so the row above its results takes the drop.
 test("a column dropped on the search bar keeps the rows with a value in it", async ({
   page,
   request,
@@ -61,30 +63,17 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   expect(withAuthor, "some rows have none").toBeLessThan(all.length);
 
   await openGrid(page);
-  await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author_ref"),
-  );
+  const searchRow = page.locator(".view-row");
+  await searchHeader(page, "author_ref").dragTo(searchRow);
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${withAuthor})`);
+  // The column is still in the grid.
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
 
   // A column the search has no term for says so, and the query stays.
-  await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("snippet"),
-  );
+  await searchHeader(page, "snippet").dragTo(searchRow);
   await expect(page.locator(".datalib-toast", { hasText: "cannot filter by" })).toBeVisible();
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
-});
-
-/// The drop itself: a header dragged with the mouse onto the row above
-/// the results, which stands in for the toolbar's search box. The grid
-/// drags headers with the browser's own drag-and-drop, and the row takes
-/// a drag only while one of this grid's headers is on the move.
-test("a header dragged onto the search row becomes a term", async ({ page }) => {
-  await openGrid(page);
-  await searchHeader(page, "author_ref").dragTo(page.locator(".view-row"));
-  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
-  // The column is still in the grid, where it was.
-  await expect(searchHeader(page, "author_ref")).toBeVisible();
 });
 
 /// A column pinned from its header menu is still pinned after a reload:

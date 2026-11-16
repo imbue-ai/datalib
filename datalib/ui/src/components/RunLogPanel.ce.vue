@@ -1129,11 +1129,7 @@ function createGrid(first: RunLogLine[]) {
   openRowsOn(b.slickGrid, lineAt, (line) => emit("line-opened", line.seq));
   selectAllRowsOnKey(b.slickGrid, lineAt);
   copySelectedRowsOnKey(b.slickGrid, lineAt, copyCell);
-  // What the bar's drop does, without the mouse, for the e2e tests:
-  // a drag dispatched by hand is at the mercy of timing under load, and
-  // the grid card exposes the same thing as `__fwGridApi.groupBy`.
   (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
-    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
     // Whether lines older than the oldest held are still to be read: a
     // test scrolls up until they are not, and the top is the log's start.
     hasOlder: () => win !== null && (win.next !== null || win.pending !== null),
