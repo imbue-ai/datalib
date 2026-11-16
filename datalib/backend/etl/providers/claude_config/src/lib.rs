@@ -91,7 +91,7 @@ pub struct ClaudeApiSync {
     /// offset from the run's start (`-30d`). Older conversations are
     /// never detail-fetched, and one already mirrored stays; moving the
     /// start further back later backfills on the next run. Unset → sync
-    /// everything.
+    /// everything. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
     pub since: Option<String>,
     /// Force-refetch the N most-recently-updated conversations each run.
