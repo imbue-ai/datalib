@@ -70,13 +70,16 @@ pub fn counts_by_step(
 /// index, when nothing has been counted.
 pub type IndexCounts = Option<HashMap<Counter, Counted>>;
 
-/// Whose rows a step's count is, by its function: a source's download and
-/// render, and the grid index's own. Every other step writes no rows.
+/// Whose rows a step's count is, by its function: a source's download,
+/// render, time series and occurrences, and the grid index's own. Every
+/// other step writes no rows.
 fn counter_of(step: &str) -> Option<Counter> {
     let (group, function) = step.rsplit_once('/')?;
     let by = match function {
         "ingest" => CountedBy::Download,
         "render_markdown" => CountedBy::Render,
+        "render_time_series" => CountedBy::TimeSeries,
+        "render_occurrences" => CountedBy::Occurrences,
         "grid_index" => CountedBy::Index,
         _ => return None,
     };
@@ -370,9 +373,10 @@ mod tests {
         assert!(chips(&no_index).is_empty(), "nothing counted yet");
     }
 
-    /// A step that writes no rows keeps its own count, grey, since a
-    /// double-click on it could list nothing; and so does a pass that
-    /// failed and was run again. Neither is in the yellow number.
+    /// A step that writes no rows (a package's own program) keeps its
+    /// own count, grey, since a double-click on it could list nothing;
+    /// and so does a pass that failed and was run again. Neither is in the
+    /// yellow number.
     #[test]
     fn what_only_the_log_holds_is_grey_and_apart_from_the_rows() {
         let failed = |step: &str, value: i64, run: &str| MetricRow {
@@ -380,14 +384,9 @@ mod tests {
             ..sample(step, "", value, run)
         };
         let by = counts_by_step(
-            &[sample(
-                "garmin/render_time_series",
-                "severity=warning",
-                2,
-                "r8",
-            )],
+            &[sample("garmin/forecast", "severity=warning", 2, "r8")],
             &[
-                failed("garmin/render_time_series", 1, "r9"),
+                failed("garmin/forecast", 1, "r9"),
                 failed("garmin/ingest", 0, "r9"),
                 failed("garmin/render_markdown", 3, "r9"),
             ],
@@ -401,22 +400,76 @@ mod tests {
         )]);
         let step = |id: &str| StepProblems::of(id, by.get(id), &held);
 
-        let series = chips(&step("garmin/render_time_series"));
-        assert_eq!(kinds(&series), [(ChipKind::Metric, "3")]);
+        let forecast = chips(&step("garmin/forecast"));
+        assert_eq!(kinds(&forecast), [(ChipKind::Metric, "3")]);
         assert_eq!(
-            series[0].title,
+            forecast[0].title,
             "2 problems this step counted, as of run r8, that it lists nowhere but its log\n\
              1 pass failed and was run again, as of run r9\n\
              Each is in the log, a double-click on the status away."
         );
-        assert_eq!(query(&step("garmin/render_time_series")), None);
+        assert_eq!(query(&step("garmin/forecast")), None);
         assert!(chips(&step("garmin/ingest")).is_empty());
         assert_eq!(
             kinds(&chips(&step("garmin/render_markdown"))),
             [(ChipKind::Warning, "1"), (ChipKind::Metric, "3")]
         );
 
-        let steps: Vec<StepProblems> = [
+        let steps: Vec<StepProblems> =
+            ["garmin/ingest", "garmin/render_markdown", "garmin/forecast"]
+                .into_iter()
+                .map(step)
+                .collect();
+        assert_eq!(
+            kinds(&group_chips(&steps)),
+            [(ChipKind::Warning, "1"), (ChipKind::Metric, "6")]
+        );
+        assert_eq!(
+            group_query(&steps).as_deref(),
+            Some(
+                "source:garmin -stage:time_series -stage:occurrences -doc:render_store \
+                 -severity:info muted:no"
+            )
+        );
+    }
+
+    /// The time-series and occurrences steps keep their problems as rows
+    /// the index holds, so their counts are those rows, red and yellow,
+    /// opening exactly them: never their own report, never grey.
+    #[test]
+    fn the_time_series_and_occurrences_steps_count_their_rows() {
+        let reported = ProblemCounts {
+            warnings: 9,
+            run_id: "r1".into(),
+            ..Default::default()
+        };
+        let series = datalib_problem_mutes::counter_of("garmin", CountedBy::TimeSeries);
+        let listed = datalib_problem_mutes::counter_of("roster", CountedBy::Occurrences);
+        let held = index(&[
+            (
+                series.clone(),
+                Counted {
+                    shown: tally(0, 1),
+                    muted: tally(0, 0),
+                },
+            ),
+            (
+                listed.clone(),
+                Counted {
+                    shown: tally(0, 2),
+                    muted: tally(0, 1),
+                },
+            ),
+        ]);
+        let step = |id: &str| StepProblems::of(id, Some(&reported), &held);
+        let ts = step("garmin/render_time_series");
+        assert_eq!(kinds(&chips(&ts)), [(ChipKind::Warning, "1")]);
+        assert_eq!(query(&ts), Some(datalib_problem_mutes::query(&series)));
+        let occ = step("roster/render_occurrences");
+        assert_eq!(kinds(&chips(&occ)), [(ChipKind::Warning, "2")]);
+        assert_eq!(query(&occ), Some(datalib_problem_mutes::query(&listed)));
+
+        let garmin: Vec<StepProblems> = [
             "garmin/ingest",
             "garmin/render_markdown",
             "garmin/render_time_series",
@@ -424,13 +477,10 @@ mod tests {
         .into_iter()
         .map(step)
         .collect();
+        assert_eq!(kinds(&group_chips(&garmin)), [(ChipKind::Warning, "1")]);
         assert_eq!(
-            kinds(&group_chips(&steps)),
-            [(ChipKind::Warning, "1"), (ChipKind::Metric, "6")]
-        );
-        assert_eq!(
-            group_query(&steps).as_deref(),
-            Some("source:garmin -doc:render_store -severity:info muted:no")
+            group_query(&garmin).as_deref(),
+            Some("source:garmin -stage:occurrences -doc:render_store -severity:info muted:no")
         );
     }
 

@@ -172,6 +172,8 @@ rust_test(
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",
         "//datalib/backend/http:src/agent_config_guide.md",
+        # The TNG Garmin account, for the time-series step's problem rows.
+        "//datalib/backend/etl/providers/garmin:tng_fixture",
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
@@ -180,6 +182,7 @@ rust_test(
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],

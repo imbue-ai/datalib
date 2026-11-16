@@ -71,7 +71,19 @@ closed_vocabulary! {
         Render,
         /// Building the `grid_rows` row.
         GridRow,
+        /// Reading a source's time series (`render_time_series`).
+        TimeSeries,
+        /// Listing a calendar's occurrences (`render_occurrences`).
+        Occurrences,
     }
+}
+
+impl Stage {
+    /// The stages a step other than the download and the render records
+    /// in a store of its own, each that step's alone. `grid_index` copies
+    /// each one's rows apart from the render store's, so neither copy
+    /// erases the other's.
+    pub const OWN_STORE: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];
 }
 
 closed_vocabulary! {
@@ -172,6 +184,10 @@ pub enum CountedBy {
     Download,
     /// The source's render: every other row of the source.
     Render,
+    /// The source's `render_time_series`: a time-series-stage row.
+    TimeSeries,
+    /// The source's `render_occurrences`: an occurrences-stage row.
+    Occurrences,
     /// The grid index, about a render store it could not read.
     Index,
 }
@@ -181,7 +197,21 @@ impl CountedBy {
         match (stage, scope_kind) {
             (_, ScopeKind::Entity) if scope_key == INDEX_OWN_SCOPE_KEY => CountedBy::Index,
             (Stage::Fetch, _) => CountedBy::Download,
+            (Stage::TimeSeries, _) => CountedBy::TimeSeries,
+            (Stage::Occurrences, _) => CountedBy::Occurrences,
             _ => CountedBy::Render,
+        }
+    }
+
+    /// The stages whose rows are this step's alone; empty for the render,
+    /// whose rows are every stage the others leave, and for the index,
+    /// whose one row is a render-stage row named by its key.
+    pub fn own_stages(self) -> &'static [Stage] {
+        match self {
+            CountedBy::Download => &[Stage::Fetch],
+            CountedBy::TimeSeries => &[Stage::TimeSeries],
+            CountedBy::Occurrences => &[Stage::Occurrences],
+            CountedBy::Render | CountedBy::Index => &[],
         }
     }
 }
@@ -759,6 +789,14 @@ mod tests {
         assert_eq!(
             CountedBy::of(Stage::Render, ScopeKind::Entity, INDEX_OWN_SCOPE_KEY),
             CountedBy::Index
+        );
+        assert_eq!(
+            CountedBy::of(Stage::TimeSeries, ScopeKind::Entity, "activities:1"),
+            CountedBy::TimeSeries
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Occurrences, ScopeKind::Entity, "events:1"),
+            CountedBy::Occurrences
         );
     }
 

@@ -43,7 +43,8 @@ data_root = "~/datalib"
 
 # --- The indexes every source feeds -------------------------------------
 
-# The SQL index behind the grid and search reads every source's documents;
+# The SQL index behind the grid and search reads every source's documents,
+# and the problem rows of its time-series and occurrences steps;
 # the search index's aggregator reads every source's keyword index and
 # embeddings, and keeps the search index to the sources it names.
 [[groups]]
@@ -56,14 +57,20 @@ function = "grid_index"
 command = "datalib-step"
 inputs = [
   "airvisual/render_markdown",
+  "airvisual/render_time_series",
   "apple_messages/render_markdown",
   "apple_photos/render_markdown",
   "beeper/render_markdown",
   "calendar-google/render_markdown",
+  "calendar-google/render_occurrences",
   "calendar-fastmail/render_markdown",
+  "calendar-fastmail/render_occurrences",
   "calendar-caldav/render_markdown",
+  "calendar-caldav/render_occurrences",
   "calendar-calendly/render_markdown",
+  "calendar-calendly/render_occurrences",
   "calendar-ics/render_markdown",
+  "calendar-ics/render_occurrences",
   "chatgpt-api/render_markdown",
   "chatgpt-export/render_markdown",
   "claude-api/render_markdown",
@@ -80,6 +87,7 @@ inputs = [
   "facebook/render_markdown",
   "file_inventory/render_markdown",
   "garmin/render_markdown",
+  "garmin/render_time_series",
   "github/render_markdown",
   "gitlab/render_markdown",
   "google_drive/render_markdown",
@@ -98,6 +106,7 @@ inputs = [
   "todoist/render_markdown",
   "whatsapp/render_markdown",
   "yolink/render_markdown",
+  "yolink/render_time_series",
 ]
 
 [[steps]]

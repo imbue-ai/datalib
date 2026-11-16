@@ -1563,6 +1563,9 @@ function = "ingest"
     expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
     ]);
+    expect(inputsOf(added, "unified_document_index/grid_index")).toContain(
+      "riker/render_time_series",
+    );
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
     expect(
       listSteps(added).some((s) => s.kind === "applet" && s.id === "unified_time_series_index"),
@@ -1593,6 +1596,9 @@ function = "ingest"
     const added = setTimeSeriesStep(WATCH, "riker", "garmin");
     const gone = unwireFromFanIns(added, "riker/render_time_series");
     expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
+    expect(inputsOf(gone, "unified_document_index/grid_index")).not.toContain(
+      "riker/render_time_series",
+    );
   });
 });
 
@@ -1616,6 +1622,13 @@ function = "ingest"
 
   it("leaves a source of another type alone", () => {
     expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
+  });
+
+  /// Its problem rows reach the problems list only through `grid_index`.
+  it("is read by grid_index for its problem rows", () => {
+    const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
+    const grid = listSteps(added).find((s) => s.id === "unified_document_index/grid_index");
+    expect(grid?.inputs).toContain("bridge/render_occurrences");
   });
 
   /// The wizard edits a source's render step; written first, the

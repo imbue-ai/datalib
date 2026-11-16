@@ -742,7 +742,7 @@ async fn run_function(
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await
         }
-        Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::RenderTimeSeries => time_series::run_render(&env, data_root, now, emitter).await,
         Function::RenderOccurrences => {
             occurrences::run(&env, data_root, now, params, emitter).await
         }

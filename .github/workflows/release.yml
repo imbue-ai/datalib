@@ -99,7 +99,7 @@ jobs:
           persist-credentials: false
 
       # No cache, as in the build job below; see its comment.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false
@@ -213,7 +213,7 @@ jobs:
       # and bazel uses the extracted trees in a repository cache without
       # checking them. Downloads come from their origin, each pinned by
       # sha256. docs/dev/security_posture.md has the measurement.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false
@@ -402,7 +402,7 @@ jobs:
       # The tauri beforeBuildCommand bazel-builds the bundled
       # datalib-http / datalib-dag / datalib-step binaries; no cache, as in
       # the build job above.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false

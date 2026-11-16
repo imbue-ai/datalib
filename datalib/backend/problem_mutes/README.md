@@ -68,14 +68,19 @@ place, `datalib_problem_mutes`:
 2. It counts the grid index's error and warning rows in one read-only
    query, each by whose it is and whether its id is muted
    (`count_in_index`). Whose it is, is `datalib_problems::CountedBy`: a
-   fetch-stage row is the source's `ingest` step's, the index's own row
-   about a render store it could not read is `grid_index`'s, and every
-   other row is the source's `render_markdown` step's. An `info` row is
-   in no count.
+   fetch-stage row is the source's `ingest` step's, a `time_series` row
+   its `render_time_series` step's, an `occurrences` row its
+   `render_occurrences` step's, the index's own row about a render
+   store it could not read is `grid_index`'s, and every other row is
+   the source's `render_markdown` step's. An `info` row is in no count.
 3. The row's number is the unmuted rows; the muted ones are said on
    hover. With the number the row carries `problems_query`, the grid's
    query for exactly those rows (`query`, and `group_query` for a
-   group), which "Review" and a double-click open.
+   group), which "Review" and a double-click open. The search bar has
+   no `OR`, so the render's query is the source's rows less the other
+   steps' stages (`-stage:fetch -stage:time_series -stage:occurrences`),
+   and a source group's is the source's rows less the stages of the
+   steps it lacks.
 
 A muted problem that was fixed is no longer in the index, so it counts
 nothing; and since the count and the list are one read of one store,
@@ -84,9 +89,11 @@ counter over rows of every stage and severity, the number is the rows
 its query lists.
 
 What is not a row is not in those numbers. A pass that failed and was
-run again, and the count of a step that writes no problem rows (the
-time-series and calendar-occurrence renders), are a grey number beside
-them, and a double-click on that opens the step's log.
+run again, and the count of a step that writes no problem rows (a
+package's own program), are a grey number beside them, and a
+double-click on that opens the step's log. The time-series and
+calendar-occurrence renders write rows, which reach the index as above
+(`etl/README.md` §"Problems flow downstream with the data").
 
 So `datalib-http` reads two stores' rows here, the mutes store and the
 index's `problems`; it opens both read-only and holds neither. Before

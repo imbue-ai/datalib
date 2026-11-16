@@ -30,7 +30,7 @@ use datalib_photo_schema::NormalizedPhoto;
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::{layout_json, SectionSpan, DDL as MARKDOWNS_TABLE_DDL};
-use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
+use datalib_schema::problems::{ProblemRow, Severity, Stage, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
 use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
@@ -345,33 +345,81 @@ pub async fn own_problem_counts(
     Ok(out)
 }
 
-/// One source's `problems`, replaced whole when they differ from what the
-/// index holds; `true` when they did. The stamps come through unchanged:
-/// `first_seen_at_utc` is when the problem was first seen where it
-/// happened, not when the index first copied it.
+/// Which of a source's rows in the index one copy replaces: the render
+/// store's, which is every stage but [`Stage::OWN_STORE`]'s, or one of
+/// those, which a step of its own copies apart.
+#[derive(Debug, Clone, Copy)]
+enum CopiedFrom {
+    RenderStore,
+    OwnStore(Stage),
+}
+
+impl CopiedFrom {
+    /// The rows' clause, over `source_id` and then [`Self::bound`].
+    fn clause(self) -> &'static str {
+        match self {
+            CopiedFrom::RenderStore => {
+                "source_id = ? AND stage NOT IN (SELECT value FROM json_each(?))"
+            }
+            CopiedFrom::OwnStore(_) => "source_id = ? AND stage = ?",
+        }
+    }
+
+    fn bound(self) -> String {
+        match self {
+            CopiedFrom::RenderStore => serde_json::to_string(&Stage::OWN_STORE.map(Stage::as_str))
+                .expect("a list of words serializes"),
+            CopiedFrom::OwnStore(stage) => stage.as_str().to_string(),
+        }
+    }
+}
+
+/// One source's `problems` from its render store, replaced whole when
+/// they differ from what the index holds; `true` when they did. The
+/// stamps come through unchanged: `first_seen_at_utc` is when the problem
+/// was first seen where it happened, not when the index first copied it.
 pub(crate) async fn replace_source_problems(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     source_id: &str,
     rows: &[ProblemRow],
 ) -> Result<bool> {
-    let held = sqlx::query("SELECT * FROM problems WHERE source_id = ? ORDER BY problem_uuid")
-        .bind(source_id)
-        .fetch_all(&mut **conn)
-        .await
-        .context("read the source's problems")?
-        .iter()
-        .map(ProblemRow::from_row)
-        .collect::<Result<Vec<_>>>()?;
+    replace_problems(conn, source_id, CopiedFrom::RenderStore, rows).await
+}
+
+async fn replace_problems(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    source_id: &str,
+    from: CopiedFrom,
+    rows: &[ProblemRow],
+) -> Result<bool> {
+    // Audited: the clause is one of two constants; both values bound.
+    let held = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT * FROM problems WHERE {} ORDER BY problem_uuid",
+        from.clause()
+    )))
+    .bind(source_id)
+    .bind(from.bound())
+    .fetch_all(&mut **conn)
+    .await
+    .context("read the source's problems")?
+    .iter()
+    .map(ProblemRow::from_row)
+    .collect::<Result<Vec<_>>>()?;
     let mut incoming = rows.to_vec();
     incoming.sort_by(|a, b| a.problem_uuid.cmp(&b.problem_uuid));
     if held == incoming {
         return Ok(false);
     }
-    sqlx::query("DELETE FROM problems WHERE source_id = ?")
-        .bind(source_id)
-        .execute(&mut **conn)
-        .await
-        .context("clear the source's problems")?;
+    // Audited: as above.
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DELETE FROM problems WHERE {}",
+        from.clause()
+    )))
+    .bind(source_id)
+    .bind(from.bound())
+    .execute(&mut **conn)
+    .await
+    .context("clear the source's problems")?;
     let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
     for row in rows {
         // Audited: `sql` is built from `ProblemRow`'s associated consts,
@@ -382,6 +430,97 @@ pub(crate) async fn replace_source_problems(
             .with_context(|| format!("insert problem {}", row.problem_uuid))?;
     }
     Ok(true)
+}
+
+/// A store a source's step other than its render keeps its problem rows
+/// in, the rows of the one stage of [`Stage::OWN_STORE`] that step
+/// records: `render_time_series`'s, `render_occurrences`'s.
+#[derive(Debug, Clone)]
+pub struct OwnStore {
+    pub source_id: String,
+    pub stage: Stage,
+    pub path: PathBuf,
+}
+
+/// Copy each [`OwnStore`]'s rows into the index, read at the store's
+/// head and replacing that source's rows of that stage whole, apart from
+/// the render store's; take out a stage's rows for a source no store
+/// names. One transaction, sealed when anything moved. Returns how many
+/// rows the stores hold.
+pub async fn copy_own_store_problems(pool: &SqlitePool, stores: &[OwnStore]) -> Result<usize> {
+    let mut read = Vec::with_capacity(stores.len());
+    for store in stores {
+        let rows = own_store_problems(store)
+            .await
+            .with_context(|| format!("read {}'s problems", store.path.display()))?;
+        read.push((store, rows));
+    }
+    let copied = read.iter().map(|(_, rows)| rows.len()).sum();
+    let mut conn = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *conn)
+        .await
+        .context("begin the problems copy")?;
+    let res = async {
+        let mut moved = false;
+        for (store, rows) in &read {
+            let from = CopiedFrom::OwnStore(store.stage);
+            moved |= replace_problems(&mut conn, &store.source_id, from, rows).await?;
+        }
+        for stage in Stage::OWN_STORE {
+            let named: Vec<&str> = stores
+                .iter()
+                .filter(|s| s.stage == stage)
+                .map(|s| s.source_id.as_str())
+                .collect();
+            let gone = sqlx::query(
+                "DELETE FROM problems WHERE stage = ? \
+                 AND source_id NOT IN (SELECT value FROM json_each(?))",
+            )
+            .bind(stage.as_str())
+            .bind(serde_json::to_string(&named)?)
+            .execute(&mut *conn)
+            .await
+            .context("take out the problems of steps no longer named")?;
+            moved |= gone.rows_affected() > 0;
+        }
+        if moved {
+            bump_generation(&mut conn).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let end = if res.is_ok() { "COMMIT" } else { "ROLLBACK" };
+    let ended = sqlx::query(end).execute(&mut *conn).await;
+    res?;
+    ended.context("commit the problems copy")?;
+    Ok(copied)
+}
+
+/// One store's rows of its stage, at its head. A store not written yet
+/// holds none, and so does one with no `problems` table: a package's
+/// program that keeps none, or a store from before the table, which its
+/// step rebuilds on its next run.
+async fn own_store_problems(store: &OwnStore) -> Result<Vec<ProblemRow>> {
+    if !store.path.exists() {
+        return Ok(Vec::new());
+    }
+    let Some(reader) = datalib_etl::doltlite_raw::open_reader(&store.path, None).await? else {
+        return Ok(Vec::new());
+    };
+    let rows = sqlx::query(
+        "SELECT * FROM problems WHERE source_id = ? AND stage = ? ORDER BY problem_uuid",
+    )
+    .bind(&store.source_id)
+    .bind(store.stage.as_str())
+    .fetch_all(reader.pool())
+    .await;
+    reader.close().await;
+    match rows {
+        Ok(rows) => rows.iter().map(ProblemRow::from_row).collect(),
+        Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Ok(Vec::new()),
+        Err(e) => Err(e).context("read the problems"),
+    }
 }
 
 /// A render store that lacks a table or column this build reads, though
@@ -4036,6 +4175,90 @@ mod source_cursor_tests {
             .await
             .unwrap();
         assert_eq!(left, 0, "{uuid} should be gone from the index");
+    }
+
+    /// A step that keeps problems in a store of its own (here a
+    /// calendar's occurrences) has them copied apart from the render
+    /// store's: a render that clears its rows leaves the step's alone, and
+    /// a copy that no longer names the step takes its rows out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_steps_own_problems_and_the_render_stores_do_not_erase_each_other() {
+        use super::{copy_own_store_problems, version, OwnStore};
+        use datalib_etl::doltlite_raw::StoreKind;
+        use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let mut bad = doc(root, "src", "md-1", "a");
+        bad.problems.push(ProblemRow::new(
+            "src",
+            Stage::GridRow,
+            Scope::Markdown("md-1"),
+            Some("md-1"),
+            Outcome::Nulled,
+            Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
+            Some(1),
+        ));
+        render(root, "src", &[bad]);
+
+        let path = datalib_etl::layout::render_occurrences_db(root, "src");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let store = datalib_etl::doltlite_raw::open_derived(
+            &path,
+            &[datalib_etl::step_problems::ddl()],
+            StoreKind::Occurrences,
+        )
+        .await
+        .unwrap();
+        let unlisted = ProblemRow::new(
+            "src",
+            Stage::Occurrences,
+            Scope::Entity("ics_objects:1"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::RenderFailed, "no start"),
+            None,
+        );
+        datalib_etl::step_problems::replace(
+            &store,
+            vec![unlisted.clone()],
+            &datalib_time::split_stamp("2370-01-01T00:00:00+00:00"),
+        )
+        .await
+        .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&store, "test")
+            .await
+            .unwrap();
+        store.close().await;
+        let own = [OwnStore {
+            source_id: "src".into(),
+            stage: Stage::Occurrences,
+            path,
+        }];
+        let stages = || async {
+            sqlx::query_scalar::<_, String>("SELECT stage FROM problems ORDER BY stage")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+        };
+
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(copy_own_store_problems(&pool, &own).await.unwrap(), 1);
+        assert_eq!(stages().await, ["grid_row", "occurrences"]);
+
+        render(root, "src", &[doc(root, "src", "md-1", "a fixed")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(stages().await, ["occurrences"], "the render's copy left it");
+        let generation = version(&pool).await.unwrap();
+        copy_own_store_problems(&pool, &own).await.unwrap();
+        assert_eq!(
+            version(&pool).await.unwrap(),
+            generation,
+            "a copy that moved nothing seals nothing"
+        );
+
+        copy_own_store_problems(&pool, &[]).await.unwrap();
+        assert!(stages().await.is_empty(), "a step no longer named");
     }
 
     /// An unusable cursor must fall back to reading the store whole, not to
