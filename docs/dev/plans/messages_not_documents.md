@@ -55,7 +55,7 @@ machinery:
   commit sees the text that commit had.
 
 Render writes each item's text on its own, and whatever shows a thread
-or a conversation joins its items in position order when it is read.
+or a conversation joins its items in order when it is read.
 Nothing needs to know where one message starts inside a larger text,
 so the backpointers that answer that go too: a section's byte span
 and index within its document, and a chunk's `first_section` and
@@ -144,12 +144,31 @@ differently, and no fixed set of levels fits them all:
 | Claude Code | project › session › sub-agent session › message |
 
 So every node (an item, or a container that holds items) names **one
-parent and its position among its siblings**, and that is all the tree
+parent and how it sorts among its siblings**, and that is all the tree
 stores. A container is a row too, with a uuid a person can open; some
 containers have text of their own (a Notion page, a Slack thread's
 first message) and some have none (an email thread). "The children of
-X, in order" is one indexed query on `(parent, position)` and needs no
+X, in order" is one indexed query on `(parent, sort key, uuid)` and needs no
 stored list.
+
+**Siblings sort by a key that never renumbers**, never by a dense
+position we count. An item with a time sorts by `created_at_utc`, then
+uuid; item uuids are already time-prefixed, so the tie-break agrees. A
+message that arrives late (a backfill, a slow sync) lands among its
+siblings without moving any of them. Where upstream orders children
+without times, as Notion orders a page's blocks, the key is upstream's
+own order, and a block that moves is a change to the page that
+re-renders it anyway.
+
+**A container keeps its upstream record too**: a Slack channel's id, an
+email thread's id, a Notion page's id, as `(upstream_entity_kind,
+upstream_id)`. A download problem about a container ("could not list
+channel C01") then reaches the container's row the same way an item's
+reaches the item. A container's uuid is minted by the one rule in
+[`entity_ids.md`](../entity_ids.md) from its kind and upstream key, with
+no stamp, as documents are minted today. A kind that is both a place
+and read together (a WhatsApp chat) is one row with both roles, not
+two rows with one uuid each.
 
 **What each kind of container is for is declared by its kind**, not
 discovered from depth. A container can be:
@@ -201,7 +220,7 @@ whether windows overlap is decided by the eval, and changing it
 re-embeds without changing anything a person sees.
 
 **What is read together is read in pages, not as a file.** The viewer
-opens it at an item and asks for the items around it by position. A
+opens it at an item and asks for the items around it in order. A
 ten-year group chat opens as fast as a short one.
 
 ## What changes, and for whom
@@ -220,7 +239,8 @@ Every place that assumes a document, from the read side of the tree:
 | Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
 | Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
 | Feedback anchors (`data-section-uuid`) | a message inside a document | unchanged: already per item |
-| Eval targets (`uuid`, `markdown_uuid`) | a hit anywhere in the document counts | a target is an item; "found" can be scored per group as well |
+| Eval targets (`uuid`, `markdown_uuid`) | a hit anywhere in the document counts | a target keeps its `uuid` (an item, which does not move); its `markdown_uuid` is replaced by the uuid of what holds it, read together, by a script run against the root. The set stays private; "found" is scored per item and per group |
+| Agents and Minds workspaces reading files (`docs/agent_user.md` §"Markdown", `rendered_documents.md`) | read `<group>/render_markdown/*.md` directly | read through the applet: `/chat/{uuid}` already returns a page's text, and a route listing a container's items takes over from the files; the docs say so in the step that stops writing them |
 | `docs/user/searching.md`, `rendered_documents.md`, `agent_user.md` | describe documents | rewritten with the step that changes each |
 
 There are few enough users that links people have saved need no forward
@@ -228,6 +248,15 @@ path. A query a person types does, which is why `is:document` stays as
 an alias.
 
 ## Forward path for existing data
+
+**The markdown files go, and something reads them today.**
+`docs/agent_user.md` tells an agent to read `<group>/render_markdown/`
+directly, and a Minds workspace may. That is a break a person using an
+agent notices. The step that stops writing the files (step 5) first
+makes the applet serve everything they held, rewrites both docs, and
+says it in the release notes. The `.md` trees already on disk are
+derived, so the render step deletes its own tree on its first run after
+that step, as the aggregator deleted qmd's index.
 
 Everything this changes is derived: render stores, the grid, the search
 index. They are rebuilt from the raw stores, which already hold every
@@ -245,19 +274,25 @@ Each step lands on its own, leaves search working, and is checked
 against the eval before the next.
 
 1. **The tree.** Render gives every container a row of its own and
-   fills each node's parent, its position among its siblings, and its
+   fills each node's parent, its sort key among its siblings, and its
    nearest ancestor that is read together and that is a place; reply-to
    and the other relations go in as edges. `grid_index`
-   carries the columns and an index on `(parent, position)`. A re-render
+   carries the columns and an index on `(parent, sort key, uuid)`. A re-render
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
 2. **Children in order.** One route that lists a container's
-   children by position, a page at a time. The viewer can use it
+   children in order, a page at a time. The viewer can use it
    beside the file.
 3. **Text in the render store.** Each item's rendered text is stored
    with its row. The search index reads items from the store instead of
    cutting files, and `keyword_index` folds into `grid_index`, which
-   already reads every render store.
+   already reads every render store. Leaving a source out of search
+   must survive the fold: today it is a source with no `keyword_index`
+   step (`datalib_step/src/append.rs`), and `embed` stays the per-source
+   switch for meaning. After the fold it is the source's absence from
+   the aggregator's inputs, which already drops any source it does not
+   name, and the config upgrade rewrites every existing root's
+   `keyword_index` steps into that.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
@@ -304,6 +339,9 @@ against the eval before the next.
   growing agent session adds its new messages instead of rewriting the
   whole file as it does today. Step 3 measures one full re-render's
   growth so the number is known, not to decide where the text goes.
+  If it is large, a render-version bump can write the new text on a
+  fresh branch and move `main` to it, then drop the old branch's
+  history, so two full copies never stay.
 - **Is a section's uuid always its row's uuid?** In `chat-common` the
   `data-section-uuid` wrapper and the message's grid row share one uuid.
   That has not been checked for every renderer outside it (email,
