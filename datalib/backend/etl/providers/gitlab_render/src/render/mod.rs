@@ -27,7 +27,8 @@ pub use parse::parse_api_dir;
 ///     handle as the account's own, so search reads it as `me`.
 /// v9: the description and each comment are a message of their own, and
 ///     their HTML goes in as written.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a comment's time keeps the forge's `Z`: its clock is unknown.
+pub const RENDER_VERSION: u32 = 10;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Gitlab,

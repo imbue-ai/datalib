@@ -29,8 +29,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     //    for the scroll-to-top assertion below.
     await page.goto(GRID);
     await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
-    // The main pane's viewport: the grid keeps one per frozen quadrant.
-    const viewport = page.locator(".grid-box .slick-viewport-top.slick-viewport-left");
+    const viewport = page.locator(".grid-box .slick-viewport");
     await expect(viewport).toBeVisible();
     const beforeScrollTop = await viewport.evaluate((el) => el.scrollTop);
     expect(

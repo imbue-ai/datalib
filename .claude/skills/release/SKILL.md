@@ -163,7 +163,7 @@ published from a local machine — the tag is the trigger.
     doesn't cancel the others. No release exists until every job has
     succeeded, and a re-run of just the failed jobs finishes it.
     Once published it is immutable: its assets can never change
-    (`docs/dev/release_steps.md` §"Draft, then publish").
+    (`docs/dev/release_steps.md` §"Attest, then draft, then publish").
 
     The tag also starts `reader-wheels.yml`, which publishes
     `imbue-datalib-reader` to PyPI: `gh run list --workflow=reader-wheels.yml
@@ -174,6 +174,10 @@ published from a local machine — the tag is the trigger.
     The last job has already checked that it is immutable, holds what the
     run made, and is `releases/latest`; if that job failed after publishing,
     its log says what is wrong, and a person should look before going on.
+    The `attest` job before it signed and verified a build provenance
+    attestation for every asset and the image; the release notes can point
+    readers at `docs/user/first_time_user.md` §"Checking who built what you
+    downloaded".
 
     Then give the release its notes. The workflow creates it with an
     empty body, and apps that read the raw stores learn of a change
@@ -200,6 +204,9 @@ published from a local machine — the tag is the trigger.
     uv run python scripts/release/pin_release.py vX.Y.Z
     ```
 
+    It downloads the five tarballs (about 450 MB) to check each one's
+    attestation before writing its hash, and refuses the release if any
+    check fails: say so rather than editing the pins by hand.
     Open a PR with what it changed, and land it like any other.
 13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a

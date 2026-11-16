@@ -117,6 +117,32 @@ Three optional knobs:
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.
 
+### Checking who built what you downloaded
+
+The script checks the tarball against a hash written into the script
+itself, so it installs exactly what the script names, and the script
+comes from datalib's `main` branch. To see for yourself that a download
+was built by datalib's release workflow from the release's own commit,
+and not uploaded by hand, ask for its *build
+provenance attestation*: a statement that workflow signed when it built
+the file. You need GitHub's CLI, `gh`, signed in to any account. Set
+`tag` to the release you installed:
+
+```sh
+tag=v0.55.0
+gh release download "$tag" -R imbue-ai/datalib -p datalib-aarch64-apple-darwin.tar.gz
+gh attestation verify datalib-aarch64-apple-darwin.tar.gz -R imbue-ai/datalib \
+  --signer-workflow imbue-ai/datalib/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+```
+
+The same check works on every file of a release except the `.sha256`
+files: the other tarballs, the Node runtime (`runtime-*.tar.gz`) and the
+desktop app's `Datalib-aarch64-apple-darwin.dmg`. It fails on a file
+whose bytes differ by one bit, and on one built by any other workflow,
+tag or commit. Releases up to v0.54.1 carry no attestation. The check
+says where a file came from, not that the code in it is good.
+
 Next, make the data root — the folder everything gets written into —
 and work from there:
 

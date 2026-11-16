@@ -61,7 +61,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await expect(page.getByText("Added Personal Claude.")).toBeVisible();
   await expandGroup(page, "personal-claude");
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="personal-claude/ingest"]'),
+    page.locator('.tg-grid .slick-row[data-key="personal-claude/ingest"]'),
   ).toBeVisible();
   await expect(page.locator(".m2-editor")).toHaveValue(/when_deleted_upstream = "keep_local_copy"/);
 });

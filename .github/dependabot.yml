@@ -58,7 +58,13 @@ updates:
       time: "04:00"
       timezone: Europe/Zurich
     open-pull-requests-limit: 3
+    # A package goes to the first group that matches it, so slickgrid
+    # comes first. Its packages are released together and import each
+    # other's types: one bumped alone fails the typecheck, and a major
+    # used to arrive as one PR per package.
     groups:
+      slickgrid:
+        patterns: ["@slickgrid-universal/*"]
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:

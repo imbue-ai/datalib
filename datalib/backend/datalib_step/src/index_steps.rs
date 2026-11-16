@@ -93,7 +93,7 @@ pub async fn run_aggregator(
     let groups = groups_from_inputs(&env.inputs);
     let (dropped, swept) = crate::search_index::sweep(data_root, &groups).await?;
     tracing::info!(dropped, swept, "the search index is swept");
-    let held = crate::search_index::holdings(data_root, &groups).await?;
+    let held = datalib_search_index::holdings(data_root, &groups).await?;
     for h in &held {
         let labels = [("source", h.source.as_str())];
         progress.metric("search_documents", &labels, h.documents as i64);
@@ -109,7 +109,7 @@ pub async fn run_aggregator(
 }
 
 /// The aggregator's one-line account of the whole index.
-fn holdings_summary(held: &[crate::search_index::Holding]) -> String {
+fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
     let documents: usize = held.iter().map(|h| h.documents).sum();
     let left: usize = held.iter().map(|h| h.not_embedded).sum();
     format!(
@@ -219,7 +219,7 @@ mod tests {
     /// What the aggregator's Manage row says about the whole index.
     #[test]
     fn the_summary_adds_up_every_source() {
-        let h = |source: &str, documents, not_embedded| crate::search_index::Holding {
+        let h = |source: &str, documents, not_embedded| datalib_search_index::Holding {
             source: source.to_string(),
             documents,
             not_embedded,

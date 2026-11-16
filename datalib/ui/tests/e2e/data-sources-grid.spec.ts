@@ -1,6 +1,6 @@
 // The Pipeline table on /data_sources (the sources card) actually paints.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { TABLE_ROWS, expectGridPainted } from "./grid-helpers";
 
 test("the Pipeline table paints at full height", async ({ page }) => {
@@ -19,23 +19,32 @@ test("the Pipeline table paints at full height", async ({ page }) => {
   await expect(page.locator('.tg-grid .slick-header-column[col-id="name"]')).toBeVisible();
 });
 
-/// The pinned Name column draws each row in a pane of its own, and the
-/// theme's `:hover` lit only the half under the pointer.
-test("hovering either half of a row lights the other", async ({ page }) => {
+/// Hovering a row lights all of it, the pinned Name and the cells that
+/// scroll alike. When pinned columns drew each row in two panes, the
+/// theme's `:hover` lit only the half under the pointer (#881).
+test("hovering a row lights its pinned cells and the rest alike", async ({ page }) => {
   await page.goto("/data_sources");
   const rows = page.locator(TABLE_ROWS);
   await expect(rows).not.toHaveCount(0, { timeout: 10_000 });
-  const half = (key: string, pinned: boolean) =>
-    page.locator(
-      `.tg-grid .slick-row${pinned ? "[data-pinned]" : ":not([data-pinned])"}[data-key="${key}"]`,
-    );
+  // The colour a cell shows: its own background, or the first one behind it.
+  const shade = (cell: Locator) =>
+    cell.evaluate((el) => {
+      for (let at: Element | null = el; at; at = at.parentElement) {
+        const bg = getComputedStyle(at).backgroundColor;
+        if (bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg;
+      }
+      return "";
+    });
+  const row = rows.nth(1);
+  const name = row.locator('[col-id="name"]');
+  const last = row.locator(".slick-cell").last();
+  const resting = await shade(last);
 
-  const first = (await rows.first().getAttribute("data-key"))!;
-  await half(first, true).hover();
-  await expect(half(first, false)).toHaveClass(/\bdatalib-row-hover\b/);
+  await name.hover();
+  await expect.poll(() => shade(last)).not.toBe(resting);
+  const lit = await shade(last);
+  expect(await shade(name)).toBe(lit);
 
-  const second = (await rows.nth(1).getAttribute("data-key"))!;
-  await half(second, false).locator(".slick-cell").last().hover();
-  await expect(half(second, true)).toHaveClass(/\bdatalib-row-hover\b/);
-  await expect(half(first, false)).not.toHaveClass(/\bdatalib-row-hover\b/);
+  await last.hover();
+  await expect.poll(() => shade(name)).toBe(lit);
 });

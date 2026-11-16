@@ -388,8 +388,7 @@ onUnmounted(() => {
     </p>
 
     <p v-if="manage && !groupRow" class="sd-msg bad">
-      The config has no group <code>{{ group }}</code
-      >.
+      The config has no group <code>{{ group }}</code>.
     </p>
 
     <!-- The group: its row, read across its steps. -->

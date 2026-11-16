@@ -229,11 +229,8 @@ test("a tab switched away from and back keeps its table drawn", async ({ page })
   const grid = page.locator(".ct-main .tg-grid");
   const row = grid.locator(".slick-row", { hasText: "slack" }).first();
   await expect(row).toBeVisible({ timeout: 20_000 });
-  // The first column is frozen, so the line is a row in each pane, joined
-  // by its data-row.
-  const line = grid.locator(`.slick-row[data-row="${await row.getAttribute("data-row")}"]`);
   const lefts = () =>
-    line
+    row
       .locator(".slick-cell")
       .evaluateAll((cells) => cells.map((c) => Math.round(c.getBoundingClientRect().left)));
   // Every cell at a place of its own; piled up, they share one. (The
