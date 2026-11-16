@@ -12,7 +12,7 @@ use std::time::Duration;
 use datalib_step_problems::{Covered, Ended, Found, StepFile};
 
 use crate::events::{Event, EventSink, LogLevel};
-use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
+use crate::subprocess::ENV_NOW;
 
 /// A lull this long writes what is waiting, so a problem shows while its
 /// step goes quiet.
@@ -22,7 +22,8 @@ const BATCH: usize = 200;
 pub(crate) struct Relay {
     data_root: PathBuf,
     step_id: String,
-    run: String,
+    /// The step's group: the source its problems are about.
+    source_id: String,
     now: datalib_time::StoredStamp,
     file: Option<StepFile>,
     pending: Vec<Found>,
@@ -67,14 +68,13 @@ impl Relay {
                     &datalib_time::IsoOffsetTimestamp::now_local().to_string(),
                 )
             });
-        let run = extra_env
-            .get(ENV_RUN_ID)
-            .cloned()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         Relay {
             data_root,
             step_id: step_id.to_string(),
-            run,
+            source_id: step_id
+                .rsplit_once('/')
+                .map_or(step_id, |(group, _)| group)
+                .to_string(),
             now,
             file: None,
             pending: Vec::new(),
@@ -107,7 +107,11 @@ impl Relay {
         if self.pending.is_empty() {
             return;
         }
-        let batch = std::mem::take(&mut self.pending);
+        let source_id = self.source_id.clone();
+        let batch: Vec<_> = std::mem::take(&mut self.pending)
+            .into_iter()
+            .map(|f| f.into_row(&source_id))
+            .collect();
         let n = batch.len();
         if let Err(e) = self.write(batch).await {
             self.say(format!(
@@ -117,14 +121,13 @@ impl Relay {
         }
     }
 
-    async fn write(&mut self, batch: Vec<Found>) -> anyhow::Result<()> {
+    async fn write(&mut self, batch: Vec<datalib_problems::ProblemRow>) -> anyhow::Result<()> {
         if self.file.is_none() {
-            self.file = Some(
-                StepFile::open(&self.data_root, &self.step_id, &self.run, self.now.clone()).await?,
-            );
+            self.file =
+                Some(StepFile::open(&self.data_root, &self.step_id, self.now.clone()).await?);
         }
         self.file
-            .as_ref()
+            .as_mut()
             .expect("opened above")
             .record(batch)
             .await

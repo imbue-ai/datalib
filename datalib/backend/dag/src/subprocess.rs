@@ -1014,7 +1014,7 @@ mod tests {
             .await
             .unwrap()
             .into_iter()
-            .map(|r| r.key)
+            .map(|r| r.scope_key)
             .collect()
     }
 
@@ -1033,36 +1033,21 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let p = |key: &str| {
             format!(
-                r#"echo '{{"event":"problem","key":"{key}","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"404"}}'"#
+                r#"echo '{{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"{key}","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"404"}}'"#
             )
         };
         let all = r#"echo '{"event":"covered","kind":"all"}'"#;
-        run_sh(
-            root.path(),
-            &format!("{}\n{}\n{all}", p("record:t:1"), p("record:t:2")),
-        )
-        .await;
-        assert_eq!(
-            problem_keys(root.path()).await,
-            ["record:t:1", "record:t:2"]
-        );
+        run_sh(root.path(), &format!("{}\n{}\n{all}", p("t:1"), p("t:2"))).await;
+        assert_eq!(problem_keys(root.path()).await, ["t:1", "t:2"]);
 
-        run_sh(root.path(), &format!("{}\n{all}", p("record:t:2"))).await;
-        assert_eq!(problem_keys(root.path()).await, ["record:t:2"]);
+        run_sh(root.path(), &format!("{}\n{all}", p("t:2"))).await;
+        assert_eq!(problem_keys(root.path()).await, ["t:2"]);
 
         run_sh(root.path(), &format!("{all}\nexit 1")).await;
-        assert_eq!(
-            problem_keys(root.path()).await,
-            ["record:t:2"],
-            "a failed run"
-        );
+        assert_eq!(problem_keys(root.path()).await, ["t:2"], "a failed run");
 
         run_sh(root.path(), "true").await;
-        assert_eq!(
-            problem_keys(root.path()).await,
-            ["record:t:2"],
-            "said nothing"
-        );
+        assert_eq!(problem_keys(root.path()).await, ["t:2"], "said nothing");
     }
 
     /// A problem is in the file while its step is still running: the step
@@ -1073,7 +1058,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let seen = root.path().join("seen");
         let script = format!(
-            r#"echo '{{"event":"problem","key":"record:t:1","severity":"error","outcome":"dropped","reason":"fetch_failed"}}'
+            r#"echo '{{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"t:1","severity":"error","outcome":"dropped","reason":"fetch_failed"}}'
                i=0; while [ ! -e '{}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done"#,
             seen.display()
         );

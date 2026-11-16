@@ -1,82 +1,101 @@
 //! A step's problems, kept in `problems.sqlite` in the step's own folder:
-//! the one shape every writer uses, and the rules that stamp and clear its
-//! rows. A step writes the file itself through [`StepFile`], or sends
-//! `problem` and `covered` events and the runner writes it through the
-//! same type (`docs/dev/step_protocol.md` §"Problems").
+//! the same `problems` table every store carries (`ProblemRow`), and the
+//! rules that clear it at the end of a run. A step writes the file itself
+//! through [`StepFile`], or sends `problem` and `covered` lines and the
+//! runner writes it through the same type (`docs/dev/step_protocol.md`
+//! §"Problems: what you could not do").
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_problems::Severity;
+use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage};
+use datalib_table::BulkUpsertable;
 use datalib_time::StoredStamp;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
-use sqlx::Row as _;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 pub const FILE_NAME: &str = "problems.sqlite";
 
-/// Where the step `step_id` keeps its problems under `data_root`.
 pub fn file_of(data_root: &Path, step_id: &str) -> PathBuf {
     data_root.join(step_id).join(FILE_NAME)
 }
 
-/// What a problem is about, in the terms its step held when it arose.
-/// Every field may be empty; all empty is the step's run as a whole.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct About {
-    /// The upstream record: the values a grid row carries as
-    /// `upstream_entity_kind`, `upstream_id` and `upstream_account`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
-    /// A node's uuid, for a step that held the node itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub node: Option<String>,
-    /// A file, relative to the folder the step reads.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-/// The record of the step's own store a problem is about, which is what
-/// a `records` [`Covered`] matches.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Record {
-    pub table: String,
-    pub id: String,
-}
-
-/// One problem as a step reports it: the body of a `problem` event.
+/// One problem as a `problem` line spells it: a [`ProblemRow`] without
+/// the columns the writer fills (its id, its source, its stamps).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
-    /// The step's own name for the problem, the same on every run that
-    /// finds it. A key starting `listing:` or `phase:` is what a
-    /// `listings` [`Covered`] matches.
-    pub key: String,
-    pub severity: Severity,
-    pub outcome: String,
-    pub reason: String,
+    pub stage: Stage,
+    pub scope_kind: ScopeKind,
+    /// What the problem is about within the step: `<table>:<id>` for a
+    /// record, `file:<path>` for a file, `listing:<name>` or
+    /// `phase:<name>` for a part of the run. [`Covered`] matches it.
+    pub scope_key: String,
+    pub outcome: Outcome,
+    pub reason: Reason,
+    #[serde(default)]
+    pub severity: Option<Severity>,
     #[serde(default)]
     pub sample: String,
     #[serde(default)]
-    pub about: About,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub record: Option<Record>,
+    pub item_uuid: Option<String>,
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub rule: Option<String>,
+    #[serde(default)]
+    pub upstream_entity_kind: Option<String>,
+    #[serde(default)]
+    pub upstream_id: Option<String>,
+    #[serde(default)]
+    pub upstream_account: Option<String>,
 }
 
-/// What a run re-checked, and so may clear: the body of a `covered`
-/// event. A record or file kind that names neither `all_but` nor `only`
-/// vouches for every one of them, which only a run that succeeds can.
+impl Found {
+    pub fn into_row(self, source_id: &str) -> ProblemRow {
+        let scope = match self.scope_kind {
+            ScopeKind::Markdown => Scope::Markdown(&self.scope_key),
+            ScopeKind::Entity => Scope::Entity(&self.scope_key),
+        };
+        let problem = Problem {
+            reason: self.reason,
+            field: self.field.clone(),
+            path: self.path.clone(),
+            rule: self.rule.clone(),
+            sample: self.sample.clone(),
+            severity: self.severity,
+        };
+        ProblemRow {
+            upstream_entity_kind: self.upstream_entity_kind.clone(),
+            upstream_id: self.upstream_id.clone(),
+            upstream_account: self.upstream_account.clone(),
+            ..ProblemRow::new(
+                source_id,
+                self.stage,
+                scope,
+                self.item_uuid.as_deref(),
+                self.outcome,
+                problem,
+                None,
+            )
+        }
+    }
+}
+
+/// What a run checked again, and so may clear: the body of a `covered`
+/// line. A records or files kind that names neither `all_but` nor
+/// `only` vouches for every one of them, which only a run that succeeds
+/// can.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Covered {
-    /// Everything the step can find.
     All,
-    /// Every `listing:` and `phase:` key.
+    /// Every `listing:` and `phase:` scope.
     Listings,
-    /// The records of `table`: every one but `all_but`, or exactly `only`.
+    /// The `<table>:<id>` scopes of one table: every one but `all_but`,
+    /// or exactly `only`.
     Records {
         table: String,
         #[serde(default)]
@@ -84,7 +103,7 @@ pub enum Covered {
         #[serde(default)]
         only: Option<Vec<String>>,
     },
-    /// Every problem about a file under `under`, but the paths named.
+    /// The `file:<path>` scopes under a folder, but `all_but`.
     Files {
         under: String,
         #[serde(default)]
@@ -92,7 +111,6 @@ pub enum Covered {
     },
 }
 
-/// How the run ended, as far as clearing goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ended {
     Succeeded,
@@ -101,100 +119,31 @@ pub enum Ended {
     Short,
 }
 
-/// One row of the file.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Row {
-    pub key: String,
-    pub problem_uuid: String,
-    pub severity: Severity,
-    pub outcome: String,
-    pub reason: String,
-    pub sample: String,
-    pub about: About,
-    pub record: Option<Record>,
-    pub first_seen_at_utc: String,
-    pub changed_at_utc: String,
-    pub tz_offset: Option<String>,
-    /// The run that last found it.
-    pub run: String,
-}
-
-/// `found` as the file keeps it, given the row it holds under the same
-/// key: found again unchanged, it keeps every stamp; changed, it keeps
-/// when it was first seen and is stamped `now`.
-pub fn stamped(
-    step_id: &str,
-    found: Found,
-    held: Option<&Row>,
-    now: &StoredStamp,
-    run: &str,
-) -> Row {
-    let same = held.is_some_and(|h| {
-        h.severity == found.severity
-            && h.outcome == found.outcome
-            && h.reason == found.reason
-            && h.sample == found.sample
-            && h.about == found.about
-            && h.record == found.record
-    });
-    let (first_seen_at_utc, changed_at_utc, tz_offset) = match held {
-        Some(h) if same => (
-            h.first_seen_at_utc.clone(),
-            h.changed_at_utc.clone(),
-            h.tz_offset.clone(),
-        ),
-        Some(h) => (
-            h.first_seen_at_utc.clone(),
-            now.utc.clone(),
-            now.tz_offset.clone(),
-        ),
-        None => (now.utc.clone(), now.utc.clone(), now.tz_offset.clone()),
-    };
-    Row {
-        problem_uuid: datalib_id::step_problem_id(step_id, &found.key),
-        key: found.key,
-        severity: found.severity,
-        outcome: found.outcome,
-        reason: found.reason,
-        sample: found.sample,
-        about: found.about,
-        record: found.record,
-        first_seen_at_utc,
-        changed_at_utc,
-        tz_offset,
-        run: run.to_string(),
-    }
-}
-
 /// Whether a row this run did not find again goes, given what the run
 /// covered and how it ended.
-pub fn clears(row: &Row, covered: &[Covered], ended: Ended) -> bool {
+pub fn clears(row: &ProblemRow, covered: &[Covered], ended: Ended) -> bool {
     let whole = ended == Ended::Succeeded;
     let but = |all_but: &Option<Vec<String>>, one: &str| match all_but {
         None => whole,
         Some(list) => !list.iter().any(|x| x == one),
     };
+    let key = row.scope_key.as_str();
     covered.iter().any(|c| match c {
         Covered::All => whole,
-        Covered::Listings => {
-            whole && (row.key.starts_with("listing:") || row.key.starts_with("phase:"))
-        }
+        Covered::Listings => whole && (key.starts_with("listing:") || key.starts_with("phase:")),
         Covered::Records {
             table,
             all_but,
             only,
-        } => row
-            .record
-            .as_ref()
-            .filter(|r| &r.table == table)
-            .is_some_and(|r| match only {
-                Some(only) => only.iter().any(|x| x == &r.id),
-                None => but(all_but, &r.id),
+        } => key
+            .strip_prefix(table.as_str())
+            .and_then(|rest| rest.strip_prefix(':'))
+            .is_some_and(|id| match only {
+                Some(only) => only.iter().any(|x| x == id),
+                None => but(all_but, id),
             }),
-        Covered::Files { under, all_but } => row
-            .about
-            .path
-            .as_deref()
+        Covered::Files { under, all_but } => key
+            .strip_prefix("file:")
             .filter(|p| is_under(p, under))
             .is_some_and(|p| but(all_but, p)),
     })
@@ -209,60 +158,16 @@ fn is_under(path: &str, under: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-const DDL: &str = "CREATE TABLE IF NOT EXISTS problems (
-    key TEXT PRIMARY KEY NOT NULL,
-    problem_uuid TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    sample TEXT NOT NULL,
-    about_kind TEXT,
-    about_id TEXT,
-    about_account TEXT,
-    about_node TEXT,
-    about_path TEXT,
-    record_table TEXT,
-    record_id TEXT,
-    first_seen_at_utc TEXT NOT NULL,
-    changed_at_utc TEXT NOT NULL,
-    tz_offset TEXT,
-    run TEXT NOT NULL
-)";
-
-const INSERT: &str = "INSERT OR REPLACE INTO problems (key, problem_uuid, severity, outcome, \
-     reason, sample, about_kind, about_id, about_account, about_node, about_path, \
-     record_table, record_id, first_seen_at_utc, changed_at_utc, tz_offset, run) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-fn row_of(r: &SqliteRow) -> Result<Row> {
-    let severity: String = r.try_get("severity")?;
-    Ok(Row {
-        key: r.try_get("key")?,
-        problem_uuid: r.try_get("problem_uuid")?,
-        severity: Severity::parse(&severity)
-            .with_context(|| format!("a severity this build does not know: {severity:?}"))?,
-        outcome: r.try_get("outcome")?,
-        reason: r.try_get("reason")?,
-        sample: r.try_get("sample")?,
-        about: About {
-            kind: r.try_get("about_kind")?,
-            id: r.try_get("about_id")?,
-            account: r.try_get("about_account")?,
-            node: r.try_get("about_node")?,
-            path: r.try_get("about_path")?,
-        },
-        record: match (
-            r.try_get::<Option<String>, _>("record_table")?,
-            r.try_get::<Option<String>, _>("record_id")?,
-        ) {
-            (Some(table), Some(id)) => Some(Record { table, id }),
-            _ => None,
-        },
-        first_seen_at_utc: r.try_get("first_seen_at_utc")?,
-        changed_at_utc: r.try_get("changed_at_utc")?,
-        tz_offset: r.try_get("tz_offset")?,
-        run: r.try_get("run")?,
-    })
+fn insert_sql() -> String {
+    let cols: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
+        .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+        .collect();
+    format!(
+        "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
+        ProblemRow::TABLE,
+        cols.join(", "),
+        vec!["?"; cols.len()].join(", ")
+    )
 }
 
 /// One run's writer of one step's file: [`record`](Self::record) as
@@ -270,20 +175,12 @@ fn row_of(r: &SqliteRow) -> Result<Row> {
 /// writer while it is open.
 pub struct StepFile {
     pool: SqlitePool,
-    step_id: String,
-    run: String,
     now: StoredStamp,
+    found: HashSet<String>,
 }
 
 impl StepFile {
-    /// Open (creating it) the file of `step_id` for the run `run`, whose
-    /// stamps are `now`.
-    pub async fn open(
-        data_root: &Path,
-        step_id: &str,
-        run: &str,
-        now: StoredStamp,
-    ) -> Result<Self> {
+    pub async fn open(data_root: &Path, step_id: &str, now: StoredStamp) -> Result<Self> {
         let path = file_of(data_root, step_id);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -300,61 +197,56 @@ impl StepFile {
             .connect_with(opts)
             .await
             .with_context(|| format!("open {}", path.display()))?;
-        sqlx::query(DDL)
-            .execute(&pool)
-            .await
-            .with_context(|| format!("create the problems table in {}", path.display()))?;
+        for (_, ddl) in datalib_problems::DDL {
+            if let Err(e) = sqlx::query(*ddl).execute(&pool).await {
+                pool.close().await;
+                return Err(e)
+                    .with_context(|| format!("create the problems table in {}", path.display()));
+            }
+        }
         Ok(StepFile {
             pool,
-            step_id: step_id.to_string(),
-            run: run.to_string(),
             now,
+            found: HashSet::new(),
         })
     }
 
-    /// Write what this run found, in one transaction. A key found twice
-    /// in one run is one row, the later one's.
-    pub async fn record(&self, found: Vec<Found>) -> Result<()> {
-        if found.is_empty() {
+    /// Write what this run found, in one transaction, each row stamped
+    /// against the one the file holds under the same id.
+    pub async fn record(&mut self, rows: Vec<ProblemRow>) -> Result<()> {
+        if rows.is_empty() {
             return Ok(());
         }
+        let insert = insert_sql();
         let mut tx = self
             .pool
             .begin()
             .await
             .context("begin the problems write")?;
-        for f in found {
-            let held = sqlx::query("SELECT * FROM problems WHERE key = ?")
-                .bind(&f.key)
+        let mut news = Vec::new();
+        for row in rows {
+            let held = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+                .bind(&row.problem_uuid)
                 .fetch_optional(&mut *tx)
                 .await
                 .context("read the problem held")?
-                .map(|r| row_of(&r))
+                .map(|r| ProblemRow::from_row(&r))
                 .transpose()?;
-            let row = stamped(&self.step_id, f, held.as_ref(), &self.now, &self.run);
-            sqlx::query(INSERT)
-                .bind(&row.key)
-                .bind(&row.problem_uuid)
-                .bind(row.severity.as_str())
-                .bind(&row.outcome)
-                .bind(&row.reason)
-                .bind(&row.sample)
-                .bind(&row.about.kind)
-                .bind(&row.about.id)
-                .bind(&row.about.account)
-                .bind(&row.about.node)
-                .bind(&row.about.path)
-                .bind(row.record.as_ref().map(|r| &r.table))
-                .bind(row.record.as_ref().map(|r| &r.id))
-                .bind(&row.first_seen_at_utc)
-                .bind(&row.changed_at_utc)
-                .bind(&row.tz_offset)
-                .bind(&row.run)
+            let row = row.stamped(held.as_ref(), &self.now.utc, self.now.tz_offset.as_deref());
+            // Audited: `insert` is built from `ProblemRow`'s associated
+            // consts, never from row data; every value is bound.
+            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
                 .execute(&mut *tx)
                 .await
-                .with_context(|| format!("record problem {}", row.key))?;
+                .with_context(|| format!("record problem {}", row.problem_uuid))?;
+            if row.is_news(held.as_ref()) {
+                news.push(row.clone());
+            }
+            self.found.insert(row.problem_uuid);
         }
-        tx.commit().await.context("commit the problems write")
+        tx.commit().await.context("commit the problems write")?;
+        datalib_problems::note_recorded(&news);
+        Ok(())
     }
 
     /// End the run: remove what it covered and did not find again, and
@@ -371,21 +263,23 @@ impl StepFile {
             .begin()
             .await
             .context("begin the problems clear")?;
-        let earlier: Vec<Row> = sqlx::query("SELECT * FROM problems WHERE run != ?")
-            .bind(&self.run)
+        let held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
             .fetch_all(&mut *tx)
             .await
             .context("read the problems held")?
             .iter()
-            .map(row_of)
+            .map(ProblemRow::from_row)
             .collect::<Result<_>>()?;
         let mut gone = 0;
-        for row in earlier.iter().filter(|r| clears(r, covered, ended)) {
-            sqlx::query("DELETE FROM problems WHERE key = ?")
-                .bind(&row.key)
+        for row in held
+            .iter()
+            .filter(|r| !self.found.contains(&r.problem_uuid) && clears(r, covered, ended))
+        {
+            sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+                .bind(&row.problem_uuid)
                 .execute(&mut *tx)
                 .await
-                .with_context(|| format!("clear problem {}", row.key))?;
+                .with_context(|| format!("clear problem {}", row.problem_uuid))?;
             gone += 1;
         }
         tx.commit().await.context("commit the problems clear")?;
@@ -394,7 +288,7 @@ impl StepFile {
 }
 
 /// Every row of the file at `path`, read-only; none when there is no file.
-pub async fn read(path: &Path) -> Result<Vec<Row>> {
+pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -405,12 +299,12 @@ pub async fn read(path: &Path) -> Result<Vec<Row>> {
         .connect_with(datalib_sqlite_open::file(path).read_only(true))
         .await
         .with_context(|| format!("open {}", path.display()))?;
-    let rows = sqlx::query("SELECT * FROM problems ORDER BY key")
+    let rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
         .fetch_all(&pool)
         .await
         .with_context(|| format!("read {}", path.display()));
     pool.close().await;
-    rows?.iter().map(row_of).collect()
+    rows?.iter().map(ProblemRow::from_row).collect()
 }
 
 #[cfg(test)]

@@ -467,6 +467,15 @@ pub struct ProblemRow {
     /// left by an older renderer is identifiable. `None` off a fetch.
     #[col(sql = "INT")]
     pub render_version: Option<i64>,
+    /// The upstream record the problem is about, as the step that found
+    /// it named it: the values a grid row carries under the same names,
+    /// which is how a reader finds the row a problem is about.
+    #[col(sql = "VARCHAR(64)")]
+    pub upstream_entity_kind: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_id: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_account: Option<String>,
 }
 
 impl ProblemRow {
@@ -512,6 +521,9 @@ impl ProblemRow {
             changed_at_utc: String::new(),
             tz_offset: None,
             render_version: render_version.map(i64::from),
+            upstream_entity_kind: None,
+            upstream_id: None,
+            upstream_account: None,
         }
     }
 
@@ -584,6 +596,9 @@ impl ProblemRow {
             changed_at_utc: r.try_get("changed_at_utc")?,
             tz_offset: r.try_get("tz_offset")?,
             render_version: r.try_get("render_version")?,
+            upstream_entity_kind: r.try_get("upstream_entity_kind")?,
+            upstream_id: r.try_get("upstream_id")?,
+            upstream_account: r.try_get("upstream_account")?,
         })
     }
 }
@@ -825,6 +840,6 @@ mod tests {
         ] {
             assert!(ddl.contains(col), "{ddl}");
         }
-        assert_eq!(COLUMNS[0].1.len(), 17);
+        assert_eq!(COLUMNS[0].1.len(), 20);
     }
 }
