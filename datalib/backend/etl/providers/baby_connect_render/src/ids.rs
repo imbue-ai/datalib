@@ -1,7 +1,6 @@
 //! Baby Connect entity ids. Baby Connect's ids are unique across the
 //! service for each kind of object, so a child's and an entry's natural
-//! key is Baby Connect's id alone, as the raw store keys it; a month is
-//! the child's id and the month.
+//! key is Baby Connect's id alone, as the raw store keys it.
 
 use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::{record_stamp_ms, RecordStampPrecision};
@@ -9,7 +8,6 @@ use datalib_time::{record_stamp_ms, RecordStampPrecision};
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::BabyConnect;
 
 pub const KIND_KID: &str = "kid";
-pub const KIND_MONTH: &str = "month";
 pub const KIND_ENTRY: &str = "entry";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
@@ -17,12 +15,6 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 /// No stamp: a child is a container, and its entries carry the times.
 pub fn kid(source_id: &str, kid_id: &str) -> Identity {
     IDS.mint(source_id, KIND_KID, kid_id.to_string(), None)
-}
-
-/// A child's month, `YYYY-MM`. No stamp: its document row takes its
-/// stamps from the entries in it.
-pub fn month(source_id: &str, kid_id: &str, month: &str) -> Identity {
-    IDS.mint(source_id, KIND_MONTH, format!("{kid_id}#{month}"), None)
 }
 
 /// An entry, stamped with the time it was logged for.
@@ -45,7 +37,6 @@ mod tests {
         let at = Some("2368-10-12T02:10:00-07:00");
         for got in [
             kid("src", "5629499534213121"),
-            month("src", "5629499534213121", "2368-10"),
             entry("src", "4785074604081121", at),
         ] {
             assert_eq!(

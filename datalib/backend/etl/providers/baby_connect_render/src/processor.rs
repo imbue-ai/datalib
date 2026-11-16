@@ -13,8 +13,8 @@ use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcess
 
 use datalib_time::NamedZone;
 
-use crate::render::{render_month, RENDER_VERSION};
-use crate::store::{self, split_bucket};
+use crate::render::{render_child, RENDER_VERSION};
+use crate::store;
 
 pub fn plan_render(
     ctx: PlanContext,
@@ -42,7 +42,7 @@ impl SourceRender for BabyConnectRender {
         RENDER_VERSION
     }
 
-    /// A different zone moves every entry's time, so every month renders
+    /// A different zone moves every entry's time, so every child renders
     /// again.
     fn render_params(&self) -> serde_json::Value {
         serde_json::json!({ "time_zone": self.time_zone })
@@ -78,11 +78,8 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -
     let mut buckets: Vec<Bucket> = Vec::new();
     for key in todo {
         ctx.progress.inc(1);
-        let Some((kid, month)) = split_bucket(key) else {
-            continue;
-        };
         let inputs = Inputs::default();
-        let md = render_month(ctx.root, ctx.name, &store, kid, month, zone, &inputs)?;
+        let md = render_child(ctx.root, ctx.name, &store, key, zone, &inputs)?;
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for {key}"))?;
         buckets.push(Bucket {
@@ -90,7 +87,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -
             inputs: inputs.declared(),
         });
     }
-    // A month the store no longer has an entry in: its rows leave.
+    // A child the store no longer has an entry for: their rows leave.
     let gone: Vec<&String> = store
         .render
         .iter()
@@ -100,5 +97,5 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -
     ctx.declare_empty(gone.iter().map(|s| s.as_str()))?;
     let rendered = buckets.len();
     ctx.finish(&buckets, head.as_deref())?;
-    Ok(format!("rendered {rendered} month(s)"))
+    Ok(format!("rendered {rendered} child(ren)"))
 }
