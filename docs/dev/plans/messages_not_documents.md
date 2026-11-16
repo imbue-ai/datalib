@@ -1,8 +1,7 @@
 # Messages, not documents: grouping chosen when a search runs
 
-**Status: proposal (2026-11-16). Steps 1 and 2 are being built (draft
-PR on branch `tree-step-1`; branch `tree-step-2` on top of it); nothing
-else is.** Facts about
+**Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
+#1770); nothing else is built.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 
@@ -218,8 +217,9 @@ one from last year stays where it was said.
 The model makes possible something the app does not have: **a tree a
 person can browse, and a search held to any branch of it.**
 
-- **The tree card.** Every source is a root; under it, its accounts,
-  then channels, labels, folders, pages, as deep as the source goes.
+- **The tree card.** The library is the root; under it, the person's
+  folders of sources, then each source, then its accounts, channels,
+  labels, folders, pages, as deep as the source goes.
   Each node shows how many items are under it and expands to its
   children, both those it contains and those filed under it, loaded a
   level at a time. Opening a leaf container opens what is read
@@ -228,7 +228,35 @@ person can browse, and a search held to any branch of it.**
   to the items under it: `under:<node>` for everything beneath it,
   `at:<node>` for its children alone. A node is a chip like a person, so
   it is clicked or typed, never spelled out. `source:` becomes
-  `under:` a source's root, which it already means.
+  `under:` the source's node, which it already means.
+
+**Above the sources: the library and its folders.** A source's
+top containers (an email account, a Slack workspace, a chat with no
+account above it) have no parent today. They get one:
+
+- **A source is a node.** It is the source's group: its uuid is minted
+  from the group id, and its children are the source's top containers.
+  Renderers do not mint it; they keep naming no parent at their top,
+  and `grid_index`, which knows each row's source, reads that as the
+  source node. A step is not a node: it is how a source's data was
+  made, and it lives in the DAG. A problem's `stage` says which step
+  raised it.
+- **A folder of sources is a group too**, one with no type and no
+  steps, and a group names the folder it is in with one optional
+  config field (`parent = "<group id>"`). A person arranges their
+  sources into folders on the Manage screen. Moving a source never
+  changes its id, which is its directory on disk; only its parent
+  moves.
+- **The library is the one root**, above every folder and source.
+
+The arrangement belongs to the person, not to any source, so a move
+costs one row: the source-to-folder links are read from the config
+into a small table of their own, and no row of any source is rewritten,
+re-rendered or re-indexed when a source moves. Every node but the
+library then has a parent, so a problem rolls up through its
+containers, its source and the person's folders to the library, and
+"how many problems under X" is the same lookup as "how many items
+under X".
 
 **How "under" stays fast.** `grid_index` keeps one table of every
 node's ancestors, `(node, ancestor, depth)`, following both kinds of
@@ -410,7 +438,9 @@ against the eval before the next.
    the grid's list-then-slice (measured at 74k rows, not at today's
    941k) is measured then. `keyword:` and
    collections inside sets become `under:` their node, with the old keys
-   kept as aliases.
+   kept as aliases. The library root, the source nodes and the folders
+   above them come here too, with the `parent` config field and moving a
+   source on the Manage screen.
 9. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
 
