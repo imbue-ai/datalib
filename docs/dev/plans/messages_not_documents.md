@@ -267,6 +267,37 @@ re-embeds without changing anything a person sees.
 opens it at an item and asks for the items around it in order. A
 ten-year group chat opens as fast as a short one.
 
+**A view per kind of node.** Opening a node shows it the way its kind
+is read: a message in its context, a thread's items a page at a time,
+a channel's threads to browse. A shared layer supplies the views for
+everything that goes through it (chat-common for every chat source's
+message, thread and channel), and a provider or an applet adds one for
+a kind of its own. That is a registry keyed on the node's kind, which
+is what [`dispatch_on_kind.md`](dispatch_on_kind.md) proposes for
+chips and cards. So the kinds become a small closed set (channel,
+thread, chat, mailbox, label, folder, page, calendar, project,
+collection, …) designed with that registry, beside the free-text
+`kind` a person reads, and `/chat` gives way to it.
+
+## The same thing in two sources
+
+The same email in Gmail and in Fastmail is two records in two sources,
+each in its own tree, and for now nothing says they are the same: two
+copies. Not one node with two parents. If it is ever worth knowing, it
+is an edge between the two, matched on a key the sources share (an
+email's Message-ID), and neither tree changes.
+
+## Contacts in the tree
+
+A card sits in its address book. The groups a source keeps (vCard
+`CATEGORIES`, a CardDAV group card, a Google contact group) are filings,
+as an email's labels are. A label a person makes in the contacts app is
+one too, with one difference: its writer is the applet, whose store is
+under `datalib_curated/`, not a render step. So the applet owns its
+labels' data nodes and filings, and the ancestors table reads them
+beside the render stores'. A person the app merged from several cards
+is the same: two records, not a parent.
+
 ## What changes, and for whom
 
 Every place that assumes a document, from the read side of the tree:

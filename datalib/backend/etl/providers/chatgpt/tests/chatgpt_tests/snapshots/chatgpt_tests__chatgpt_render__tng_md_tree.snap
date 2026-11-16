@@ -9,7 +9,6 @@ provider: chatgpt
 source_label: "ChatGPT"
 chat_uuid: 00000000-0000-869c-aa85-d9b7911f2b27
 markdown_uuid: 00000000-0000-869c-aa85-d9b7911f2b27
-period: all
 display: "Risa Survey Briefing"
 account: "data@enterprise.starfleet.test"
 external_id: "68fa0005-fake-7000-8000-positronic0005"
@@ -208,7 +207,6 @@ provider: chatgpt
 source_label: "ChatGPT"
 chat_uuid: 00000000-0000-86dd-be81-c87daeff7764
 markdown_uuid: 00000000-0000-86dd-be81-c87daeff7764
-period: all
 display: "Holodeck Cave on Risa"
 account: "data@enterprise.starfleet.test"
 external_id: "68fa0004-fake-7000-8000-positronic0004"
@@ -247,7 +245,6 @@ provider: chatgpt
 source_label: "ChatGPT"
 chat_uuid: 00000000-0000-893e-9200-2f457298a582
 markdown_uuid: 00000000-0000-893e-9200-2f457298a582
-period: all
 display: "Polynomial Fit for Sensor Calibration"
 account: "data@enterprise.starfleet.test"
 external_id: "68fa0002-fake-7000-8000-positronic0002"
@@ -294,7 +291,6 @@ provider: chatgpt
 source_label: "ChatGPT"
 chat_uuid: 00000000-0000-84b7-85ef-23cb38507f8b
 markdown_uuid: 00000000-0000-84b7-85ef-23cb38507f8b
-period: all
 display: "Sonnet on a Cat Named Spot"
 account: "data@enterprise.starfleet.test"
 external_id: "68fa0001-fake-7000-8000-positronic0001"
@@ -359,7 +355,6 @@ provider: chatgpt
 source_label: "ChatGPT"
 chat_uuid: 00000000-0000-888f-8dff-2bdaf3aa5faa
 markdown_uuid: 00000000-0000-888f-8dff-2bdaf3aa5faa
-period: all
 display: "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
 account: "data@enterprise.starfleet.test"
 external_id: "68fa0003-fake-7000-8000-positronic0003"
