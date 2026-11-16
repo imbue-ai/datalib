@@ -137,7 +137,7 @@ differently, and no fixed set of levels fits them all:
 | Source | From the top down |
 |---|---|
 | Slack | workspace › channel › thread › reply |
-| Email | account › thread › message |
+| Email | account › thread › message; and account › label › label › … filing threads |
 | WhatsApp, Signal, Messenger | chat › message |
 | Notion | workspace › page › page › … › block; a discussion on a block |
 | Google Drive | folder › … › file › comment thread › reply |
@@ -192,11 +192,49 @@ role, worked out once at render, so grouping by either is one column
 and never a walk up the tree. A source with no threads loses nothing:
 its chat is read together and is its own place.
 
-**Everything that is not containment is an edge.** Reply-to (a Signal
+**A node can also be filed under other nodes.** An email thread lives
+in its account, and is also filed under every label or folder its
+messages carry; labels nest (`Work › Clients › Acme`). A photo is
+filed under its keywords and its collections, which nest too, and the
+search already treats those as a tree (`keyword:` matches the keywords
+above a photo's; a collection answers to each set above it). So the
+tree has two kinds of parent:
+
+- **contained by**: exactly one, where the node lives. Removing it
+  removes the node.
+- **filed under**: any number, each a container itself (a label, a
+  folder, a keyword, a collection) with its own parent.
+
+**Everything else is an edge, not a parent.** Reply-to (a Signal
 quote, an email's `In-Reply-To`, a GitHub review reply), a mention, a
-link, a label on an email: each is a relation between two nodes, not a
-parent, so a message that quotes one from last year stays where it was
-said.
+link: each is a relation between two nodes, so a message that quotes
+one from last year stays where it was said.
+
+## Browsing the tree
+
+The model makes possible something the app does not have: **a tree a
+person can browse, and a search held to any branch of it.**
+
+- **The tree card.** Every source is a root; under it, its accounts,
+  then channels, labels, folders, pages, as deep as the source goes.
+  Each node shows how many items are under it and expands to its
+  children, both those it contains and those filed under it, loaded a
+  level at a time. Opening a leaf container opens what is read
+  together.
+- **Held to a branch.** Choosing a node holds the grid and every search
+  to the items under it: `under:<node>` for everything beneath it,
+  `at:<node>` for its children alone. A node is a chip like a person, so
+  it is clicked or typed, never spelled out. `source:` becomes
+  `under:` a source's root, which it already means.
+
+**How "under" stays fast.** `grid_index` keeps one table of every
+node's ancestors, `(node, ancestor, depth)`, following both kinds of
+parent, so "under X" is one indexed lookup however deep X is and
+whichever way a node reached it. A message under a nested label is
+found from the label and from every label above it, with no walk up
+the tree at search time and no special case for labels, keywords or
+folders. Its size is the sum of every node's depth: a few million
+rows for a root of a million items about four levels deep.
 
 **An item keeps the upstream record it came from**, as
 `upstream_entity_kind` and `upstream_id`, the pair `grid_rows` already
@@ -278,7 +316,8 @@ Each step lands on its own, leaves search working, and is checked
 against the eval before the next.
 
 1. **The tree.** Render gives every container a row of its own and
-   fills each node's parent, its sort key among its siblings, and its
+   fills each node's parent, what it is filed under, its sort key among
+   its siblings, and its
    nearest ancestor that is read together and that is a place; reply-to
    and the other relations go in as edges. Containers' upstream values
    come from the ingest crate's recipe. The few sections that are not
@@ -313,7 +352,11 @@ against the eval before the next.
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
    together, and the eval picks the window.
-8. **The rest of the table above:** the map, links, the problems banner
+8. **Browsing the tree.** The ancestors table in `grid_index`,
+   `under:` and `at:` as search keys, and the tree card. `keyword:` and
+   collections inside sets become `under:` their node, with the old keys
+   kept as aliases.
+9. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
 
 ## Open questions
@@ -333,10 +376,20 @@ against the eval before the next.
   more rows; Drive's paragraphs are the same question. Which kinds are
   read together and which are places is each source's to declare, and
   this plan's tables are a first guess to check source by source.
-- **One parent is enough?** A Drive file could once sit in several
-  folders, and an email carries several labels. Labels are edges, not
-  parents; a second folder would be too. Nothing found so far needs
-  two parents in the tree.
+- **Where a label lives.** Gmail labels a message, and a thread
+  carries the union of its messages' labels; JMAP mailboxes likewise.
+  Is a thread filed under a label when any of its messages is, and does
+  the tree card show the thread or the message there?
+- **Counts on the tree card.** "How many items under X" for a node with
+  half a million under it is a count over the ancestors table; it may
+  need keeping per node at `grid_index` time rather than counting when
+  a level opens.
+- **Which upstream hierarchies to bring in.** Email labels and
+  mailboxes and Lightroom's keywords and collections already reach the
+  search (`label:`, `keyword:`, `collection:`); Slack channels and Notion
+  pages are in their raw stores. Drive folders, Apple Mail's mailboxes
+  and a Claude Code project are still to check. Each source
+  declares its tree in step 1 and the card shows what it declared.
 - **What storing the text costs.** The text goes in the render store,
   versioned with its row, so a reader at a commit sees that commit's
   text. On one real root (186k files) the markdown is 1.25 GB and the
