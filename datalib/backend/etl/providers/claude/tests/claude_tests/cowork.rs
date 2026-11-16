@@ -50,8 +50,9 @@ async fn download(raw: &Path, configure: impl FnOnce(&mut FetchOptions)) -> Fetc
 
 /// The task renders as one conversation: the person's two prompts
 /// without what the app attached to them, the picture attached to the
-/// first, Claude's tool calls and their results in its replies, and a
-/// link to the task on claude.ai.
+/// first, Claude's tool calls and their results in its replies, what it
+/// said between them where it said it, and a link to the task on
+/// claude.ai.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cowork_task_renders_as_a_conversation() {
     // Laid out as a data root is, so the picture's link is the store's
@@ -94,6 +95,11 @@ async fn a_cowork_task_renders_as_a_conversation() {
         md.contains("![viewscreen.png](/data/claude/ingest/blob/"),
         "the picture the person attached is drawn from its bytes"
     );
+    // What Claude said before a tool call reads before it, not folded
+    // into the answer after every call.
+    let said = |text: &str| md.find(text).unwrap_or_else(|| panic!("{text} in {md}"));
+    assert!(said("I'll read the crew list first.") < said("Tool use: Read"));
+    assert!(said("Tool result: Write") < said("Done: roster.md lists"));
     insta::assert_snapshot!("cowork_task_md", md);
     let head = doc
         .rows
