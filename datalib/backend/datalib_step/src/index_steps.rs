@@ -136,7 +136,20 @@ pub async fn run_keyword(
         unsettled = done.unsettled,
         "the search index's keywords are done"
     );
-    Ok(claim_reads(env))
+    // The chunks follow the index's version as well as the render, so the
+    // embed after a new chunking embeds what it cut.
+    Ok(claim_reads(env)
+        .into_iter()
+        .map(|c| OutputClaim {
+            version: keyword_version(&c.version),
+            ..c
+        })
+        .collect())
+}
+
+/// The keyword pass's version: what it read, and the index text's version.
+fn keyword_version(read: &str) -> String {
+    format!("{read}{}", datalib_search_index::text::key_suffix())
 }
 
 /// `<group>/embed`: the vectors this source's chunks are missing from the
@@ -203,6 +216,20 @@ fn version_of_reads(reads: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keyword pass's version moves with the index text's version as
+    /// well as with what it read: a new chunking moves no render, and the
+    /// embed after it must still run.
+    #[test]
+    fn the_keyword_pass_claims_the_index_version_too() {
+        let read = version_of_reads(r#"{"mail/render_markdown":"v1"}"#).unwrap();
+        let claimed = keyword_version(&read);
+        assert!(claimed.starts_with(&read), "{claimed}");
+        assert!(
+            claimed.ends_with(&datalib_search_index::text::key_suffix()),
+            "{claimed}"
+        );
+    }
 
     /// A per-source step's version follows what it read, and nothing
     /// else: a run with nothing from the runner claims none.
