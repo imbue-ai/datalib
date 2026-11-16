@@ -109,6 +109,7 @@ const CATALOG: &[Entry] = &[
         "SMS Backup & Restore",
         Some("sms"),
     ),
+    e("baby_connect", None, "Baby Connect", Some("baby_connect")),
     e("beeper", None, "Beeper", Some("beeper")),
     e("pdf", None, "Local PDFs", Some("pdf")),
     e(

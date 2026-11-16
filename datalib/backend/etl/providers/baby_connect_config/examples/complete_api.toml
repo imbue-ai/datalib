@@ -1,0 +1,57 @@
+# Your Baby Connect history, signed in through latchkey (by browser), with
+# every option set.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+group = "baby_connect"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "keiko@enterprise.test"
+
+# Baby Connect answers one day at a time. `since` and `until` bound the
+# days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back
+# from each sync ("-90d"). Without them the read starts at the eldest
+# child's birthday and ends today.
+[steps.params.api]
+since = "2368-01-01"
+until = "2372-12-31"
+
+# One document per child per month: every entry, with its notes. Baby
+# Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
+# name) says where the clock was, daylight saving included. Unset reads the
+# times as UTC, and the Manage row says so.
+[[steps]]
+group = "baby_connect"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["baby_connect/ingest"]
+
+[steps.params]
+time_zone = "America/Los_Angeles"
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "baby_connect"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["baby_connect/render_markdown"]
+
+[[steps]]
+group = "baby_connect"
+function = "embed"
+command = "datalib-step"
+inputs = ["baby_connect/keyword_index"]

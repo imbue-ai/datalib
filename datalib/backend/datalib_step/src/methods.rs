@@ -34,6 +34,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         }
         SourceType::Lightroom => datalib_etl_lightroom_config::LightroomConfig::METHODS,
         SourceType::Airvisual => datalib_etl_airvisual_config::AirvisualConfig::METHODS,
+        SourceType::BabyConnect => datalib_etl_baby_connect_config::BabyConnectConfig::METHODS,
         SourceType::AppleMessages => {
             datalib_etl_apple_messages_config::AppleMessagesConfig::METHODS
         }

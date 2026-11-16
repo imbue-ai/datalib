@@ -951,6 +951,56 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
 
+  {
+    type: "baby_connect",
+    method: "api",
+    label: "Baby Connect",
+    blurb: "Copy everything you logged for your children: feeds, sleeps, diapers and notes.",
+    keywords: ["baby connect", "baby", "babyconnect", "tracker", "feeding", "sleep", "diaper"],
+    kind: "api",
+    icon: "baby_connect",
+    defaultName: "baby_connect",
+    nameHint: "Baby Connect",
+    wizard: true,
+    intro:
+      "Each child's month becomes a document you can read and search: every entry, with " +
+      "who logged it and the notes you typed. The first sync asks for one day at a time, " +
+      "from your eldest child's birthday.",
+    credentialService: "babyconnect",
+    // A session is two cookies: `seacloud1`, set at sign-in, and `srf`,
+    // which the home page's token must match.
+    credentialRegister: {
+      base_api_url: "https://app.babyconnect.com/",
+      login_url: "https://app.babyconnect.com/login",
+      login_flow: "cookie-capture",
+      login_flow_params: { cookieKeys: ["seacloud1", "srf"] },
+    },
+    fields: [
+      {
+        kind: "text",
+        phase: "render",
+        target: "time_zone",
+        label: "Time zone",
+        help:
+          "Where you were when you logged, as a zone name such as America/Los_Angeles. " +
+          "Baby Connect keeps times without one; empty reads them as UTC. Changing it " +
+          "re-renders; it never re-downloads.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "From",
+        help: "The first day to copy. Empty starts at your eldest child's birthday.",
+      },
+      {
+        kind: "date",
+        target: "api.until",
+        label: "Until",
+        help: "The last day to copy. Empty copies up to today.",
+      },
+    ],
+  },
+
   // ── the two `email` variants ──────────────────────────────────────
   //
   // Gmail must come before the JMAP entry: `variantKey` matching takes

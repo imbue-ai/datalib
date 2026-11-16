@@ -32,6 +32,8 @@ pub enum Provider {
     /// Apple's Messages app. The vendor stays for the reason it does on
     /// `apple_photos`: "messages" alone names nothing.
     AppleMessages,
+    /// Baby Connect: a child's month of logged entries.
+    BabyConnect,
     Beeper,
     /// Calendar events: Google Calendar, CalDAV (Fastmail, iCloud, …)
     /// and `.ics` files, one tag for all of them.

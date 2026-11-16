@@ -101,6 +101,47 @@ each run. The originals sit beside it at
 `<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
 at that folder gives you their EXIF and content hashes.
 
+## Baby Connect
+
+`type = "baby_connect"` — the [Baby Connect](https://www.baby-connect.com)
+web app through latchkey (`api`). Copies every entry logged for each of
+your children: feeds, sleeps, diapers, medicine, growth, milestones,
+diary entries, and the notes typed with any of them. Each child's month
+becomes one document, its days in order.
+
+Baby Connect has no API, so the download makes the two requests its own
+web page makes, signed in with the page's session cookies. Register the
+service once, then sign in in the browser that opens; latchkey keeps the
+two cookies the session is made of:
+
+```sh
+latchkey services register babyconnect \
+  --base-api-url="https://app.babyconnect.com/" \
+  --login-url="https://app.babyconnect.com/login" \
+  --login-flow=cookie-capture \
+  --login-flow-params='{"cookieKeys": ["seacloud1", "srf"]}'
+latchkey auth browser babyconnect
+```
+
+Baby Connect answers one day at a time, so the first sync asks once for
+every day from your eldest child's birthday to today: about 365 requests
+a year of use. Set `since` and `until` on the `api` table (a day, an RFC
+3339 instant, or an offset such as `"-90d"`) to read less. Later syncs
+read only the days not yet read, and the last two again.
+
+Baby Connect keeps each entry's time as a clock reading with no zone.
+Name the zone you logged in on the render step, and daylight saving is
+applied for each date:
+
+```toml fragment
+[steps.params]
+time_zone = "America/Los_Angeles"
+```
+
+Without it the times are read as UTC, and the source's Manage row says
+so. Changing it re-renders; it never downloads again.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/baby_connect/INGEST.md) has the details.
+
 ## Beeper
 
 `type = "beeper"` — mirrors the Beeper Texts desktop app's local data
