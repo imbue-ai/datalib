@@ -163,6 +163,23 @@ pub fn stamp_text_html(s: &str) -> String {
     }
 }
 
+/// A message's time kept as text, in a message header's form. A stamp
+/// whose source names no clock (`Z`, `-00:00`) stays `Z`, as
+/// [`timestamp_html`] writes one; anything else reads as
+/// [`stamp_text_html`].
+pub fn message_stamp_text_html(s: &str) -> String {
+    let Ok(t) = datalib_time::parse_strict(s) else {
+        return stamp_text_html(s);
+    };
+    let names_no_clock = s.ends_with(['Z', 'z']) || s.ends_with("-00:00");
+    let iso = if names_no_clock {
+        datalib_time::with_unknown_offset(t.to_rfc3339_secs())
+    } else {
+        t.to_rfc3339_secs()
+    };
+    time_element_at(" class=\"msg-ts\"", &t, iso)
+}
+
 fn time_element(class: &str, t: &IsoOffsetTimestamp) -> String {
     time_element_at(class, t, t.to_rfc3339_secs())
 }
@@ -237,6 +254,36 @@ mod tests {
             "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
         );
         assert_eq!(stamp_text_html("<b>soon</b>"), "&lt;b&gt;soon&lt;/b&gt;");
+    }
+
+    /// A forge comment's `…Z` came out `+00:00`, claiming a UTC clock
+    /// the source never named.
+    #[test]
+    fn a_message_stamp_kept_as_text_keeps_an_unknown_clock() {
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00.000Z"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00Z\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00-00:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00Z\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00+00:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00+00:00\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00-07:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00-07:00\" \
+             title=\"2369-04-15 10:05:00 -07:00\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-03-18"),
+            "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+        );
     }
 
     #[test]

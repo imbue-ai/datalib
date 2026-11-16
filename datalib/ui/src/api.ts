@@ -245,6 +245,7 @@ export type ProblemReason =
   | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "ignored"
   | "no_document"
   | "silent"
   | "noted";

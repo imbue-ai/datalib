@@ -29,6 +29,8 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what} is not there upstream`;
     case "forbidden":
       return `${what} cannot be read with this credential`;
+    case "ignored":
+      return `${what} is set, but another setting takes its place, so it does nothing`;
     case "no_document":
       return "this document did not render again, though its rows are still upstream; this is the last rendering";
     case "noted":

@@ -138,10 +138,6 @@ const VOLATILE_KEYS: &[&str] = &[
     // items fetched; on a live API they jitter with whatever new
     // activity has happened. Snapshot the structure, not the values.
     "stats",
-    // qmd's `status` text embeds the index file path, byte sizes, and
-    // a relative "updated N seconds ago" — none of which reproduce
-    // across runs. Snapshot presence, not contents.
-    "qmd_status",
     // Per-row bookkeeping in the doltlite raw stores. Stamped to
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
@@ -613,7 +609,7 @@ fn manual_e2e_live_sync_golden() {
 
     // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
     // the on-disk per-group layout. `system/` and the `unified_document_index` group
-    // (the aggregate index + qmd) are skipped — see the module header.
+    // (the grid and search index) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
@@ -661,14 +657,15 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
-    // The qmd index: the per-source split the qmd steps exist for.
+    // The search index: the per-source split the keyword_index and embed
+    // steps exist for.
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_document_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "the qmd index: documents and embedding left, per source",
+        description => "the search index: documents and chunks left to embed, per source",
     }, {
-        assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
+        assert_json_snapshot!("search_index", search_index_report(&data_root, &cfg_out));
     });
 
     // The search terms: what each row answers to when an id or a handle is
@@ -761,7 +758,7 @@ fn manual_e2e_live_sync_golden() {
     );
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
-    assert_qmd_steps_follow_their_render(&summary2);
+    assert_index_steps_follow_their_render(&summary2);
 
     // Run 1's problems are all still standing minutes later, and a problem
     // recorded again unchanged keeps its row, stamps and all, so run 2
@@ -1274,10 +1271,10 @@ fn assert_step_statuses_ok(summary: &Value) {
 }
 
 /// Every source with a keyword index holds one document per markdown file
-/// qmd reads from its render tree, a source with an `embed` step has
-/// nothing left to embed, and one without still has all of it left: the
-/// embed stayed in its own collection.
-fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
+/// its render tree has outside `unindexed/`, a source with an `embed` step
+/// has nothing left to embed, and one without still has all of it left: the
+/// embed stayed in its own source.
+fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
     let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
     let steps = cfg
         .get("steps")
@@ -1293,56 +1290,60 @@ fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
             .collect()
     };
     let embedded = groups_with("embed");
-    let qmd = datalib_qmd_indexer::Qmd::pinned().expect("resolve qmd");
-    let collections = datalib_qmd_indexer::Index::open(data_root, qmd)
-        .and_then(|index| index.collections())
-        .expect("read the qmd index's collections");
+    let keyword: Vec<String> = groups_with("keyword_index").into_iter().collect();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the search index read");
+    let held = rt
+        .block_on(datalib_search_index::holdings(data_root, &keyword))
+        .expect("read what the search index holds");
+    assert_eq!(
+        held.len(),
+        keyword.len(),
+        "the search index was never made, though {} sources have a keyword_index",
+        keyword.len()
+    );
 
     let mut report = serde_json::Map::new();
-    for group in groups_with("keyword_index") {
-        let c = collections
-            .iter()
-            .find(|c| c.name == group)
-            .unwrap_or_else(|| panic!("no qmd collection for {group}, which has a keyword_index"));
-        let on_disk = markdown_qmd_reads(&data_root.join(&group).join("render_markdown"));
+    for h in held {
+        let on_disk = searchable_markdown_files(&data_root.join(&h.source).join("render_markdown"));
         assert_eq!(
-            c.documents, on_disk,
-            "{group}: the qmd collection holds {} documents; its render tree has {on_disk} \
-             markdown files qmd reads",
-            c.documents
+            h.documents as u64, on_disk,
+            "{}: the search index holds {} documents; its render tree has {on_disk} \
+             markdown files outside unindexed/",
+            h.source, h.documents
         );
-        let embeds = embedded.contains(&group);
+        let embeds = embedded.contains(&h.source);
         if embeds {
             assert_eq!(
-                c.needs_embedding, 0,
-                "{group} has an embed step, yet {} of its contents are not embedded",
-                c.needs_embedding
+                h.not_embedded, 0,
+                "{} has an embed step, yet {} of its chunks are not embedded",
+                h.source, h.not_embedded
             );
-        } else if c.documents > 0 {
+        } else if h.documents > 0 {
             assert!(
-                c.needs_embedding > 0,
-                "{group} has no embed step, yet all of it is embedded: an embed reached \
-                 beyond its own collection"
+                h.not_embedded > 0,
+                "{} has no embed step, yet all of it is embedded: an embed reached \
+                 beyond its own source",
+                h.source
             );
         }
         report.insert(
-            group,
+            h.source,
             serde_json::json!({
-                "documents": c.documents,
+                "documents": h.documents,
                 "embed_step": embeds,
-                "needs_embedding": c.needs_embedding,
+                "chunks_not_embedded": h.not_embedded,
             }),
         );
     }
     Value::Object(report)
 }
 
-/// The markdown files qmd indexes under `dir`: its glob skips hidden paths
-/// and a few build directories (`reindexCollection`), it drops a file with
-/// no text, and the collection ignores what a renderer filed under
-/// `UNINDEXED_DIR` (`datalib_qmd_indexer::ignore_for_group`).
-fn markdown_qmd_reads(dir: &Path) -> u64 {
-    const SKIPPED: &[&str] = &["node_modules", "vendor", "dist", "build"];
+/// The markdown files the search covers under `dir`: every one a renderer
+/// did not file under `UNINDEXED_DIR`.
+fn searchable_markdown_files(dir: &Path) -> u64 {
     WalkDir::new(dir)
         .into_iter()
         .filter_map(Result::ok)
@@ -1351,20 +1352,13 @@ fn markdown_qmd_reads(dir: &Path) -> u64 {
             let mut parts = e.path().strip_prefix(dir).unwrap().components();
             parts.next().map(|c| c.as_os_str()) != Some(UNINDEXED_DIR.as_ref())
         })
-        .filter(|e| {
-            !e.path().strip_prefix(dir).unwrap().components().any(|c| {
-                let seg = c.as_os_str().to_string_lossy();
-                seg.starts_with('.') || SKIPPED.contains(&seg.as_ref())
-            })
-        })
-        .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| !t.trim().is_empty()))
         .count() as u64
 }
 
-/// Run 2's qmd work is only where a render moved: a source's
+/// Run 2's search-index work is only where a render moved: a source's
 /// `keyword_index` reads only its render and its `embed` only that, so a
 /// source whose render did not move skips both, whatever other sources did.
-fn assert_qmd_steps_follow_their_render(summary: &Value) {
+fn assert_index_steps_follow_their_render(summary: &Value) {
     let steps = summary
         .get("steps")
         .and_then(Value::as_array)
@@ -2374,7 +2368,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "finished_at_utc",
         "duration_secs",
         "data_root",
-        "qmd_status",
         "last_attempt_at_utc",
         "first_seen_at_utc",
         "changed_at_utc",
