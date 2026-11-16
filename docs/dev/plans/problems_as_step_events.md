@@ -1,4 +1,4 @@
-# Problems as step events, kept by the runner
+# Problems in the step protocol, kept beside each step's data
 
 *Proposal (2026-11-16). Nothing here is built. It replaces the problem
 rows that each store keeps and that render and `grid_index` copy
@@ -41,35 +41,63 @@ the problem's id; and a problem links to the message it is about.
 
 ## The idea
 
-**A problem is an event a step sends, like a metric; the runner keeps
-it.** The runner already reads every step's events and already knows
-which step it is talking to. It writes problems into one store, keyed
-by the step that found them, as they arrive. A Manage count is then a
-count of that step's rows, live while the step runs, for any program
-that speaks the protocol.
+**A step's problems are part of its output, in a file the step
+protocol defines, and are read from there while the step runs.** Each
+step keeps its problems in `problems.sqlite` in its own folder
+(`<data root>/<group>/<function>/`). It has one writer, which is one of
+two:
+
+- **The step itself**, which is how every `datalib-step` function
+  does it, through one shared module that applies the rules below.
+  This is the same under the runner and in a hand run
+  (`step_protocol.md` §"Running `datalib-step` by hand"): an app that
+  embeds one download finds the problems beside the data, with the
+  same stamps and clearing as the app would get.
+- **The runner, on the step's behalf**, for a program that would
+  rather not write SQLite. It sends `problem` and `covered` events
+  (below), and the runner applies them to that step's file.
+
+A step does one or the other, never both, so a file never has two
+writers. The runner learns which from the step's `problems` line
+(§"The events"). A program that leaves the writing to the runner and
+is run by hand prints its problems and keeps none; that is the price
+of not writing the file, and the protocol says so.
+
+Nothing copies the file. `datalib-http` reads it live for the Manage
+counts and "Needs you", and the problems grid reads it for its rows. A
+step's file holds only that step's rows, so who found a problem needs
+no working out.
 
 | | today | after |
 |---|---|---|
 | a download can't fetch a message | shown after render and `grid_index` run | shown while the download runs |
 | the source's render is off | never shown | shown |
 | a package step's problem | grey count, opens nothing | red or yellow count, opens its rows |
-| which step a row counts against | derived from `stage` | the step that sent it |
+| a step run by hand | rows in its store, seen by nobody until render | the same file, beside its data |
+| which step a row counts against | derived from `stage` | the step whose file holds it |
 | a store's `problems` table | in every store, copied downstream | gone |
 
 ## The events
 
-Two new lines on stdout (or fd 3), beside `metric` and `log`
+What a row says is the same whichever side writes it, so it is
+described here as the events a step sends. Three new lines on stdout
+(or fd 3), beside `metric` and `log`
 (`docs/dev/step_protocol.md` §"stdout: the event protocol"):
 
 ```json
+{"event":"problems","writer":"runner"}
 {"event":"problem","key":"record:messages:C01/1712345678.000100","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"HTTP 404","about":{"kind":"message","id":"C01/1712345678.000100"}}
 {"event":"covered","kind":"record","table":"messages","all":true}
 ```
 
+- **`problems`** comes before any `problem` line and says who writes
+  this step's file: `runner`, or `step` for a step that writes it
+  itself and so sends no `problem` lines. A step that sends neither
+  writes no problems, and its file is left as it is.
 - **`key`** names the problem within the step, and is what a later run
-  sends again for the same problem. The runner mints the problem's id
-  from the step id and the key, so a step never needs to know its
-  source's id to name its own problem.
+  sends again for the same problem. The problem's id is minted from the
+  step id and the key, so a step never needs to know its source's id
+  to name its own problem.
 - **`severity`, `outcome`, `reason`** are today's closed sets
   (`datalib_problems`). A package may also send a `reason` this build
   does not know; it is kept as written and shown as text.
@@ -93,7 +121,7 @@ Two new lines on stdout (or fd 3), beside `metric` and `log`
   - `path`: a file under the source's folder.
   - none of them: the problem is about the step's run as a whole (a
     listing or phase it could not do).
-- **`covered`** says what this run re-checked, so the runner knows
+- **`covered`** says what this run re-checked, so the writer knows
   what to clear. Its kinds are today's coverage, unchanged
   (`docs/dev/data_architecture_ingestion.md` §"Error handling"): every
   listing and phase, every record of a table, every record of a table
@@ -103,14 +131,15 @@ Two new lines on stdout (or fd 3), beside `metric` and `log`
 
 A problem event is **never coalesced or dropped**. Metrics are
 coalesced to the newest value; problems are not, and the runner writes
-them in batches inside one transaction per batch.
+them in batches inside one transaction per batch. A step that writes
+its own file does the same, so a reader sees each batch whole.
 
 ## Clearing
 
-At the end of a run the runner removes that step's rows that fall
-inside what the run said it covered and that the run did not send
-again. The rules are the ones `run_problems` applies today, moved from
-the download into the runner:
+At the end of a run the writer removes the rows that fall inside what
+the run said it covered and that the run did not find again. The rules
+are the ones `run_problems` applies today, moved into the one shared
+module that both the runner and `datalib-step` call:
 
 - A run that **succeeds** clears within everything it covered.
 - A run that **ends `incomplete`, fails or is stopped** clears only
@@ -120,44 +149,53 @@ the download into the runner:
 - A row sent again keeps its first-seen stamp; its changed stamp moves
   only when its severity, outcome, reason or sample changed
   (`ProblemRow::stamped`).
-- A step removed from the config has its rows removed on the next
-  config load. A step turned off keeps its rows.
+- A step turned off keeps its file. A step removed from the config,
+  or reset (`datalib-dag --reset`), loses its folder and the file with
+  it. A reset downloads everything again, so a problem that still
+  holds comes back under the same id, and its mute holds again; only
+  its first-seen stamp starts over.
 
-## The store
+## The file
 
-`system/problems.sqlite`: plain SQLite in WAL mode, not doltlite. It
-needs no history: a problem describes the latest attempt, not a
-commit. Its one writer is the process holding `runner-lock`
-(`datalib-http`'s supervisor, or `datalib-dag` run by hand), which is
-already the one writer of `system/supervisor.sqlite`. Readers open it
+`<group>/<function>/problems.sqlite`: plain SQLite in WAL mode, not
+doltlite, so it can be read while it is written. It needs no history:
+a problem describes the latest attempt, not a commit. Its one writer is
+the step or the runner on its behalf (§"The idea"); readers open it
 read-only.
 
-One table, one row per `(step_id, key)`:
+One table, one row per `key`:
 
 | column | what |
 |---|---|
-| `problem_uuid` | minted from `step_id` and `key` |
-| `step_id`, `group_id` | who found it; the group is the source |
+| `problem_uuid` | minted from the step id and `key` |
 | `key` | the step's own name for it |
-| `severity`, `outcome`, `reason`, `sample` | as sent |
-| `about_kind`, `about_id`, `about_account`, `about_message`, `about_path` | as sent |
+| `severity`, `outcome`, `reason`, `sample` | as written |
+| `about_kind`, `about_id`, `about_account`, `about_message`, `about_path` | as written |
 | `first_seen_at_utc`, `changed_at_utc`, `tz_offset` | stamps (§"Timestamp convention" in `AGENTS.md`) |
-| `run_id` | the run that last sent it, for the run's log |
+| `run_id` | the run that last wrote it, for the run's log; empty in a hand run |
 
+The step and its group are the folder, so no column repeats them.
 Mutes stay where they are (`datalib_curated/`, by problem id), and so
 does the rule that a muted row counts nowhere.
 
 ## Who reads it
 
-- **The Manage counts and "Needs you"**: `datalib-http` counts rows by
-  `step_id` and severity, less the muted ones. A count's double-click
-  opens the problems grid on `step:<id>`. `CountedBy`, the per-stage
-  counter queries and their guarantee test go away.
+- **The Manage counts and "Needs you"**: `datalib-http` counts each
+  step's file by severity, less the muted rows. That is one small open
+  per step, a few dozen on a large root, and the answer can be kept
+  until a file's modification time moves. A count's double-click opens
+  the problems grid on `step:<id>`. `CountedBy`, the per-stage counter
+  queries and their guarantee test go away.
 - **The problems grid** (the `unified_document_index` applet) reads
-  the store read-only. To link a row to what a person can open it
-  looks up the message it is about (§"From what the step held to what
-  a person opens"); a message the index does not hold yet shows
-  unlinked, and links once it does.
+  every step's file and merges the rows in memory. A root holds
+  hundreds of problems, not millions, so this is cheap and the grid is
+  as live as the counts. It is not one SQL query over attached files:
+  SQLite attaches ten files to a connection by default. If the merge is
+  ever measured slow, a copy into the index for the grid alone is the
+  fallback, while the counts keep reading the files. To link a row to
+  what a person can open, the grid looks up the message it is about
+  (§"From what the step held to what a person opens"); a message the
+  index does not hold yet shows unlinked, and links once it does.
 - **The document banner** lists the problems about any message the view
   shows, for whatever grouping holds them (thread, conversation,
   page).
@@ -240,9 +278,8 @@ stores, time-series and occurrences stores and the index, and mutes
 keyed by today's ids.
 
 - **Rows.** The launch's migrate pass reads every store's `problems`
-  table once and writes each row into `system/problems.sqlite` under
-  the step that found it (the last use of today's stage-to-step map),
-  with its stamps. A failed fetch is not tried again until its record
+  table once and writes each row into the file of the step that found
+  it (the last use of today's stage-to-step map), with its stamps. A failed fetch is not tried again until its record
   is owed again, so these rows cannot simply be left for the next run
   to find. The `problems` tables are then left alone, and a later
   release drops them from the DDL.
@@ -255,23 +292,40 @@ keyed by today's ids.
 
 ## Order of work
 
-1. The events and the store: the runner parses `problem` and
-   `covered`, writes the table, clears at the end of a run. Tested
-   with a shell-script step, as the protocol's other events are.
-2. The Manage counts and "Needs you" read the store. The grey
-   metric-only count goes.
-3. `datalib-step`'s steps send events instead of writing tables:
-   `run_problems` and the render's `problems` become senders,
-   `step_problems.rs` goes.
-4. The problems grid and the banner read the store, linking through
-   the message. Each provider's mismatch in §"What the tree does
-   today" is fixed by the step that gives it its recipe.
-5. The migrate pass, the mute rewrite and the config rewrite.
-6. Remove the copies: render's re-mint, `grid_index`'s
-   `replace_source_problems` and `copy_own_store_problems`,
-   `Stage::OWN_STORE`, `CountedBy`, and the docs that describe them.
+`messages_not_documents.md` rewrites render and `grid_index` and adds
+the conversation and thread rows a problem links through. The steps
+below that touch neither go first; the rest wait for it.
 
-Steps 1 and 2 are useful alone: a package step gets real counts at
+Now:
+
+1. **The file and the shared module**: the table, the clearing rules,
+   the stamps. Tested on its own, on made-up rows.
+2. **The protocol**: the runner parses `problems`, `problem` and
+   `covered` and writes the file for a step that asks it to. Tested
+   with a shell-script step, as the protocol's other events are.
+3. **The Manage counts and "Needs you"** read the files. The grey
+   metric-only count goes.
+4. **Downloads write their own file.** `run_problems` writes through
+   the shared module instead of the raw store's table, and in the same
+   change render stops copying the raw store's fetch-stage rows, so no
+   problem is counted twice. A download's problem shows while it runs.
+5. **One recipe per provider for a record's upstream values**, fixing
+   the mismatches in §"What the tree does today". This is ingest-side,
+   and `messages_not_documents.md` needs it too.
+
+After `messages_not_documents.md` has its conversation and thread rows
+and its text in the render store:
+
+6. **Render, `render_time_series` and `render_occurrences` write their
+   own file**; `step_problems.rs` goes.
+7. **The problems grid and the banner read the files**, linking
+   through the message.
+8. **The migrate pass**, the mute rewrite and the config rewrite.
+9. **Remove the copies**: `grid_index`'s `replace_source_problems` and
+   `copy_own_store_problems`, `Stage::OWN_STORE`, `CountedBy`,
+   `item_of_entity`, and the docs that describe them.
+
+Steps 1 to 3 are useful alone: a package step gets real counts at
 once.
 
 ## Open questions
@@ -279,7 +333,7 @@ once.
 - How many problems can one run send? A source with a broken
   credential may fail every record. Today's
   "N back-to-back failures trip a budget" rule keeps that to one
-  `phase:` row; the runner may also want a cap that turns the
+  `phase:` row; the shared module may also want a cap that turns the
   overflow into one row saying how many it did not keep.
 - `stage` becomes a property of the step (download, render, index)
   rather than of the row. Does any search a person has typed use
