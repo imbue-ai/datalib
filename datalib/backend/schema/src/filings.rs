@@ -1,6 +1,6 @@
 // What a row or a container is filed under besides the container that
 // holds it: an email thread under each of its labels, a photo under its
-// keywords. Carried by the document that names it, like `nodes`.
+// keywords. Carried by the document that names it, like `data_nodes`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

@@ -18,8 +18,8 @@ use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
@@ -154,7 +154,7 @@ impl Out<'_> {
             .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
         let mut rows = build_rows(&md_rel, &mut problems);
-        let nodes = place(self.source_id, m_uuid, &mut rows);
+        let data_nodes = place(self.source_id, m_uuid, &mut rows);
         (self.on_doc)(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
@@ -170,7 +170,7 @@ impl Out<'_> {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes,
+            data_nodes,
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
@@ -182,11 +182,11 @@ impl Out<'_> {
 /// Each document is read together at the top of the source, and every
 /// other row it holds (a device, a day, a listing) sits in it. The
 /// document is the container its own row describes.
-fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<NodeRow> {
+fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow> {
     let Some(doc) = rows.iter().find(|r| r.uuid == m_uuid) else {
         return Vec::new();
     };
-    let mut node = NodeRow::new(m_uuid, m_uuid, source_id, doc.kind.clone())
+    let mut node = DataNodeRow::new(m_uuid, m_uuid, source_id, doc.kind.clone())
         .named(doc.conversation_name.clone())
         .read_together();
     if let (Some(kind), Some(id)) = (&doc.upstream_entity_kind, &doc.upstream_id) {
@@ -876,10 +876,10 @@ mod tests {
                 .unwrap()
         };
         let mut rows = vec![row("page", true), row("device", false)];
-        let nodes = place("garmin", "page", &mut rows);
-        assert_eq!(nodes.len(), 1);
-        assert!(nodes[0].read_together && nodes[0].parent_uuid.is_none());
-        assert_eq!(nodes[0].upstream_id.as_deref(), Some("g"));
+        let data_nodes = place("garmin", "page", &mut rows);
+        assert_eq!(data_nodes.len(), 1);
+        assert!(data_nodes[0].read_together && data_nodes[0].parent_uuid.is_none());
+        assert_eq!(data_nodes[0].upstream_id.as_deref(), Some("g"));
         assert_eq!(rows[0].parent_uuid, None);
         assert_eq!(rows[1].parent_uuid.as_deref(), Some("page"));
         assert_eq!(rows[1].read_uuid.as_deref(), Some("page"));

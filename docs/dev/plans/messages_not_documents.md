@@ -144,7 +144,8 @@ differently, and no fixed set of levels fits them all:
 | Google Drive | folder › … › file › comment thread › reply |
 | Claude Code | project › session › sub-agent session › message |
 
-So every node (an item, or a container that holds items) names **one
+So every **data node** (an item, or a container that holds items; "node"
+below, never a DAG step, and the `data_nodes` table) names **one
 parent and how it sorts among its siblings**, and that is all the tree
 stores. A container is a row too, with a uuid a person can open; some
 containers have text of their own (a Notion page, a Slack thread's
@@ -278,7 +279,7 @@ Every place that assumes a document, from the read side of the tree:
 | `Keyed` / `Kept::Sections` | what the filters keep, per document | what the filters keep is a set of items |
 | `WithoutVectors` | documents without vectors | items not covered by any embedded chunk |
 | Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | the items of what is read together, a page at a time, opened at one |
-| The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
+| The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/data_node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
 | Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with what holds it looked up |
 | Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
 | Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |

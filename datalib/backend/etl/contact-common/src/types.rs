@@ -4,7 +4,7 @@
 
 use datalib_contact_schema::NormalizedContact;
 use datalib_handle::Handle;
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::Problem;
 
 #[derive(Debug, Clone)]
@@ -19,7 +19,7 @@ pub struct ContactDoc {
     /// The address book as a container, a place, where upstream keeps
     /// one; `None` leaves the card at the top of its source. Its
     /// `markdown_uuid` and place in the tree are filled at render.
-    pub address_book: Option<NodeRow>,
+    pub address_book: Option<DataNodeRow>,
     /// For a group, the handle each of `contact.members` is drawn by (in
     /// its order, `None` where the member has none), so its page lists
     /// them as chips. Empty for a person.

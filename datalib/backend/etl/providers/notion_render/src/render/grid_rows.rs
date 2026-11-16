@@ -7,8 +7,8 @@ use std::time::Instant;
 use anyhow::Result;
 use datalib_etl_render::inputs::{Inputs, Lookup};
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -190,7 +190,7 @@ fn thread_rows(
     page_title: &str,
     stanza: &str,
     at: &Placed,
-    thread_node: &NodeRow,
+    thread_node: &DataNodeRow,
     parent_block_id: Option<&str>,
     anchor: Option<&str>,
     emails: Lookup<'_, HashMap<String, String>>,
@@ -318,7 +318,7 @@ pub struct PageDocument {
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// The page and the pages and databases above it.
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
     pub problems: Vec<ProblemRow>,
@@ -338,7 +338,7 @@ pub struct ThreadDocument {
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// The thread, its page and what is above that.
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     /// See [`PageDocument::problems`].
     pub problems: Vec<ProblemRow>,
 }
@@ -409,7 +409,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             page_title: title,
             inputs,
             rows,
-            nodes: at.nodes,
+            data_nodes: at.data_nodes,
             problems,
         });
     }
@@ -487,7 +487,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             inputs.lookup("users", &parsed.user_emails),
             &mut problems,
         );
-        at.nodes.push(thread_node);
+        at.data_nodes.push(thread_node);
         threads.push(ThreadDocument {
             markdown_uuid,
             discussion_uuid: disc_id.clone(),
@@ -496,7 +496,7 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             anchor_block_uuid: parent_block_id.clone(),
             inputs,
             rows,
-            nodes: at.nodes,
+            data_nodes: at.data_nodes,
             problems,
         });
     }
@@ -604,14 +604,14 @@ mod tests {
         let docs = gather_documents(&parsed, "notion").unwrap();
         let page_doc = &docs.pages[0];
         let page_uuid = page_doc.markdown_uuid.as_str();
-        assert_eq!(page_doc.nodes.len(), 1);
-        assert_eq!(page_doc.nodes[0].uuid, page_uuid);
+        assert_eq!(page_doc.data_nodes.len(), 1);
+        assert_eq!(page_doc.data_nodes[0].uuid, page_uuid);
         assert_eq!(page_doc.rows[0].parent_uuid, None, "a top page");
         let t = &docs.threads[0];
-        let thread_node = t.nodes.last().unwrap();
+        let thread_node = t.data_nodes.last().unwrap();
         assert_eq!(thread_node.uuid, t.markdown_uuid);
         assert_eq!(thread_node.parent_uuid.as_deref(), Some(page_uuid));
-        assert_eq!(t.nodes[0].uuid, page_uuid);
+        assert_eq!(t.data_nodes[0].uuid, page_uuid);
         assert_eq!(t.rows[0].parent_uuid.as_deref(), Some(page_uuid));
         assert_eq!(t.rows[0].read_uuid.as_deref(), Some(page_uuid));
         assert_eq!(

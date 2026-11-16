@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
 use datalib_schema::filings::FilingRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -428,7 +428,7 @@ fn render_one(
         .iter()
         .map(datalib_etl_render::photo::with_photo_url)
         .collect(),
-        nodes: tree.nodes,
+        data_nodes: tree.data_nodes,
         filings: tree.filings,
         photos: Vec::new(),
         problems,
@@ -907,7 +907,7 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
 #[allow(clippy::too_many_arguments)]
 /// The containers one document of a chat carries, and where its rows sit.
 struct Tree {
-    nodes: Vec<NodeRow>,
+    data_nodes: Vec<DataNodeRow>,
     filings: Vec<FilingRow>,
     /// Where the document's own row sits.
     document: Lineage,
@@ -926,18 +926,18 @@ fn tree_of(
     source_id: &str,
 ) -> Tree {
     let md = &doc.markdown_uuid;
-    let mut nodes = Vec::with_capacity(chat.containers.len() + 2);
+    let mut data_nodes = Vec::with_capacity(chat.containers.len() + 2);
     let mut at = Lineage::top();
     for container in &chat.containers {
-        let node = NodeRow {
+        let node = DataNodeRow {
             markdown_uuid: md.clone(),
             ..container.clone()
         }
         .under(&at);
         at = at.below(&node);
-        nodes.push(node);
+        data_nodes.push(node);
     }
-    let mut chat_node = NodeRow::new(md, &chat.chat_uuid, source_id, &profile.chat_kind)
+    let mut chat_node = DataNodeRow::new(md, &chat.chat_uuid, source_id, &profile.chat_kind)
         .named(Some(chat.display.clone()))
         .read_together();
     if !chat.containers.iter().any(|c| c.is_place) {
@@ -958,17 +958,17 @@ fn tree_of(
     }
     let chat_node = chat_node.under(&at);
     let in_chat = at.below(&chat_node);
-    nodes.push(chat_node);
-    let filings = filed(chat, md, &mut nodes);
+    data_nodes.push(chat_node);
+    let filings = filed(chat, md, &mut data_nodes);
     if *md == chat.chat_uuid {
         return Tree {
-            nodes,
+            data_nodes,
             filings,
             document: at,
             inside: in_chat,
         };
     }
-    let mut part = NodeRow::new(md, md, source_id, &profile.chat_kind).read_together();
+    let mut part = DataNodeRow::new(md, md, source_id, &profile.chat_kind).read_together();
     if let Some(r) = &doc.source_ref {
         part = part.upstream(
             r.entity_kind.clone(),
@@ -978,9 +978,9 @@ fn tree_of(
     }
     let part = part.under(&in_chat);
     let inside = in_chat.below(&part);
-    nodes.push(part);
+    data_nodes.push(part);
     Tree {
-        nodes,
+        data_nodes,
         filings,
         document: in_chat,
         inside,
@@ -988,21 +988,21 @@ fn tree_of(
 }
 
 /// The chat filed under the last container of each path in
-/// `chat.filed_under`, and each container of every path added to `nodes`
+/// `chat.filed_under`, and each container of every path added to `data_nodes`
 /// once, in its place.
-fn filed(chat: &NormalizedChat, md: &str, nodes: &mut Vec<NodeRow>) -> Vec<FilingRow> {
+fn filed(chat: &NormalizedChat, md: &str, data_nodes: &mut Vec<DataNodeRow>) -> Vec<FilingRow> {
     let mut filings = Vec::with_capacity(chat.filed_under.len());
     for path in &chat.filed_under {
         let mut at = Lineage::top();
         for container in path {
-            let node = NodeRow {
+            let node = DataNodeRow {
                 markdown_uuid: md.to_string(),
                 ..container.clone()
             }
             .under(&at);
             at = at.below(&node);
-            if !nodes.iter().any(|n| n.uuid == node.uuid) {
-                nodes.push(node);
+            if !data_nodes.iter().any(|n| n.uuid == node.uuid) {
+                data_nodes.push(node);
             }
         }
         if let Some(under) = &at.parent_uuid {
@@ -1577,8 +1577,8 @@ mod tests {
         let chat = whole(mk_chat());
         let doc = &chat.buckets[0];
         let tree = tree_of(&test_profile(), &chat, doc, "src");
-        let [node] = tree.nodes.as_slice() else {
-            panic!("{:?}", tree.nodes)
+        let [node] = tree.data_nodes.as_slice() else {
+            panic!("{:?}", tree.data_nodes)
         };
         assert_eq!(node.uuid, chat.chat_uuid);
         assert_eq!(node.markdown_uuid, doc.markdown_uuid);
@@ -1609,13 +1609,13 @@ mod tests {
     fn a_chat_under_a_place_sits_in_it() {
         let mut chat = whole(mk_chat());
         chat.containers = vec![
-            NodeRow::new("", "workspace", "src", "Slack workspace").place(),
-            NodeRow::new("", "channel", "src", "Slack channel").place(),
+            DataNodeRow::new("", "workspace", "src", "Slack workspace").place(),
+            DataNodeRow::new("", "channel", "src", "Slack channel").place(),
         ];
         let doc = &chat.buckets[0];
         let tree = tree_of(&test_profile(), &chat, doc, "src");
         let parents: Vec<_> = tree
-            .nodes
+            .data_nodes
             .iter()
             .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref(), n.is_place))
             .collect();
@@ -1628,7 +1628,7 @@ mod tests {
             ]
         );
         assert!(tree
-            .nodes
+            .data_nodes
             .iter()
             .all(|n| n.markdown_uuid == doc.markdown_uuid));
         assert_eq!(tree.inside.place_uuid.as_deref(), Some("channel"));
@@ -1645,7 +1645,7 @@ mod tests {
         let chat = mk_chat();
         let doc = &chat.buckets[0];
         let tree = tree_of(&test_profile(), &chat, doc, "src");
-        let part = tree.nodes.last().unwrap();
+        let part = tree.data_nodes.last().unwrap();
         assert_eq!(part.uuid, doc.markdown_uuid);
         assert_eq!(part.parent_uuid.as_deref(), Some(chat.chat_uuid.as_str()));
         assert!(part.read_together);
@@ -1668,13 +1668,13 @@ mod tests {
     #[test]
     fn a_chat_is_filed_under_the_last_container_of_each_path() {
         let mut chat = whole(mk_chat());
-        let work = NodeRow::new("", "work", "src", "Label").place();
+        let work = DataNodeRow::new("", "work", "src", "Label").place();
         chat.filed_under = vec![
             vec![
                 work.clone(),
-                NodeRow::new("", "acme", "src", "Label").place(),
+                DataNodeRow::new("", "acme", "src", "Label").place(),
             ],
-            vec![work, NodeRow::new("", "zeta", "src", "Label").place()],
+            vec![work, DataNodeRow::new("", "zeta", "src", "Label").place()],
         ];
         let doc = &chat.buckets[0];
         let tree = tree_of(&test_profile(), &chat, doc, "src");
@@ -1682,7 +1682,7 @@ mod tests {
         assert_eq!(under, ["acme", "zeta"]);
         assert!(tree.filings.iter().all(|f| f.node_uuid == chat.chat_uuid));
         let labels: Vec<_> = tree
-            .nodes
+            .data_nodes
             .iter()
             .filter(|n| n.kind == "Label")
             .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref()))
@@ -1703,8 +1703,8 @@ mod tests {
     #[test]
     fn a_rendered_document_carries_the_containers_its_chat_names() {
         let mut chat = whole(mk_chat());
-        chat.containers = vec![NodeRow::new("", "channel", "src", "Slack channel").place()];
-        chat.filed_under = vec![vec![NodeRow::new("", "label", "src", "Label").place()]];
+        chat.containers = vec![DataNodeRow::new("", "channel", "src", "Slack channel").place()];
+        chat.filed_under = vec![vec![DataNodeRow::new("", "label", "src", "Label").place()]];
         let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
@@ -1720,7 +1720,7 @@ mod tests {
             },
         )
         .unwrap();
-        let uuids: Vec<_> = docs[0].nodes.iter().map(|n| n.uuid.as_str()).collect();
+        let uuids: Vec<_> = docs[0].data_nodes.iter().map(|n| n.uuid.as_str()).collect();
         assert!(
             uuids.contains(&"channel") && uuids.contains(&"label"),
             "{uuids:?}"

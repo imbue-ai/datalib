@@ -17,8 +17,8 @@ use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::{join, Section};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
@@ -163,7 +163,7 @@ fn render_one(
             )
         })
         .collect();
-    let (nodes, at) = tree(profile, doc, source_id);
+    let (data_nodes, at) = tree(profile, doc, source_id);
     let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
@@ -193,7 +193,7 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -209,20 +209,20 @@ fn tree(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
     source_id: &str,
-) -> (Vec<NodeRow>, Lineage) {
+) -> (Vec<DataNodeRow>, Lineage) {
     let md = &doc.doc_uuid;
-    let mut nodes = Vec::with_capacity(2);
+    let mut data_nodes = Vec::with_capacity(2);
     let mut at = Lineage::top();
     if let Some(book) = &doc.address_book {
-        let book = NodeRow {
+        let book = DataNodeRow {
             markdown_uuid: md.clone(),
             ..book.clone()
         }
         .under(&at);
         at = at.below(&book);
-        nodes.push(book);
+        data_nodes.push(book);
     }
-    let own = NodeRow::new(md, md, source_id, &profile.contact_kind)
+    let own = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
         .named(Some(display_or_id(doc).to_string()))
         .upstream(
             profile.contact_entity_kind,
@@ -231,8 +231,8 @@ fn tree(
         )
         .read_together()
         .under(&at);
-    nodes.push(own);
-    (nodes, at)
+    data_nodes.push(own);
+    (data_nodes, at)
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -705,7 +705,7 @@ mod tests {
     fn a_card_sits_in_its_address_book() {
         let mut doc = mk_contact();
         doc.address_book = Some(
-            NodeRow::new("", "book", "linkedin", "Address book")
+            DataNodeRow::new("", "book", "linkedin", "Address book")
                 .upstream("addressbook", "acct!/books/bridge/", None)
                 .place(),
         );
@@ -725,8 +725,8 @@ mod tests {
         .unwrap();
         let rendered = &docs[0];
         let md = doc.doc_uuid.as_str();
-        let nodes: Vec<(&str, &str, Option<&str>, bool, bool)> = rendered
-            .nodes
+        let data_nodes: Vec<(&str, &str, Option<&str>, bool, bool)> = rendered
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -739,7 +739,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            nodes,
+            data_nodes,
             vec![
                 (md, "book", None, true, false),
                 (md, md, Some("book"), false, true),

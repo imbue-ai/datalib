@@ -13,7 +13,7 @@ use datalib_etl_contact_common::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason};
 
 use datalib_etl_contacts::ingest::schema_raw::member_uid;
@@ -256,7 +256,7 @@ fn normalize(
         doc_uuid: id.uuid,
         group_label: contact.addressbook.clone(),
         address_book: contact.addressbook_id.as_deref().map(|book| {
-            NodeRow::new(
+            DataNodeRow::new(
                 "",
                 ids::addressbook(source_id, book).uuid,
                 source_id,

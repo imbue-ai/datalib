@@ -17,9 +17,9 @@ use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 
@@ -106,14 +106,14 @@ fn render_one(
         .unwrap_or(&md_path)
         .to_string_lossy()
         .into_owned();
-    let nodes = tree(profile, event, source_id);
+    let data_nodes = tree(profile, event, source_id);
     let row = build_grid_row(
         profile,
         event,
         source_id,
         &md_rel,
         start,
-        &Lineage::top().below(&nodes[0]),
+        &Lineage::top().below(&data_nodes[0]),
         &mut problems,
     );
     Ok(RenderedMarkdown {
@@ -129,7 +129,7 @@ fn render_one(
         sections,
         edges: edges(event),
         contacts: Vec::new(),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -559,9 +559,13 @@ fn build_grid_row(
 /// The calendar, a place, and the event in it, read on its own. A
 /// changed occurrence sits in the calendar beside its series, which it
 /// links.
-fn tree(profile: &CalendarRenderProfile, event: &NormalizedEvent, source_id: &str) -> Vec<NodeRow> {
+fn tree(
+    profile: &CalendarRenderProfile,
+    event: &NormalizedEvent,
+    source_id: &str,
+) -> Vec<DataNodeRow> {
     let md = &event.event_uuid;
-    let calendar = NodeRow::new(md, &event.calendar_uuid, source_id, "Calendar")
+    let calendar = DataNodeRow::new(md, &event.calendar_uuid, source_id, "Calendar")
         .named(Some(event.calendar_label.clone()))
         .upstream(
             event.calendar_entity_kind,
@@ -569,7 +573,7 @@ fn tree(profile: &CalendarRenderProfile, event: &NormalizedEvent, source_id: &st
             profile.account.clone(),
         )
         .place();
-    let own = NodeRow::new(md, md, source_id, kind_of(event))
+    let own = DataNodeRow::new(md, md, source_id, kind_of(event))
         .named(Some(title_of(event).to_string()))
         .upstream(
             event.upstream_entity_kind,
@@ -805,8 +809,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let doc = render_one(&profile(), &series(), dir.path(), "tng_calendar").unwrap();
         type Node<'a> = (&'a str, Option<&'a str>, bool, bool, Option<&'a str>);
-        let nodes: Vec<Node<'_>> = doc
-            .nodes
+        let data_nodes: Vec<Node<'_>> = doc
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -820,7 +824,7 @@ mod tests {
             .collect();
         let cal = "33333333-3333-8333-8333-333333333333";
         assert_eq!(
-            nodes,
+            data_nodes,
             vec![
                 (cal, None, true, false, Some("bridge")),
                 (SERIES, Some(cal), false, true, Some("bridge#staff")),

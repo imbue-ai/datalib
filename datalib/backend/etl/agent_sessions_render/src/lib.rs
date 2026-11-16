@@ -11,7 +11,7 @@ use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{AuthorKind, ItemKind, NormalizedChatItem, UpstreamRef};
 use datalib_etl_render::html::{escape_text, md_code_block};
 use datalib_id::Identity;
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use serde_json::Value;
 
 /// The `bucket_query` of an agent-session render's diff scan: the
@@ -115,9 +115,9 @@ pub fn project_of(cwd: &str) -> String {
 /// The project a session ran in: its working directory, a place. Upstream
 /// keeps no record of a project, so the directory is its key, and a
 /// project moved or renamed on disk is a new node.
-pub fn project_node(source_id: &str, kind: &str, id: Identity) -> NodeRow {
+pub fn project_node(source_id: &str, kind: &str, id: Identity) -> DataNodeRow {
     let name = project_of(&id.natural_key);
-    NodeRow::new("", id.uuid, source_id, kind)
+    DataNodeRow::new("", id.uuid, source_id, kind)
         .named(Some(name))
         .upstream(id.entity_kind, id.natural_key, None)
         .place()
@@ -130,8 +130,8 @@ pub fn parent_session_node(
     kind: &str,
     id: Identity,
     name: Option<&str>,
-) -> NodeRow {
-    NodeRow::new("", id.uuid, source_id, kind)
+) -> DataNodeRow {
+    DataNodeRow::new("", id.uuid, source_id, kind)
         .named(name.map(str::to_string))
         .upstream(id.entity_kind, id.natural_key, None)
         .read_together()

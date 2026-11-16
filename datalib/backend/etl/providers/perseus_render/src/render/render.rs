@@ -130,8 +130,8 @@ fn render_book(
     let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
         .into_iter()
         .collect();
-    let nodes = tree::book(source_id, &book.n, &m_uuid, &book_title(&book.n));
-    tree::place(&mut rows, &nodes);
+    let data_nodes = tree::book(source_id, &book.n, &m_uuid, &book_title(&book.n));
+    tree::place(&mut rows, &data_nodes);
     let edges: Vec<EdgeRow> = Vec::new();
 
     summary.rows_emitted += rows.len();
@@ -148,7 +148,7 @@ fn render_book(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -207,13 +207,13 @@ fn render_chapter(
         ));
         idx += 1;
     }
-    let nodes = tree::chapter(
+    let data_nodes = tree::chapter(
         source_id,
         edition,
         ids::chapter(source_id, &book.n, &chapter.n, &edition.id),
         &conversation_name(&book.n, &chapter.n, edition),
     );
-    tree::place(&mut rows, &nodes);
+    tree::place(&mut rows, &data_nodes);
     let edges = chapter_edges(source_id, book, chapter, edition, &m_uuid, alignments);
 
     summary.rows_emitted += rows.len();
@@ -230,7 +230,7 @@ fn render_chapter(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -694,12 +694,12 @@ mod tests {
         let chapter = ids::chapter("perseus", "1", "1", "perseus-grc2").uuid;
         let section = ids::section("perseus", "1", "1", "1", "perseus-grc2").uuid;
         let book_doc = &docs[0];
-        assert_eq!(book_doc.nodes[0].uuid, work);
-        assert!(book_doc.nodes[0].is_place);
+        assert_eq!(book_doc.data_nodes[0].uuid, work);
+        assert!(book_doc.data_nodes[0].is_place);
         assert_eq!(book_doc.rows[0].parent_uuid.as_deref(), Some(work.as_str()));
         let ch = &docs[1];
-        let nodes: Vec<(&str, Option<&str>, bool, bool)> = ch
-            .nodes
+        let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = ch
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -711,7 +711,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            nodes,
+            data_nodes,
             vec![
                 (work.as_str(), None, true, false),
                 (edition.as_str(), Some(work.as_str()), true, false),

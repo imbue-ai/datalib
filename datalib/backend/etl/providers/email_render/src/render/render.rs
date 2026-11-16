@@ -30,7 +30,7 @@ use datalib_etl_render::html::{
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::plain_text::plain_text;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
@@ -759,9 +759,9 @@ fn message_id_key(header: &str) -> Option<&str> {
 const LABEL_KIND: &str = "Email Label";
 
 /// The account a thread is in, and the place its labels hang from.
-fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> NodeRow {
+fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> DataNodeRow {
     let id = ids::account(source_id, account_id);
-    NodeRow::new("", id.uuid, source_id, "Email Account")
+    DataNodeRow::new("", id.uuid, source_id, "Email Account")
         .named(label)
         .upstream(id.entity_kind, id.natural_key, account_id.to_string())
         .place()
@@ -775,10 +775,10 @@ fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> Nod
 fn label_paths(
     source_id: &str,
     bucket: &EmailThreadBucket,
-    account: &NodeRow,
+    account: &DataNodeRow,
     by_name: &HashMap<String, Vec<String>>,
     mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
-) -> Vec<Vec<NodeRow>> {
+) -> Vec<Vec<DataNodeRow>> {
     let held: BTreeSet<&str> = bucket
         .joins
         .mailboxes
@@ -815,10 +815,10 @@ fn label_path(
     mailbox_id: &str,
     by_name: &HashMap<String, Vec<String>>,
     mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
-) -> Vec<NodeRow> {
+) -> Vec<DataNodeRow> {
     let node = |id: &str, name: &str| {
         let i = ids::mailbox(source_id, account_id, id);
-        NodeRow::new("", i.uuid, source_id, LABEL_KIND)
+        DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
             .named((!name.is_empty()).then(|| name.to_string()))
             .upstream(i.entity_kind, i.natural_key, account_id.to_string())
             .place()
@@ -839,7 +839,7 @@ fn label_path(
                 }
                 None => {
                     let i = ids::label_path(source_id, account_id, &prefix);
-                    NodeRow::new("", i.uuid, source_id, LABEL_KIND)
+                    DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
                         .named(Some(name.to_string()))
                         .place()
                 }
@@ -1748,12 +1748,12 @@ mod tree_tests {
         ids::mailbox("mail", ACCT, id).uuid
     }
 
-    /// Each node's (uuid, parent, name), for the nodes of `kind`.
+    /// Each node's (uuid, parent, name), for the data_nodes of `kind`.
     fn of_kind<'a>(
         doc: &'a RenderedMarkdown,
         kind: &str,
     ) -> Vec<(&'a str, Option<&'a str>, Option<&'a str>)> {
-        doc.nodes
+        doc.data_nodes
             .iter()
             .filter(|n| n.kind == kind)
             .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref(), n.name.as_deref()))
@@ -1785,7 +1785,7 @@ mod tree_tests {
             of_kind(&doc, "Email Account"),
             [(account.as_str(), None, Some(ACCT))]
         );
-        let chat = doc.nodes.iter().find(|n| n.uuid == thread).unwrap();
+        let chat = doc.data_nodes.iter().find(|n| n.uuid == thread).unwrap();
         assert_eq!(chat.parent_uuid.as_deref(), Some(account.as_str()));
         assert!(chat.read_together && !chat.is_place, "{chat:?}");
         let implied = ids::label_path("mail", ACCT, "Work/Clients").uuid;
@@ -1805,7 +1805,7 @@ mod tree_tests {
         want.sort();
         assert_eq!(labels, want);
         assert!(doc
-            .nodes
+            .data_nodes
             .iter()
             .filter(|n| n.kind == "Email Label")
             .all(|n| n.is_place));
@@ -1852,7 +1852,7 @@ mod tree_tests {
         ];
         want.sort();
         assert_eq!(labels, want);
-        let clients_node = doc.nodes.iter().find(|n| n.uuid == clients).unwrap();
+        let clients_node = doc.data_nodes.iter().find(|n| n.uuid == clients).unwrap();
         assert_eq!(
             (
                 clients_node.upstream_entity_kind.as_deref(),

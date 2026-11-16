@@ -4,8 +4,8 @@
 //! keyed by the catalog's `id_local`, which a rename keeps.
 
 use datalib_id::{IdNamespace, Identity};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::filings::FilingRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 
 use crate::read::ImageRow;
 
@@ -35,7 +35,7 @@ fn kind_of(table: &str) -> &'static str {
 }
 
 pub struct Tree {
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     pub filings: Vec<FilingRow>,
     /// Where the photo's own row sits.
     pub photo: Lineage,
@@ -43,20 +43,20 @@ pub struct Tree {
 
 pub fn of(source_id: &str, image: &ImageRow, catalog_name: Option<&str>) -> Tree {
     let md = &crate::photo::uuid(source_id, &image.id_global);
-    let catalog = NodeRow::new(md, catalog_uuid(source_id), source_id, "Lightroom catalog")
+    let catalog = DataNodeRow::new(md, catalog_uuid(source_id), source_id, "Lightroom catalog")
         .named(catalog_name.map(String::from))
         .place();
     let in_catalog = Lineage::top().below(&catalog);
-    let own = NodeRow::new(md, md, source_id, "Lightroom photo")
+    let own = DataNodeRow::new(md, md, source_id, "Lightroom photo")
         .upstream(crate::photo::ENTITY_KIND, image.id_global.clone(), None)
         .read_together()
         .under(&in_catalog);
-    let mut nodes = vec![catalog, own];
+    let mut data_nodes = vec![catalog, own];
     let mut filings = Vec::with_capacity(image.filed.len());
     for f in &image.filed {
         let mut at = Lineage::top();
         for (id, name) in &f.path {
-            let node = NodeRow::new(
+            let node = DataNodeRow::new(
                 md,
                 filed_uuid(source_id, f.table, *id),
                 source_id,
@@ -67,8 +67,8 @@ pub fn of(source_id: &str, image: &ImageRow, catalog_name: Option<&str>) -> Tree
             .place()
             .under(&at);
             at = at.below(&node);
-            if !nodes.iter().any(|n| n.uuid == node.uuid) {
-                nodes.push(node);
+            if !data_nodes.iter().any(|n| n.uuid == node.uuid) {
+                data_nodes.push(node);
             }
         }
         if let Some(under) = &at.parent_uuid {
@@ -76,7 +76,7 @@ pub fn of(source_id: &str, image: &ImageRow, catalog_name: Option<&str>) -> Tree
         }
     }
     Tree {
-        nodes,
+        data_nodes,
         filings,
         photo: in_catalog,
     }
@@ -112,8 +112,8 @@ mod tests {
         let kw = |id| filed_uuid("lr", "AgLibraryKeyword", id);
         let col = |id| filed_uuid("lr", "AgLibraryCollection", id);
         assert_ne!(kw(1), col(1), "the table separates one id_local");
-        let nodes: Vec<(String, Option<String>, bool, bool)> = t
-            .nodes
+        let data_nodes: Vec<(String, Option<String>, bool, bool)> = t
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -125,7 +125,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            nodes,
+            data_nodes,
             vec![
                 (catalog.clone(), None, true, false),
                 (photo.clone(), Some(catalog.clone()), false, true),

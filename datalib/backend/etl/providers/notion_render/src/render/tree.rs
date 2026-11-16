@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::inputs::Lookup;
-use datalib_schema::nodes::{Lineage, NodeRow};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 
 use super::ids;
 use super::render::parent_of;
@@ -25,7 +25,7 @@ pub(super) struct PageNode<'a> {
 
 /// The containers of one document, and where its rows sit.
 pub(super) struct Placed {
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     /// Where the page's own row sits.
     pub page: Lineage,
     /// Inside the page.
@@ -39,13 +39,13 @@ pub(super) fn page(
     page: &PageNode<'_>,
     tree: Lookup<'_, HashMap<String, TreeRow>>,
 ) -> Placed {
-    let mut nodes: Vec<NodeRow> = above(md, stanza, page.id, tree);
+    let mut data_nodes: Vec<DataNodeRow> = above(md, stanza, page.id, tree);
     let mut at = Lineage::top();
-    for node in &mut nodes {
+    for node in &mut data_nodes {
         *node = node.clone().under(&at);
         at = at.below(node);
     }
-    let own = NodeRow::new(
+    let own = DataNodeRow::new(
         md,
         ids::page(stanza, page.id, page.created_time).uuid,
         stanza,
@@ -56,17 +56,17 @@ pub(super) fn page(
     .read_together()
     .under(&at);
     let inside = at.below(&own);
-    nodes.push(own);
+    data_nodes.push(own);
     Placed {
-        nodes,
+        data_nodes,
         page: at,
         inside,
     }
 }
 
 /// A comment thread as a container of its page, read on its own.
-pub(super) fn thread(md: &str, stanza: &str, discussion_id: &str, in_page: &Placed) -> NodeRow {
-    NodeRow::new(
+pub(super) fn thread(md: &str, stanza: &str, discussion_id: &str, in_page: &Placed) -> DataNodeRow {
+    DataNodeRow::new(
         md,
         ids::discussion(stanza, discussion_id).uuid,
         stanza,
@@ -83,8 +83,8 @@ fn above(
     stanza: &str,
     page_id: &str,
     tree: Lookup<'_, HashMap<String, TreeRow>>,
-) -> Vec<NodeRow> {
-    let mut out: Vec<NodeRow> = Vec::new();
+) -> Vec<DataNodeRow> {
+    let mut out: Vec<DataNodeRow> = Vec::new();
     let mut seen: HashSet<String> = HashSet::from([page_id.to_string()]);
     let mut next = tree.get(page_id).and_then(parent_of);
     while let Some(id) = next {
@@ -103,11 +103,11 @@ fn above(
     out
 }
 
-fn container(md: &str, stanza: &str, id: &str, row: &TreeRow) -> Option<NodeRow> {
+fn container(md: &str, stanza: &str, id: &str, row: &TreeRow) -> Option<DataNodeRow> {
     let name = shown_title(row).map(String::from);
     match row.kind? {
         TreeKind::Page | TreeKind::UnmirroredPage => Some(
-            NodeRow::new(
+            DataNodeRow::new(
                 md,
                 ids::page(stanza, id, row.created_time.as_deref()).uuid,
                 stanza,
@@ -118,7 +118,7 @@ fn container(md: &str, stanza: &str, id: &str, row: &TreeRow) -> Option<NodeRow>
             .read_together(),
         ),
         TreeKind::Database => Some(
-            NodeRow::new(
+            DataNodeRow::new(
                 md,
                 ids::database(stanza, id).uuid,
                 stanza,
@@ -179,7 +179,7 @@ mod tests {
             inputs.lookup("tree", &tree),
         );
         let kinds: Vec<(&str, Option<&str>, bool, bool)> = at
-            .nodes
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -198,7 +198,7 @@ mod tests {
                 ("Notion page", Some("Stardate 41153"), true, false),
             ]
         );
-        let [top, db, own] = &at.nodes[..] else {
+        let [top, db, own] = &at.data_nodes[..] else {
             panic!("three containers")
         };
         assert_eq!(top.parent_uuid, None);

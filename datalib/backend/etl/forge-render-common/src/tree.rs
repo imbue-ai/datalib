@@ -7,13 +7,13 @@
 
 use std::collections::HashMap;
 
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
-use datalib_schema::nodes::{Lineage, NodeRow};
 
 use crate::{ChangeRequest, Comment, ForgeProfile};
 
 pub(crate) struct Tree {
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     /// Where the change request's own row sits.
     pub change_request: Lineage,
     /// Inside it: where every comment sits.
@@ -22,17 +22,17 @@ pub(crate) struct Tree {
 
 pub(crate) fn of(profile: &ForgeProfile, cr: &ChangeRequest, stanza: &str) -> Tree {
     let md = &cr.uuid;
-    let mut nodes = Vec::with_capacity(2);
+    let mut data_nodes = Vec::with_capacity(2);
     let mut at = Lineage::top();
     if let Some(c) = &cr.container_node {
-        let node = NodeRow::new(md, &c.uuid, stanza, c.kind)
+        let node = DataNodeRow::new(md, &c.uuid, stanza, c.kind)
             .named(Some(cr.container.clone()))
             .upstream(c.entity_kind, c.upstream_id.clone(), None)
             .place();
         at = at.below(&node);
-        nodes.push(node);
+        data_nodes.push(node);
     }
-    let own = NodeRow::new(md, md, stanza, profile.doc_kind)
+    let own = DataNodeRow::new(md, md, stanza, profile.doc_kind)
         .named(Some(cr.title.clone()))
         .upstream(
             profile.doc_entity_kind,
@@ -42,9 +42,9 @@ pub(crate) fn of(profile: &ForgeProfile, cr: &ChangeRequest, stanza: &str) -> Tr
         .read_together()
         .under(&at);
     let inside = at.below(&own);
-    nodes.push(own);
+    data_nodes.push(own);
     Tree {
-        nodes,
+        data_nodes,
         change_request: at,
         inside,
     }

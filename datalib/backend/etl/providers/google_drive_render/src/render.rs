@@ -14,8 +14,8 @@ use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -126,7 +126,7 @@ pub fn render_doc(
         .join("\n");
     let tree = file.tree();
     rows.extend(file.row(&md_rel, &text, &tree.file, &mut problems));
-    let mut nodes = tree.nodes;
+    let mut data_nodes = tree.data_nodes;
     for t in &threads {
         let thread = file.thread_node(t, &tree.inside);
         rows.extend(comment_rows_of(
@@ -137,7 +137,7 @@ pub fn render_doc(
             &tree.inside.below(&thread),
             &mut problems,
         ));
-        nodes.push(thread);
+        data_nodes.push(thread);
     }
 
     let problem_row = |item: Option<&str>, outcome, problem| {
@@ -175,7 +175,7 @@ pub fn render_doc(
         sections,
         edges: Vec::new(),
         contacts: comments::authors(source_id, &threads, file.me.as_ref()),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -235,7 +235,7 @@ fn interleave(blocks: &[Block], threads: &[Thread], placed: &[Option<usize>]) ->
 
 /// The containers one Doc carries, and where its rows sit.
 struct FileTree {
-    nodes: Vec<NodeRow>,
+    data_nodes: Vec<DataNodeRow>,
     /// Where the file's own row sits.
     file: Lineage,
     /// Inside the file: where a thread's first comment sits.
@@ -309,10 +309,10 @@ impl FileFacts {
     /// one.
     fn tree(&self) -> FileTree {
         let md = &self.id.uuid;
-        let mut nodes = Vec::with_capacity(2);
+        let mut data_nodes = Vec::with_capacity(2);
         let mut at = Lineage::top();
         if let Some(folder) = &self.folder {
-            let node = NodeRow::new(
+            let node = DataNodeRow::new(
                 md,
                 ids::folder(&self.source_id, folder).uuid,
                 &self.source_id,
@@ -321,9 +321,9 @@ impl FileFacts {
             .upstream(ids::KIND_FOLDER, folder.clone(), self.account())
             .place();
             at = at.below(&node);
-            nodes.push(node);
+            data_nodes.push(node);
         }
-        let file = NodeRow::new(md, md, &self.source_id, KIND_DOC)
+        let file = DataNodeRow::new(md, md, &self.source_id, KIND_DOC)
             .named(Some(self.title.clone()))
             .upstream(
                 self.id.entity_kind,
@@ -333,9 +333,9 @@ impl FileFacts {
             .read_together()
             .under(&at);
         let inside = at.below(&file);
-        nodes.push(file);
+        data_nodes.push(file);
         FileTree {
-            nodes,
+            data_nodes,
             file: at,
             inside,
         }
@@ -343,9 +343,9 @@ impl FileFacts {
 
     /// A comment thread inside the file, read together. It is its first
     /// comment, as a document is its own row, and its replies sit in it.
-    fn thread_node(&self, t: &Thread, in_file: &Lineage) -> NodeRow {
+    fn thread_node(&self, t: &Thread, in_file: &Lineage) -> DataNodeRow {
         let first = &t.messages[0].id;
-        NodeRow::new(
+        DataNodeRow::new(
             &self.id.uuid,
             &first.uuid,
             &self.source_id,

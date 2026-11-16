@@ -289,7 +289,7 @@ workspace and its channel) is its tree, below.
 ### `parent_uuid`, `sort_key`, `read_uuid`, `place_uuid`: where a row sits
 
 Every row sits in a tree of **containers**: the chat, thread, channel,
-page, calendar or label it lives in, each a row of the `nodes` table
+page, calendar or label it lives in, each a row of the `data_nodes` table
 that the document carries the way it carries its contacts (a channel
 named by many threads has a row under each, one container when read).
 `parent_uuid` is the container that holds the row. `sort_key` is how

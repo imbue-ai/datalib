@@ -38,9 +38,9 @@ use datalib_columns::Entity;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{entity_link, stamp_text_html};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::providers::Provider;
 
 /// The `grid_rows.source_label`: one label for every source's measurements, as the Source column shows them.
@@ -376,8 +376,8 @@ fn step_link(step: &str) -> String {
 
 /// The report, read together at the top of its source, as the subject
 /// that is its document describes it: every other measurement sits in it.
-fn report_node(source_id: &str, markdown_uuid: &str, subjects: &[Subject]) -> NodeRow {
-    let mut node = NodeRow::new(markdown_uuid, markdown_uuid, source_id, "Storage report")
+fn report_node(source_id: &str, markdown_uuid: &str, subjects: &[Subject]) -> DataNodeRow {
+    let mut node = DataNodeRow::new(markdown_uuid, markdown_uuid, source_id, "Storage report")
         .named(Some(format!("{source_id} storage")))
         .read_together();
     if let Some(s) = subjects.iter().find(|s| s.uuid(source_id) == markdown_uuid) {
@@ -490,7 +490,7 @@ pub fn plan(
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: vec![node],
+            data_nodes: vec![node],
             filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
@@ -643,10 +643,10 @@ mod tests {
         .unwrap()
         .expect("a measured source");
         let doc = &m.doc;
-        assert_eq!(doc.nodes.len(), 1);
-        assert_eq!(doc.nodes[0].uuid, doc.markdown_uuid);
-        assert!(doc.nodes[0].read_together);
-        assert_eq!(doc.nodes[0].upstream_id.as_deref(), Some("s/ingest"));
+        assert_eq!(doc.data_nodes.len(), 1);
+        assert_eq!(doc.data_nodes[0].uuid, doc.markdown_uuid);
+        assert!(doc.data_nodes[0].read_together);
+        assert_eq!(doc.data_nodes[0].upstream_id.as_deref(), Some("s/ingest"));
         let tree = doc.rows.iter().find(|r| r.is_document).unwrap();
         let table = doc.rows.iter().find(|r| !r.is_document).unwrap();
         assert_eq!(tree.parent_uuid, None);

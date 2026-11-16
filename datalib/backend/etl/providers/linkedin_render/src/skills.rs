@@ -14,8 +14,8 @@ use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -143,7 +143,7 @@ pub fn build(
     skills.sort_by_key(|(_, name)| name.to_lowercase());
 
     // The one document is read together, and each skill sits in it.
-    let node = NodeRow::new(&doc_id.uuid, &doc_id.uuid, source_id, KIND_SKILLS)
+    let node = DataNodeRow::new(&doc_id.uuid, &doc_id.uuid, source_id, KIND_SKILLS)
         .named(Some(TITLE.to_string()))
         .upstream(
             doc_id.entity_kind,
@@ -217,7 +217,7 @@ pub fn build(
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: vec![node],
+            data_nodes: vec![node],
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
@@ -297,9 +297,9 @@ mod tests {
             "{diplomacy}"
         );
         assert_eq!(inputs.len(), 2, "both rows declared: {inputs:?}");
-        assert_eq!(doc.nodes.len(), 1);
-        assert!(doc.nodes[0].read_together);
-        assert_eq!(doc.nodes[0].uuid, doc.rows[0].uuid);
+        assert_eq!(doc.data_nodes.len(), 1);
+        assert!(doc.data_nodes[0].read_together);
+        assert_eq!(doc.data_nodes[0].uuid, doc.rows[0].uuid);
         assert_eq!(doc.rows[0].parent_uuid, None);
         for skill in &doc.rows[1..] {
             assert_eq!(

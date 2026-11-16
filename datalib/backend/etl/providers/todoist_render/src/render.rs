@@ -19,8 +19,8 @@ use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOS
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -282,10 +282,10 @@ pub fn build(
         grouped.entry(at).or_default().push(t);
     }
 
-    let (mut nodes, above, in_project) = project_nodes(&facts, store, inputs);
+    let (mut data_nodes, above, in_project) = project_nodes(&facts, store, inputs);
     let mut in_section: HashMap<&str, Lineage> = HashMap::new();
     for (id, s) in &sections {
-        let node = NodeRow::new(
+        let node = DataNodeRow::new(
             &facts.id.uuid,
             ids::section(source_id, id).uuid,
             source_id,
@@ -300,7 +300,7 @@ pub fn build(
         )
         .under(&in_project);
         in_section.insert(id, in_project.below(&node));
-        nodes.push(node);
+        data_nodes.push(node);
     }
     let task_uuids: HashMap<&str, String> = tasks
         .iter()
@@ -418,7 +418,7 @@ pub fn build(
         sections: md_sections,
         edges: Vec::new(),
         contacts: Vec::new(),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -432,10 +432,10 @@ fn project_nodes(
     facts: &ProjectFacts,
     store: &Store,
     inputs: &Inputs,
-) -> (Vec<NodeRow>, Lineage, Lineage) {
+) -> (Vec<DataNodeRow>, Lineage, Lineage) {
     let md = &facts.id.uuid;
     let node = |id: &str, name: Option<String>| {
-        NodeRow::new(
+        DataNodeRow::new(
             md,
             ids::project(&facts.source_id, id).uuid,
             &facts.source_id,
@@ -446,7 +446,7 @@ fn project_nodes(
         .read_together()
         .place()
     };
-    let mut chain: Vec<NodeRow> = Vec::new();
+    let mut chain: Vec<DataNodeRow> = Vec::new();
     let mut seen: HashSet<&str> = HashSet::from([facts.project_id.as_str()]);
     let mut next = store
         .projects

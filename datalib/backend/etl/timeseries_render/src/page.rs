@@ -16,8 +16,8 @@ use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
-use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
@@ -246,7 +246,7 @@ pub fn write_page(
     m_uuid: &str,
     body: String,
     render_version: u32,
-    nodes: Vec<NodeRow>,
+    data_nodes: Vec<DataNodeRow>,
     build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -281,7 +281,7 @@ pub fn write_page(
         sections: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
-        nodes,
+        data_nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -568,8 +568,8 @@ fn capitalize(word: &str) -> String {
 /// source's render.
 /// The page, read together, at the top of its source: its devices are
 /// rows in it, and it is the source's one document.
-fn page_node(profile: &PageProfile, source_id: &str, m_uuid: &str) -> NodeRow {
-    NodeRow::new(m_uuid, m_uuid, source_id, "Sensor Timeseries")
+fn page_node(profile: &PageProfile, source_id: &str, m_uuid: &str) -> DataNodeRow {
+    DataNodeRow::new(m_uuid, m_uuid, source_id, "Sensor Timeseries")
         .named(Some(profile.page_title(source_id)))
         .upstream(KIND_PAGE, source_id, None)
         .read_together()

@@ -356,8 +356,8 @@ fn a_task_sits_in_its_section_its_parent_and_its_project() {
     let fleet = ids::project("todoist", "6Fleet").uuid;
     let refit = ids::project("todoist", REFIT).uuid;
     let section = ids::section("todoist", "6SecEngineering").uuid;
-    let nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
-        .nodes
+    let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
+        .data_nodes
         .iter()
         .map(|n| {
             (
@@ -369,7 +369,7 @@ fn a_task_sits_in_its_section_its_parent_and_its_project() {
         })
         .collect();
     assert_eq!(
-        nodes,
+        data_nodes,
         vec![
             (fleet.as_str(), None, true, true),
             (refit.as_str(), Some(fleet.as_str()), true, true),

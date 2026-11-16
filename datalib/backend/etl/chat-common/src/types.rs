@@ -379,12 +379,12 @@ pub struct NormalizedChat {
     /// workspace and channel. Each document of the chat carries them, with
     /// its own `markdown_uuid`; their places in the tree are filled from
     /// this order. Empty for a chat with nothing above it.
-    pub containers: Vec<datalib_schema::nodes::NodeRow>,
+    pub containers: Vec<datalib_schema::data_nodes::DataNodeRow>,
     /// What the chat is filed under besides its containers: an email
     /// thread's labels. Each is a path of containers, top first (a nested
     /// label's parents, then the label); the chat is filed under the last.
     /// Paths may share their top: one container, carried once.
-    pub filed_under: Vec<Vec<datalib_schema::nodes::NodeRow>>,
+    pub filed_under: Vec<Vec<datalib_schema::data_nodes::DataNodeRow>>,
     /// Human-readable label that goes into the chat-level grid_row's
     /// `conversation_name` (and the page title when `title` is unset).
     /// E.g. "Will Riker" or "Bridge Crew".

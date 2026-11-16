@@ -27,11 +27,11 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
+use datalib_schema::data_nodes::{DataNodeRow, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::{layout_json, SectionSpan, DDL as MARKDOWNS_TABLE_DDL};
-use datalib_schema::nodes::{NodeRow, DDL as NODES_DDL};
 use datalib_schema::problems::{ProblemRow, Severity, Stage, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
@@ -635,7 +635,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
-        .chain(NODES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -1093,7 +1093,7 @@ pub struct RenderedMarkdown {
     /// The containers this document's rows live in, from its own up to the
     /// top of the source; owned by the document like its contacts, so a
     /// channel named by many threads has a row under each.
-    pub nodes: Vec<NodeRow>,
+    pub data_nodes: Vec<DataNodeRow>,
     /// What its rows and containers are filed under besides their parent.
     pub filings: Vec<FilingRow>,
     /// The people this document describes or mentions, as its source
@@ -2006,7 +2006,7 @@ pub(crate) const DELETE_DOCUMENT_GRID_ROWS: &str =
     "DELETE FROM grid_rows WHERE markdown_uuid IN (SELECT value FROM json_each(?)) RETURNING uuid";
 pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
     "DELETE FROM edges WHERE src_markdown_uuid IN (SELECT value FROM json_each(?))",
-    "DELETE FROM nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM filings WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_contact_handles WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
@@ -2107,7 +2107,7 @@ async fn apply_markdown(
         insert_edge(conn, edge).await?;
     }
     for sql in [
-        "DELETE FROM nodes WHERE markdown_uuid = ?",
+        "DELETE FROM data_nodes WHERE markdown_uuid = ?",
         "DELETE FROM filings WHERE markdown_uuid = ?",
     ] {
         sqlx::query(sql)
@@ -2116,7 +2116,7 @@ async fn apply_markdown(
             .await
             .context("delete prior containers")?;
     }
-    for node in &md.nodes {
+    for node in &md.data_nodes {
         insert_node(conn, &md.markdown_uuid, node).await?;
     }
     for filing in &md.filings {
@@ -2356,7 +2356,7 @@ async fn insert_edge(
 async fn insert_node(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,
-    node: &NodeRow,
+    node: &DataNodeRow,
 ) -> Result<()> {
     if node.markdown_uuid != markdown_uuid {
         bail!(
@@ -2366,7 +2366,7 @@ async fn insert_node(
         );
     }
     sqlx::query(
-        "INSERT OR REPLACE INTO nodes \
+        "INSERT OR REPLACE INTO data_nodes \
          (markdown_uuid, uuid, source_id, kind, name, parent_uuid, sort_key, read_together, \
           is_place, read_uuid, place_uuid, upstream_entity_kind, upstream_id, upstream_account) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2798,7 +2798,7 @@ mod write_lock_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes: Vec::new(),
             filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
@@ -3252,7 +3252,7 @@ mod source_cursor_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes: Vec::new(),
             filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
@@ -3675,13 +3675,13 @@ mod source_cursor_tests {
     /// re-render that names none takes them out of the grid too.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_grid_carries_each_documents_containers() {
-        use datalib_schema::nodes::NodeRow;
+        use datalib_schema::data_nodes::DataNodeRow;
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["s".to_string()];
         let mut d = doc(root, "s", "md-a", "body");
-        d.nodes = vec![NodeRow::new("md-a", "md-a", "s", "Chat").read_together()];
+        d.data_nodes = vec![DataNodeRow::new("md-a", "md-a", "s", "Chat").read_together()];
         d.filings = vec![datalib_schema::filings::FilingRow::new(
             "md-a", "md-a", "label",
         )];
@@ -3700,13 +3700,13 @@ mod source_cursor_tests {
                 .unwrap()
             }
         };
-        assert_eq!((count("nodes").await, count("filings").await), (1, 1));
+        assert_eq!((count("data_nodes").await, count("filings").await), (1, 1));
 
         render(root, "s", &[doc(root, "s", "md-a", "body again")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
-        assert_eq!((count("nodes").await, count("filings").await), (0, 0));
+        assert_eq!((count("data_nodes").await, count("filings").await), (0, 0));
     }
 
     /// A store from a build before #962 lacked `source_contacts`, failed

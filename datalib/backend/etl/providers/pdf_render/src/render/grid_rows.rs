@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::grid_rows::{content_hash, preview, GridRow};
-use datalib_schema::nodes::NodeRow;
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
 
@@ -128,10 +128,10 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
 
 /// The document as a container, read together, at the top of its source:
 /// it is its bytes, wherever on disk they are, so no folder holds it.
-pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>) -> NodeRow {
+pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>) -> DataNodeRow {
     let when = document_stamp(meta.created_at, meta.modified_at);
     let doc = document(source_id, meta.blake3, when);
-    NodeRow::new(&doc.uuid, &doc.uuid, source_id, KIND_DOCUMENT)
+    DataNodeRow::new(&doc.uuid, &doc.uuid, source_id, KIND_DOCUMENT)
         .named(Some(display_title(meta.title, meta.rel_path)))
         .upstream(doc.entity_kind, doc.natural_key, None)
         .read_together()

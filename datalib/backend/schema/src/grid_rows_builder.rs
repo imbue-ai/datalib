@@ -295,7 +295,7 @@ impl GridRowBuilder {
 
     /// Where the row sits in the tree: its parent, and the nearest
     /// containers above it that are read together and that are a place.
-    pub fn lineage(self, at: &crate::nodes::Lineage) -> Self {
+    pub fn lineage(self, at: &crate::data_nodes::Lineage) -> Self {
         self.parent_uuid(at.parent_uuid.clone())
             .read_uuid(at.read_uuid.clone())
             .place_uuid(at.place_uuid.clone())

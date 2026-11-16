@@ -91,7 +91,7 @@ database per source, at
     term (`etl/render/src/search_terms.rs`).
   - `edges` — its outgoing links: a `Link` the page draws, or a
     `ReplyTo` from an item to the one it answers.
-  - `nodes` and `filings` — the containers its rows live in, from its
+  - `data_nodes` and `filings` — the containers its rows live in, from its
     own up to the top of the source, and what they are filed under
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.

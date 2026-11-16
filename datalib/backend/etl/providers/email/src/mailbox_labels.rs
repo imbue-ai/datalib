@@ -35,10 +35,11 @@ impl MailboxNode {
     }
 }
 
-pub fn paths_by_id(nodes: &[MailboxNode]) -> HashMap<String, String> {
-    let by_id: HashMap<&str, &MailboxNode> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let mut out = HashMap::with_capacity(nodes.len());
-    for n in nodes {
+pub fn paths_by_id(data_nodes: &[MailboxNode]) -> HashMap<String, String> {
+    let by_id: HashMap<&str, &MailboxNode> =
+        data_nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut out = HashMap::with_capacity(data_nodes.len());
+    for n in data_nodes {
         let mut segs: Vec<&str> = Vec::new();
         let mut cur = Some(n);
         let mut depth = 0;
@@ -71,8 +72,8 @@ pub struct Resolved {
     pub unmatched: Vec<String>,
 }
 
-pub fn resolve(nodes: &[MailboxNode], labels: &[String]) -> Resolved {
-    let paths = paths_by_id(nodes);
+pub fn resolve(data_nodes: &[MailboxNode], labels: &[String]) -> Resolved {
+    let paths = paths_by_id(data_nodes);
     // path -> ids. A path *should* be unique, but two sibling mailboxes
     // with the same name (or a re-used Gmail label) could collide;
     // matching all of them is the conservative choice.
@@ -106,13 +107,13 @@ mod tests {
 
     #[test]
     fn builds_nested_paths_from_parent_chain() {
-        let nodes = vec![
+        let data_nodes = vec![
             node("a", "Work", None),
             node("b", "Projects", Some("a")),
             node("c", "Q3", Some("b")),
             node("d", "Inbox", None),
         ];
-        let paths = paths_by_id(&nodes);
+        let paths = paths_by_id(&data_nodes);
         assert_eq!(paths["a"], "Work");
         assert_eq!(paths["b"], "Work/Projects");
         assert_eq!(paths["c"], "Work/Projects/Q3");
@@ -122,26 +123,26 @@ mod tests {
     #[test]
     fn flat_mbox_label_is_its_own_path() {
         // Gmail-takeout style: the full label is the `name`, no parent.
-        let nodes = vec![node("x", "Work/Projects", None)];
-        let paths = paths_by_id(&nodes);
+        let data_nodes = vec![node("x", "Work/Projects", None)];
+        let paths = paths_by_id(&data_nodes);
         assert_eq!(paths["x"], "Work/Projects");
     }
 
     #[test]
     fn exact_match_only_no_subtree() {
-        let nodes = vec![node("a", "Work", None), node("b", "Projects", Some("a"))];
-        let r = resolve(&nodes, &["Work".to_string()]);
+        let data_nodes = vec![node("a", "Work", None), node("b", "Projects", Some("a"))];
+        let r = resolve(&data_nodes, &["Work".to_string()]);
         assert_eq!(r.ids, HashSet::from(["a".to_string()]));
         assert!(r.unmatched.is_empty());
 
-        let r = resolve(&nodes, &["Work/Projects".to_string()]);
+        let r = resolve(&data_nodes, &["Work/Projects".to_string()]);
         assert_eq!(r.ids, HashSet::from(["b".to_string()]));
     }
 
     #[test]
     fn reports_unmatched_labels() {
-        let nodes = vec![node("a", "Inbox", None)];
-        let r = resolve(&nodes, &["Inbox".to_string(), "Typo".to_string()]);
+        let data_nodes = vec![node("a", "Inbox", None)];
+        let r = resolve(&data_nodes, &["Inbox".to_string(), "Typo".to_string()]);
         assert_eq!(r.ids, HashSet::from(["a".to_string()]));
         assert_eq!(r.unmatched, vec!["Typo".to_string()]);
     }

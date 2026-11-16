@@ -263,7 +263,7 @@ pub fn render_all(
             contacts: account_contact(stanza, parsed.account.as_ref(), cr, &comments)
                 .into_iter()
                 .collect(),
-            nodes: tree.nodes,
+            data_nodes: tree.data_nodes,
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
@@ -474,8 +474,8 @@ mod tests {
         )
         .unwrap();
         let doc = &docs[0];
-        let nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
-            .nodes
+        let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -487,7 +487,7 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            nodes,
+            data_nodes,
             vec![
                 ("repo", None, true, false),
                 ("pr", Some("repo"), false, true)

@@ -888,7 +888,7 @@ mod tree_tests {
 
     const SRC: &str = "codex";
 
-    /// What chat-common makes of `chats`: each document's nodes and rows.
+    /// What chat-common makes of `chats`: each document's data_nodes and rows.
     fn rendered(chats: &[NormalizedChat]) -> Vec<RenderedMarkdown> {
         let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
@@ -910,7 +910,7 @@ mod tree_tests {
 
     /// Each node's (uuid, parent, read together, place).
     fn tree(doc: &RenderedMarkdown) -> Vec<(String, Option<String>, bool, bool)> {
-        doc.nodes
+        doc.data_nodes
             .iter()
             .map(|n| {
                 (
@@ -950,7 +950,7 @@ mod tree_tests {
             ]
         );
         let sub = doc(subagent);
-        let project_row = &sub.nodes[0];
+        let project_row = &sub.data_nodes[0];
         assert_eq!(project_row.name.as_deref(), Some("enterprise"));
         assert_eq!(
             project_row.upstream_id.as_deref(),

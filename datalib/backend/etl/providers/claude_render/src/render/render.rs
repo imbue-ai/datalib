@@ -35,7 +35,7 @@ use super::parse::{
     ShreddedConversation, ATTACHMENTS_PROJECTION_SQL,
 };
 use datalib_id::Identity;
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
@@ -496,9 +496,9 @@ fn build_chat(
 /// The project a conversation is in: the same node as the project's own
 /// page, which chat-common makes read together and a place, so every
 /// document that names it says the same of it.
-fn project_node(source_id: &str, project_uuid: &str, name: Option<String>) -> NodeRow {
+fn project_node(source_id: &str, project_uuid: &str, name: Option<String>) -> DataNodeRow {
     let id = ids::project(source_id, project_uuid);
-    NodeRow::new("", id.uuid, source_id, project_profile().chat_kind)
+    DataNodeRow::new("", id.uuid, source_id, project_profile().chat_kind)
         .named(name)
         .upstream(id.entity_kind, id.natural_key, None)
         .read_together()
@@ -736,14 +736,14 @@ fn in_reading_order<'a>(
                 b.message_uuid.as_str(),
             ))
     });
-    let nodes: Vec<TreeNode<'_>> = by_time
+    let data_nodes: Vec<TreeNode<'_>> = by_time
         .iter()
         .map(|m| TreeNode {
             id: &m.message_uuid,
             parent: m.parent_message_uuid.as_deref(),
         })
         .collect();
-    let Some(order) = leaf.and_then(|leaf| reading_order(&nodes, leaf)) else {
+    let Some(order) = leaf.and_then(|leaf| reading_order(&data_nodes, leaf)) else {
         return by_time.into_iter().map(|m| (m, Vec::new())).collect();
     };
     let by_uuid: HashMap<&str, &MessageRow> = by_time
@@ -1516,17 +1516,17 @@ mod tree_tests {
         .unwrap();
         let project = ids::project("cl", "p1").uuid;
         let doc = |uuid: &str| docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
-        let roles = |n: &NodeRow| (n.parent_uuid.clone(), n.read_together, n.is_place);
+        let roles = |n: &DataNodeRow| (n.parent_uuid.clone(), n.read_together, n.is_place);
 
         let page = doc(&project);
-        let [page_node] = page.nodes.as_slice() else {
-            panic!("{:?}", page.nodes)
+        let [page_node] = page.data_nodes.as_slice() else {
+            panic!("{:?}", page.data_nodes)
         };
         assert_eq!(roles(page_node), (None, true, true));
 
         let in_project = doc(&ids::conversation("cl", "c1").uuid);
-        let [above, chat] = in_project.nodes.as_slice() else {
-            panic!("{:?}", in_project.nodes)
+        let [above, chat] = in_project.data_nodes.as_slice() else {
+            panic!("{:?}", in_project.data_nodes)
         };
         assert_eq!(above.uuid, project);
         assert_eq!(roles(above), roles(page_node));
@@ -1544,8 +1544,8 @@ mod tree_tests {
         assert_eq!(roles(chat), (Some(project.clone()), true, false));
 
         let alone = doc(&ids::conversation("cl", "c2").uuid);
-        let [chat] = alone.nodes.as_slice() else {
-            panic!("{:?}", alone.nodes)
+        let [chat] = alone.data_nodes.as_slice() else {
+            panic!("{:?}", alone.data_nodes)
         };
         assert_eq!(roles(chat), (None, true, true));
     }

@@ -348,7 +348,7 @@ fn render_one(
         sections,
         edges: Vec::new(),
         contacts: Vec::new(),
-        nodes: vec![node],
+        data_nodes: vec![node],
         filings: Vec::new(),
         photos: Vec::new(),
         problems,

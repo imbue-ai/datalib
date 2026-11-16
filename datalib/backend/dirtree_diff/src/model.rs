@@ -212,7 +212,7 @@ pub struct SideResult {
     /// lossy and could not rebuild what `analyze` produced.
     pub dup_groups: Vec<DupGroup>,
     pub dup_wasted: i64,
-    pub nodes: Vec<Node>,
+    pub data_nodes: Vec<Node>,
 }
 
 /// The headline counts. A struct rather than a map so the viewer and
@@ -246,7 +246,7 @@ pub struct DiffResult {
 
 impl DiffResult {
     pub fn node(&self, side: Side, path: &str) -> Option<&Node> {
-        self.side(side).nodes.iter().find(|n| n.path == path)
+        self.side(side).data_nodes.iter().find(|n| n.path == path)
     }
 
     pub fn side(&self, side: Side) -> &SideResult {
@@ -258,7 +258,7 @@ impl DiffResult {
 
     pub fn statuses(&self, side: Side) -> std::collections::BTreeMap<String, Status> {
         self.side(side)
-            .nodes
+            .data_nodes
             .iter()
             .filter(|n| n.status.is_finding())
             .map(|n| (n.path.clone(), n.status))

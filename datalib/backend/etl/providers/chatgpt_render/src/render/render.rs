@@ -28,7 +28,7 @@ use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
     ATTACHMENTS_PROJECTION_SQL,
 };
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -297,14 +297,14 @@ fn build_chat(
 /// The project or custom GPT a conversation was held in, a place. The
 /// store keeps only its id, so it has no name. A project's id starts
 /// `g-p-`, as its chatgpt.com address shows (`/g/g-p-…/project`).
-fn gizmo_node(source_id: &str, gizmo_id: &str, account: Option<String>) -> NodeRow {
+fn gizmo_node(source_id: &str, gizmo_id: &str, account: Option<String>) -> DataNodeRow {
     let id = ids::gizmo(source_id, gizmo_id);
     let kind = if gizmo_id.starts_with("g-p-") {
         "ChatGPT Project"
     } else {
         "Custom GPT"
     };
-    NodeRow::new("", id.uuid, source_id, kind)
+    DataNodeRow::new("", id.uuid, source_id, kind)
         .upstream(id.entity_kind, id.natural_key, account)
         .place()
 }
@@ -321,7 +321,7 @@ fn ordered_messages(shredded: &ShreddedConversation) -> Vec<(&OAMessageRow, Vec<
             .unwrap_or("")
             .cmp(b.create_time.as_deref().unwrap_or(""))
     });
-    let nodes: Vec<TreeNode<'_>> = by_time
+    let data_nodes: Vec<TreeNode<'_>> = by_time
         .iter()
         .map(|m| TreeNode {
             id: &m.message_id,
@@ -332,7 +332,7 @@ fn ordered_messages(shredded: &ShreddedConversation) -> Vec<(&OAMessageRow, Vec<
         .conv
         .current_node
         .as_deref()
-        .and_then(|leaf| reading_order(&nodes, leaf));
+        .and_then(|leaf| reading_order(&data_nodes, leaf));
     let Some(order) = order else {
         return by_time.into_iter().map(|m| (m, Vec::new())).collect();
     };
@@ -648,7 +648,7 @@ mod tree_tests {
                 .iter()
                 .find(|d| d.markdown_uuid == ids::conversation("gpt", c).uuid)
                 .unwrap();
-            doc.nodes
+            doc.data_nodes
                 .iter()
                 .map(|n| {
                     (

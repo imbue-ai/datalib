@@ -310,7 +310,7 @@ fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
     )
     .unwrap();
     let roles: Vec<(&str, bool, bool, Option<&str>)> = md
-        .nodes
+        .data_nodes
         .iter()
         .map(|n| {
             (
@@ -332,7 +332,7 @@ fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
             ("Google Doc comment thread", false, true, Some(file)),
         ]
     );
-    assert_eq!(md.nodes[2].uuid, thread);
+    assert_eq!(md.data_nodes[2].uuid, thread);
     let at: Vec<(Option<&str>, Option<&str>, Option<&str>)> = md
         .rows
         .iter()

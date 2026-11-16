@@ -28,7 +28,7 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_etl_render::processor::Unparsed;
 use datalib_etl_slack::ingest::schema_raw::split_key;
-use datalib_schema::nodes::NodeRow;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
 
@@ -424,12 +424,12 @@ fn containers_of(
     workspace_name: Option<String>,
     channel_name: String,
     is_dm: bool,
-) -> Vec<NodeRow> {
+) -> Vec<DataNodeRow> {
     let workspace = ids::workspace(source_id, &root.team_id);
     let channel = ids::channel(source_id, &root.team_id, &root.channel_id);
     let channel_kind = if is_dm { "Slack DM" } else { "Slack Channel" };
     vec![
-        NodeRow::new("", workspace.uuid, source_id, "Slack Workspace")
+        DataNodeRow::new("", workspace.uuid, source_id, "Slack Workspace")
             .named(workspace_name)
             .upstream(
                 workspace.entity_kind,
@@ -437,7 +437,7 @@ fn containers_of(
                 root.team_id.clone(),
             )
             .place(),
-        NodeRow::new("", channel.uuid, source_id, channel_kind)
+        DataNodeRow::new("", channel.uuid, source_id, channel_kind)
             .named(Some(channel_name))
             .upstream(
                 channel.entity_kind,
@@ -962,7 +962,7 @@ mod tests {
         let channel = ids::channel("src", "T1", "C1").uuid;
         let thread = ids::thread("src", "T1", "C1", "12604000100.000100").uuid;
         let tree: Vec<_> = doc
-            .nodes
+            .data_nodes
             .iter()
             .map(|n| {
                 (
@@ -994,8 +994,8 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(doc.nodes[0].name.as_deref(), Some("Enterprise"));
-        assert_eq!(doc.nodes[1].name.as_deref(), Some("#bridge"));
+        assert_eq!(doc.data_nodes[0].name.as_deref(), Some("Enterprise"));
+        assert_eq!(doc.data_nodes[1].name.as_deref(), Some("#bridge"));
         let messages: Vec<_> = doc.rows.iter().filter(|r| r.uuid != thread).collect();
         assert_eq!(messages.len(), 2);
         for row in messages {
