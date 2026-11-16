@@ -102,13 +102,13 @@ database per source, at
     they belong to the document.
   - `sections` — what each piece of the document says, in order, kept
     apart from how it is drawn. An item a renderer has split (chat-common
-    does) keeps its body alone, with no header or wrapper, and who it was
-    addressed to by name; the store draws its header again from its row.
+    does) keeps its body alone, with no header or wrapper, who it was
+    addressed to (name and handle) and its labels; the store draws its header again from its row.
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and it is
     not kept. The search index draws its text from it, each item as an
-    envelope line (who, to whom, when) and its body
+    envelope line (who, to whom, when), its labels and its body
     (`search_index/src/text.rs`). The grid index does not copy it
     ([`messages_not_documents.md`](plans/messages_not_documents.md)
     §"Store the body, format on read").

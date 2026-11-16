@@ -478,12 +478,15 @@ against the eval before the next.
      item's index text from its body and its row, and stops reading
      files. A framed body is drawn as it is, so its chunks' text and
      hashes do not move; only chat-common's sources re-embed. An
-     unframed item is drawn as one plain envelope line, then its body:
-     `Will Riker to Jean-Luc Picard — Tue 3 Mar 2026 14:05`. Names, not
-     addresses (the search terms already match those exactly);
-     recipients only where the item has its own, as an email's To and
-     Cc, not a chat's members on every line; no labels, which a person
-     moves, and no URLs. A chunk that starts inside an item repeats its
+     unframed item is drawn as one plain envelope line, its labels, then
+     its body: `Will Riker <riker@enterprise.starfleet> to Jean-Luc
+     Picard — Tue 3 Mar 2026 14:05`, then `Labels: Away missions`. A
+     person is named, with the address one would type for them where the
+     handle is an email or a phone number, so a pasted address or a word
+     of a label finds the item by its words as well as through the search
+     terms; a Slack id and the like stay out. Recipients only where the
+     item has its own, as an email's To and Cc, not a chat's members on
+     every line; no URLs. A chunk that starts inside an item repeats its
      envelope line, so every chunk says who and when. The title stays in
      the prompt's frame.
 
