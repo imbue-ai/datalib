@@ -292,19 +292,91 @@ pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
+    read_with(path, datalib_sqlite_open::file(path).read_only(true)).await
+}
+
+/// A doltlite store's rows as its `main` commit has them: what its writer
+/// last sealed, read without waiting on the writer.
+async fn read_store(path: &Path) -> Result<Vec<ProblemRow>> {
+    read_with(
+        path,
+        datalib_sqlite_open::revision(path, "main").read_only(true),
+    )
+    .await
+}
+
+async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Vec<ProblemRow>> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .connect_with(datalib_sqlite_open::file(path).read_only(true))
+        .connect_with(opts)
         .await
         .with_context(|| format!("open {}", path.display()))?;
-    let rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
-        .fetch_all(&pool)
-        .await
-        .with_context(|| format!("read {}", path.display()));
+    let has_table: Result<Option<(i64,)>, _> =
+        sqlx::query_as("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems'")
+            .fetch_optional(&pool)
+            .await;
+    let rows = match has_table {
+        Ok(None) => Ok(Vec::new()),
+        Ok(Some(_)) => sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
+            .fetch_all(&pool)
+            .await
+            .map_err(anyhow::Error::from),
+        Err(e) => Err(e.into()),
+    }
+    .with_context(|| format!("read the problems in {}", path.display()));
     pool.close().await;
     rows?.iter().map(ProblemRow::from_row).collect()
+}
+
+/// One step's problems, or why they could not be read.
+#[derive(Debug)]
+pub struct OfStep {
+    pub step_id: String,
+    pub rows: Vec<ProblemRow>,
+    pub unread: Vec<String>,
+}
+
+/// What a step's problems are: the `problems` table of every store
+/// directly in its folder (a `.doltlite_db` read at `main`, or a plain
+/// `.sqlite` file, its own `problems.sqlite` among them). A row that
+/// names no source gets the step's group, which is the source.
+pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
+    let mut out = OfStep {
+        step_id: step_id.to_string(),
+        rows: Vec::new(),
+        unread: Vec::new(),
+    };
+    let dir = data_root.join(step_id);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return out;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+    let group = step_id.rsplit_once('/').map_or(step_id, |(g, _)| g);
+    for file in files {
+        let read = match file.extension().and_then(|e| e.to_str()) {
+            Some("doltlite_db") => read_store(&file).await,
+            Some("sqlite") => read(&file).await,
+            _ => continue,
+        };
+        match read {
+            Ok(rows) => out.rows.extend(rows.into_iter().map(|r| ProblemRow {
+                source_id: if r.source_id.is_empty() {
+                    group.to_string()
+                } else {
+                    r.source_id.clone()
+                },
+                ..r
+            })),
+            Err(e) => out.unread.push(format!("{e:#}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
