@@ -2,7 +2,9 @@
 //! #1). Schema-only (serde + anyhow).
 
 pub use datalib_source_common::WhenDeletedUpstream;
-use datalib_source_common::{not_negative, LatchkeySettings, LocalPath, SourceCommon};
+use datalib_source_common::{
+    not_negative, seconds_between_requests, LatchkeySettings, LocalPath, SourceCommon,
+};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -71,19 +73,28 @@ impl ChatgptConfig {
         if let Some(api) = &self.api {
             datalib_time::TimeWindow::check("api", api.since.as_deref(), None)
                 .map_err(anyhow::Error::msg)?;
-            not_negative("api.max_pages", api.max_pages).map_err(anyhow::Error::msg)?;
-            not_negative("api.limit", api.limit).map_err(anyhow::Error::msg)?;
-            if let Some(s) = api.sleep_between {
-                anyhow::ensure!(
-                    s.is_finite() && (0.0..=3600.0).contains(&s),
-                    "`api.sleep_between` is {s}; it is seconds between requests, from 0 to 3600"
-                );
-            }
+            not_negative("api.max_listing_pages", api.max_listing_pages)
+                .map_err(anyhow::Error::msg)?;
+            not_negative(
+                "api.max_conversations_per_run",
+                api.max_conversations_per_run,
+            )
+            .map_err(anyhow::Error::msg)?;
+            not_negative(
+                "api.refetch_newest_conversations",
+                api.refetch_newest_conversations,
+            )
+            .map_err(anyhow::Error::msg)?;
+            seconds_between_requests("api.seconds_between_requests", api.seconds_between_requests)
+                .map_err(anyhow::Error::msg)?;
         }
         Ok(())
     }
 }
 
+/// The API's settings. `since`, `max_conversations_per_run`,
+/// `refetch_newest_conversations`, `seconds_between_requests` and
+/// `conv_uuids` mean the same on the `claude` source.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptApiSync {
@@ -98,19 +109,27 @@ pub struct ChatgptApiSync {
     #[serde(default)]
     pub since: Option<String>,
     /// Stop listing after this many pages of 100 conversations. Unset
-    /// lists them all. Ignored, with a warning, beside `conv_uuids`.
+    /// lists them all. A listing cut short deletes nothing here. Ignored,
+    /// with a warning, beside `conv_uuids`.
     #[serde(default)]
-    pub max_pages: Option<i64>,
-    /// Fetch at most this many conversations per run. Unset fetches every
+    pub max_listing_pages: Option<i64>,
+    /// Fetch at most this many conversations per run, the ones never
+    /// fetched first; the next run fetches the rest. Unset fetches every
     /// one that is owed. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
-    pub limit: Option<i64>,
+    pub max_conversations_per_run: Option<i64>,
+    /// Fetch this many of the most recently updated conversations again
+    /// every run, even when the copy here is already at the update time
+    /// listed: a check against the live copy. Unset fetches only what
+    /// changed. Ignored, with a warning, beside `conv_uuids`.
+    #[serde(default)]
+    pub refetch_newest_conversations: Option<i64>,
     /// Seconds to wait between requests, from 0 to 3600. Unset waits
     /// none; the download still backs off on its own when rate-limited.
     #[serde(default)]
-    pub sleep_between: Option<f64>,
-    /// When non-empty, restrict the fetch to exactly these conversation ids
-    /// (bare id or a paste-able `https://chatgpt.com/c/<id>` URL).
+    pub seconds_between_requests: Option<f64>,
+    /// When non-empty, fetch exactly these conversations every run, by id
+    /// or a paste-able `https://chatgpt.com/c/<id>` URL, with no listing.
     #[serde(default)]
     pub conv_uuids: Vec<String>,
 }
@@ -118,10 +137,12 @@ pub struct ChatgptApiSync {
 impl ChatgptApiSync {
     /// The wait between requests; `validate` has refused a value this
     /// would not fit.
-    pub fn sleep_between(&self) -> std::time::Duration {
-        self.sleep_between
-            .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok())
-            .unwrap_or_default()
+    pub fn wait_between_requests(&self) -> std::time::Duration {
+        seconds_between_requests(
+            "api.seconds_between_requests",
+            self.seconds_between_requests,
+        )
+        .unwrap_or_default()
     }
 }
 
@@ -140,26 +161,26 @@ impl datalib_source_common::IngestMethods for ChatgptConfig {
 mod tests {
     use super::*;
 
-    /// `sleep_between` was read and then ignored: a sync hard-coded no
-    /// wait. A negative one would have panicked `Duration` once read.
+    /// The wait was once read and then ignored: a sync hard-coded none.
+    /// A negative one would have panicked `Duration` once read.
     #[test]
-    fn sleep_between_is_read_and_held_to_seconds() {
+    fn seconds_between_requests_is_read_and_held_to_seconds() {
         let api = |s: Option<f64>| ChatgptApiSync {
-            sleep_between: s,
+            seconds_between_requests: s,
             ..Default::default()
         };
         assert_eq!(
-            api(Some(0.5)).sleep_between(),
+            api(Some(0.5)).wait_between_requests(),
             std::time::Duration::from_millis(500)
         );
-        assert_eq!(api(None).sleep_between(), std::time::Duration::ZERO);
+        assert_eq!(api(None).wait_between_requests(), std::time::Duration::ZERO);
         for bad in [-1.0, f64::NAN, 1e9] {
             let cfg = ChatgptConfig {
                 api: Some(api(Some(bad))),
                 ..Default::default()
             };
             let err = cfg.validate().unwrap_err().to_string();
-            assert!(err.contains("api.sleep_between"), "{err}");
+            assert!(err.contains("api.seconds_between_requests"), "{err}");
         }
     }
 
@@ -183,18 +204,24 @@ mod tests {
 
     #[test]
     fn negative_counts_are_refused_by_name() {
-        let cfg = ChatgptConfig {
-            api: Some(ChatgptApiSync {
-                limit: Some(-3),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("api.limit"));
+        for key in [
+            "max_listing_pages",
+            "max_conversations_per_run",
+            "refetch_newest_conversations",
+        ] {
+            let cfg: ChatgptConfig = toml::from_str(&format!("[api]\n{key} = -3\n")).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(&format!("`api.{key}`")), "{err}");
+        }
+    }
+
+    /// The names these settings had before they matched `claude`'s are
+    /// refused at load; `datalib-migrate-config` rewrites them.
+    #[test]
+    fn the_old_names_are_refused() {
+        for old in ["max_pages = 1", "limit = 1", "sleep_between = 1.0"] {
+            assert!(toml::from_str::<ChatgptConfig>(&format!("[api]\n{old}\n")).is_err());
+        }
     }
 
     /// `api.since` takes the shared window grammar, and a typo is

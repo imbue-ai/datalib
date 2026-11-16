@@ -58,8 +58,8 @@ impl Fetcher<Conversation> for Conversations<'_> {
             };
             ctx.opts.progress.inc(1);
             out.push(Fetched { listed, outcome });
-            if ctx.opts.sleep_between > Duration::ZERO {
-                sleep(ctx.opts.sleep_between).await;
+            if ctx.opts.wait_between_requests > Duration::ZERO {
+                sleep(ctx.opts.wait_between_requests).await;
             }
         }
         Ok(out)

@@ -23,9 +23,12 @@
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
 //! `since`; then `problem_inputs.rs`: `grid_index` reads each
 //! `render_time_series` and `render_occurrences` step, for its problem
-//! rows. Those last eight rewrites are also the ones `datalib-http`
-//! makes by itself ([`UNATTENDED`]).
+//! rows; then `conversation_settings.rs`: the ChatGPT and Claude
+//! ingests' API settings take the names they share. Those last nine
+//! rewrites are also the ones `datalib-http` makes by itself
+//! ([`UNATTENDED`]).
 
+pub mod conversation_settings;
 pub mod convert;
 pub mod document_index;
 pub mod lowercase_ids;
@@ -79,6 +82,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if problem_inputs::is_retired(text)? {
         return Ok(LegacyFormat::UnreadProblems);
     }
+    if conversation_settings::is_retired(text)? {
+        return Ok(LegacyFormat::ConversationSettingNames);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -91,7 +97,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand
         | LegacyFormat::TodoistCompletedSince
-        | LegacyFormat::UnreadProblems => text.to_string(),
+        | LegacyFormat::UnreadProblems
+        | LegacyFormat::ConversationSettingNames => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -106,6 +113,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = step_commands::rewrite(&out)?;
     let out = todoist_since::rewrite(&out)?;
     let out = problem_inputs::rewrite(&out)?;
+    let out = conversation_settings::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -226,6 +234,18 @@ pub fn upgrade_problem_inputs(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Give the ChatGPT and Claude ingests' API settings the names they
+/// share (`conversation_settings.rs`). Refused, as [`upgrade_qmd_steps`]
+/// is, when the result would not load every entry the original did.
+pub fn upgrade_conversation_settings(text: &str) -> Result<Option<String>> {
+    if !conversation_settings::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = conversation_settings::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
@@ -243,7 +263,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 8] = [
+pub const UNATTENDED: [Rewrite; 9] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -291,6 +311,14 @@ pub const UNATTENDED: [Rewrite; 8] = [
         what: "`grid_index` reads each `render_time_series` and `render_occurrences` step, \
                so their problem rows reach the problems list and the Manage counts",
         run: upgrade_problem_inputs,
+    },
+    Rewrite {
+        why: "has a ChatGPT or Claude source whose API settings have their old names",
+        what: "ChatGPT's `max_pages`, `limit` and `sleep_between` are `max_listing_pages`, \
+               `max_conversations_per_run` and `seconds_between_requests`, and Claude's \
+               `refresh_most_recent_n_chat_count` is `refetch_newest_conversations`, \
+               the names both sources share",
+        run: upgrade_conversation_settings,
     },
 ];
 
@@ -946,6 +974,25 @@ inputs = ["mail/render_markdown"]
         assert!(out.contains("\nsince = \"2364-01-01\"\n"), "{out}");
         assert!(loads(&out), "{out}");
         assert_eq!(upgrade_todoist_since(&out).unwrap(), None);
+        assert_eq!(convert(before).unwrap(), out);
+    }
+
+    /// A ChatGPT source written with the old setting names is renamed by
+    /// the server, every entry still loading, and then has nothing left to
+    /// do. `datalib-step` refuses the old keys (the config crates' tests).
+    #[test]
+    fn a_chatgpt_source_with_the_old_setting_names_is_upgraded() {
+        let before = "[[groups]]\nid = \"gpt\"\ntype = \"chatgpt\"\n\n[[steps]]\n\
+                      group = \"gpt\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
+                      [steps.params.api]\nlimit = 10\n";
+        let loads = |text: &str| {
+            let check = datalib_dag::config::check_text(text);
+            check.cfg.steps.iter().any(|s| s.id == "gpt/ingest")
+        };
+        let out = upgrade_conversation_settings(before).unwrap().unwrap();
+        assert!(out.contains("\nmax_conversations_per_run = 10\n"), "{out}");
+        assert!(loads(&out), "{out}");
+        assert_eq!(upgrade_conversation_settings(&out).unwrap(), None);
         assert_eq!(convert(before).unwrap(), out);
     }
 

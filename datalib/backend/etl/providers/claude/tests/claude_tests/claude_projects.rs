@@ -112,8 +112,8 @@ async fn run(
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let mut o = FetchOptions {
         export_dir: Some(api.to_path_buf()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: Vec::new(),
         projects: true,
         ..FetchOptions::new(db.clone())

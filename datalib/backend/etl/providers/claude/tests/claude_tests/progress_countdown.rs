@@ -122,8 +122,8 @@ async fn each_conversation_ticks_once_and_the_count_reaches_zero_only_at_the_end
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: Vec::new(),
         progress: Progress::new(Arc::new(recorder.clone())),
         ..FetchOptions::new(db.clone())

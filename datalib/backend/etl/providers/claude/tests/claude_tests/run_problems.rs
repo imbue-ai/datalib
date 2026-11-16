@@ -613,3 +613,72 @@ async fn an_org_without_chat_is_not_walked_and_keeps_what_it_held() {
         "an org that is not walked is not pruned"
     );
 }
+
+/// Beside `conv_uuids` no listing runs, so every listing setting did
+/// nothing and nothing said so. Each is a warning row; the wait, which a
+/// named fetch keeps, is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_listing_settings_beside_named_conversations_are_warnings() {
+    let acct = Account::new(true);
+    acct.holds(&[conv("c-a1", ENTERPRISE)], &[]);
+    let s = acct
+        .run(|o| {
+            o.conv_uuids = vec!["c-a1".into()];
+            o.since = Some("2369-01-01".into());
+            o.max_conversations_per_run = Some(5);
+            o.refetch_newest_conversations = Some(2);
+            o.wait_between_requests = std::time::Duration::from_millis(1);
+        })
+        .await
+        .unwrap();
+    assert_eq!(s.fetched, 1, "{s:?}");
+    assert_eq!(
+        acct.keys().await,
+        [
+            "config:max_conversations_per_run:5",
+            "config:refetch_newest_conversations:2",
+            "config:since:2369-01-01",
+        ]
+    );
+}
+
+/// A run fetches at most `max_conversations_per_run`, and the next run
+/// the rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_fetches_at_most_its_cap() {
+    let acct = Account::new(true);
+    let convs = [
+        conv("c-a1", ENTERPRISE),
+        conv("c-a2", ENTERPRISE),
+        conv("c-a3", ENTERPRISE),
+    ];
+    acct.holds(&convs, &[]);
+    let capped = |o: &mut FetchOptions| o.max_conversations_per_run = Some(2);
+    assert_eq!(acct.run(capped).await.unwrap().fetched, 2);
+    assert_eq!(acct.run(capped).await.unwrap().fetched, 1);
+    assert_eq!(acct.conversation_ids().await, ["c-a1", "c-a2", "c-a3"]);
+}
+
+/// `refetch_newest_conversations` fetches the newest again though the
+/// copy here is at the version listed, and only those: the others'
+/// details now fail, so asking for one would be an error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_newest_conversations_are_fetched_again_every_run() {
+    let acct = Account::new(true);
+    let mut newest = conv("c-a3", ENTERPRISE);
+    newest["updated_at"] = json!("2369-01-03T00:00:00Z");
+    acct.holds(
+        &[conv("c-a1", ENTERPRISE), newest, conv("c-a2", ENTERPRISE)],
+        &[],
+    );
+    assert_eq!(acct.run(|_| {}).await.unwrap().fetched, 3);
+    assert_eq!(acct.run(|_| {}).await.unwrap().fetched, 0);
+
+    acct.fail(&detail(ENTERPRISE, "c-a1"), 500);
+    acct.fail(&detail(ENTERPRISE, "c-a2"), 500);
+    let s = acct
+        .run(|o| o.refetch_newest_conversations = Some(1))
+        .await
+        .unwrap();
+    assert_eq!((s.fetched, s.errors), (1, 0), "{s:?}");
+}

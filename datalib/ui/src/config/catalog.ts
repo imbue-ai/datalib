@@ -514,12 +514,6 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
@@ -548,9 +542,21 @@ export const CATALOG: CatalogEntry[] = [
       },
       {
         kind: "int",
-        target: "api.refresh_most_recent_n_chat_count",
-        label: "Force-refresh the N most recent chats each sync",
-        help: "Empty relies on updated_at alone.",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when updated_at says they have not changed, in each org. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
       },
       {
         kind: "string_list",
@@ -613,12 +619,6 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
@@ -668,6 +668,30 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "int",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when update_time says they have not changed. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
+      },
+      {
+        kind: "int",
+        target: "api.max_listing_pages",
+        label: "Stop listing after (pages of 100)",
+        help: "A listing cut short deletes nothing here. Empty lists them all.",
       },
       {
         kind: "select",
