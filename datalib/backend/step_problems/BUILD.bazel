@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A step's own problems.sqlite: its shape, and the rules that stamp and
+# clear its rows. Both the runner (for a step that sends problem events)
+# and datalib-step (which writes its own) go through it.
+rust_library(
+    name = "datalib_step_problems",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_step_problems",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "step_problems_unittests",
+    size = "small",
+    crate = ":datalib_step_problems",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
