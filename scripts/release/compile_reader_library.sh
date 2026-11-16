@@ -12,9 +12,10 @@ out="$2"
 mapfile -t copts < "$in/library_copts.txt"
 
 # BLAKE3's SIMD kernels for this CPU, each with its own flags, beside the
-# amalgamation that dispatches to them: `<cpu> <source> <flags>` per line.
+# amalgamation that dispatches to them: `<cpu> <source> <flags>` per line,
+# the last with no newline after it.
 objects=()
-while read -r cpu source flags; do
+while read -r cpu source flags || [[ -n "$cpu" ]]; do
     [[ "$cpu" == "$(uname -m)" ]] || continue
     # shellcheck disable=SC2086 # split on purpose: one flag per word
     gcc -c "${copts[@]}" $flags -w "$in/blake3_kernels/$source" -o "/tmp/${source%.c}.o"
