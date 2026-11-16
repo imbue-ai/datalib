@@ -96,7 +96,7 @@ use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 use crate::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
 };
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{
     close_open_blocks, escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
     without_bidi_controls,
@@ -419,6 +419,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         sections,
+        front: front(profile, chat, doc, &chat_title),
         edges,
         contacts: crate::people::document_contacts(
             source_id,
@@ -482,34 +483,33 @@ fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
 
 // Markdown
 
+/// The document's front matter.
+fn front(
+    profile: &RenderProfile,
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+    chat_title: &str,
+) -> Front {
+    Front::new()
+        .name("title", chat_title)
+        .plain("provider", profile.provider)
+        .text("source_label", &profile.source_label)
+        .plain("chat_uuid", &chat.chat_uuid)
+        .plain("markdown_uuid", &doc.markdown_uuid)
+        .text("display", &chat.display)
+        .text_if("account", chat.account.as_deref())
+        .text_if("project", chat.project.as_deref())
+        .text_if("external_id", chat.external_id.as_deref())
+        .plain("item_count", message_count(doc))
+}
+
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
 ) -> Vec<Section> {
-    let mut s = String::with_capacity(1024);
-    s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(chat_title)));
-    s.push_str(&format!("provider: {}\n", profile.provider));
-    s.push_str(&format!(
-        "source_label: {}\n",
-        yaml_scalar(&profile.source_label)
-    ));
-    s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
-    s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
-    s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
-    if let Some(a) = &chat.account {
-        s.push_str(&format!("account: {}\n", yaml_scalar(a)));
-    }
-    if let Some(p) = &chat.project {
-        s.push_str(&format!("project: {}\n", yaml_scalar(p)));
-    }
-    if let Some(e) = &chat.external_id {
-        s.push_str(&format!("external_id: {}\n", yaml_scalar(e)));
-    }
-    s.push_str(&format!("item_count: {}\n", message_count(doc)));
-    s.push_str("---\n\n");
+    let mut s = front(profile, chat, doc, chat_title).draw();
 
     s.push_str(
         &Title {

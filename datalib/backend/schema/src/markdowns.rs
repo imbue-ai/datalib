@@ -104,6 +104,12 @@ pub struct MarkdownRow {
     /// NULL from a renderer that declares no sections.
     #[col(sql = "VARCHAR(64)")]
     pub content_hash: Option<String>,
+    /// The document's front matter as its renderer handed it, as JSON:
+    /// its keys in order, each with its value
+    /// (`datalib_etl_render::front_matter::Front`). NULL from a store an
+    /// older build wrote.
+    #[col(sql = "TEXT")]
+    pub front: Option<String>,
 }
 
 /// One piece of a document's `.md`: the `data-section-uuid` it wraps, or

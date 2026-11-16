@@ -1094,6 +1094,9 @@ pub struct RenderedMarkdown {
     /// The `content_hash` the store holds for this document, when it is
     /// read back; `None` from a renderer, whose sections give it.
     pub content_hash: Option<String>,
+    /// Its front matter as facts: what its first section draws, kept as
+    /// data (`markdowns.front`).
+    pub front: crate::front_matter::Front,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -2227,8 +2230,8 @@ async fn upsert_markdown(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
           item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
-          content_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          content_hash, front) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -2244,6 +2247,7 @@ async fn upsert_markdown(
     .bind(&md.bucket_key)
     .bind(section_layout.as_deref().map(layout_json))
     .bind(content_hash)
+    .bind((!md.front.is_empty()).then(|| md.front.to_json()))
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -2804,6 +2808,7 @@ mod write_lock_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),
@@ -3258,6 +3263,7 @@ mod source_cursor_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),

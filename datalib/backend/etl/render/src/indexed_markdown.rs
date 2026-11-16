@@ -1433,6 +1433,11 @@ impl IndexedMarkdownStore {
                         .as_deref()
                         .and_then(datalib_schema::markdowns::parse_layout),
                     content_hash: md.content_hash.clone(),
+                    front: md
+                        .front
+                        .as_deref()
+                        .and_then(crate::front_matter::Front::from_json)
+                        .unwrap_or_default(),
                     edges,
                     contacts,
                     data_nodes,
@@ -1704,6 +1709,7 @@ mod tests {
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),
