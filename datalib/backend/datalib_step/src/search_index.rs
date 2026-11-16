@@ -13,7 +13,7 @@ use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
-use datalib_search_index::{ChunkSpan, Index, IndexDoc, InferenceCache};
+use datalib_search_index::{Index, IndexDoc, InferenceCache, Reader};
 
 /// Documents read and indexed together, one transaction each.
 const DOCUMENT_BATCH: usize = 200;
@@ -159,9 +159,18 @@ pub(crate) async fn embed(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    let index = Index::open(&layout::grid_index_db(root)).await?;
-    let spans = index.chunk_spans(group).await;
-    index.close().await;
+    // Read-only: an embed writes only the cache, and a writer of the
+    // index's file (a keyword pass, the grid's load) must not hold it up.
+    let Some(reader) = Reader::open(
+        &layout::grid_index_db(root),
+        &layout::inference_cache_db(root),
+    )
+    .await?
+    else {
+        return Ok(Done::default());
+    };
+    let spans = reader.chunk_hashes(group).await;
+    reader.close().await;
     let spans = spans?;
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
     let out = embed_into(&cache, root, group, model_path, spans, progress, stop).await;
@@ -174,25 +183,22 @@ async fn embed_into(
     root: &Path,
     group: &str,
     model_path: &Path,
-    spans: Vec<ChunkSpan>,
+    spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
     let model = datalib_search_index::model_key();
-    let hashes: Vec<String> = spans.iter().map(|s| s.hash.clone()).collect();
+    let hashes: Vec<String> = spans.iter().map(|(_, hash)| hash.clone()).collect();
     let missing: HashSet<String> = cache.missing(&model, &hashes).await?.into_iter().collect();
     if missing.is_empty() {
         return Ok(done);
     }
     let mut by_doc: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
     let mut queued = HashSet::new();
-    for span in &spans {
-        if missing.contains(&span.hash) && queued.insert(span.hash.as_str()) {
-            by_doc
-                .entry(&span.markdown_uuid)
-                .or_default()
-                .insert(&span.hash);
+    for (doc, hash) in &spans {
+        if missing.contains(hash) && queued.insert(hash.as_str()) {
+            by_doc.entry(doc).or_default().insert(hash);
         }
     }
     progress.set_message("search index: embedding");

@@ -139,6 +139,21 @@ impl Reader {
         Ok(other.is_some())
     }
 
+    /// Each chunk of `source_id`'s documents, `(markdown_uuid, prompt
+    /// hash)`, in document order: what the embed step asks the cache
+    /// about. Read-only, so an embed never waits on a writer of the file.
+    pub async fn chunk_hashes(&self, source_id: &str) -> Result<Vec<(String, String)>> {
+        sqlx::query_as(
+            "SELECT d.markdown_uuid, c.hash FROM search_chunks c \
+               JOIN search_documents d ON d.doc_id = c.doc_id \
+              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
+        )
+        .bind(source_id)
+        .fetch_all(&self.index)
+        .await
+        .context("read the indexed chunks")
+    }
+
     /// How many documents the index holds, embedded or not.
     pub async fn documents(&self) -> Result<usize> {
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM search_documents")

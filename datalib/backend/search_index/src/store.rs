@@ -64,6 +64,12 @@ const DDL: [&str; 7] = [
 /// thousand documents, many minutes when it loads a large source whole.
 const WAIT_FOR_THE_GRID: Duration = Duration::from_secs(60 * 60);
 
+/// About how much drawn text one transaction of [`Index::put`] indexes.
+/// Its FTS rows and chunks take a few hundred milliseconds a megabyte; a
+/// whole batch of large documents in one held another writer of the file
+/// for over half a minute.
+pub const PUT_BYTES: usize = 1 << 20;
+
 /// Documents removed in one transaction, so a large removal never holds
 /// the file the grid index's step is waiting on.
 const REMOVE_BATCH: usize = 500;
@@ -129,21 +135,37 @@ impl Index {
         Ok(rows.into_iter().collect())
     }
 
-    /// Indexes `docs` in one transaction. A document already held with the
-    /// same hash is left alone; a changed one has its sections and chunks
-    /// replaced.
+    /// Indexes `docs`, committing after about [`PUT_BYTES`] of their text
+    /// so the file's other writers wait seconds, not the whole batch. A
+    /// document already held with the same hash is left alone; a changed
+    /// one has its sections and chunks replaced, in one transaction.
     pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let mut changed = false;
-        for doc in docs {
-            changed |= put_one(&mut tx, doc)
-                .await
-                .with_context(|| format!("index document {}", doc.markdown_uuid))?;
+        let mut rest = docs;
+        while !rest.is_empty() {
+            let mut bytes = 0;
+            let take = rest
+                .iter()
+                .take_while(|d| {
+                    let first = bytes == 0;
+                    bytes += d.sections.iter().map(|s| s.text.len()).sum::<usize>();
+                    first || bytes <= PUT_BYTES
+                })
+                .count();
+            let (now, later) = rest.split_at(take);
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+            let mut changed = false;
+            for doc in now {
+                changed |= put_one(&mut tx, doc)
+                    .await
+                    .with_context(|| format!("index document {}", doc.markdown_uuid))?;
+            }
+            if changed {
+                moved(&mut tx).await?;
+            }
+            tx.commit().await.context("commit the indexed documents")?;
+            rest = later;
         }
-        if changed {
-            moved(&mut tx).await?;
-        }
-        tx.commit().await.context("commit the indexed documents")
+        Ok(())
     }
 
     pub async fn remove(&self, markdown_uuids: &[String]) -> Result<()> {
