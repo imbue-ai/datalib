@@ -1,0 +1,162 @@
+---
+source: datalib/backend/etl/providers/claude/tests/claude_tests/cowork.rs
+expression: md
+---
+---
+title: "Senior staff roster"
+provider: claude
+source_label: "Claude"
+chat_uuid: 00000000-0000-8916-81e1-fc590e392e83
+markdown_uuid: 00000000-0000-8916-81e1-fc590e392e83
+display: "Senior staff roster"
+account: "jlpicard@enterprise.starfleet.test"
+external_id: "cse_01TngRosterReadyRoom1701D"
+item_count: 4
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8916-81e1-fc590e392e83">Senior staff roster <a class="source-link" href="https://claude.ai/cowork/cse_01TngRosterReadyRoom1701D" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-0b75b509-d680-883e-a0fc-b365ae11f336" data-section-uuid="0b75b509-d680-883e-a0fc-b365ae11f336" class="msg msg--claude">
+
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-14T09:00:00Z" title="2369-04-14 09:00:00 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+Read crew.txt in my ready room folder and write roster.md listing each officer with their post on the Enterprise-D. The viewscreen capture is for the header.
+
+![viewscreen.png](/data/claude/ingest/blob/650b03afa397278c115e287886603221510dbe1455a079d0bbe8ab771462f66d)
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 4 tool steps</summary>
+
+<div id="m-0b75b509-f5c0-8564-8297-5318d0f5322a" data-section-uuid="0b75b509-f5c0-8564-8297-5318d0f5322a" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:00:08Z" title="2369-04-14 09:00:08 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+<details><summary>Tool use: Read</summary>
+
+Read `/sessions/ready-room/crew.txt`
+</details>
+
+</div>
+
+<div id="m-0b75b509-f5c0-809e-b768-351d91a847af" data-section-uuid="0b75b509-f5c0-809e-b768-351d91a847af" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:00:08Z" title="2369-04-14 09:00:08 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+<details><summary>Tool result: Read</summary>
+
+```
+Picard, Riker, Data, La Forge
+```
+
+</details>
+
+</div>
+
+<div id="m-0b75b509-f5c0-8557-b6a5-676bd98eebab" data-section-uuid="0b75b509-f5c0-8557-b6a5-676bd98eebab" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:00:08Z" title="2369-04-14 09:00:08 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+<details><summary>Tool use: Write</summary>
+
+Create `/sessions/ready-room/roster.md`
+
+```markdown
+# Senior staff
+
+- Captain Jean-Luc Picard: commanding officer
+- Commander William Riker: first officer
+- Lieutenant Commander Data: second officer and operations
+- Lieutenant Commander Geordi La Forge: chief engineer
+```
+</details>
+
+</div>
+
+<div id="m-0b75b509-f5c0-8404-ac74-1f5c45c85fab" data-section-uuid="0b75b509-f5c0-8404-ac74-1f5c45c85fab" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:00:08Z" title="2369-04-14 09:00:08 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+<details><summary>Tool result: Write</summary>
+
+```
+File written: roster.md
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75b509-f5c0-8191-b86b-e344e09a426c" data-section-uuid="0b75b509-f5c0-8191-b86b-e344e09a426c" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:00:08Z" title="2369-04-14 09:00:08 UTC">Mon Apr 14th, 2369 at 09:00</time>
+
+I'll read the crew list first.
+
+Done: roster.md lists the four officers in crew.txt, each with their post.
+
+</div>
+
+<div id="m-0b75b50c-95a0-854b-968a-c6fc91f98094" data-section-uuid="0b75b50c-95a0-854b-968a-c6fc91f98094" class="msg msg--claude">
+
+## [Me](datalib:handle/me/self "Me") <time class="msg-ts" datetime="2369-04-14T09:03:00Z" title="2369-04-14 09:03:00 UTC">Mon Apr 14th, 2369 at 09:03</time>
+
+Add Worf, chief of security.
+
+</div>
+
+<details class="tool-group">
+<summary>🛠 2 tool steps</summary>
+
+<div id="m-0b75b50c-bcb0-85ef-8b10-91475a7eca40" data-section-uuid="0b75b50c-bcb0-85ef-8b10-91475a7eca40" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:03:10Z" title="2369-04-14 09:03:10 UTC">Mon Apr 14th, 2369 at 09:03</time>
+
+<details><summary>Tool use: Edit</summary>
+
+Edit `/sessions/ready-room/roster.md`
+
+Replace:
+
+```markdown
+- Lieutenant Commander Geordi La Forge: chief engineer
+
+```
+
+with:
+
+```markdown
+- Lieutenant Commander Geordi La Forge: chief engineer
+- Lieutenant Worf: chief of security
+
+```
+</details>
+
+</div>
+
+<div id="m-0b75b50c-bcb0-8e3e-b156-44e613f84077" data-section-uuid="0b75b50c-bcb0-8e3e-b156-44e613f84077" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:03:10Z" title="2369-04-14 09:03:10 UTC">Mon Apr 14th, 2369 at 09:03</time>
+
+<details><summary>Tool result: Edit</summary>
+
+```
+Edited roster.md
+```
+
+</details>
+
+</div>
+
+</details>
+
+<div id="m-0b75b50c-bcb0-8400-b966-bd7fb3878c62" data-section-uuid="0b75b50c-bcb0-8400-b966-bd7fb3878c62" class="msg msg--claude">
+
+## [claude-opus-5-5](datalib:handle/ai_model/claude-opus-5-5 "claude-opus-5-5") <time class="msg-ts" datetime="2369-04-14T09:03:10Z" title="2369-04-14 09:03:10 UTC">Mon Apr 14th, 2369 at 09:03</time>
+
+Added Lieutenant Worf as chief of security. The roster now lists five officers.
+
+</div>

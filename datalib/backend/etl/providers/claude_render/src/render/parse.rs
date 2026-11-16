@@ -11,7 +11,10 @@ use datalib_etl_render::inputs::{Inputs, RawRange};
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqlitePool;
 
-use datalib_etl_claude::ingest::db::{self, db_path_for, LoadedConversation, LoadedRaw};
+use datalib_etl_claude::ingest::cowork;
+use datalib_etl_claude::ingest::db::{
+    self, db_path_for, LoadedConversation, LoadedCoworkSession, LoadedRaw,
+};
 use datalib_etl_claude::ingest::normalize::normalize_to_export_shape;
 use datalib_etl_claude::ingest::schema_raw::ConversationAttachmentRow;
 
@@ -289,20 +292,34 @@ async fn parse_open(
     let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
     let first_user_uuid = db::first_user_uuid_from(&pool).await?;
     let all_convs = db::load_conversations_from(&pool).await?;
-    let total = all_convs.len();
+    let all_cowork = db::load_cowork_sessions_from(&pool).await?;
+    let total = all_convs.len() + all_cowork.len();
     let all_projects = load_project_rows(&pool).await?;
 
-    let scan = scan_diff(&pool, source_id, range, &pin, &all_convs, &all_projects).await?;
+    let scan = scan_diff(
+        &pool,
+        source_id,
+        range,
+        &pin,
+        &all_convs,
+        &all_cowork,
+        &all_projects,
+    )
+    .await?;
 
-    let (filtered, docs_skipped) = match &scan.render {
-        None => (all_convs, 0usize),
+    let (filtered, cowork, docs_skipped) = match &scan.render {
+        None => (all_convs, all_cowork, 0usize),
         Some(changed) => {
             let kept: Vec<LoadedConversation> = all_convs
                 .into_iter()
                 .filter(|c| changed.contains(&c.id))
                 .collect();
-            let skipped = total.saturating_sub(kept.len());
-            (kept, skipped)
+            let cowork: Vec<LoadedCoworkSession> = all_cowork
+                .into_iter()
+                .filter(|s| changed.contains(&s.id))
+                .collect();
+            let skipped = total.saturating_sub(kept.len() + cowork.len());
+            (kept, cowork, skipped)
         }
     };
 
@@ -313,6 +330,7 @@ async fn parse_open(
     };
 
     let mut parsed = parse_loaded(raw);
+    parse_cowork(&mut parsed, cowork);
     parsed.docs_skipped = docs_skipped;
 
     // Projects ride the same changed-bucket filter as conversations.
@@ -466,18 +484,44 @@ fn project_doc_row(project_uuid: String, doc_uuid: String, payload: Value) -> Pr
     }
 }
 
+/// Each stored Cowork task as the conversation its log reads as
+/// (`ingest::cowork::to_export_shape`), beside the chats.
+pub fn parse_cowork(parsed: &mut ParsedExport, sessions: Vec<LoadedCoworkSession>) {
+    for s in sessions {
+        let origin = cowork::Origin {
+            account_uuid: parsed.viewer_account_uuid.as_deref(),
+            org_uuid: s.org_uuid.as_deref().unwrap_or(""),
+            org_name: s.org_name.as_deref(),
+        };
+        let conv = cowork::to_export_shape(&s.session, &s.events, &origin);
+        let inputs = Inputs::default();
+        inputs.read("cowork_sessions", &s.id);
+        match build_conv_row(&conv) {
+            Ok(Some(row)) => parsed.conversations.push(ClaudeConversation {
+                conv: row,
+                upstream_payload: conv,
+                inputs,
+            }),
+            Ok(None) => {}
+            Err(e) => parsed.failed.push((s.id, format!("{e:#}"))),
+        }
+    }
+}
+
 /// Phase 1: union over `dolt_diff_conversations`,
-/// `dolt_diff_claude_attachments`, `dolt_diff_project_docs` and
-/// `dolt_diff_projects` to project the changed bucket keys —
-/// conversation UUIDs from the first two, project UUIDs from the last
-/// two. A user or project rename reaches a conversation through the
-/// inputs it declared, so nothing fans out.
+/// `dolt_diff_claude_attachments`, `dolt_diff_project_docs`,
+/// `dolt_diff_projects` and the two Cowork tables to project the
+/// changed bucket keys — conversation UUIDs from the first two, project
+/// UUIDs from the next two, Cowork task ids from the last two. A user or
+/// project rename reaches a conversation through the inputs it declared,
+/// so nothing fans out.
 async fn scan_diff(
     pool: &SqlitePool,
     source_id: &str,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
     conversations: &[LoadedConversation],
+    cowork: &[LoadedCoworkSession],
     projects: &[ProjectRow],
 ) -> Result<ScanResult> {
     let scan = datalib_etl::doltlite_raw::scan_buckets(
@@ -503,6 +547,14 @@ async fn scan_diff(
                     SELECT coalesce(to_id, from_id)
                       FROM dolt_diff_projects
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_id, from_id)
+                      FROM dolt_diff_cowork_sessions
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_session_id, from_session_id)
+                      FROM dolt_diff_cowork_events
+                     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
                 WHERE bucket_uuid IS NOT NULL
             ",
@@ -519,6 +571,12 @@ async fn scan_diff(
                 c.id.as_str(),
             )
         })
+        .chain(cowork.iter().map(|s| {
+            (
+                super::ids::conversation(source_id, &s.id).uuid,
+                s.id.as_str(),
+            )
+        }))
         .chain(projects.iter().map(|p| {
             (
                 super::ids::project(source_id, &p.project_uuid).uuid,

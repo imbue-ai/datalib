@@ -11,6 +11,7 @@
 //! (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 pub mod api;
+pub mod cowork;
 pub mod db;
 pub mod export;
 mod fetchers;
@@ -46,8 +47,10 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 pub use api::{ClaudeClient, ClaudeError};
 use db::ProjectUpsert;
 pub use db::{db_path_for, Conversation, LoadedConversation, LoadedRaw, RawDb};
-use fetchers::{Conversations, Docs, Files, ProjectListed};
-use schema_raw::{OrgRow, UserRow, ATTACHMENTS, CONVERSATIONS, PROJECTS, PROJECT_DOCS_LISTINGS};
+use fetchers::{Conversations, CoworkListed, CoworkSessions, Docs, Files, ProjectListed};
+use schema_raw::{
+    OrgRow, UserRow, ATTACHMENTS, CONVERSATIONS, COWORK_SESSIONS, PROJECTS, PROJECT_DOCS_LISTINGS,
+};
 
 /// Between one org's listings and the next's.
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
@@ -116,6 +119,11 @@ pub struct FetchOptions {
     /// When non-empty, mirror only these project UUIDs. The per-org
     /// listing still runs; everything outside the set is skipped.
     pub project_uuids: Vec<String>,
+    /// Also mirror Cowork tasks run in the cloud that are not chats.
+    pub cowork: bool,
+    /// When non-empty, fetch only these Cowork tasks (`cse_…`,
+    /// `session_…` or a claude.ai URL), whatever `cowork` says.
+    pub cowork_session_ids: Vec<String>,
     /// Whether a conversation a complete listing no longer names is
     /// deleted here too or kept.
     pub when_deleted_upstream: datalib_etl_claude_config::WhenDeletedUpstream,
@@ -145,6 +153,8 @@ impl FetchOptions {
             conv_uuids: Vec::new(),
             projects: true,
             project_uuids: Vec::new(),
+            cowork: true,
+            cowork_session_ids: Vec::new(),
             when_deleted_upstream: Default::default(),
             sealer: None,
             progress: Default::default(),
@@ -190,6 +200,15 @@ pub struct FetchSummary {
     pub project_docs_fetched: usize,
     /// Projects whose docs listing was held and under a day old.
     pub project_docs_skipped: usize,
+    /// Cowork tasks whose log was written this run.
+    pub cowork_fetched: usize,
+    /// Cowork tasks listed and already held at their version.
+    pub cowork_skipped: usize,
+    /// Cowork tasks the session listing names that are also chats in an
+    /// org's conversation listing, mirrored as those chats.
+    pub cowork_as_chats: usize,
+    /// Cowork tasks a complete listing no longer names, deleted here.
+    pub cowork_pruned: usize,
     pub new_blobs: usize,
     /// Edges satisfied from bytes the CAS already held.
     pub skipped_blobs: usize,
@@ -223,6 +242,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "max_conversations_per_run": opts.max_conversations_per_run,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
+        "cowork": opts.cowork,
+        "cowork_session_ids": opts.cowork_session_ids,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let client = ClaudeClient::with_latchkey(opts.latchkey.clone());
@@ -248,6 +269,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         files: Mutex::new(HashMap::new()),
         forbidden_orgs: Mutex::new(BTreeMap::new()),
         config_problems: Mutex::new(Vec::new()),
+        chat_sessions: Mutex::new(HashSet::new()),
         counts: Counts::default(),
     };
     let mut summary = FetchSummary::default();
@@ -304,6 +326,10 @@ pub(crate) struct Ctx<'a> {
     pub forbidden_orgs: Mutex<BTreeMap<String, String>>,
     /// The configured entries upstream has not got.
     pub config_problems: Mutex<Vec<DownloadProblem>>,
+    /// The Cowork tasks this run's conversation listings name as chats
+    /// (`workspace_session_id`), as `cse_…` ids: mirrored as those chats,
+    /// so the Cowork walk leaves them alone.
+    pub chat_sessions: Mutex<HashSet<String>>,
     pub counts: Counts,
 }
 
@@ -318,11 +344,8 @@ impl Ctx<'_> {
         }
     }
 
-    pub fn remember_files(&self, c: &Conversation) {
-        self.files
-            .lock()
-            .unwrap()
-            .insert(c.uuid.clone(), c.files.clone());
+    pub fn remember_files(&self, owner: &str, files: Vec<Value>) {
+        self.files.lock().unwrap().insert(owner.to_string(), files);
     }
 
     /// The conversation's file object for one of its files: from this
@@ -338,10 +361,11 @@ impl Ctx<'_> {
         if let Some(found) = known {
             return Ok(found);
         }
-        let Some(payload) = self.db.load_conversation_payload(conv_uuid).await? else {
-            return Ok(None);
+        let files = match self.db.load_conversation_payload(conv_uuid).await? {
+            Some(payload) => db::files_of(&payload),
+            None => self.db.cowork_files(conv_uuid).await?,
         };
-        Ok(fetchers::find_file(&db::files_of(&payload), file_uuid).cloned())
+        Ok(fetchers::find_file(&files, file_uuid).cloned())
     }
 
     /// The give-up guard tripped: every further request would be refused
@@ -757,7 +781,7 @@ impl Ctx<'_> {
                     self.db.store_conversation(&mut tx, &c).await?;
                     owed::hold(&mut tx, CONVERSATIONS, conv_uuid, c.updated_at.as_deref()).await?;
                     tx.commit().await?;
-                    self.remember_files(&c);
+                    self.remember_files(&c.uuid, c.files.clone());
                     s.fetched += 1;
                     self.wrote(1).await;
                     info!(
@@ -876,6 +900,12 @@ impl Ctx<'_> {
                 org = %org_name,
                 count = listing.len(),
                 "listed one org's conversations"
+            );
+            self.chat_sessions.lock().unwrap().extend(
+                listing
+                    .iter()
+                    .filter_map(|c| c.get("workspace_session_id").and_then(Value::as_str))
+                    .filter_map(cowork::session_id),
             );
             sleep(SLEEP_BETWEEN).await;
             listings_by_org.push((org_uuid.to_string(), org_name, listing));
@@ -1007,6 +1037,192 @@ impl Ctx<'_> {
         Ok(drained.terminal.is_some())
     }
 
+    /// Every org's Cowork tasks that are sessions only, pruned to what a
+    /// complete listing names, then the log of each not held at its
+    /// version. A task an org's conversation listing names as a chat is
+    /// left to that chat. Whether a rate limit ended it.
+    async fn cowork(
+        &self,
+        orgs: &[Value],
+        since: Option<&DateTime<Utc>>,
+        s: &mut FetchSummary,
+    ) -> Result<bool> {
+        let chats = self.chat_sessions.lock().unwrap().clone();
+        let mut listed: Vec<Listed> = Vec::new();
+        let mut by_id: HashMap<String, CoworkListed> = HashMap::new();
+        for org in orgs {
+            let Some((org_uuid, org_name)) = org_identity(org) else {
+                continue;
+            };
+            if self.forbidden_orgs.lock().unwrap().contains_key(org_uuid) {
+                continue;
+            }
+            let listing = match self.client.list_cowork_sessions(org_uuid).await {
+                Ok(l) => l,
+                Err(_) if self.stop().requested() => return Ok(false),
+                Err(ClaudeError::RateLimited(reason, _)) => {
+                    self.give_up("cowork", &reason);
+                    return Ok(true);
+                }
+                // Not pruned: nothing of this org was listed.
+                Err(e) => {
+                    self.found.listing(
+                        &format!("cowork org:{org_uuid}"),
+                        format!("org {org_name:?}: {e}"),
+                    );
+                    s.errors += 1;
+                    continue;
+                }
+            };
+            info!(
+                event = "claude_cowork_listing_count",
+                org = %org_name,
+                count = listing.len(),
+                "listed one org's Cowork tasks"
+            );
+            let mut keep: HashSet<String> = HashSet::new();
+            for session in &listing {
+                let Some(id) = session
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(cowork::session_id)
+                else {
+                    continue;
+                };
+                if chats.contains(&id) {
+                    s.cowork_as_chats += 1;
+                    continue;
+                }
+                keep.insert(id.clone());
+                let last = session.get("last_event_at").and_then(Value::as_str);
+                if !updated_at_in_scope(last, since) {
+                    s.out_of_scope += 1;
+                    continue;
+                }
+                listed.push(Listed::new(&id, cowork::version_of(session)));
+                by_id.insert(
+                    id,
+                    CoworkListed {
+                        org_uuid: org_uuid.to_string(),
+                        org_name: org_name.clone(),
+                        session: session.clone(),
+                    },
+                );
+            }
+            let (deleted, kept) = self
+                .db
+                .prune_org_cowork(org_uuid, &keep, self.opts.when_deleted_upstream)
+                .await?;
+            s.cowork_pruned += deleted;
+            s.kept_deleted_upstream += kept;
+        }
+        self.drain_cowork(listed, by_id, s).await
+    }
+
+    /// `cowork_session_ids`: exactly the named tasks, each looked up in
+    /// every org in turn. One no org has is a `config:` problem.
+    async fn named_cowork(&self, orgs: &[Value], s: &mut FetchSummary) -> Result<bool> {
+        let mut listed: Vec<Listed> = Vec::new();
+        let mut by_id: HashMap<String, CoworkListed> = HashMap::new();
+        for raw in &self.opts.cowork_session_ids {
+            if self.stop().requested() {
+                return Ok(false);
+            }
+            let Some(id) = cowork::session_id(raw) else {
+                self.config_problems
+                    .lock()
+                    .unwrap()
+                    .push(DownloadProblem::not_found(
+                        "cowork_session_ids",
+                        raw,
+                        "not a Cowork task id (`cse_…`, `session_…`) or a \
+                         https://claude.ai/cowork/… link"
+                            .to_string(),
+                    ));
+                continue;
+            };
+            let mut found = false;
+            for org in orgs {
+                let Some((org_uuid, org_name)) = org_identity(org) else {
+                    continue;
+                };
+                match self.client.get_cowork_session(org_uuid, &id).await {
+                    Ok(session) => {
+                        listed.push(Listed::new(&id, cowork::version_of(&session)));
+                        by_id.insert(
+                            id.clone(),
+                            CoworkListed {
+                                org_uuid: org_uuid.to_string(),
+                                org_name: org_name.clone(),
+                                session,
+                            },
+                        );
+                        found = true;
+                        break;
+                    }
+                    Err(_) if self.stop().requested() => return Ok(false),
+                    Err(ClaudeError::RateLimited(reason, _)) => {
+                        self.give_up("cowork", &reason);
+                        return Ok(true);
+                    }
+                    // Another org's task answers 404, or 403 from an org
+                    // whose sessions this credential may not read.
+                    Err(ClaudeError::Forbidden(..)) => continue,
+                    Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 404") => continue,
+                    Err(e) => {
+                        self.found
+                            .phase("cowork", format!("looking up {id} in {org_name:?}: {e}"));
+                        s.errors += 1;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                self.config_problems
+                    .lock()
+                    .unwrap()
+                    .push(DownloadProblem::not_found(
+                        "cowork_session_ids",
+                        raw,
+                        format!(
+                            "no Cowork task with this id in any of {} org(s)",
+                            orgs.len()
+                        ),
+                    ));
+            }
+        }
+        self.drain_cowork(listed, by_id, s).await
+    }
+
+    async fn drain_cowork(
+        &self,
+        listed: Vec<Listed>,
+        by_id: HashMap<String, CoworkListed>,
+        s: &mut FetchSummary,
+    ) -> Result<bool> {
+        let in_scope = listed.len();
+        let owed = owed_missing_first(self.db.pool(), COWORK_SESSIONS, listed).await?;
+        s.cowork_skipped = in_scope - owed.len();
+        // Announcing nothing would publish the total again after the
+        // count reached zero.
+        if !owed.is_empty() {
+            self.bar.expect(owed.len() as u64);
+        }
+        let drained = self
+            .drain(
+                COWORK_SESSIONS,
+                "cowork",
+                owed,
+                &CoworkSessions { ctx: self, by_id },
+                1,
+            )
+            .await?;
+        s.cowork_fetched = drained.got;
+        s.errors += drained.failed;
+        Ok(drained.terminal.is_some())
+    }
+
     /// Every attachment edge the store lists and does not hold at its
     /// conversation's version. Whether a rate limit ended it.
     async fn attachments(&self, s: &mut FetchSummary) -> Result<bool> {
@@ -1065,6 +1281,13 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         } else {
             ctx.named(&orgs, s).await?
         };
+    }
+    if !rate_limited && !ctx.stop().requested() {
+        if !ctx.opts.cowork_session_ids.is_empty() {
+            rate_limited = ctx.named_cowork(&orgs, s).await?;
+        } else if ctx.opts.cowork {
+            rate_limited = ctx.cowork(&orgs, since.as_ref(), s).await?;
+        }
     }
     if !rate_limited && !ctx.stop().requested() {
         rate_limited = ctx.attachments(s).await?;

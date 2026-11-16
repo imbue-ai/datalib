@@ -97,7 +97,7 @@
     ]
   },
   "claude": {
-    "schema_hash": "d01c4036cfad6d8d7d12243dfa014b1db025e4b6580fd131c262d248bb96e61d",
+    "schema_hash": "8c7cd2d96a7d270b44c84e6c99a54d9aaa949f8d4caac1e00caa04abe2cb0ab0",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -109,6 +109,11 @@
       "CREATE TABLE conversations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX conversations_org ON conversations(org_uuid)",
       "CREATE INDEX conversations_updated ON conversations(updated_at)",
+      "CREATE TABLE cowork_events( id TEXT PRIMARY KEY, payload TEXT NULL, session_id TEXT NULL, sequence_num INTEGER NULL)",
+      "CREATE TABLE cowork_events_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX cowork_events_session ON cowork_events(session_id)",
+      "CREATE TABLE cowork_sessions( id TEXT PRIMARY KEY, payload TEXT NULL, org_uuid TEXT NULL, org_name TEXT NULL, title TEXT NULL, last_event_at TEXT NULL)",
+      "CREATE TABLE cowork_sessions_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE orgs( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL)",
       "CREATE TABLE orgs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",

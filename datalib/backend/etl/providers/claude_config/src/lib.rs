@@ -144,6 +144,17 @@ pub struct ClaudeApiSync {
     /// comes from — but every project outside this set is left alone.
     #[serde(default)]
     pub project_uuids: Vec<String>,
+    /// Also mirror Cowork tasks that run in Anthropic's cloud: each
+    /// task's whole log, rendered as a conversation. On by default. A
+    /// task claude.ai has turned into a chat is mirrored as that chat
+    /// either way.
+    #[serde(default = "default_true")]
+    pub cowork: bool,
+    /// When non-empty, fetch exactly these Cowork tasks every run, by id
+    /// (`cse_…` or `session_…`) or a paste-able
+    /// `https://claude.ai/cowork/<id>` URL, with no listing.
+    #[serde(default)]
+    pub cowork_session_ids: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -172,6 +183,8 @@ impl Default for ClaudeApiSync {
             conv_uuids: Vec::new(),
             projects: default_true(),
             project_uuids: Vec::new(),
+            cowork: default_true(),
+            cowork_session_ids: Vec::new(),
         }
     }
 }
@@ -221,6 +234,17 @@ mod tests {
         let from_toml: ClaudeApiSync = toml::from_str("").unwrap();
         assert!(from_toml.projects);
         assert!(ClaudeApiSync::default().projects);
+    }
+
+    /// Same trap as `projects`: Cowork is on whichever way the struct
+    /// is built.
+    #[test]
+    fn cowork_defaults_on_both_ways() {
+        let from_toml: ClaudeApiSync = toml::from_str("").unwrap();
+        assert!(from_toml.cowork);
+        assert!(ClaudeApiSync::default().cowork);
+        let off: ClaudeApiSync = toml::from_str("cowork = false").unwrap();
+        assert!(!off.cowork);
     }
 
     #[test]

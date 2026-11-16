@@ -41,12 +41,15 @@ impl SourceRender for ClaudeRender {
         }))
     }
 
-    /// A conversation is its own row; an attachment is its conversation's.
+    /// A conversation and a Cowork task are their own rows; an
+    /// attachment is its conversation's.
     fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
         use datalib_etl::blob_cas::CasEdgeRow;
         use datalib_etl::bulk::BulkUpsertable;
-        use datalib_etl_claude::ingest::schema_raw::{ConversationAttachmentRow, ConversationRow};
-        let conversation = if table == ConversationRow::TABLE {
+        use datalib_etl_claude::ingest::schema_raw::{
+            ConversationAttachmentRow, ConversationRow, CoworkSessionRow,
+        };
+        let conversation = if table == ConversationRow::TABLE || table == CoworkSessionRow::TABLE {
             id
         } else if table == ConversationAttachmentRow::TABLE {
             ConversationAttachmentRow::owning_id_of(id)?
@@ -119,6 +122,10 @@ mod tests {
             Some(conversation.clone())
         );
         assert_eq!(item("conversations", "c1"), Some(conversation));
+        assert_eq!(
+            item("cowork_sessions", "cse_1"),
+            Some(crate::render::ids::conversation("src", "cse_1").uuid)
+        );
         assert_eq!(item("project_docs", "d1"), None);
         assert_eq!(item("claude_attachments", "no-separator"), None);
     }

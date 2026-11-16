@@ -949,6 +949,11 @@ projects = true                       # also mirror Claude Projects: description
 project_uuids = [                     # only these projects, by id or pasted link;
   "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
 ]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
+]
 
 [[steps]]
 group = "claude-api"

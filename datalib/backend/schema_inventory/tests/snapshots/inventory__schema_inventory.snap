@@ -129,6 +129,36 @@ conversations_bookkeeping
     volatile_payload
     tz_offset
     held_version
+cowork_events
+    id
+    payload
+    session_id
+    sequence_num
+cowork_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+cowork_sessions
+    id
+    payload
+    org_uuid
+    org_name
+    title
+    last_event_at
+cowork_sessions_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 orgs
     id
     payload

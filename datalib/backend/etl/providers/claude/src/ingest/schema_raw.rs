@@ -18,6 +18,8 @@ pub const PROJECT_DOCS: &str = "project_docs";
 pub const PROJECT_DOCS_LISTINGS: &str = "project_docs_listings";
 pub const CONVERSATIONS: &str = "conversations";
 pub const ATTACHMENTS: &str = "claude_attachments";
+pub const COWORK_SESSIONS: &str = "cowork_sessions";
+pub const COWORK_EVENTS: &str = "cowork_events";
 
 pub const DATA_TABLES: &[&str] = &[
     USERS,
@@ -27,6 +29,8 @@ pub const DATA_TABLES: &[&str] = &[
     PROJECT_DOCS_LISTINGS,
     CONVERSATIONS,
     ATTACHMENTS,
+    COWORK_SESSIONS,
+    COWORK_EVENTS,
 ];
 
 /// `users` — one row per Anthropic user UUID.
@@ -101,6 +105,33 @@ pub const CONVERSATIONS_ORG_INDEX_DDL: &str =
 
 pub const CONVERSATIONS_UPDATED_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at)";
+
+/// `cowork_sessions` — one row per Cowork task run in the cloud, keyed
+/// by its `cse_…` id: the session as `/v1/code/sessions` lists it. Held
+/// at [`crate::ingest::cowork::version_of`] its listing entry.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "cowork_sessions")]
+pub struct CoworkSessionRow {
+    pub id_and_payload: WirePayload,
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
+    pub title: Option<String>,
+    pub last_event_at: Option<String>,
+}
+
+/// `cowork_events` — one row per event of a Cowork task's log, keyed by
+/// its `event_id`, written with its session: the log is read whole each
+/// time the session is owed, and an event it no longer has goes.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "cowork_events")]
+pub struct CoworkEventRow {
+    pub id_and_payload: WirePayload,
+    pub session_id: Option<String>,
+    pub sequence_num: Option<i64>,
+}
+
+pub const COWORK_EVENTS_SESSION_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS cowork_events_session ON cowork_events(session_id)";
 
 /// `claude_attachments` — N:M edge between one conversation's
 /// attachment slot and a `cas_objects` blob, written with the
@@ -217,6 +248,9 @@ pub fn full_ddl() -> Vec<String> {
         ConversationRow::ddl(),
         CONVERSATIONS_ORG_INDEX_DDL.to_string(),
         CONVERSATIONS_UPDATED_INDEX_DDL.to_string(),
+        CoworkSessionRow::ddl(),
+        CoworkEventRow::ddl(),
+        COWORK_EVENTS_SESSION_INDEX_DDL.to_string(),
     ];
     out.extend(ConversationAttachmentRow::all_ddl());
     for table in DATA_TABLES {

@@ -518,6 +518,7 @@ export const CATALOG: CatalogEntry[] = [
         ],
       },
       { heading: "Projects", fields: ["api.projects"] },
+      { heading: "Cowork", fields: ["api.cowork"] },
       { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
@@ -539,6 +540,13 @@ export const CATALOG: CatalogEntry[] = [
         label: "Also copy Claude Projects",
         default: true,
         help: "Each project's description, custom instructions and knowledge documents.",
+      },
+      {
+        kind: "bool",
+        target: "api.cowork",
+        label: "Also copy Cowork tasks",
+        default: true,
+        help: "Each task that ran in the cloud, as a conversation: your prompts, Claude's steps and its answers.",
       },
       {
         kind: "int",

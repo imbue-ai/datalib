@@ -120,6 +120,7 @@ fn listing_item(conv: &Value) -> Value {
         "created_at",
         "updated_at",
         "model",
+        "workspace_session_id",
     ] {
         if let Some(v) = conv.get(key) {
             obj.insert(key.into(), v.clone());
@@ -251,7 +252,20 @@ impl Synthesizer for ClaudeSynth {
             }
         }
 
-        count += synthesize_files(&self.api_dir.join("files"), &convs, out_root)?;
+        let (n, cowork_files) = synthesize_cowork(&self.api_dir, by_org.keys(), out_root)?;
+        count += n;
+        let chat_files = convs.iter().flat_map(|c| {
+            let org = org_uuid_of(c);
+            c.get("chat_messages")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.get("files").and_then(Value::as_array))
+                .flatten()
+                .map(move |f| (org.clone(), f.clone()))
+        });
+        let files: Vec<OrgFile> = chat_files.chain(cowork_files).collect();
+        count += synthesize_files(&self.api_dir.join("files"), &files, out_root)?;
 
         Ok(SynthesizeReport {
             fixtures_written: count,
@@ -259,10 +273,74 @@ impl Synthesizer for ClaudeSynth {
     }
 }
 
-/// The bytes behind each conversation file whose `files/<file_uuid>.<ext>`
-/// is present, served where the download asks for them
-/// ([`crate::ingest::file_url`]).
-fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Result<usize> {
+/// A file, and the org whose `/contents` serves it.
+type OrgFile = (Option<String>, Value);
+
+/// Every org's Cowork listing (empty where it has no task, since the
+/// download asks every org), and each task's log and lookup by id, from
+/// `cowork/*.json`: `{"org_uuid", "session", "events"}`. Answers how
+/// many it wrote, and the files the tasks' people attached, by org.
+fn synthesize_cowork<'a>(
+    api_dir: &Path,
+    orgs: impl Iterator<Item = &'a String>,
+    out_root: &Path,
+) -> Result<(usize, Vec<OrgFile>)> {
+    use crate::ingest::api::{
+        cowork_events_url, cowork_sessions_url, sessions_request, SESSIONS_BASE,
+    };
+    let mut by_org: BTreeMap<String, Vec<Value>> = orgs.map(|o| (o.clone(), Vec::new())).collect();
+    let dir = api_dir.join("cowork");
+    let mut paths: Vec<PathBuf> = if dir.is_dir() {
+        fs::read_dir(&dir)
+            .with_context(|| format!("read {}", dir.display()))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    paths.sort();
+    let mut count = 0;
+    let mut files = Vec::new();
+    for path in paths {
+        let task: Value = serde_json::from_slice(&fs::read(&path)?)
+            .with_context(|| format!("parse {}", path.display()))?;
+        let org = task
+            .get("org_uuid")
+            .and_then(Value::as_str)
+            .with_context(|| format!("{}: no org_uuid", path.display()))?;
+        let session = task.get("session").cloned().unwrap_or_default();
+        let id = session
+            .get("id")
+            .and_then(Value::as_str)
+            .with_context(|| format!("{}: no session.id", path.display()))?;
+        let events = task.get("events").cloned().unwrap_or_else(|| json!([]));
+        let attached = crate::ingest::cowork::files_of(events.as_array().map_or(&[][..], |e| e));
+        files.extend(attached.into_iter().map(|f| (Some(org.to_string()), f)));
+        let req = sessions_request(&cowork_events_url(id, None), org);
+        write_fixture(out_root, &req, &json_response(&json!({ "data": events })))?;
+        let req = sessions_request(&format!("{SESSIONS_BASE}/{id}"), org);
+        write_fixture(
+            out_root,
+            &req,
+            &json_response(&json!({ "response_shape": session })),
+        )?;
+        count += 2;
+        by_org.entry(org.to_string()).or_default().push(session);
+    }
+    for (org, sessions) in by_org {
+        let req = sessions_request(&cowork_sessions_url(None), &org);
+        write_fixture(out_root, &req, &json_response(&json!({ "data": sessions })))?;
+        count += 1;
+    }
+    Ok((count, files))
+}
+
+/// The bytes behind each file, of a conversation or a Cowork task, whose
+/// `files/<file_uuid>.<ext>` is present, served where the download asks
+/// for them ([`crate::ingest::file_url`]).
+fn synthesize_files(files_dir: &Path, files: &[OrgFile], out_root: &Path) -> Result<usize> {
     if !files_dir.is_dir() {
         return Ok(0);
     }
@@ -273,16 +351,6 @@ fn synthesize_files(files_dir: &Path, convs: &[Value], out_root: &Path) -> Resul
             on_disk.insert(stem.to_string(), path);
         }
     }
-    let files = convs.iter().flat_map(|c| {
-        let org = org_uuid_of(c);
-        c.get("chat_messages")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m.get("files").and_then(Value::as_array))
-            .flatten()
-            .map(move |f| (org.clone(), f))
-    });
     let mut count = 0;
     for (org, file) in files {
         let Some((file_uuid, path)) = file
@@ -349,8 +417,8 @@ mod tests {
         let out = d.path().join("playback");
         let report = ClaudeSynth::new(&api).synthesize(&out).unwrap();
         // /organizations + 2 chat listings + 3 detail + 2 project
-        // listings (one per org, empty here) = 8
-        assert_eq!(report.fixtures_written, 8);
+        // listings + 2 Cowork listings (one per org, empty here) = 10
+        assert_eq!(report.fixtures_written, 10);
 
         let orgs_req = req_get(&format!("{BASE}/organizations"));
         let p = out.join("claude").join(fixture_key(&orgs_req));

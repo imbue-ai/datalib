@@ -473,7 +473,7 @@ fn build_chat(
         // back to claude.ai now that `uuid` is a minted v5, and what
         // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
-        source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
+        source_url: Some(source_url(&conv.raw_json, &conv_uuid)),
         upstream_account: None,
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
@@ -490,6 +490,17 @@ fn build_chat(
         .into_iter()
         .collect(),
         inputs: inputs.declared(),
+    }
+}
+
+/// Where claude.ai shows the conversation: a Cowork task at its own
+/// address, a chat at its.
+fn source_url(raw: &Value, id: &str) -> String {
+    let via = raw.pointer("/_source/via").and_then(Value::as_str);
+    if via == Some(datalib_etl_claude::ingest::cowork::VIA) {
+        datalib_etl_claude::ingest::cowork::url_of(id)
+    } else {
+        format!("https://claude.ai/chat/{id}")
     }
 }
 
