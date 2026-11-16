@@ -128,8 +128,8 @@ Where upstream's own parent links are, and what happens to them:
 
 **An item is the unit.** An item is one thing a person or program
 wrote, with one author and one time: a message, an email, a comment, a
-page, an event, a tool call. It is one row, and its text is stored with
-the row. Everything is keyed by the item's uuid, which already exists
+page, an event, a tool call. It is one row, and its body is stored with
+the row (§"Store the body, format on read"). Everything is keyed by the item's uuid, which already exists
 and does not move.
 
 **Containment is a tree of any depth.** Each source's things nest
@@ -292,6 +292,43 @@ windowed within the page and never mixed with a subpage's. How wide a window is 
 whether windows overlap is decided by the eval, and changing it
 re-embeds without changing anything a person sees.
 
+**Store the body, format on read.** What render stores for an item is
+its content, not text laid out for one reader:
+
+- **The facts** a header is drawn from (author, time, handles, reply-to,
+  edited) are columns, most of them on the row already.
+- **The body** is stored once, in one normalized form of ours: markdown
+  with our link forms for a person, a date and an attachment. Turning
+  upstream's own form (Slack's markup, an email's HTML, Notion's
+  blocks) into it is the provider's work and stays at render. The form
+  is a small written grammar, strict enough that every output below
+  parses it, and turning it into HTML keeps chat-common's sanitizer
+  allowlist.
+
+Everything around the body (an item's header line, a group's title and
+who took part, the separators) is drawn when something reads it, by one
+function per output:
+
+- **Markdown**, for the viewer and an export, and **HTML** later. These
+  may change as often as anyone likes; a change costs nothing stored.
+  The promises in [`rendered_documents.md`](../../user/rendered_documents.md)
+  (the link a person is, the `<time>` a date is, `data-section-uuid`)
+  become what these functions draw, not bytes on disk. A view per node
+  kind is the same function chosen by kind.
+- **Index text**, what a chunk is embedded and keyword-indexed from.
+  It is kept plain and changes rarely: a chunk is keyed by its text's
+  hash, so any change to this function re-embeds every chunk of every
+  source. So it carries the body, who wrote it and when (the eval is
+  not yet good enough to say a timestamp can go), and nothing for
+  show: no URLs, a chip as its name. It has a version, and moving it is
+  as deliberate as a render-version bump; it costs a re-embed, never a
+  re-render or a re-download.
+
+This is possible only now. Chunks were found again by byte spans of one
+file, which pinned one text for every reader. A chunk is cut by us and
+names the items it covers, so the text it was made from need exist
+nowhere but while it is embedded.
+
 **What is read together is read in pages, not as a file.** The viewer
 opens it at an item and asks for the items around it in order. A
 ten-year group chat opens as fast as a short one.
@@ -412,8 +449,9 @@ against the eval before the next.
    with the first query that uses it, and one route that lists a
    container's children around an anchor, a page each way at a time.
    The viewer can use it beside the file.
-3. **Text in the render store.** Each item's rendered text is stored
-   with its row. The search index reads items from the store instead of
+3. **The body in the render store.** Each item's body is stored with
+   its row, and the index text is drawn from it on read
+   (§"Store the body, format on read"). The search index reads items from the store instead of
    cutting files, and `keyword_index` folds into `grid_index`, which
    already reads every render store. Leaving a source out of search
    must survive the fold: today it is a source with no `keyword_index`
@@ -426,7 +464,9 @@ against the eval before the next.
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
 5. **The viewer reads items.** `DocCard` opens what is read together at an
-   item and pages through it. The `.md` files stop being written.
+   item and pages through it, each page drawn by the markdown function
+   from the stored bodies. The `.md` files stop being written, and with
+   them the rule that they are write-only.
 6. **No time buckets.** A bucketed source renders one container per
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
@@ -475,13 +515,13 @@ against the eval before the next.
   pages are in their raw stores. Drive folders, Apple Mail's mailboxes
   and a Claude Code project are still to check. Each source
   declares its tree in step 1 and the card shows what it declared.
-- **What storing the text costs.** The text goes in the render store,
+- **What storing the body costs.** The body goes in the render store,
   versioned with its row, so a reader at a commit sees that commit's
   text. On one real root (186k files) the markdown is 1.25 GB and the
   render stores already 9.6 GB. Doltlite keeps every version a commit
   reached and does not compress
   ([`doltlite.md`](../doltlite.md) §"What a write costs"), so a
-  re-render that changes every item's text (a render-version bump)
+  re-render that changes every item's body (a render-version bump)
   keeps the old copy too, until history is thrown away, which can be
   done at any time. An append is cheap if the key is the item's uuid,
   which is time-prefixed, so new items land in the last leaves: a
