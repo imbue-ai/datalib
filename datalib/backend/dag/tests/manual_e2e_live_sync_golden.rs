@@ -627,7 +627,7 @@ fn manual_e2e_live_sync_golden() {
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
     }
-    snapshot_index_text(&data_root, &mut manifest);
+    snapshot_index_text(&data_root, &cfg_out, &mut manifest);
     manifest.sort();
 
     // Prune snapshots orphaned when the set of produced files changes.
@@ -1277,22 +1277,8 @@ fn assert_step_statuses_ok(summary: &Value) {
 /// has nothing left to embed, and one without still has all of it left: the
 /// embed stayed in its own source.
 fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
-    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
-    let steps = cfg
-        .get("steps")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let groups_with = |function: &str| -> std::collections::BTreeSet<String> {
-        steps
-            .iter()
-            .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
-            .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .collect()
-    };
-    let embedded = groups_with("embed");
-    let keyword: Vec<String> = groups_with("keyword_index").into_iter().collect();
+    let embedded = groups_with(cfg_text, "embed");
+    let keyword: Vec<String> = groups_with(cfg_text, "keyword_index").into_iter().collect();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1341,6 +1327,19 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
         );
     }
     Value::Object(report)
+}
+
+/// The groups that have a step of `function` in the config.
+fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    cfg.get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
+        .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The markdown files the search covers under `dir`: every one a renderer
@@ -1751,12 +1750,14 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 /// `manifest` collects the snapshot key (top + rel path)
 /// for the overall manifest assertion.
 /// Every searchable document's text as the search index embeds it, chunk
-/// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`.
+/// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
+/// for each source with a `keyword_index`, the ones search reads.
 /// Drawn by `datalib-step index-text --chunks`, the call the keyword and
 /// embed passes make, so a change to what search reads (the envelope line,
 /// a flattened link, where a chunk is cut, the prompt) is a diff here even
 /// when the page looks the same.
-fn snapshot_index_text(data_root: &Path, manifest: &mut Vec<String>) {
+fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<String>) {
+    let searched = groups_with(cfg_text, "keyword_index");
     let out = Command::new(bin_dir().join("datalib-step"))
         .arg("index-text")
         .arg(data_root)
@@ -1775,6 +1776,9 @@ fn snapshot_index_text(data_root: &Path, manifest: &mut Vec<String>) {
         "index-text drew no document, though the bake renders searchable sources"
     );
     for (source, uuid, body) in docs {
+        if !searched.contains(&source) {
+            continue;
+        }
         let shard = &uuid[uuid.len() - 2..];
         let key = format!("{source}/index_text/{shard}/{uuid}.txt");
         manifest.push(key.clone());
