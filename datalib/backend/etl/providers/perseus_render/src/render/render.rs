@@ -19,6 +19,7 @@ use datalib_schema::providers::Provider;
 
 use super::align::{split, PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, Edition, ParsedPerseus, Section};
+use super::tree;
 use super::RENDER_VERSION;
 use crate::ids;
 use datalib_etl_perseus::{WORK_SHORT, WORK_TITLE, WORK_URN};
@@ -126,9 +127,11 @@ fn render_book(
     let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &render_book_md(book))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
+    let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
         .into_iter()
         .collect();
+    let nodes = tree::book(source_id, &book.n, &m_uuid, &book_title(&book.n));
+    tree::place(&mut rows, &nodes);
     let edges: Vec<EdgeRow> = Vec::new();
 
     summary.rows_emitted += rows.len();
@@ -145,7 +148,7 @@ fn render_book(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
-        nodes: Vec::new(),
+        nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -204,6 +207,13 @@ fn render_chapter(
         ));
         idx += 1;
     }
+    let nodes = tree::chapter(
+        source_id,
+        edition,
+        ids::chapter(source_id, &book.n, &chapter.n, &edition.id),
+        &conversation_name(&book.n, &chapter.n, edition),
+    );
+    tree::place(&mut rows, &nodes);
     let edges = chapter_edges(source_id, book, chapter, edition, &m_uuid, alignments);
 
     summary.rows_emitted += rows.len();
@@ -220,7 +230,7 @@ fn render_chapter(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
-        nodes: Vec::new(),
+        nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -644,6 +654,75 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
         }
+    }
+
+    /// A chapter is read together inside its edition, which is a place
+    /// inside the work; its sections sit in the chapter. A book's index
+    /// sits in the work, which no edition owns.
+    #[test]
+    fn a_chapter_sits_in_its_edition_in_the_work() {
+        let ed = edition("perseus-grc2", "grc", "Ἱστορίαι — Jones");
+        let book = Book {
+            n: "1".into(),
+            chapters: vec![Chapter {
+                book_n: "1".into(),
+                n: "1".into(),
+                sections: vec![section("1", &[("perseus-grc2", "Θουκυδίδης ξυνέγραψε.")])],
+            }],
+        };
+        let parsed = ParsedPerseus {
+            books: vec![book],
+            editions: vec![ed],
+            ..ParsedPerseus::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &parsed,
+            &PerseusAlignments::default(),
+            dir.path(),
+            "perseus",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let work = ids::work("perseus").uuid;
+        let edition = ids::edition("perseus", "perseus-grc2").uuid;
+        let chapter = ids::chapter("perseus", "1", "1", "perseus-grc2").uuid;
+        let section = ids::section("perseus", "1", "1", "1", "perseus-grc2").uuid;
+        let book_doc = &docs[0];
+        assert_eq!(book_doc.nodes[0].uuid, work);
+        assert!(book_doc.nodes[0].is_place);
+        assert_eq!(book_doc.rows[0].parent_uuid.as_deref(), Some(work.as_str()));
+        let ch = &docs[1];
+        let nodes: Vec<(&str, Option<&str>, bool, bool)> = ch
+            .nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            nodes,
+            vec![
+                (work.as_str(), None, true, false),
+                (edition.as_str(), Some(work.as_str()), true, false),
+                (chapter.as_str(), Some(edition.as_str()), false, true),
+            ]
+        );
+        let row = |uuid: &str| ch.rows.iter().find(|r| r.uuid == uuid).unwrap();
+        assert_eq!(row(&chapter).parent_uuid.as_deref(), Some(edition.as_str()));
+        assert_eq!(row(&section).parent_uuid.as_deref(), Some(chapter.as_str()));
+        assert_eq!(row(&section).read_uuid.as_deref(), Some(chapter.as_str()));
+        assert_eq!(row(&section).place_uuid.as_deref(), Some(edition.as_str()));
     }
 
     #[test]

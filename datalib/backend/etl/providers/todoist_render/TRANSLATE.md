@@ -93,6 +93,15 @@ download problem naming the project finds its document; a task by its
 id and `added_at`; a comment by its id and `posted_at`, task and
 project comments as two kinds.
 
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). A project is
+read together and a place, inside the project above it (`parent_id`);
+a project's document carries every project above it. A section is a
+container in its project, keyed by its id. A task sits in its parent
+task where Todoist names one in the project, else in its section, else
+in the project; a comment sits in its task, or in the project. Sections
+and tasks sort among their siblings by Todoist's own order
+(`section_order`, `child_order`), not by time.
+
 ## Incrementality
 
 The bucket is the project, keyed by its id. Each bucket declares every

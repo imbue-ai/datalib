@@ -9,7 +9,7 @@ use datalib_etl_todoist::ingest::db::{self, Stamp};
 use datalib_etl_todoist::ingest::schema_raw::{self, Kind};
 use datalib_etl_todoist::ingest::RawDb;
 use datalib_etl_todoist_render::render::build;
-use datalib_etl_todoist_render::store;
+use datalib_etl_todoist_render::{ids, store};
 use datalib_schema::grid_rows::GridRow;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
@@ -303,4 +303,94 @@ async fn a_later_render_narrows_to_the_projects_whose_rows_moved() {
     let s = s.unwrap();
     let render = s.render.expect("a cursor narrows the run");
     assert_eq!(render.into_iter().collect::<Vec<_>>(), [REFIT]);
+}
+
+/// A project is read together and a place, inside the project above it;
+/// a task sits in its section, a sub-task in its task, and a comment in
+/// the task it is on. Siblings keep Todoist's own order.
+#[test]
+fn a_task_sits_in_its_section_its_parent_and_its_project() {
+    let mut s = store::Store::default();
+    s.projects.insert(
+        "6Fleet".into(),
+        json!({"id": "6Fleet", "name": "Fleet", "is_deleted": false}),
+    );
+    s.projects.insert(
+        REFIT.into(),
+        json!({"id": REFIT, "name": "Enterprise refit", "parent_id": "6Fleet",
+               "is_deleted": false}),
+    );
+    s.sections.insert(
+        "6SecEngineering".into(),
+        json!({"id": "6SecEngineering", "name": "Engineering", "project_id": REFIT,
+               "section_order": 1, "is_deleted": false}),
+    );
+    s.items.insert(
+        "6TaskCoils".into(),
+        task(
+            "6TaskCoils",
+            REFIT,
+            Some("6SecEngineering"),
+            None,
+            "Coils",
+            1,
+        ),
+    );
+    s.items.insert(
+        "6TaskConduit".into(),
+        task(
+            "6TaskConduit",
+            REFIT,
+            Some("6SecEngineering"),
+            Some("6TaskCoils"),
+            "Conduit",
+            2,
+        ),
+    );
+    s.notes.insert(
+        "6NoteCoils".into(),
+        json!({"id": "6NoteCoils", "item_id": "6TaskConduit", "content": "Soon.",
+               "is_deleted": false, "posted_at": "2026-09-21T09:00:00.000000Z"}),
+    );
+    let doc = build("todoist", &s, REFIT, &Inputs::default());
+    let fleet = ids::project("todoist", "6Fleet").uuid;
+    let refit = ids::project("todoist", REFIT).uuid;
+    let section = ids::section("todoist", "6SecEngineering").uuid;
+    let nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.uuid.as_str(),
+                n.parent_uuid.as_deref(),
+                n.read_together,
+                n.is_place,
+            )
+        })
+        .collect();
+    assert_eq!(
+        nodes,
+        vec![
+            (fleet.as_str(), None, true, true),
+            (refit.as_str(), Some(fleet.as_str()), true, true),
+            (section.as_str(), Some(refit.as_str()), false, false),
+        ]
+    );
+    let by_kind =
+        |kind: &str| -> Vec<&GridRow> { doc.rows.iter().filter(|r| r.kind == kind).collect() };
+    let project_row = by_kind("Todoist Project")[0];
+    assert_eq!(project_row.parent_uuid.as_deref(), Some(fleet.as_str()));
+    let tasks = by_kind("Todoist Task");
+    assert_eq!(tasks[0].parent_uuid.as_deref(), Some(section.as_str()));
+    assert_eq!(
+        tasks[1].parent_uuid.as_deref(),
+        Some(tasks[0].uuid.as_str())
+    );
+    assert!(tasks[0].sort_key < tasks[1].sort_key, "Todoist's order");
+    let comment = by_kind("Todoist Comment")[0];
+    assert_eq!(comment.parent_uuid.as_deref(), Some(tasks[1].uuid.as_str()));
+    for r in &doc.rows[1..] {
+        assert_eq!(r.read_uuid.as_deref(), Some(refit.as_str()), "{}", r.kind);
+        assert_eq!(r.place_uuid.as_deref(), Some(refit.as_str()), "{}", r.kind);
+    }
 }

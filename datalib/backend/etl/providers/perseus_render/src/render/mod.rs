@@ -10,6 +10,7 @@ pub mod parse;
 // inception elsewhere still fails the build.
 #[allow(clippy::module_inception)]
 pub mod render;
+mod tree;
 
 /// Bump when the rendered markdown layout or grid row shape changes
 /// enough that every existing doc needs re-rendering. v7 was the

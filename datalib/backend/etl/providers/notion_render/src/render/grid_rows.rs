@@ -8,6 +8,7 @@ use anyhow::Result;
 use datalib_etl_render::inputs::{Inputs, Lookup};
 use datalib_handle::Handle;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -15,6 +16,7 @@ use serde_json::Value;
 use super::ids;
 use super::parse::{parent_block_of, ParsedNotion};
 use super::render::{notion_thread_url, notion_url, RENDER_VERSION};
+use super::tree::{self, PageNode, Placed};
 
 fn page_title_from(page: &Value) -> String {
     let props = page.get("properties");
@@ -135,6 +137,7 @@ fn page_row(
     page: &Value,
     title: &str,
     stanza: &str,
+    at: &Lineage,
     users: Lookup<'_, HashMap<String, String>>,
     emails: Lookup<'_, HashMap<String, String>>,
     problems: &mut Vec<ProblemRow>,
@@ -174,6 +177,7 @@ fn page_row(
         .upstream_entity_kind(Some(id.entity_kind.to_string()))
         .notion_page_uuid(Some(id.uuid.clone()))
         .markdown_uuid(Some(id.uuid))
+        .lineage(at)
         .build_or_record(stanza, &pid, RENDER_VERSION, problems)
 }
 
@@ -182,8 +186,11 @@ fn thread_rows(
     disc_id: &str,
     members_sorted: &[Value],
     page_id: &str,
+    page_uuid: &str,
     page_title: &str,
     stanza: &str,
+    at: &Placed,
+    thread_node: &NodeRow,
     parent_block_id: Option<&str>,
     anchor: Option<&str>,
     emails: Lookup<'_, HashMap<String, String>>,
@@ -194,7 +201,7 @@ fn thread_rows(
     }
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
     let thread = ids::discussion(stanza, disc_id);
-    let page_uuid = ids::page(stanza, page_id, None).uuid;
+    let in_thread = at.inside.below(thread_node);
     let mut rows: Vec<GridRow> = Vec::new();
     let first = &members_sorted[0];
     let mut aggregated_text: String = members_sorted
@@ -245,9 +252,10 @@ fn thread_rows(
             .source_url(Some(thread_url.clone()))
             .upstream_id(Some(thread.natural_key.clone()))
             .upstream_entity_kind(Some(thread.entity_kind.to_string()))
-            .notion_page_uuid(Some(page_uuid.clone()))
+            .notion_page_uuid(Some(page_uuid.to_string()))
             .notion_block_uuid(parent_block_id.map(String::from))
             .markdown_uuid(Some(thread.uuid.clone()))
+            .lineage(&at.inside)
             .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
     );
     for (idx, c) in members_sorted.iter().enumerate() {
@@ -281,9 +289,10 @@ fn thread_rows(
                 .source_url(Some(thread_url.clone()))
                 .upstream_id(Some(id.natural_key))
                 .upstream_entity_kind(Some(id.entity_kind.to_string()))
-                .notion_page_uuid(Some(page_uuid.clone()))
+                .notion_page_uuid(Some(page_uuid.to_string()))
                 .notion_block_uuid(parent_block_id.map(String::from))
                 .markdown_uuid(Some(thread.uuid.clone()))
+                .lineage(&in_thread)
                 .build_or_record(stanza, disc_id, RENDER_VERSION, problems),
         );
     }
@@ -308,6 +317,8 @@ pub struct PageDocument {
     /// declares the bucket with the total.
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
+    /// The page and the pages and databases above it.
+    pub nodes: Vec<NodeRow>,
     /// What this document lost on the way here; travels with the rows
     /// so both commit together.
     pub problems: Vec<ProblemRow>,
@@ -326,6 +337,8 @@ pub struct ThreadDocument {
     /// See [`PageDocument::inputs`].
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
+    /// The thread, its page and what is above that.
+    pub nodes: Vec<NodeRow>,
     /// See [`PageDocument::problems`].
     pub problems: Vec<ProblemRow>,
 }
@@ -375,21 +388,41 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
         let mut rows: Vec<GridRow> = Vec::new();
         let users = inputs.lookup("users", &parsed.user_names);
         let emails = inputs.lookup("users", &parsed.user_emails);
-        if let Some(r) = page_row(page, &title, stanza, users, emails, &mut problems) {
+        let created_time = page.get("created_time").and_then(|v| v.as_str());
+        let markdown_uuid = ids::page(stanza, &pid, created_time).uuid;
+        let at = tree::page(
+            &markdown_uuid,
+            stanza,
+            &PageNode {
+                id: &pid,
+                created_time,
+                title: &title,
+            },
+            inputs.lookup("tree", &parsed.tree),
+        );
+        if let Some(r) = page_row(page, &title, stanza, &at.page, users, emails, &mut problems) {
             rows.push(r);
         }
-        let created_time = page.get("created_time").and_then(|v| v.as_str());
         pages.push(PageDocument {
-            markdown_uuid: ids::page(stanza, &pid, created_time).uuid,
+            markdown_uuid,
             page_uuid: pid,
             page_title: title,
             inputs,
             rows,
+            nodes: at.nodes,
             problems,
         });
     }
 
     // ── thread documents ─────────────────────────────────────────────
+    let page_created: HashMap<&str, Option<&str>> = parsed
+        .pages
+        .iter()
+        .filter_map(|p| {
+            let id = p.get("id").and_then(Value::as_str)?;
+            Some((id, p.get("created_time").and_then(Value::as_str)))
+        })
+        .collect();
     let mut threads: Vec<ThreadDocument> = Vec::new();
     for (disc_id, members) in &comments_by_discussion {
         let first = members[0];
@@ -426,25 +459,44 @@ pub fn gather_documents(parsed: &ParsedNotion, stanza: &str) -> Result<DocumentR
             .as_deref()
             .and_then(|b| anchors.get(b))
             .map(String::as_str);
+        let markdown_uuid = ids::discussion(stanza, disc_id).uuid;
+        let created_time = page_created.get(page_id.as_str()).copied().flatten();
+        let page_uuid = ids::page(stanza, &page_id, created_time).uuid;
+        let mut at = tree::page(
+            &markdown_uuid,
+            stanza,
+            &PageNode {
+                id: &page_id,
+                created_time,
+                title: &title,
+            },
+            inputs.lookup("tree", &parsed.tree),
+        );
+        let thread_node = tree::thread(&markdown_uuid, stanza, disc_id, &at);
         let rows = thread_rows(
             disc_id,
             &owned,
             &page_id,
+            &page_uuid,
             &title,
             stanza,
+            &at,
+            &thread_node,
             parent_block_id.as_deref(),
             anchor,
             inputs.lookup("users", &parsed.user_emails),
             &mut problems,
         );
+        at.nodes.push(thread_node);
         threads.push(ThreadDocument {
-            markdown_uuid: ids::discussion(stanza, disc_id).uuid,
+            markdown_uuid,
             discussion_uuid: disc_id.clone(),
             page_uuid: page_id,
             page_title: title,
             anchor_block_uuid: parent_block_id.clone(),
             inputs,
             rows,
+            nodes: at.nodes,
             problems,
         });
     }
@@ -528,6 +580,49 @@ mod tests {
             t.rows[1].notion_page_uuid.as_deref(),
             Some(docs.pages[0].markdown_uuid.as_str())
         );
+    }
+
+    /// A thread is read on its own inside its page, and each comment
+    /// inside the thread. The page's uuid carries its `created_time`, so
+    /// a thread must mint it from the page's stamp to name the page's
+    /// document rather than an id no document has.
+    #[test]
+    fn a_thread_sits_inside_its_page_and_its_comments_inside_the_thread() {
+        let mut p = page("p1", "Standup Notes");
+        p["created_time"] = json!("2364-02-01T00:00:00.000Z");
+        let parsed = ParsedNotion {
+            pages: vec![p],
+            comments: vec![comment(
+                "c1",
+                "p1",
+                "d1",
+                "Data",
+                "2364-02-02T00:00:00.000Z",
+            )],
+            ..Default::default()
+        };
+        let docs = gather_documents(&parsed, "notion").unwrap();
+        let page_doc = &docs.pages[0];
+        let page_uuid = page_doc.markdown_uuid.as_str();
+        assert_eq!(page_doc.nodes.len(), 1);
+        assert_eq!(page_doc.nodes[0].uuid, page_uuid);
+        assert_eq!(page_doc.rows[0].parent_uuid, None, "a top page");
+        let t = &docs.threads[0];
+        let thread_node = t.nodes.last().unwrap();
+        assert_eq!(thread_node.uuid, t.markdown_uuid);
+        assert_eq!(thread_node.parent_uuid.as_deref(), Some(page_uuid));
+        assert_eq!(t.nodes[0].uuid, page_uuid);
+        assert_eq!(t.rows[0].parent_uuid.as_deref(), Some(page_uuid));
+        assert_eq!(t.rows[0].read_uuid.as_deref(), Some(page_uuid));
+        assert_eq!(
+            t.rows[1].parent_uuid.as_deref(),
+            Some(t.markdown_uuid.as_str())
+        );
+        assert_eq!(
+            t.rows[1].read_uuid.as_deref(),
+            Some(t.markdown_uuid.as_str())
+        );
+        assert_eq!(t.rows[1].notion_page_uuid.as_deref(), Some(page_uuid));
     }
 
     /// A page object carries only `created_by.id`, so a page author

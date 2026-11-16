@@ -9,6 +9,7 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Gitlab;
 
 pub const KIND_MR: &str = "merge_request";
 pub const KIND_NOTE: &str = "note";
+pub const KIND_PROJECT: &str = "project";
 
 /// `created_at` is the stamp GitLab wrote on the record, as the row
 /// stores it, so the id carries it.
@@ -36,6 +37,19 @@ pub fn merge_request(
     created_at: Option<&str>,
 ) -> Identity {
     identity(source_id, project, KIND_MR, iid.to_string(), created_at)
+}
+
+/// `key` is GitLab's numeric id for the project, which a rename or a
+/// move keeps. No stamp: a project is a container.
+pub fn project(source_id: &str, key: &str) -> Identity {
+    Identity::mint(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_PROJECT,
+        key.to_string(),
+        None,
+    )
 }
 
 pub fn note(source_id: &str, project: &str, id: i64, created_at: Option<&str>) -> Identity {

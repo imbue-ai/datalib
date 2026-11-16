@@ -31,6 +31,8 @@ pub const RENDER_VERSION: u32 = 10;
 #[derive(Debug, Clone)]
 pub struct CalendarInfo {
     pub uuid: String,
+    /// Upstream's id for it, which a rename keeps.
+    pub upstream_id: String,
     pub label: String,
     pub time_zone: Option<String>,
 }
@@ -136,6 +138,7 @@ pub fn normalize_all(parsed: &Parsed, source_id: &str) -> Vec<NormalizedEvent> {
                 c.id.as_str(),
                 CalendarInfo {
                     uuid: ids::calendar(source_id, &c.id).uuid,
+                    upstream_id: c.id.clone(),
                     label: c.display_name.clone().unwrap_or_else(|| c.id.clone()),
                     time_zone: c.time_zone.clone(),
                 },
@@ -145,6 +148,7 @@ pub fn normalize_all(parsed: &Parsed, source_id: &str) -> Vec<NormalizedEvent> {
     let info = |id: &str| {
         calendars.get(id).cloned().unwrap_or_else(|| CalendarInfo {
             uuid: ids::calendar(source_id, id).uuid,
+            upstream_id: id.to_string(),
             label: id.to_string(),
             time_zone: None,
         })

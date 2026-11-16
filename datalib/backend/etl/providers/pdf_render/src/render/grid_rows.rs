@@ -4,6 +4,7 @@ use std::path::Path;
 
 use datalib_id::{composite_key, IdNamespace, Identity};
 use datalib_schema::grid_rows::{content_hash, preview, GridRow};
+use datalib_schema::nodes::NodeRow;
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
 
@@ -125,6 +126,17 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
     Some(a.to_string())
 }
 
+/// The document as a container, read together, at the top of its source:
+/// it is its bytes, wherever on disk they are, so no folder holds it.
+pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>) -> NodeRow {
+    let when = document_stamp(meta.created_at, meta.modified_at);
+    let doc = document(source_id, meta.blake3, when);
+    NodeRow::new(&doc.uuid, &doc.uuid, source_id, KIND_DOCUMENT)
+        .named(Some(display_title(meta.title, meta.rel_path)))
+        .upstream(doc.entity_kind, doc.natural_key, None)
+        .read_together()
+}
+
 /// Build the row set for one document: the document row followed by one
 /// row per page, in page order.
 pub fn rows_for_document(
@@ -230,9 +242,10 @@ pub fn rows_for_document(
             channel: None,
             conversation_name: Some(title.clone()),
             conversation_uuid: doc_uuid.clone(),
-            parent_uuid: None,
-            sort_key: None,
-            read_uuid: None,
+            // A page is read with its document, in the PDF's order.
+            parent_uuid: Some(doc_uuid.clone()),
+            sort_key: Some(format!("{number:010}")),
+            read_uuid: Some(doc_uuid.clone()),
             place_uuid: None,
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
@@ -345,6 +358,25 @@ mod tests {
         let rows = rows_for_document("pdf", &meta(None, "a/b.pdf"), &pages);
         let doc = rows[0].uuid.clone();
         assert!(rows.iter().all(|r| r.conversation_uuid == doc));
+    }
+
+    /// A page sits in its document, which is read together, and sorts
+    /// by its number: every page carries the document's one stamp.
+    #[test]
+    fn a_page_sits_in_its_document_in_page_order() {
+        let pages = vec![(2, "two".into()), (10, "ten".into())];
+        let m = meta(Some("T"), "a.pdf");
+        let rows = rows_for_document("pdf", &m, &pages);
+        let node = document_node("pdf", &m);
+        assert_eq!(node.uuid, rows[0].uuid);
+        assert!(node.read_together && !node.is_place);
+        assert_eq!(node.parent_uuid, None);
+        assert_eq!(rows[0].parent_uuid, None);
+        for page in &rows[1..] {
+            assert_eq!(page.parent_uuid.as_deref(), Some(node.uuid.as_str()));
+            assert_eq!(page.read_uuid.as_deref(), Some(node.uuid.as_str()));
+        }
+        assert!(rows[1].sort_key < rows[2].sort_key, "page 2 before page 10");
     }
 
     #[test]

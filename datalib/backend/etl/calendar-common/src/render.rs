@@ -19,6 +19,7 @@ use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::nodes::{Lineage, NodeRow};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 
@@ -105,7 +106,16 @@ fn render_one(
         .unwrap_or(&md_path)
         .to_string_lossy()
         .into_owned();
-    let row = build_grid_row(profile, event, source_id, &md_rel, start, &mut problems);
+    let nodes = tree(profile, event, source_id);
+    let row = build_grid_row(
+        profile,
+        event,
+        source_id,
+        &md_rel,
+        start,
+        &Lineage::top().below(&nodes[0]),
+        &mut problems,
+    );
     Ok(RenderedMarkdown {
         section_layout: None,
         content_hash: None,
@@ -119,7 +129,7 @@ fn render_one(
         sections,
         edges: edges(event),
         contacts: Vec::new(),
-        nodes: Vec::new(),
+        nodes,
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
@@ -470,6 +480,7 @@ fn build_grid_row(
     source_id: &str,
     md_rel: &str,
     start: Option<String>,
+    at: &Lineage,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     // What the event is, when and where, and what it says, before the
@@ -536,12 +547,38 @@ fn build_grid_row(
         .upstream_id(Some(event.upstream_id.clone()))
         .upstream_entity_kind(Some(event.upstream_entity_kind.to_string()))
         .markdown_uuid(Some(event.event_uuid.clone()))
+        .lineage(at)
         .build_or_record(
             source_id,
             &event.event_uuid,
             profile.render_version,
             problems,
         )
+}
+
+/// The calendar, a place, and the event in it, read on its own. A
+/// changed occurrence sits in the calendar beside its series, which it
+/// links.
+fn tree(profile: &CalendarRenderProfile, event: &NormalizedEvent, source_id: &str) -> Vec<NodeRow> {
+    let md = &event.event_uuid;
+    let calendar = NodeRow::new(md, &event.calendar_uuid, source_id, "Calendar")
+        .named(Some(event.calendar_label.clone()))
+        .upstream(
+            event.calendar_entity_kind,
+            event.calendar_upstream_id.clone(),
+            profile.account.clone(),
+        )
+        .place();
+    let own = NodeRow::new(md, md, source_id, kind_of(event))
+        .named(Some(title_of(event).to_string()))
+        .upstream(
+            event.upstream_entity_kind,
+            event.upstream_id.clone(),
+            profile.account.clone(),
+        )
+        .read_together()
+        .under(&Lineage::top().below(&calendar));
+    vec![calendar, own]
 }
 
 /// A series points at each of its changed occurrences, and an occurrence
@@ -700,6 +737,8 @@ mod tests {
             shape,
             calendar_uuid: "33333333-3333-8333-8333-333333333333".into(),
             calendar_label: "Bridge".into(),
+            calendar_entity_kind: "calendar",
+            calendar_upstream_id: "bridge".into(),
             calendar_time_zone: Some("America/Los_Angeles".into()),
             upstream_id: "bridge#staff".into(),
             upstream_entity_kind: "event",
@@ -757,6 +796,44 @@ mod tests {
             account: Some("picard@enterprise.test".into()),
             render_version: 1,
         }
+    }
+
+    /// An event is read on its own inside its calendar, a place keyed by
+    /// upstream's id for it; the series link stays a link, not a reply.
+    #[test]
+    fn an_event_sits_in_its_calendar() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = render_one(&profile(), &series(), dir.path(), "tng_calendar").unwrap();
+        type Node<'a> = (&'a str, Option<&'a str>, bool, bool, Option<&'a str>);
+        let nodes: Vec<Node<'_>> = doc
+            .nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                    n.upstream_id.as_deref(),
+                )
+            })
+            .collect();
+        let cal = "33333333-3333-8333-8333-333333333333";
+        assert_eq!(
+            nodes,
+            vec![
+                (cal, None, true, false, Some("bridge")),
+                (SERIES, Some(cal), false, true, Some("bridge#staff")),
+            ]
+        );
+        let row = &doc.rows[0];
+        assert_eq!(row.parent_uuid.as_deref(), Some(cal));
+        assert_eq!(row.place_uuid.as_deref(), Some(cal));
+        assert_eq!(row.read_uuid, None);
+        assert!(doc
+            .edges
+            .iter()
+            .all(|e| e.kind == datalib_schema::edges::EdgeKind::Link.as_i64()));
     }
 
     /// Everything an invite carries is text: the title, the place, a
@@ -943,6 +1020,7 @@ mod tests {
             "tng_calendar",
             "x/index.md",
             start,
+            &Lineage::top(),
             &mut problems,
         )
         .expect("valid row");
@@ -1011,6 +1089,7 @@ mod tests {
             "tng_calendar",
             "x/index.md",
             None,
+            &Lineage::top(),
             &mut problems,
         )
         .expect("valid row");

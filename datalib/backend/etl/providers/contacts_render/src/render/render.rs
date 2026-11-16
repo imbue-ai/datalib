@@ -13,6 +13,7 @@ use datalib_etl_contact_common::{
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
+use datalib_schema::nodes::NodeRow;
 use datalib_schema::problems::{Problem, Reason};
 
 use datalib_etl_contacts::ingest::schema_raw::member_uid;
@@ -254,6 +255,17 @@ fn normalize(
         contact: person,
         doc_uuid: id.uuid,
         group_label: contact.addressbook.clone(),
+        address_book: contact.addressbook_id.as_deref().map(|book| {
+            NodeRow::new(
+                "",
+                ids::addressbook(source_id, book).uuid,
+                source_id,
+                "Address book",
+            )
+            .named(Some(contact.addressbook.clone()))
+            .upstream(ids::KIND_ADDRESSBOOK, book, None)
+            .place()
+        }),
         member_handles,
         upstream_account: None,
         inputs,
@@ -339,6 +351,7 @@ mod tests {
             inputs: Vec::new(),
             uid: "tng-picard".to_string(),
             addressbook: "Bridge".to_string(),
+            addressbook_id: Some("acct!/books/bridge/".to_string()),
             display_name: Some("Jean-Luc Picard".to_string()),
             revision: Some("2370-04-15T00:00:00Z".to_string()),
             created: None,
@@ -612,6 +625,27 @@ mod tests {
         );
         let listed: Vec<&str> = n.contact.groups.iter().map(String::as_str).collect();
         assert_eq!(listed, vec!["Away Team", "Starred", "Bridge crew"]);
+    }
+
+    /// A card's address book is a place keyed by the raw store's
+    /// `addressbooks` id, which a rename keeps, and named by its label.
+    #[test]
+    fn a_card_names_its_address_book_by_the_id_a_rename_keeps() {
+        let n = normalize(
+            &sample(),
+            "tng_contacts",
+            &Cards::new(),
+            &Groups::new(),
+            &HashMap::new(),
+        );
+        let book = n.address_book.expect("the card is in an address book");
+        assert_eq!(
+            book.uuid,
+            ids::addressbook("tng_contacts", "acct!/books/bridge/").uuid
+        );
+        assert_eq!(book.upstream_id.as_deref(), Some("acct!/books/bridge/"));
+        assert_eq!(book.name.as_deref(), Some("Bridge"));
+        assert!(book.is_place);
     }
 
     #[test]

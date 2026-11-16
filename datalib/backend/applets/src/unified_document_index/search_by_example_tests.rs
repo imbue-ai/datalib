@@ -91,7 +91,6 @@ fn chat(
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".into(),
             markdown_uuid: uuid.into(),
             source_ref: None,
             items: vec![item],
@@ -222,6 +221,7 @@ fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> Contac
         contact,
         doc_uuid: uuid.into(),
         group_label: "Address Book".into(),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),

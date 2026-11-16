@@ -11,6 +11,7 @@ pub const KIND_PROJECT: &str = "project";
 pub const KIND_TASK: &str = "task";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_PROJECT_COMMENT: &str = "project_comment";
+pub const KIND_SECTION: &str = "section";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 
@@ -19,6 +20,11 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 /// stamps from what is in it.
 pub fn project(source_id: &str, project_id: &str) -> Identity {
     IDS.mint(source_id, KIND_PROJECT, project_id.to_string(), None)
+}
+
+/// No stamp: a section is a container, and its tasks carry the times.
+pub fn section(source_id: &str, section_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_SECTION, section_id.to_string(), None)
 }
 
 /// `added_at` is the task's own.

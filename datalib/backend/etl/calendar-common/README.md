@@ -51,6 +51,12 @@ it (`Changed: <date>`) through `edges`, so the preview pane walks either
 way. An occurrence of a series the store does not hold — an invitation
 to one date of someone else's meeting — stands alone and says so.
 
+**Where a row sits** (`docs/dev/grid_rows.md` §"`parent_uuid`…"). The
+calendar is a place, keyed by upstream's id for it (a CalDAV collection,
+a Google calendar id), which a rename keeps; each event is read together
+inside it. A changed occurrence sits in the calendar beside its series:
+the links between the two are `Link` edges, not parents.
+
 ## Dates in the grid
 
 `created_at` is **when the event happens**: the start's instant, so

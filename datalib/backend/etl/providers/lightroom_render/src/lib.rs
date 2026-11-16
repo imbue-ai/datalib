@@ -5,4 +5,5 @@
 pub mod photo;
 pub mod processor;
 pub mod read;
+pub mod tree;
 pub mod xmp;

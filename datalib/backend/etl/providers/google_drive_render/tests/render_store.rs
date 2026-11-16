@@ -275,3 +275,82 @@ fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
     let reasons: Vec<Reason> = md.problems.iter().map(|p| p.reason).collect();
     assert_eq!(reasons, vec![Reason::BlobMissing]);
 }
+
+/// A Doc sits in its folder, a place, and is read together; a comment
+/// thread is read together inside it, its first comment where the thread
+/// sits and each reply inside the thread.
+#[test]
+fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = json!({
+        "id": DOC, "name": "Captain's log, supplemental", "mimeType": store::DOC_MIME,
+        "createdTime": "2364-03-01T08:00:00.000Z", "parents": ["0BridgeLogs"],
+    });
+    let comment = json!({
+        "author": {"displayName": "Geordi La Forge"}, "content": "Warp core?",
+        "createdTime": "2364-03-01T09:00:00.000Z",
+        "replies": [{"id": "r1", "author": {"displayName": "Data"}, "content": "Stable.",
+                     "createdTime": "2364-03-01T10:00:00.000Z"}],
+    });
+    let md = render_doc(
+        dir.path(),
+        "drive",
+        &DocInput {
+            file_id: DOC,
+            entry: &entry,
+            capture: &store::Capture {
+                id: CaptureRow::id_for(DOC, "12"),
+                parts: Vec::new(),
+            },
+            native: Ok(&native()),
+            images: &Default::default(),
+            comments: &[(format!("{DOC}#c1"), comment)],
+        },
+        &Inputs::default(),
+    )
+    .unwrap();
+    let roles: Vec<(&str, bool, bool, Option<&str>)> = md
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.kind.as_str(),
+                n.is_place,
+                n.read_together,
+                n.parent_uuid.as_deref(),
+            )
+        })
+        .collect();
+    let folder = ids::folder("drive", "0BridgeLogs").uuid;
+    let file = md.markdown_uuid.as_str();
+    let thread = md.rows[1].uuid.as_str();
+    assert_eq!(
+        roles,
+        vec![
+            ("Google Drive folder", true, false, None),
+            ("Google Doc", false, true, Some(folder.as_str())),
+            ("Google Doc comment thread", false, true, Some(file)),
+        ]
+    );
+    assert_eq!(md.nodes[2].uuid, thread);
+    let at: Vec<(Option<&str>, Option<&str>, Option<&str>)> = md
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.parent_uuid.as_deref(),
+                r.read_uuid.as_deref(),
+                r.place_uuid.as_deref(),
+            )
+        })
+        .collect();
+    let folder = Some(folder.as_str());
+    assert_eq!(
+        at,
+        vec![
+            (folder, None, folder),
+            (Some(file), Some(file), folder),
+            (Some(thread), Some(thread), folder),
+        ]
+    );
+}
