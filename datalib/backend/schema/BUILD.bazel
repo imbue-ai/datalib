@@ -9,6 +9,7 @@ rust_library(
         "src/edges.rs",
         "src/data_nodes.rs",
         "src/filings.rs",
+        "src/item_bodies.rs",
         "src/search_terms.rs",
         "src/markdowns.rs",
         "src/providers.rs",

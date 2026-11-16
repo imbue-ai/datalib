@@ -27,6 +27,10 @@ pub mod filings {
     include!("filings.rs");
 }
 
+pub mod item_bodies {
+    include!("item_bodies.rs");
+}
+
 pub mod search_terms {
     include!("search_terms.rs");
 }

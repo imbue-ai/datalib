@@ -672,13 +672,13 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .as_deref()
                 .or(item.text.as_deref())
                 .unwrap_or("(system event)");
+            let summary = escape_md_inline(summary);
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
                 ts = timestamp_html(item.date_ms, item.date_offset_secs),
-                summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
-            return Section::keyed(&item.message_uuid, s);
+            return Section::item(&item.message_uuid, s, summary);
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -712,31 +712,30 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             format!("🏷 {}\n\n{text}", labels.join(" · "))
         }
     };
-    match item.kind {
-        ItemKind::Text => {
-            let text = labelled(body(item.text.as_deref().unwrap_or("")));
-            if !text.is_empty() {
-                s.push('\n');
-                s.push_str(&text);
-                s.push('\n');
-            }
-        }
-        ItemKind::Attachment => {
-            let caption = labelled(body(item.text.as_deref().unwrap_or("")));
-            if !caption.is_empty() {
-                s.push('\n');
-                s.push_str(&caption);
-                s.push('\n');
-            }
-            if item.attachments.is_empty() {
-                s.push_str("\n*[attachment metadata missing]*\n");
-            }
-            for att in &item.attachments {
-                render_attachment(&mut s, att);
-            }
-        }
-        ItemKind::System => unreachable!(),
+    // What the item says: its text, then its attachments. The labels
+    // line above it is where it is filed, not what it says.
+    let said = body(item.text.as_deref().unwrap_or(""));
+    let text = labelled(said.clone());
+    if !text.is_empty() {
+        s.push('\n');
+        s.push_str(&text);
+        s.push('\n');
     }
+    let mut attached = String::new();
+    if item.kind == ItemKind::Attachment {
+        if item.attachments.is_empty() {
+            attached.push_str("\n*[attachment metadata missing]*\n");
+        }
+        for att in &item.attachments {
+            render_attachment(&mut attached, att);
+        }
+    }
+    s.push_str(&attached);
+    let item_body = [said.trim(), attached.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     if !item.reactions.is_empty() {
         s.push('\n');
@@ -766,7 +765,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     }
 
     s.push_str("\n</div>\n\n");
-    Section::keyed(&item.message_uuid, s)
+    Section::item(&item.message_uuid, s, item_body)
 }
 
 fn replies_line(replies: Replies) -> Option<String> {
@@ -1777,6 +1776,41 @@ mod tests {
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("🏷 Starred\n\nSpot's portrait"), "{md}");
         assert!(md.contains("spot.png"), "{md}");
+    }
+
+    /// An item's body is what it says and nothing drawn around it: no
+    /// author, time, labels or reactions, but its caption and its files.
+    #[test]
+    fn an_items_body_leaves_out_its_header_labels_and_reactions() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.kind = ItemKind::Attachment;
+        item.labels = vec!["Starred".to_string()];
+        item.text = Some("Spot's portrait".to_string());
+        item.attachments = vec![NormalizedAttachment {
+            href: None,
+            file_name: Some("spot.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: None,
+        }];
+        let sections = render_markdown(&profile, &chat, &chat.buckets[0], "Test");
+        let item = sections
+            .iter()
+            .find(|s| s.uuid.as_deref() == Some("33333333-3333-3333-3333-333333333333"))
+            .unwrap();
+        let body = item
+            .body
+            .as_deref()
+            .expect("chat-common splits the body off");
+        assert!(body.starts_with("Spot's portrait\n\n"), "{body}");
+        assert!(body.contains("spot.png"), "{body}");
+        for drawn in ["Picard", "Starred", "Riker", "🫡", "<div", "<time"] {
+            assert!(!body.contains(drawn), "{drawn} in {body}");
+            assert!(item.md.contains(drawn), "{drawn} not drawn in {}", item.md);
+        }
     }
 
     #[test]

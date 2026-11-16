@@ -47,6 +47,47 @@ const REMOVED_MD_PATHS: &str = "SELECT md_path FROM markdowns \
      WHERE markdown_uuid IN (SELECT value FROM json_each(?)) AND md_path IS NOT NULL";
 const REMOVED_PROBLEMS: &str = "DELETE FROM problems \
      WHERE scope_kind = ? AND scope_key IN (SELECT value FROM json_each(?))";
+const REMOVED_BODIES: &str =
+    "DELETE FROM item_bodies WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
+const DOCUMENT_BODIES: &str = "DELETE FROM item_bodies WHERE markdown_uuid = ?";
+
+/// Replace what the store holds of `md`'s items' bodies. The grid index
+/// keeps none, so this is the render store's own write beside
+/// `grid_index::apply_one`. A document read back from the store has no
+/// sections, and keeps the bodies it has, as it keeps its layout.
+async fn put_item_bodies(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<()> {
+    if !md.rows.is_empty() && md.sections.is_empty() {
+        return Ok(());
+    }
+    let mut guard = write_lock.acquire().await?;
+    let conn = guard.conn();
+    sqlx::query(DOCUMENT_BODIES)
+        .bind(&md.markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior item bodies")?;
+    if md.rows.is_empty() {
+        return Ok(());
+    }
+    for body in crate::section::bodies(&md.markdown_uuid, &md.sections) {
+        sqlx::query(
+            "INSERT INTO item_bodies (markdown_uuid, uuid, body, framed) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&body.markdown_uuid)
+        .bind(&body.uuid)
+        .bind(&body.body)
+        .bind(body.framed)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| {
+            format!(
+                "document {}: store the body of {} (two sections name it?)",
+                md.markdown_uuid, body.uuid
+            )
+        })?;
+    }
+    Ok(())
+}
 
 pub fn path_for(rendered_root: &Path) -> PathBuf {
     rendered_root.join(STORE_FILE)
@@ -72,6 +113,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(EDGES_DDL.iter())
         .chain(datalib_schema::data_nodes::DDL.iter())
         .chain(datalib_schema::filings::DDL.iter())
+        .chain(datalib_schema::item_bodies::DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
@@ -391,6 +433,7 @@ impl IndexedMarkdownStore {
                 crate::grid_index::apply_one(&self.write_lock, out_dir, md)
                     .await
                     .with_context(|| format!("apply {}", md.markdown_uuid))?;
+                put_item_bodies(&self.write_lock, md).await?;
                 self.sweep_problems(&md.markdown_uuid, &md.problems).await?;
                 Ok(previous)
             })
@@ -437,6 +480,11 @@ impl IndexedMarkdownStore {
                 crate::grid_index::delete_document_rows(conn, markdown_uuids)
                     .await
                     .context("remove documents from the store")?;
+                sqlx::query(REMOVED_BODIES)
+                    .bind(&set)
+                    .execute(&mut **conn)
+                    .await
+                    .context("remove the item bodies of documents removed from the store")?;
                 sqlx::query(REMOVED_PROBLEMS)
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(&set)
@@ -1492,6 +1540,8 @@ mod tests {
             crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
             REMOVED_MD_PATHS,
             REMOVED_PROBLEMS,
+            REMOVED_BODIES,
+            DOCUMENT_BODIES,
         ];
         statements.extend(crate::grid_index::DELETE_DOCUMENTS);
         blocking(crate::grid_index::assert_searched_by_index(
@@ -1792,6 +1842,83 @@ mod tests {
             .unwrap();
             assert_eq!(n, 0, "{table}");
         }
+        st.close();
+    }
+
+    /// Each item's body is kept per document: a re-render replaces it,
+    /// a document read back from the store (no sections) keeps it, and
+    /// removing the document removes it, leaving other documents' alone.
+    #[test]
+    fn item_bodies_travel_with_their_document() {
+        use crate::section::Section;
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let bodies = |st: &IndexedMarkdownStore| -> Vec<(String, String, String, bool)> {
+            blocking(
+                sqlx::query_as(
+                    "SELECT markdown_uuid, uuid, body, framed FROM item_bodies \
+                     ORDER BY markdown_uuid, uuid",
+                )
+                .fetch_all(&st.pool),
+            )
+            .unwrap()
+        };
+        let with = |id: &str, sections: Vec<Section>| RenderedMarkdown {
+            sections,
+            ..doc(td.path(), id, "fp")
+        };
+        st.put_document(
+            td.path(),
+            &with(
+                "a",
+                vec![
+                    Section::unkeyed("# Tea\n".into()),
+                    Section::item("a", "<div>Riker: hi</div>\n".into(), "hi".into()),
+                    Section::keyed("m2", "<div>Data: yes</div>\n".into()),
+                ],
+            ),
+        )
+        .unwrap();
+        st.put_document(
+            td.path(),
+            &with(
+                "b",
+                vec![Section::item("b", "<div>b</div>".into(), "b".into())],
+            ),
+        )
+        .unwrap();
+        let b = ("b".into(), "b".into(), "b".into(), false);
+        assert_eq!(
+            bodies(&st),
+            vec![
+                ("a".into(), "a".into(), "hi".into(), false),
+                (
+                    "a".into(),
+                    "m2".into(),
+                    "<div>Data: yes</div>\n".into(),
+                    true
+                ),
+                b.clone(),
+            ]
+        );
+
+        st.put_document(
+            td.path(),
+            &with(
+                "a",
+                vec![Section::item("a", "<div>bye</div>".into(), "bye".into())],
+            ),
+        )
+        .unwrap();
+        let a_now = ("a".into(), "a".into(), "bye".into(), false);
+        assert_eq!(bodies(&st), vec![a_now.clone(), b.clone()]);
+
+        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
+            .unwrap();
+        assert_eq!(bodies(&st), vec![a_now, b.clone()], "read back: kept");
+
+        st.remove_documents(td.path(), &["a".to_string()]).unwrap();
+        assert_eq!(bodies(&st), vec![b]);
         st.close();
     }
 

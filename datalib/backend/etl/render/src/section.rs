@@ -2,6 +2,7 @@
 //! [`Section`] a renderer hands over so a document can be read piece by
 //! piece without parsing its markdown.
 
+use datalib_schema::item_bodies::ItemBodyRow;
 use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
 
@@ -15,6 +16,11 @@ use datalib_schema::providers::Provider;
 pub struct Section {
     pub uuid: Option<String>,
     pub md: String,
+    /// What the item says, without the header and wrapper `md` draws
+    /// around it (`item_bodies.body`). `None` from a renderer that has not
+    /// split them off yet: the store then keeps `md` as the body, marked
+    /// framed.
+    pub body: Option<String>,
 }
 
 impl Section {
@@ -22,12 +28,41 @@ impl Section {
         Self {
             uuid: Some(uuid.to_string()),
             md,
+            body: None,
+        }
+    }
+
+    /// An item's section that also says which part of it is the body.
+    pub fn item(uuid: &str, md: String, body: String) -> Self {
+        Self {
+            body: Some(body),
+            ..Self::keyed(uuid, md)
         }
     }
 
     pub fn unkeyed(md: String) -> Self {
-        Self { uuid: None, md }
+        Self {
+            uuid: None,
+            md,
+            body: None,
+        }
     }
+}
+
+/// The bodies of a document's items, one per keyed section, in order.
+pub fn bodies(markdown_uuid: &str, sections: &[Section]) -> Vec<ItemBodyRow> {
+    sections
+        .iter()
+        .filter_map(|s| {
+            let uuid = s.uuid.as_ref()?;
+            Some(ItemBodyRow {
+                markdown_uuid: markdown_uuid.to_string(),
+                uuid: uuid.clone(),
+                body: s.body.clone().unwrap_or_else(|| s.md.clone()),
+                framed: s.body.is_none(),
+            })
+        })
+        .collect()
 }
 
 /// The `.md` a list of sections spells.
@@ -126,6 +161,32 @@ mod tests {
         );
         assert_eq!(spans[1].uuid.as_deref(), Some("a"));
         assert_eq!(spans[1].bytes, "<div>é</div>\n".len(), "bytes, not chars");
+    }
+
+    /// An item whose renderer has not split its body off keeps its whole
+    /// section as the body, marked framed, so nothing reading it draws a
+    /// second header around it.
+    #[test]
+    fn a_body_is_kept_per_item_and_marked_framed_when_not_split_off() {
+        let sections = vec![
+            Section::unkeyed("# Title\n".into()),
+            Section::item("a", "<div>Riker: hi</div>\n".into(), "hi".into()),
+            Section::keyed("b", "<div>Data: yes</div>\n".into()),
+        ];
+        let got: Vec<(String, String, bool)> = bodies("doc", &sections)
+            .into_iter()
+            .map(|b| {
+                assert_eq!(b.markdown_uuid, "doc");
+                (b.uuid, b.body, b.framed)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("a".into(), "hi".into(), false),
+                ("b".into(), "<div>Data: yes</div>\n".into(), true),
+            ]
+        );
     }
 
     #[test]
