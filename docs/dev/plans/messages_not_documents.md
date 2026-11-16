@@ -59,10 +59,13 @@ or a conversation joins its items in position order when it is read.
 Nothing needs to know where one message starts inside a larger text,
 so the backpointers that answer that go too: a section's byte span
 and index within its document, and a chunk's `first_section` and
-`last_section` counted in that index. A chunk instead records the
-items it covers, by uuid, in a table of its own; "which messages does
-this vector speak for" is then a lookup, not arithmetic over a file's
-layout. The one offset left is inside a single item too long for one
+`last_section` counted in that index. A chunk still packs several
+short items; it records them by uuid, one row per item in a table of
+its own, and "which messages does this vector speak for" is then a
+lookup, not arithmetic over a file's layout. Not a range of positions:
+a message that arrives late (a backfill, a slow sync) can land inside
+the range, and the chunk would then claim an item its vector never
+saw. The one offset left is inside a single item too long for one
 chunk, which is cut in pieces as it is today.
 
 ## What a document is today
