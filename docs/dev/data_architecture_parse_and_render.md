@@ -89,7 +89,12 @@ database per source, at
     took part in it. chat-common and contact-common supply them; the
     index melts them into its search terms, one indexed row per
     term (`etl/render/src/search_terms.rs`).
-  - `edges` — its outgoing links.
+  - `edges` — its outgoing links: a `Link` the page draws, or a
+    `ReplyTo` from an item to the one it answers.
+  - `nodes` and `filings` — the containers its rows live in, from its
+    own up to the top of the source, and what they are filed under
+    besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
+    they belong to the document.
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
@@ -832,9 +837,10 @@ Two tables in the render store, both written by the driver
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet
   records `(users, U123)` anyway, so the row's arrival names the
-  thread. Keyed on the bucket rather than the document because a
-  periodizing renderer (slack, signal, beeper) turns one conversation
-  into several documents, and the inputs belong to the conversation.
+  thread. Keyed on the bucket rather than the document because one
+  conversation can render as several documents (a session and each of
+  its sub-agents' transcripts), and the inputs belong to the
+  conversation.
   `markdowns.bucket_key` is the link back: the bucket each document
   came from.
 

@@ -283,13 +283,34 @@ the cell's Keep only writes.
 card's address book, an event's calendar, a sensor's device, LinkedIn's
 connections list. A chat leaves it null — chat-common writes the
 conversation's name once, as its subject — so the two never repeat
-each other. A hierarchy of places (a Slack workspace and its channel, a
-Linear org and its team) is not modelled yet.
+each other. Where a row sits among places nested in places (a Slack
+workspace and its channel) is its tree, below.
+
+### `parent_uuid`, `sort_key`, `read_uuid`, `place_uuid`: where a row sits
+
+Every row sits in a tree of **containers**: the chat, thread, channel,
+page, calendar or label it lives in, each a row of the `nodes` table
+that the document carries the way it carries its contacts (a channel
+named by many threads has a row under each, one container when read).
+`parent_uuid` is the container that holds the row. `sort_key` is how
+it sorts among that container's children: its `created_at` in UTC
+unless the source orders children without times, as a page orders its
+blocks, never a position counted by us, so a row that arrives late
+moves none of its siblings. A container is **read together** (what a
+search groups by and the viewer opens: a thread, a chat, a page) or a
+**place** (what a person browses: a channel, a mailbox, a calendar), or
+both; `read_uuid` and `place_uuid` are the nearest container above the
+row of each kind, so grouping by either is one column. Besides its
+parent a row or container may be filed under others, an email thread
+under each of its labels: those are `filings` rows. Why, and what the
+tree is for: `docs/dev/plans/messages_not_documents.md`.
 
 ### `conversation_uuid`, `preview`, `content_hash`
 
-`conversation_uuid` is the row's own `uuid` for a document row and the
-document's for everything inside it.
+`conversation_uuid` is the conversation's id on every row in it, the
+conversation's own row included. A document that is part of a
+conversation, as a sub-agent's transcript is of its session, carries
+the session's.
 
 A producer hands the builder the row's whole text (`.body(…)`), and the
 builder keeps two things from it: `preview`, the first 240 characters

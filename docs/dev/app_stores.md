@@ -12,6 +12,7 @@
                                                   days, one row each, replaced whole by each
                                                   run (`calendar_render/src/occurrences/`)
 <data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
+                                                  nodes and filings (the tree the rows sit in) /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
                                                   label and name each row answers to, indexed
