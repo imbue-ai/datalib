@@ -186,10 +186,15 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         ["c-picard#f-fail"],
         "a file landed or gone is held; one that failed is owed"
     );
-    assert_eq!(
-        strings(pool, "SELECT scope FROM sync_scope_state ORDER BY scope").await,
-        ["claude:sweep:project_docs:p-bridge"],
-        "the markers stay: they still say when a listing is due"
+    // The same open creates the Cowork tables this store predates, and a
+    // new table clears the store's cursors (etl/README.md §"Schema
+    // self-healing"): each listing is due once more, and the docs
+    // listings stay held, as asserted above.
+    assert!(
+        strings(pool, "SELECT scope FROM sync_scope_state ORDER BY scope")
+            .await
+            .is_empty(),
+        "the open that adds a table clears the sweep markers"
     );
     assert_eq!(
         strings(

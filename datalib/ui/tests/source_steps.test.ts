@@ -978,7 +978,8 @@ describe("what Check account authenticates as", () => {
 });
 
 describe("the ChatGPT descriptor", () => {
-  /// ChatGPT's form is Claude's with the Claude-only knobs left out:
+  /// ChatGPT's form is Claude's with the Claude-only knobs (Projects,
+  /// Cowork) left out:
   /// same connection block, same probe, same scoping fields and the same
   /// API settings, writing the same `api` table `datalib-step` dispatches
   /// on; only ChatGPT's listing has pages to cap.
@@ -1012,7 +1013,7 @@ describe("the ChatGPT descriptor", () => {
     ]);
     const claudeApi = (CLAUDE.fields ?? [])
       .map((f) => f.target)
-      .filter((t) => t.startsWith("api.") && !t.startsWith("api.project"));
+      .filter((t) => t.startsWith("api.") && !t.startsWith("api.project") && t !== "api.cowork");
     expect(claudeApi.filter((t) => !targets.includes(t))).toEqual([]);
   });
 

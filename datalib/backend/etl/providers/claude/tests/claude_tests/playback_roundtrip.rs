@@ -58,9 +58,9 @@ async fn claude_synth_playback_extract_roundtrip() {
 
     let report = ClaudeSynth::new(&api).synthesize(&playback).unwrap();
     // /account + /organizations + 2 chat listings + 2 details + 2
-    // project listings (one per org, empty — the downloader asks
-    // unconditionally).
-    assert_eq!(report.fixtures_written, 8);
+    // project listings and 2 Cowork listings (one per org, empty — the
+    // downloader asks unconditionally).
+    assert_eq!(report.fixtures_written, 10);
 
     // Open here and close before the store is read back: the file
     // takes one writer at a time.

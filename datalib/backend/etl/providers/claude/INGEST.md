@@ -10,7 +10,8 @@ ingest step's params, sharing one renderer:
 
 Both write **the same tables of the same raw store** — `users`,
 `orgs`, `projects`, `project_docs`, `conversations`,
-`claude_attachments`, and for the `api` method `project_docs_listings`
+`claude_attachments`, and for the `api` method `project_docs_listings`,
+`cowork_sessions` and `cowork_events` (§"Cowork tasks")
 — which is the whole point: `render` has one
 input shape to be correct against, and there is exactly one parser.
 
@@ -186,6 +187,75 @@ is the way to drop them. A UUID in
 `api.project_uuids` that matches nothing in any visible org is a
 `config:project_uuids:<value>` problem rather than quietly mirroring
 nothing.
+
+## Cowork tasks
+
+A Cowork task runs in Anthropic's cloud or on the person's computer;
+which one is the plan's call. A task run on the computer is not read
+here. One run in the cloud is stored one of two ways, and the walk
+reads both:
+
+- **As a chat.** claude.ai has turned some tasks into conversations:
+  the conversation listing names them like any chat, with a
+  `workspace_session_id` naming the task. They are mirrored as those
+  conversations, by the walk above.
+- **As a session only.** The rest live only in the sessions API that
+  claude.ai's client shares with Claude Code on the web:
+  `GET https://claude.ai/v1/code/sessions?tags=cowork-remote` lists an
+  org's tasks (paged by `next_cursor`, passed back as `cursor`), and
+  `…/sessions/{id}/events?sort_order=asc` is one task's whole log
+  (paged the same way). The API answers only requests that carry
+  `anthropic-version: 2023-06-01`, `anthropic-beta: ccr-byoc-2025-07-29`
+  and the org in `x-organization-uuid`, beside the same `sessionKey`
+  cookie (`api::sessions_request`). Without `tags=cowork-remote` the
+  listing leaves Cowork tasks out.
+
+What decides which way a task is stored is not known. Measured on
+2026-11-16 over five tasks: one started in the desktop app with a
+folder picked and one started in a browser with two pictures attached,
+both in a personal org, became chats; three started in a browser stayed
+sessions, one in a personal org and two in a Team org, one of those
+with a picture pasted in. A task that is a chat was not in the session
+listing.
+
+`api.cowork` (default **on**) turns the session walk on and off;
+`api.cowork_session_ids` names tasks to fetch instead of listing,
+looked up by id in each org in turn (`cse_…`, the `session_…` spelling
+the desktop app keeps, or a `https://claude.ai/cowork/<id>` link). An
+entry no org has is a `config:cowork_session_ids:<value>` problem.
+Neither touches a task that is a chat.
+
+Two tables: `cowork_sessions` (the listing entry, `tags` sorted, with
+`org_uuid` / `org_name` / `title` / `last_event_at` promoted) and
+`cowork_events` (one row per event, keyed by its `event_id`, with
+`session_id` and `sequence_num` promoted). A task is held at its
+`last_event_at` and its title (`cowork::version_of`): the first moves
+only when the log grows, the second when it is renamed. Its
+`updated_at` is not used, because it moves whenever the task's
+connection or status changes. An owed task's log is read whole and
+written with its row in one transaction, and an event the log no
+longer has is deleted.
+
+A file the person attached is named on their message's event, in
+`file_attachments` (`file_uuid`, `file_name`, `file_size`, `is_image`),
+with the same `file_uuid` claude.ai gives it in a chat. Each is a
+`claude_attachments` edge owned by the task, written with it, and the
+attachment loop fetches its bytes from the org's `/contents` as it does
+a chat's (§"Attachments"), held at the task's version.
+
+A task the session listing names that this run's conversation listing
+also names (`workspace_session_id`) is counted as `cowork_as_chats`
+and left to its chat. A complete listing of an org prunes that org's
+tasks it does not name, including one that has become a chat since, so
+one task is never two pages (`when_deleted_upstream` applies). A
+listing that fails is a `listing:cowork org:<org uuid>` problem, and
+nothing of that org is pruned. A log that answers 404 means the task
+was deleted after the listing, and it goes. `api.since` gates a task
+by its `last_event_at`, as it gates a conversation by its `updated_at`.
+
+The render turns each task into a conversation in the export shape
+(`cowork::to_export_shape`; `../claude_render/TRANSLATE.md`
+§"Cowork tasks" has what is drawn).
 
 ## The `export` method: ingesting a bulk export
 

@@ -20,7 +20,7 @@ use sqlx::{Sqlite, Transaction};
 use tokio::time::sleep;
 
 use super::api::ClaudeError;
-use super::db::{file_uuid_of, Conversation};
+use super::db::{file_uuid_of, Conversation, CoworkSession};
 use super::schema_raw::ConversationAttachmentRow;
 use super::{get_conversation_with_403_retry, parse_conversation, Ctx, ATTACH_FILE_TIMEOUT};
 
@@ -164,7 +164,7 @@ impl Fetcher<Conversation> for Conversations<'_> {
             match &f.outcome {
                 Outcome::Got(c) | Outcome::Unusable(c, ..) => {
                     self.ctx.db.store_conversation(tx, c).await?;
-                    self.ctx.remember_files(c);
+                    self.ctx.remember_files(&c.uuid, c.files.clone());
                 }
                 Outcome::Gone => self.ctx.db.forget_conversation(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
@@ -175,6 +175,82 @@ impl Fetcher<Conversation> for Conversations<'_> {
 
     fn weight(&self, c: &Conversation) -> usize {
         c.payload.len()
+    }
+}
+
+// ── Cowork tasks ───────────────────────────────────────────────────────
+
+/// A Cowork task as its listing (or its own lookup) named it.
+pub(crate) struct CoworkListed {
+    pub org_uuid: String,
+    pub org_name: String,
+    pub session: Value,
+}
+
+pub(crate) struct CoworkSessions<'a> {
+    pub(crate) ctx: &'a Ctx<'a>,
+    pub(crate) by_id: HashMap<String, CoworkListed>,
+}
+
+#[async_trait]
+impl Fetcher<CoworkSession> for CoworkSessions<'_> {
+    async fn fetch(&self, batch: Vec<Listed>) -> Result<Vec<Fetched<CoworkSession>>, BatchError> {
+        let ctx = self.ctx;
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let Some(task) = self.by_id.get(&listed.key) else {
+                continue;
+            };
+            ctx.bar.doing(&format!("{} {}", task.org_name, listed.key));
+            let outcome = match ctx.client.cowork_events(&task.org_uuid, &listed.key).await {
+                Ok(events) => Outcome::Got(CoworkSession {
+                    id: listed.key.clone(),
+                    org_uuid: task.org_uuid.clone(),
+                    org_name: task.org_name.clone(),
+                    session: super::cowork::canonical_session(&task.session),
+                    events,
+                }),
+                // Deleted between the listing and this request.
+                Err(ClaudeError::Permanent(msg, _))
+                    if msg.contains("HTTP 404") && !ctx.stop().requested() =>
+                {
+                    Outcome::Gone
+                }
+                Err(ClaudeError::Permanent(msg, _)) if !ctx.stop().requested() => {
+                    Outcome::Failed(msg)
+                }
+                Err(e) => ended(ctx, e)?,
+            };
+            ctx.bar.did(1);
+            out.push(Fetched { listed, outcome });
+            if ctx.opts.wait_between_requests > Duration::ZERO {
+                sleep(ctx.opts.wait_between_requests).await;
+            }
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<CoworkSession>],
+    ) -> Result<()> {
+        for f in batch {
+            match &f.outcome {
+                Outcome::Got(c) | Outcome::Unusable(c, ..) => {
+                    self.ctx.db.store_cowork_session(tx, c).await?;
+                    self.ctx
+                        .remember_files(&c.id, super::cowork::files_of(&c.events));
+                }
+                Outcome::Gone => self.ctx.db.forget_cowork_session(tx, &f.listed.key).await?,
+                Outcome::Failed(_) | Outcome::Skipped(..) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn weight(&self, c: &CoworkSession) -> usize {
+        c.events.iter().map(|e| e.to_string().len()).sum()
     }
 }
 
