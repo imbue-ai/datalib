@@ -24,8 +24,8 @@ importers:
         specifier: 10.11.3
         version: 10.11.3
       '@slickgrid-universal/event-pub-sub':
-        specifier: 10.10.0
-        version: 10.10.0
+        specifier: 11.0.0
+        version: 11.0.0
       '@slickgrid-universal/vanilla-bundle':
         specifier: 10.11.3
         version: 10.11.3
@@ -611,11 +611,17 @@ packages:
   '@slickgrid-universal/event-pub-sub@10.10.0':
     resolution: {integrity: sha512-FKCTlV272lUNolIYeYYPggE3ducmmUeD+pxvHd+pCb1885080drQIr+k5wd+Q1eZj2P7BrlPKFEVF79ZL0QUmA==}
 
+  '@slickgrid-universal/event-pub-sub@11.0.0':
+    resolution: {integrity: sha512-mThHVdU/vHmlB6uGjCAlg2kRAqI5lwO9+wMpFg9Dz5ku4lZYk5CFm7Lq9+Q6aFfOfeWx+bWy5Ho3qmRIpPTucQ==}
+
   '@slickgrid-universal/pagination-component@10.11.3':
     resolution: {integrity: sha512-3QTbRokIFZgpRONXP9MJfE4YKVsnXS4MVq6Avz1yKCey5XuFepq17MUcs+cUaQip3GHMeWQIorT2gtGrxzHSDw==}
 
   '@slickgrid-universal/utils@10.10.0':
     resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
+
+  '@slickgrid-universal/utils@11.0.0':
+    resolution: {integrity: sha512-ozi8vY/fQ2KkAnDy32gM98AhxSx4cWllmInWFN1DeXlzh1UX7yFHzrHbKrYSnJBuknQNMGFBO51cj9RzPxWPZQ==}
 
   '@slickgrid-universal/vanilla-bundle@10.11.3':
     resolution: {integrity: sha512-YhIfW+liuSOyoFN7J81FujuDnuRl0pzUtJQcOtmLgUfBSnwGIWOOdh3LGTHOaDeizRo2fiztqdyA4HpEHCP88g==}
@@ -1807,12 +1813,18 @@ snapshots:
     dependencies:
       '@slickgrid-universal/utils': 10.10.0
 
+  '@slickgrid-universal/event-pub-sub@11.0.0':
+    dependencies:
+      '@slickgrid-universal/utils': 11.0.0
+
   '@slickgrid-universal/pagination-component@10.11.3':
     dependencies:
       '@slickgrid-universal/binding': 10.11.2
       '@slickgrid-universal/common': 10.11.3
 
   '@slickgrid-universal/utils@10.10.0': {}
+
+  '@slickgrid-universal/utils@11.0.0': {}
 
   '@slickgrid-universal/vanilla-bundle@10.11.3':
     dependencies:
