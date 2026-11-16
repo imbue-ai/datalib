@@ -311,6 +311,11 @@ Read crew.txt in my ready room folder and write roster.md listing each officer w
 
 viewscreen.png
 
+--- 0b75b509-f5c0-8c72-9d36-0da912ada9d9
+claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+I'll read the crew list first.
+
 --- 0b75b509-f5c0-802b-ad27-019d4217da5c
 claude-opus-5-5 — Mon 14 Apr 2369 09:00
 
@@ -360,8 +365,6 @@ File written: roster.md
 
 --- 0b75b509-f5c0-8cde-bd22-eecab3b39ec6
 claude-opus-5-5 — Mon 14 Apr 2369 09:00
-
-I'll read the crew list first.
 
 Done: roster.md lists the four officers in crew.txt, each with their post.
 
