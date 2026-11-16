@@ -222,7 +222,8 @@ listing.
 `api.cowork_session_ids` names tasks to fetch instead of listing,
 looked up by id in each org in turn (`cse_…`, the `session_…` spelling
 the desktop app keeps, or a `https://claude.ai/cowork/<id>` link). An
-entry no org has is a `config:cowork_session_ids:<value>` problem.
+entry no org has, or one claude.ai refuses as no task id at all (it
+answers 400), is a `config:cowork_session_ids:<value>` problem.
 Neither touches a task that is a chat.
 
 Two tables: `cowork_sessions` (the listing entry, `tags` sorted, with
