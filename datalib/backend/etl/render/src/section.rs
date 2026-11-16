@@ -4,6 +4,7 @@
 
 use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
+use datalib_schema::sections::{addressed_json, Addressee, SectionRow};
 
 /// One piece of a rendered document, in document order. `uuid` is the
 /// piece's `data-section-uuid` — a message, a contact — so a row of the
@@ -15,6 +16,27 @@ use datalib_schema::providers::Provider;
 pub struct Section {
     pub uuid: Option<String>,
     pub md: String,
+    /// What the render store keeps of it (`sections`).
+    pub kept: Kept,
+}
+
+/// What of a section the render store keeps, for whatever draws it
+/// again: the viewer, an export, the search index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kept {
+    /// The piece whole, as drawn, marked framed: from a renderer that has
+    /// not split an item's body off its header, or a piece of no item's
+    /// that still says something (a PDF's text).
+    Whole,
+    /// An item's body, without the header and wrapper `md` draws around
+    /// it, and who the item was addressed to where it says so itself.
+    Body {
+        text: String,
+        addressed: Vec<Addressee>,
+    },
+    /// Nothing: layout alone (front matter, a `<details>` opener), drawn
+    /// again from the document's facts.
+    Frame,
 }
 
 impl Section {
@@ -22,12 +44,57 @@ impl Section {
         Self {
             uuid: Some(uuid.to_string()),
             md,
+            kept: Kept::Whole,
+        }
+    }
+
+    /// An item's section that also says which part of it is the body.
+    pub fn item(uuid: &str, md: String, text: String, addressed: Vec<Addressee>) -> Self {
+        Self {
+            kept: Kept::Body { text, addressed },
+            ..Self::keyed(uuid, md)
         }
     }
 
     pub fn unkeyed(md: String) -> Self {
-        Self { uuid: None, md }
+        Self {
+            uuid: None,
+            md,
+            kept: Kept::Whole,
+        }
     }
+
+    /// A piece that is layout alone, which the store does not keep.
+    pub fn frame(md: String) -> Self {
+        Self {
+            kept: Kept::Frame,
+            ..Self::unkeyed(md)
+        }
+    }
+}
+
+/// The rows the render store keeps of a document's sections, each at its
+/// place among all of them.
+pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
+    sections
+        .iter()
+        .enumerate()
+        .filter_map(|(seq, s)| {
+            let (text, framed, addressed) = match &s.kept {
+                Kept::Frame => return None,
+                Kept::Whole => (s.md.clone(), true, None),
+                Kept::Body { text, addressed } => (text.clone(), false, addressed_json(addressed)),
+            };
+            Some(SectionRow {
+                markdown_uuid: markdown_uuid.to_string(),
+                seq: seq as i64,
+                uuid: s.uuid.clone(),
+                text,
+                framed,
+                addressed,
+            })
+        })
+        .collect()
 }
 
 /// The `.md` a list of sections spells.
@@ -61,6 +128,53 @@ pub fn layout(sections: &[Section]) -> Vec<SectionSpan> {
             bytes: s.md.len(),
         })
         .collect()
+}
+
+/// A document written top to bottom as text, with the pieces that wrap a
+/// row's `data-section-uuid` handed over keyed and the text between them
+/// unkeyed: the [`Section`]s a page made this way is.
+#[derive(Debug, Default)]
+pub struct Pieces {
+    done: Vec<Section>,
+    open: String,
+}
+
+impl Pieces {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        self.open.push_str(s);
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.open.push(c);
+    }
+
+    pub fn keyed(&mut self, uuid: &str, md: String) {
+        self.flush();
+        self.done.push(Section::keyed(uuid, md));
+    }
+
+    pub fn into_sections(mut self) -> Vec<Section> {
+        self.flush();
+        self.done
+    }
+
+    fn flush(&mut self) {
+        if !self.open.is_empty() {
+            self.done
+                .push(Section::unkeyed(std::mem::take(&mut self.open)));
+        }
+    }
+}
+
+impl std::fmt::Write for Pieces {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.open.push_str(s);
+        Ok(())
+    }
 }
 
 /// HTML attribute fragment that anchors a navigable section.
@@ -126,6 +240,60 @@ mod tests {
         );
         assert_eq!(spans[1].uuid.as_deref(), Some("a"));
         assert_eq!(spans[1].bytes, "<div>é</div>\n".len(), "bytes, not chars");
+    }
+
+    /// A piece is kept by its place among all of them: an item's body
+    /// unframed with its addressees, a piece not split off whole and
+    /// framed, and layout not at all.
+    #[test]
+    fn the_store_keeps_bodies_and_whole_pieces_but_not_layout() {
+        use datalib_schema::sections::AddressRole;
+        let to = vec![Addressee {
+            role: AddressRole::To,
+            name: "Picard".into(),
+        }];
+        let sections = vec![
+            Section::frame("# Title\n".into()),
+            Section::item(
+                "a",
+                "<div>Riker: hi</div>\n".into(),
+                "hi".into(),
+                to.clone(),
+            ),
+            Section::keyed("b", "<div>Data: yes</div>\n".into()),
+            Section::unkeyed("Page 2 text\n".into()),
+        ];
+        let row = |seq: i64, uuid: Option<&str>, text: &str, framed: bool, addressed| SectionRow {
+            markdown_uuid: "doc".into(),
+            seq,
+            uuid: uuid.map(String::from),
+            text: text.into(),
+            framed,
+            addressed,
+        };
+        assert_eq!(
+            stored("doc", &sections),
+            vec![
+                row(1, Some("a"), "hi", false, addressed_json(&to)),
+                row(2, Some("b"), "<div>Data: yes</div>\n", true, None),
+                row(3, None, "Page 2 text\n", true, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn keyed_pieces_split_the_text_around_them() {
+        use std::fmt::Write as _;
+        let mut p = Pieces::new();
+        p.push_str("head\n");
+        p.keyed("a", "<div>a</div>\n".into());
+        p.keyed("b", "<div>b</div>\n".into());
+        let _ = writeln!(p, "tail");
+        let sections = p.into_sections();
+        let uuids: Vec<_> = sections.iter().map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(uuids, [None, Some("a"), Some("b"), None]);
+        assert_eq!(join(&sections), "head\n<div>a</div>\n<div>b</div>\ntail\n");
+        assert!(Pieces::new().into_sections().is_empty());
     }
 
     #[test]

@@ -9,9 +9,10 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::section::{join, Section as DocSection};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -124,7 +125,8 @@ fn render_book(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::book(source_id, &book.n).uuid;
-    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &render_book_md(book))?;
+    let (front, md) = render_book_md(book);
+    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
@@ -145,7 +147,8 @@ fn render_book(
         md_path,
         render_version: RENDER_VERSION,
         rows,
-        sections: Vec::new(),
+        front,
+        sections: vec![DocSection::unkeyed(md)],
         edges,
         contacts: Vec::new(),
         data_nodes,
@@ -171,8 +174,8 @@ fn render_chapter(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
-    let md = render_chapter_md(source_id, chapter, edition, alignments);
-    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
+    let (front, sections) = render_chapter_sections(source_id, chapter, edition, alignments);
+    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &join(&sections))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -227,7 +230,8 @@ fn render_chapter(
         md_path,
         render_version: RENDER_VERSION,
         rows,
-        sections: Vec::new(),
+        front,
+        sections,
         edges,
         contacts: Vec::new(),
         data_nodes,
@@ -284,52 +288,38 @@ fn section_div_open(section_uuid: &str) -> String {
 
 const SECTION_DIV_CLOSE: &str = "</div>";
 
-fn render_book_md(book: &Book) -> String {
+fn render_book_md(book: &Book) -> (Front, String) {
     let title = book_title(&book.n);
-    format!(
-        "---\n\
-         provider: perseus\n\
-         work: {WORK_TITLE}\n\
-         work_urn: {WORK_URN}\n\
-         book: {book_n}\n\
-         title: {quoted_title}\n\
-         ---\n\
-         \n\
-         # {title}\n\
-         \n",
-        book_n = yaml_scalar(&book.n),
-        quoted_title = yaml_scalar(&title),
-    )
+    let front = Front::new()
+        .plain("provider", "perseus")
+        .plain("work", WORK_TITLE)
+        .plain("work_urn", WORK_URN)
+        .text("book", &book.n)
+        .text("title", &title);
+    let md = format!("{}# {title}\n\n", front.draw());
+    (front, md)
 }
 
-fn render_chapter_md(
+/// A chapter's front matter, and its sections: the head, then one per
+/// section of the text.
+fn render_chapter_sections(
     source_id: &str,
     chapter: &Chapter,
     edition: &Edition,
     alignments: &PerseusAlignments,
-) -> String {
+) -> (Front, Vec<DocSection>) {
     let locator = chapter_locator(&chapter.book_n, &chapter.n);
     let title = format!("{WORK_SHORT} {locator} — {}", edition.title);
-    let mut out = format!(
-        "---\n\
-         provider: perseus\n\
-         work: {WORK_TITLE}\n\
-         edition: {edition_id}\n\
-         book: {book_n}\n\
-         chapter: {ch_n}\n\
-         title: {quoted_title}\n\
-         language: {lang}\n\
-         ---\n\
-         \n\
-         # {heading}\n\
-         \n",
-        heading = escape_md_inline(&title),
-        quoted_title = yaml_scalar(&title),
-        edition_id = yaml_scalar(&edition.id),
-        book_n = yaml_scalar(&chapter.book_n),
-        ch_n = yaml_scalar(&chapter.n),
-        lang = yaml_scalar(&edition.lang),
-    );
+    let front = Front::new()
+        .plain("provider", "perseus")
+        .plain("work", WORK_TITLE)
+        .text("edition", &edition.id)
+        .text("book", &chapter.book_n)
+        .text("chapter", &chapter.n)
+        .text("title", &title)
+        .text("language", &edition.lang);
+    let head = format!("{}# {}\n\n", front.draw(), escape_md_inline(&title));
+    let mut sections = vec![DocSection::unkeyed(head)];
     let aligned = alignments.is_aligned(&edition.id);
     for sec in &chapter.sections {
         let text = sec.text(&edition.id);
@@ -353,16 +343,17 @@ fn render_chapter_md(
         } else {
             escape_md_block(text)
         };
-        out.push_str(&section_div_open(&s_uuid));
-        out.push_str("\n\n");
-        out.push_str(&format!(
-            "### {}.{}.{}\n\n{}\n\n",
-            chapter.book_n, chapter.n, sec.n, body
-        ));
-        out.push_str(SECTION_DIV_CLOSE);
-        out.push_str("\n\n");
+        let md = format!(
+            "{}\n\n### {}.{}.{}\n\n{}\n\n{SECTION_DIV_CLOSE}\n\n",
+            section_div_open(&s_uuid),
+            chapter.book_n,
+            chapter.n,
+            sec.n,
+            body
+        );
+        sections.push(DocSection::keyed(&s_uuid, md));
     }
-    out
+    (front, sections)
 }
 
 fn wrap_sentences(
@@ -636,6 +627,15 @@ mod tests {
     use super::*;
     use crate::render::parse::{Book, Chapter, Edition, Section};
     use std::collections::BTreeMap;
+
+    fn render_chapter_md(
+        source_id: &str,
+        chapter: &Chapter,
+        edition: &Edition,
+        alignments: &PerseusAlignments,
+    ) -> String {
+        join(&render_chapter_sections(source_id, chapter, edition, alignments).1)
+    }
 
     fn edition(id: &str, lang: &str, title: &str) -> Edition {
         Edition {

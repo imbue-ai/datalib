@@ -2,7 +2,6 @@
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -90,16 +89,18 @@ impl DataProcessor for ClaudeIngest {
                 latchkey: self.latchkey.clone(),
                 // users.json is expected alongside the raw store (playback seeds it).
                 export_dir: Some(self.raw_path.clone()),
-                overlap: self
+                refetch_newest_conversations: self
                     .sync
-                    .refresh_most_recent_n_chat_count
-                    .map(|v| v as usize)
-                    .unwrap_or(0),
-                sleep_between: Duration::ZERO,
+                    .refetch_newest_conversations
+                    .map(|v| v as usize),
+                max_conversations_per_run: self.sync.max_conversations_per_run.map(|v| v as usize),
+                wait_between_requests: self.sync.wait_between_requests(),
                 since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 projects: self.sync.projects,
                 project_uuids: self.sync.project_uuids.clone(),
+                cowork: self.sync.cowork,
+                cowork_session_ids: self.sync.cowork_session_ids.clone(),
                 when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
@@ -110,7 +111,8 @@ impl DataProcessor for ClaudeIngest {
             Ok(format!(
                 "fetched={} skipped={} out_of_scope={} errors={} non_chat_orgs={} forbidden_orgs={} \
              pruned={} kept_deleted_upstream={} total={} projects={} projects_skipped={} project_docs={} \
-             project_docs_skipped={} \
+             project_docs_skipped={} cowork={} cowork_skipped={} cowork_as_chats={} \
+             cowork_pruned={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
                 s.fetched,
                 s.skipped,
@@ -125,6 +127,10 @@ impl DataProcessor for ClaudeIngest {
                 s.projects_skipped,
                 s.project_docs_fetched,
                 s.project_docs_skipped,
+                s.cowork_fetched,
+                s.cowork_skipped,
+                s.cowork_as_chats,
+                s.cowork_pruned,
                 s.requests,
                 s.forbidden_retry_attempts,
                 s.forbidden_retry_recoveries,

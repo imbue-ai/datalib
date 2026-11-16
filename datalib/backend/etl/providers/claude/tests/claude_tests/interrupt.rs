@@ -2,10 +2,12 @@
 //! store an uninterrupted run leaves (`datalib_etl_web::interrupt`).
 //! The tape is a small TNG org: three conversations, one with two
 //! files, one of which claude.ai no longer serves, and two projects
-//! with knowledge docs. Run from an empty store and from the store an
-//! earlier run left, against an org that has moved since: one
-//! conversation edited and given a new file, one new, one deleted, and
-//! one project's docs changed with its `updated_at`.
+//! with knowledge docs, and three Cowork tasks. Run from an empty store
+//! and from the store an earlier run left, against an org that has moved
+//! since: one conversation edited and given a new file, one new, one
+//! deleted, one project's docs changed with its `updated_at`, one Cowork
+//! task grown by a turn, one new with a picture attached, one deleted,
+//! and one claude.ai has since turned into a chat.
 //!
 //! The cut the rig cannot make, between a conversation's row and the
 //! attachment edges that name its files, is made by taking the blob
@@ -48,6 +50,8 @@ const TABLES: &[&str] = &[
     "project_docs_listings",
     "conversations",
     "claude_attachments",
+    "cowork_sessions",
+    "cowork_events",
     "sync_scope_state",
 ];
 const HELD: &[&str] = &[
@@ -55,6 +59,7 @@ const HELD: &[&str] = &[
     "project_docs_listings",
     "conversations",
     "claude_attachments",
+    "cowork_sessions",
 ];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
@@ -119,6 +124,29 @@ fn project(id: &str, updated_at: &str, docs: &[(&str, &str)]) -> Value {
     })
 }
 
+/// A Cowork task whose log is one turn per prompt, each a message and
+/// its reply.
+fn task(id: &str, last_event_at: &str, prompts: &[&str]) -> Value {
+    let mut events = Vec::new();
+    for (i, prompt) in prompts.iter().enumerate() {
+        let seq = 2 * i as i64;
+        events.push(
+            json!({"event_id": format!("{id}-e{seq}"), "sequence_num": seq.to_string(),
+            "payload": {"type": "user", "uuid": format!("{id}-u{i}"), "timestamp": last_event_at,
+                        "message": {"content": [{"type": "text", "text": prompt}]}}}),
+        );
+        events.push(json!({"event_id": format!("{id}-e{}", seq + 1), "sequence_num": (seq + 1).to_string(),
+            "payload": {"type": "assistant", "uuid": format!("{id}-a{i}"), "timestamp": last_event_at,
+                        "message": {"content": [{"type": "text", "text": "Aye, sir."}]}}}));
+    }
+    json!({
+        "org_uuid": ORG.0,
+        "session": {"id": id, "title": id, "created_at": T1, "last_event_at": last_event_at,
+                    "tags": ["cowork-remote"]},
+        "events": events,
+    })
+}
+
 fn write_json(path: &Path, v: &Value) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, serde_json::to_vec_pretty(v).unwrap()).unwrap();
@@ -177,7 +205,7 @@ fn tape(dir: &Path, edition: Edition) -> (PathBuf, PathBuf) {
     let api = dir.join(format!("api-{name}"));
     let t = dir.join(format!("tape-{name}"));
     write_json(&api.join("users.json"), &json!([{"uuid": "acct-1"}]));
-    let (convs, projects) = match edition {
+    let (mut convs, projects, tasks) = match edition {
         Edition::Before => (
             vec![
                 conv("c-picard", T3, &["f-log", "f-lost"]),
@@ -191,6 +219,11 @@ fn tape(dir: &Path, edition: Edition) -> (PathBuf, PathBuf) {
                     &[("d-hail", "Subspace band 3."), ("d-esc", "Ops.")],
                 ),
                 project("p-holo", T1, &[("d-safe", "Leave them on.")]),
+            ],
+            vec![
+                task("cse_Worf", T2, &["Status?"]),
+                task("cse_Ro", T1, &["Hail them."]),
+                task("cse_Troi", T1, &["Impressions?"]),
             ],
         ),
         Edition::After => (
@@ -211,9 +244,25 @@ fn tape(dir: &Path, edition: Edition) -> (PathBuf, PathBuf) {
                 ),
                 project("p-holo", T1, &[("d-safe", "Leave them on.")]),
             ],
+            vec![
+                task("cse_Worf", T4, &["Status?", "Shields up."]),
+                task("cse_Guinan", T5, &["Ten Forward?"]),
+                task("cse_Troi", T5, &["Impressions?", "And now?"]),
+            ],
         ),
     };
+    let mut tasks = tasks;
+    if matches!(edition, Edition::After) {
+        // claude.ai has made this task a chat: its conversation names it.
+        convs[0]["workspace_session_id"] = json!("cse_Troi");
+        // The new task's person attached a picture.
+        tasks[1]["events"][0]["payload"]["file_attachments"] = json!([{"file_uuid": "f-ten", "file_name": "ten.png", "file_size": 3, "is_image": true}]);
+    }
     write_json(&api.join("conversations.json"), &Value::Array(convs));
+    for t in &tasks {
+        let id = t["session"]["id"].as_str().unwrap();
+        write_json(&api.join(format!("cowork/{id}.json")), t);
+    }
     for p in &projects {
         write_json(
             &api.join(format!("projects/{}.json", p["uuid"].as_str().unwrap())),
@@ -225,6 +274,7 @@ fn tape(dir: &Path, edition: Edition) -> (PathBuf, PathBuf) {
     serve_gone(&t, "f-lost");
     if matches!(edition, Edition::After) {
         serve_bytes(&t, "f-warp");
+        serve_bytes(&t, "f-ten");
     }
     (api, t)
 }
@@ -375,5 +425,62 @@ async fn a_death_between_the_row_and_its_attachments_leaves_them_owed() {
     assert_eq!(
         got, want,
         "the run after the death did not finish the store"
+    );
+}
+
+/// What the store holds of the Cowork tasks after each edition, so the
+/// tests above, which compare a cut run with an uncut one, cannot pass on
+/// a download that stores no task at all: each task with its whole log,
+/// a task that grew rewritten with its new turn, a task deleted upstream
+/// gone, and one claude.ai has made a chat gone from the Cowork tables,
+/// since that chat holds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cowork_tasks_follow_the_listing() {
+    async fn held(rig: &Claude, dir: &Path) -> Vec<(String, i64)> {
+        let db = rig.open(dir).await.unwrap();
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT s.id, (SELECT COUNT(*) FROM cowork_events e WHERE e.session_id = s.id) \
+             FROM cowork_sessions s ORDER BY s.id",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        db.close().await;
+        rows
+    }
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    fs::create_dir_all(&store).unwrap();
+    let first = rig(d.path(), Edition::Before, None);
+    let db = first.open(&store).await.unwrap();
+    first.download(&db, StopFlag::new()).await.unwrap();
+    first.seal(db).await.unwrap();
+    let pair = |id: &str, n: i64| (id.to_string(), n);
+    assert_eq!(
+        held(&first, &store).await,
+        [pair("cse_Ro", 2), pair("cse_Troi", 2), pair("cse_Worf", 2)]
+    );
+
+    let later = rig(d.path(), Edition::After, None);
+    let db = later.open(&store).await.unwrap();
+    later.download(&db, StopFlag::new()).await.unwrap();
+    later.seal(db).await.unwrap();
+    assert_eq!(
+        held(&later, &store).await,
+        [pair("cse_Guinan", 2), pair("cse_Worf", 4)]
+    );
+    let db = later.open(&store).await.unwrap();
+    let pictures: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT conversation_uuid, blake3 IS NOT NULL FROM claude_attachments \
+         WHERE conversation_uuid LIKE 'cse_%'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    assert_eq!(
+        pictures,
+        [("cse_Guinan".to_string(), true)],
+        "a task's picture is an attachment edge whose bytes landed"
     );
 }

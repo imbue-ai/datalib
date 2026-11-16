@@ -116,6 +116,7 @@ impl SourceRender for LightroomRender {
                 render_version: RENDER_VERSION,
                 rows: row.into_iter().collect(),
                 sections: vec![built.section],
+                front: built.front,
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 data_nodes: tree.data_nodes,

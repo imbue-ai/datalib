@@ -522,6 +522,9 @@ Pick the surface that fits the question:
   lines, oldest first, with `before_seq=` paging back and `after_seq=`
   tailing),
   `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
+  `GET /applet/unified_document_index/children/{uuid}?at=…` (what a
+  thread, channel or label holds, in order, a page each way around a
+  message, a moment or `now`: [the applets](user/applets.md#a-containers-children)),
   `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
   page links), `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.

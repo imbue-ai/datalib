@@ -454,12 +454,26 @@ impl Handle {
     /// The handle beside the name a source showed, as a person writes
     /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
     /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
-    /// the name is empty or is the identifier. A chip link's title and
+    /// the name is empty or is the identifier, and the name as it is when
+    /// it already ends with the identifier in that form (an email's
+    /// `From: Will Riker <riker@enterprise.org>`). A chip link's title and
     /// its copied text; `copyText` in `ui/src/cards/contacts.ts` mirrors it.
     pub fn describe(&self, shown: &str) -> String {
         let shown = shown.trim();
         if shown.is_empty() || shown == self.value() || shown == self.as_str() {
             return self.value().to_string();
+        }
+        let beside = match self.kind() {
+            HandleKind::Email => format!("<{}>", self.value()),
+            HandleKind::Tel => format!("({})", self.value()),
+            _ => format!("({})", self.as_str()),
+        };
+        let tail = shown
+            .len()
+            .checked_sub(beside.len())
+            .and_then(|at| shown.get(at..));
+        if tail.is_some_and(|t| t.eq_ignore_ascii_case(&beside)) {
+            return shown.to_string();
         }
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
@@ -1049,6 +1063,11 @@ mod tests {
             "riker@enterprise.org"
         );
         assert_eq!(email.describe("  "), "riker@enterprise.org");
+        // An email's sender is shown as its `From:` reads, address and all.
+        assert_eq!(
+            email.describe("Will Riker <Riker@Enterprise.org>"),
+            "Will Riker <Riker@Enterprise.org>"
+        );
         let tel = Handle::tel("+15550123456").unwrap();
         assert_eq!(tel.describe("Will Riker"), "Will Riker (+15550123456)");
         let slack = Handle::slack("T01", "U02").unwrap();

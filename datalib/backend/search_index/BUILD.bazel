@@ -61,7 +61,8 @@ rust_test(
 )
 
 # The TNG fixture's search index (`//tests/fixtures:ingested_tng_search_index`
-# and `:ingested_tng_vectors`): every chunk's prompt, then its vector.
+# and `:ingested_tng_inference_cache`): every chunk's prompt, then the
+# vectors `//datalib/backend/embedder:embed_prompts` made of them, cached.
 rust_binary(
     name = "search_prompts",
     srcs = ["tools/search_prompts.rs"],
@@ -80,13 +81,12 @@ rust_binary(
 )
 
 rust_binary(
-    name = "embed_prompts",
-    srcs = ["tools/embed_prompts.rs"],
+    name = "cache_vectors",
+    srcs = ["tools/cache_vectors.rs"],
     edition = "2021",
     visibility = ["//tests/fixtures:__pkg__"],
     deps = [
         ":datalib_search_index",
-        "//datalib/backend/embedder:datalib_embedder",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",

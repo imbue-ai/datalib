@@ -1,7 +1,8 @@
 # Messages, not documents: grouping chosen when a search runs
 
-**Status: proposal (2026-11-16). Step 1 is being built (draft PR, branch
-`tree-step-1`); nothing else is.** Facts about
+**Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
+#1770); step 3a is being built on branch `tree-step-3`; nothing else
+is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 
@@ -128,8 +129,8 @@ Where upstream's own parent links are, and what happens to them:
 
 **An item is the unit.** An item is one thing a person or program
 wrote, with one author and one time: a message, an email, a comment, a
-page, an event, a tool call. It is one row, and its text is stored with
-the row. Everything is keyed by the item's uuid, which already exists
+page, an event, a tool call. It is one row, and its body is stored with
+the row (§"Store the body, format on read"). Everything is keyed by the item's uuid, which already exists
 and does not move.
 
 **Containment is a tree of any depth.** Each source's things nest
@@ -217,8 +218,9 @@ one from last year stays where it was said.
 The model makes possible something the app does not have: **a tree a
 person can browse, and a search held to any branch of it.**
 
-- **The tree card.** Every source is a root; under it, its accounts,
-  then channels, labels, folders, pages, as deep as the source goes.
+- **The tree card.** The library is the root; under it, the person's
+  folders of sources, then each source, then its accounts, channels,
+  labels, folders, pages, as deep as the source goes.
   Each node shows how many items are under it and expands to its
   children, both those it contains and those filed under it, loaded a
   level at a time. Opening a leaf container opens what is read
@@ -227,7 +229,35 @@ person can browse, and a search held to any branch of it.**
   to the items under it: `under:<node>` for everything beneath it,
   `at:<node>` for its children alone. A node is a chip like a person, so
   it is clicked or typed, never spelled out. `source:` becomes
-  `under:` a source's root, which it already means.
+  `under:` the source's node, which it already means.
+
+**Above the sources: the library and its folders.** A source's
+top containers (an email account, a Slack workspace, a chat with no
+account above it) have no parent today. They get one:
+
+- **A source is a node.** It is the source's group: its uuid is minted
+  from the group id, and its children are the source's top containers.
+  Renderers do not mint it; they keep naming no parent at their top,
+  and `grid_index`, which knows each row's source, reads that as the
+  source node. A step is not a node: it is how a source's data was
+  made, and it lives in the DAG. A problem's `stage` says which step
+  raised it.
+- **A folder of sources is a group too**, one with no type and no
+  steps, and a group names the folder it is in with one optional
+  config field (`parent = "<group id>"`). A person arranges their
+  sources into folders on the Manage screen. Moving a source never
+  changes its id, which is its directory on disk; only its parent
+  moves.
+- **The library is the one root**, above every folder and source.
+
+The arrangement belongs to the person, not to any source, so a move
+costs one row: the source-to-folder links are read from the config
+into a small table of their own, and no row of any source is rewritten,
+re-rendered or re-indexed when a source moves. Every node but the
+library then has a parent, so a problem rolls up through its
+containers, its source and the person's folders to the library, and
+"how many problems under X" is the same lookup as "how many items
+under X".
 
 **How "under" stays fast.** `grid_index` keeps one table of every
 node's ancestors, `(node, ancestor, depth)`, following both kinds of
@@ -262,6 +292,45 @@ one window; a ten-year chat is many windows; a Notion page's blocks are
 windowed within the page and never mixed with a subpage's. How wide a window is and
 whether windows overlap is decided by the eval, and changing it
 re-embeds without changing anything a person sees.
+
+**Store the body, format on read.** What render stores for an item is
+its content, not text laid out for one reader:
+
+- **The facts** a header is drawn from (author, time, handles, reply-to,
+  edited) are columns, most of them on the row already.
+- **The body** is stored once, in one normalized form of ours: markdown
+  with our link forms for a person, a date and an attachment. Turning
+  upstream's own form (Slack's markup, an email's HTML, Notion's
+  blocks) into it is the provider's work and stays at render. The form
+  is a small written grammar, strict enough that every output below
+  parses it, and turning it into HTML keeps chat-common's sanitizer
+  allowlist.
+
+Everything around the body (an item's header line, a group's title and
+who took part, the separators) is drawn when something reads it, by one
+function per output:
+
+- **Markdown**, for the viewer and an export, and **HTML** later. These
+  may change as often as anyone likes; a change costs nothing stored.
+  The promises in [`rendered_documents.md`](../../user/rendered_documents.md)
+  (the link a person is, the `<time>` a date is, `data-section-uuid`)
+  become what these functions draw, not bytes on disk. A view per node
+  kind is the same function chosen by kind.
+- **Index text**, what a chunk is embedded and keyword-indexed from.
+  It is kept plain and changes rarely: a chunk is keyed by its text's
+  hash, so any change to this function re-embeds every chunk of every
+  source. So it carries the body, who wrote it and when (the eval is
+  not yet good enough to say a timestamp can go), and nothing for
+  show: no URLs, a chip as its name. A date is written with its day of
+  the week and its month as words ("Tue 3 Mar 2026 14:05"), so a search
+  for "a Tuesday in March" has words to meet. It has a version, and moving it is
+  as deliberate as a render-version bump; it costs a re-embed, never a
+  re-render or a re-download.
+
+This is possible only now. Chunks were found again by byte spans of one
+file, which pinned one text for every reader. A chunk is cut by us and
+names the items it covers, so the text it was made from need exist
+nowhere but while it is embedded.
 
 **What is read together is read in pages, not as a file.** The viewer
 opens it at an item and asks for the items around it in order. A
@@ -383,8 +452,9 @@ against the eval before the next.
    with the first query that uses it, and one route that lists a
    container's children around an anchor, a page each way at a time.
    The viewer can use it beside the file.
-3. **Text in the render store.** Each item's rendered text is stored
-   with its row. The search index reads items from the store instead of
+3. **The body in the render store.** Each item's body is stored with
+   its row, and the index text is drawn from it on read
+   (§"Store the body, format on read"). The search index reads items from the store instead of
    cutting files, and `keyword_index` folds into `grid_index`, which
    already reads every render store. Leaving a source out of search
    must survive the fold: today it is a source with no `keyword_index`
@@ -392,12 +462,52 @@ against the eval before the next.
    switch for meaning. After the fold it is the source's absence from
    the aggregator's inputs, which already drops any source it does not
    name, and the config upgrade rewrites every existing root's
-   `keyword_index` steps into that.
+   `keyword_index` steps into that. In three parts:
+   - **3a. Bodies.** A `sections` table in the render store: every
+     piece of a document in order, keyed or not. chat-common hands each
+     item's body and who it was addressed to, and marks its layout as
+     frame, which is not kept; every other renderer's pieces are kept
+     whole and marked `framed`, unkeyed ones too (a PDF's text is
+     unkeyed), and each splits its own bodies off later. Every renderer
+     also hands its front matter as facts (`Front`), drawn by one
+     function and kept on `markdowns.front`, and its document as
+     sections, those that handed none (Notion, Perseus, Garmin, the
+     time-series pages, the storage report) included. A re-render, and
+     nothing a person sees.
+   - **3b. Index text from the store.** The search index draws each
+     item's index text from its body and its row, and stops reading
+     files. A framed body is drawn as it is, so its chunks' text and
+     hashes do not move; only chat-common's sources re-embed. An
+     unframed item is drawn as one plain envelope line, then its body:
+     `Will Riker to Jean-Luc Picard — Tue 3 Mar 2026 14:05`. Names, not
+     addresses (the search terms already match those exactly);
+     recipients only where the item has its own, as an email's To and
+     Cc, not a chat's members on every line; no labels, which a person
+     moves, and no URLs. A chunk that starts inside an item repeats its
+     envelope line, so every chunk says who and when. The title stays in
+     the prompt's frame.
+
+     The text is never stored: a chunk keeps its hash, and its vector is
+     filed under it, so a chunk re-embeds exactly when its text changes.
+     The text is drawn again whenever it is needed, so the function must
+     be deterministic: a date in the item's own offset, never the
+     machine's clock, and a test draws one item under two `TZ` settings
+     and gets the same bytes. Which items to draw is the render store's
+     diff since the commit the index last read. `INDEX_TEXT_VERSION`
+     beside the function says when the function itself changed: the
+     index keeps the version it drew with, and a mismatch redraws every
+     item, re-embedding only the chunks whose hash moved. A golden test
+     draws chat-common's and the hostile samples and fails when the
+     output changes and the version does not.
+   - **3c. The fold.** `keyword_index` into `grid_index`, with the
+     config upgrade above.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
 5. **The viewer reads items.** `DocCard` opens what is read together at an
-   item and pages through it. The `.md` files stop being written.
+   item and pages through it, each page drawn by the markdown function
+   from the stored bodies. The `.md` files stop being written, and with
+   them the rule that they are write-only.
 6. **No time buckets.** A bucketed source renders one container per
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
@@ -409,7 +519,9 @@ against the eval before the next.
    the grid's list-then-slice (measured at 74k rows, not at today's
    941k) is measured then. `keyword:` and
    collections inside sets become `under:` their node, with the old keys
-   kept as aliases.
+   kept as aliases. The library root, the source nodes and the folders
+   above them come here too, with the `parent` config field and moving a
+   source on the Manage screen.
 9. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
 
@@ -444,13 +556,13 @@ against the eval before the next.
   pages are in their raw stores. Drive folders, Apple Mail's mailboxes
   and a Claude Code project are still to check. Each source
   declares its tree in step 1 and the card shows what it declared.
-- **What storing the text costs.** The text goes in the render store,
+- **What storing the body costs.** The body goes in the render store,
   versioned with its row, so a reader at a commit sees that commit's
   text. On one real root (186k files) the markdown is 1.25 GB and the
   render stores already 9.6 GB. Doltlite keeps every version a commit
   reached and does not compress
   ([`doltlite.md`](../doltlite.md) §"What a write costs"), so a
-  re-render that changes every item's text (a render-version bump)
+  re-render that changes every item's body (a render-version bump)
   keeps the old copy too, until history is thrown away, which can be
   done at any time. An append is cheap if the key is the item's uuid,
   which is time-prefixed, so new items land in the last leaves: a

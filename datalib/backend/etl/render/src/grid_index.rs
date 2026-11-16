@@ -27,7 +27,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
-use datalib_schema::data_nodes::{DataNodeRow, DDL as DATA_NODES_DDL};
+use datalib_schema::data_nodes::{DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
@@ -602,7 +602,7 @@ async fn record_unreadable_store(
 pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
-            .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
+            .chain(remade_indexes())
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
             // What the terms derive, which no DDL shows.
             .chain([TERMS_SHAPE]),
@@ -651,9 +651,8 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
     for ddl in index_ddl()
-        .chain(search)
+        .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
     {
         sqlx::query(ddl)
@@ -664,13 +663,22 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// The search bar's indexes are left out of a build into an empty index
+/// The indexes only reads use: the search bar's, and those that list a
+/// container's children.
+fn remade_indexes() -> impl Iterator<Item = &'static str> {
+    GRID_ROWS_INDEXES
+        .iter()
+        .map(|(_table, ddl)| *ddl)
+        .chain(CHILDREN_INDEXES.iter().copied())
+}
+
+/// The read indexes are left out of a build into an empty index
 /// and made once at its end, and remade around a source's rewrite of a
 /// large share of the index. Kept up row by row, each changed row costs
 /// a page in every one of them, more pages than SQLite's cache holds;
 /// built at the end they are sorted and contiguous.
 async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
+    for ddl in remade_indexes() {
         let name = index_name(ddl).with_context(|| format!("no index name in {ddl}"))?;
         // Audited: `name` is parsed out of our own static index DDL.
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX IF EXISTS {name}")))
@@ -682,8 +690,8 @@ async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 }
 
 async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
-        sqlx::query(*ddl)
+    for ddl in remade_indexes() {
+        sqlx::query(ddl)
             .execute(&mut *conn)
             .await
             .with_context(|| format!("create index: {ddl}"))?;
@@ -1086,6 +1094,9 @@ pub struct RenderedMarkdown {
     /// The `content_hash` the store holds for this document, when it is
     /// read back; `None` from a renderer, whose sections give it.
     pub content_hash: Option<String>,
+    /// Its front matter as facts: what its first section draws, kept as
+    /// data (`markdowns.front`).
+    pub front: crate::front_matter::Front,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
@@ -2219,8 +2230,8 @@ async fn upsert_markdown(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
           item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
-          content_hash) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          content_hash, front) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&source_id)
@@ -2236,6 +2247,7 @@ async fn upsert_markdown(
     .bind(&md.bucket_key)
     .bind(section_layout.as_deref().map(layout_json))
     .bind(content_hash)
+    .bind((!md.front.is_empty()).then(|| md.front.to_json()))
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -2623,7 +2635,7 @@ mod insert_round_trip_tests {
             conversation_name: Some("Klingon Diplomatic Greeting".into()),
             conversation_uuid: "conv-1701".into(),
             parent_uuid: Some("parent-everything".into()),
-            sort_key: Some("2026-06-02T20:00:00Z".into()),
+            sort_key: "2026-06-02T20:00:00Z".into(),
             read_uuid: Some("read-everything".into()),
             place_uuid: Some("place-everything".into()),
             message_index: Some(3),
@@ -2759,7 +2771,7 @@ mod write_lock_tests {
             conversation_name: Some(format!("Conv {uuid}")),
             conversation_uuid: uuid.clone(),
             parent_uuid: None,
-            sort_key: None,
+            sort_key: String::new(),
             read_uuid: None,
             place_uuid: None,
             message_index: None,
@@ -2796,6 +2808,7 @@ mod write_lock_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),
@@ -3250,6 +3263,7 @@ mod source_cursor_tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),

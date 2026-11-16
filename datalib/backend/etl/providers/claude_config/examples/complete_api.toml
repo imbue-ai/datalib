@@ -32,15 +32,24 @@ account = "enterprise"
 since = "2025-01-01"                  # only conversations updated on or after this (a day,
                                       # RFC 3339, or "-30d" from the sync); move it back to
                                       # backfill; unset is all
-refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+max_conversations_per_run = 100       # fetch at most this many per run, the never-fetched
+                                      # first; default: every one that changed
+refetch_newest_conversations = 3      # fetch each org's 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
-conv_uuids = [                        # only these conversations, by id or pasted link;
-  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
-]
+seconds_between_requests = 0.5        # wait between requests (0 to 3600); default: none
+conv_uuids = [                        # only these conversations, by id or pasted link, and
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # no listing, so every
+]                                     # setting above but the wait is ignored, with a
+                                      # warning; default [] is all
 projects = true                       # also mirror Claude Projects: description, instructions
                                       # and knowledge documents; default true
 project_uuids = [                     # only these projects, by id or pasted link;
   "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
 ]
 
 [[steps]]

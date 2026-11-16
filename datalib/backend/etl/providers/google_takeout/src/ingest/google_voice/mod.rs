@@ -352,16 +352,35 @@ struct Missing {
 
 impl Missing {
     fn reason_and_detail(&self) -> Option<(Reason, String)> {
-        let (reason, first) = if let Some(first) = self.unreadable.first() {
-            (Reason::FetchFailed, first)
-        } else {
-            (Reason::NotFound, self.not_in_export.first()?)
+        let attachments = |n: usize| match n {
+            1 => "1 attachment".to_string(),
+            n => format!("{n} attachments"),
         };
-        let total = self.unreadable.len() + self.not_in_export.len();
-        Some((
-            reason,
-            format!("{total} attachments could not be read; first: {first}"),
-        ))
+        let (unread, absent) = (self.unreadable.len(), self.not_in_export.len());
+        Some(
+            match (self.unreadable.first(), self.not_in_export.first()) {
+                (Some(first), None) => (
+                    Reason::FetchFailed,
+                    format!("{} could not be read; first: {first}", attachments(unread)),
+                ),
+                (Some(first), Some(_)) => (
+                    Reason::FetchFailed,
+                    format!(
+                    "{} could not be read, and the export does not hold {} more; first: {first}",
+                    attachments(unread),
+                    attachments(absent),
+                ),
+                ),
+                (None, Some(first)) => (
+                    Reason::NotFound,
+                    format!(
+                        "the export does not hold {}; first: {first}",
+                        attachments(absent)
+                    ),
+                ),
+                (None, None) => return None,
+            },
+        )
     }
 }
 
@@ -820,6 +839,40 @@ fn shown_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An attachment the export never held read as "could not be read",
+    /// though its reason said the export lacked it.
+    #[test]
+    fn a_missing_attachment_says_whether_the_export_holds_it() {
+        let missing = |unreadable: &[&str], absent: &[&str]| Missing {
+            unreadable: unreadable.iter().map(|s| s.to_string()).collect(),
+            not_in_export: absent.iter().map(|s| s.to_string()).collect(),
+        };
+        assert_eq!(missing(&[], &[]).reason_and_detail(), None);
+        assert_eq!(
+            missing(&[], &["riker.mp3"]).reason_and_detail(),
+            Some((
+                Reason::NotFound,
+                "the export does not hold 1 attachment; first: riker.mp3".to_string()
+            ))
+        );
+        assert_eq!(
+            missing(&["troi.mp3", "data.mp3"], &[]).reason_and_detail(),
+            Some((
+                Reason::FetchFailed,
+                "2 attachments could not be read; first: troi.mp3".to_string()
+            ))
+        );
+        assert_eq!(
+            missing(&["troi.mp3"], &["riker.mp3"]).reason_and_detail(),
+            Some((
+                Reason::FetchFailed,
+                "1 attachment could not be read, and the export does not hold 1 attachment \
+                 more; first: troi.mp3"
+                    .to_string()
+            ))
+        );
+    }
 
     #[test]
     fn parse_filename_three_segments() {

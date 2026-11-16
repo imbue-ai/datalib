@@ -332,6 +332,11 @@
   display: flex;
   align-items: center;
 }
+/* The theme floats the name with a 100px bottom margin; in a centred
+   flex row that margin lifts the name out of the header. */
+.grid-pane .slick-header-column .slick-column-name {
+  margin-bottom: 0;
+}
 /* Centred in a tall row, but still a block: a flex cell would turn its
    text into an item that no longer takes the ellipsis. */
 .grid-pane .slick-cell {
@@ -362,12 +367,6 @@
 /* Rows are what get selected here; the cell the click landed in is
    not a thing to outline. */
 .slick-cell.active { box-shadow: none; border-color: transparent; }
-/* Both halves of a row that pinned columns split (grid/rowHover.ts);
-   the theme's :hover lights only the half under the pointer. */
-.slickgrid-container .slick-row.datalib-row-hover,
-.slickgrid-container .slick-row.odd.datalib-row-hover {
-  background-color: var(--slick-row-mouse-hover-color, #eff5fc);
-}
 .slick-cell.tg-right { text-align: right; }
 /* A group row spans the grid in one cell that borrows the first
    column's class; a number column first would push the title off the
@@ -423,15 +422,14 @@
 /* The theme's selected grey is close to its hover grey, and in the dark
    scheme close to the rows themselves. A selected row is tinted with
    the accent instead, and marked by a bar down its left edge, as the
-   search list marks its pick: on the first cell drawn in the leftmost
-   pane, so a row that pinned columns split gets one bar. */
+   search list marks its pick: on the row's first cell. */
 .grid-pane .slick-row .slick-cell.selected {
   background-color: color-mix(in srgb, var(--datalib-accent) 22%, var(--datalib-bg));
 }
-.grid-pane .slick-row:is(:hover, .datalib-row-hover) .slick-cell.selected {
+.grid-pane .slick-row:hover .slick-cell.selected {
   background-color: color-mix(in srgb, var(--datalib-accent) 30%, var(--datalib-bg));
 }
-.grid-pane .grid-canvas-left .slick-row > .slick-cell.selected:first-child {
+.grid-pane .slick-row .slick-cell.selected.l0 {
   box-shadow: inset 3px 0 0 var(--datalib-accent);
 }
 

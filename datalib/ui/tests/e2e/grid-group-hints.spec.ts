@@ -7,7 +7,7 @@
 // grouped column, with the grouping's sort and a way to drop it.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, groupByDragging, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 /// Our placeholder, in the grid's own drop zone.
 const placeholder = (page: Page) => page.locator(".grid-box .slick-draggable-dropzone-placeholder");
@@ -15,14 +15,6 @@ const placeholder = (page: Page) => page.locator(".grid-box .slick-draggable-dro
 async function openGrid(page: Page) {
   await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-}
-
-/// Group by a column the way the bar's own drop does.
-async function groupBy(page: Page, colId: string) {
-  await page.evaluate(
-    (id) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy([id]),
-    colId,
-  );
 }
 
 test("the empty row-group bar explains what dropping a column there does", async ({ page }) => {
@@ -39,7 +31,7 @@ test("once grouped, the bar holds a chip for the column and the rows fold under 
   page,
 }) => {
   await openGrid(page);
-  await groupBy(page, "source_ref");
+  await groupByDragging(page, "source_ref");
 
   // The bar now holds a chip for the grouped column instead of the
   // placeholder…

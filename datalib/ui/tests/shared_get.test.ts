@@ -4,11 +4,36 @@ import { fetchManageRows } from "@/api";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function countedFetch() {
-  const fetch = vi.fn(async () => new Response('{"rows":[]}', { status: 200 }));
+function countedFetch(contentType = "application/json") {
+  const fetch = vi.fn(
+    async () =>
+      new Response('{"rows":[]}', { status: 200, headers: { "Content-Type": contentType } }),
+  );
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
+
+describe("getJson", () => {
+  /// A card's source may point a table at any path, and some paths
+  /// serve what a stranger sent: a body is JSON only when it says so.
+  it("refuses an answer that is not application/json, shared or not", async () => {
+    for (const type of ["text/plain", "text/html", "application/octet-stream", ""]) {
+      countedFetch(type);
+      await expect(fetchManageRows(), type).rejects.toThrow(/not JSON/);
+      await expect(fetchManageRows(false, new AbortController().signal), type).rejects.toThrow(
+        /not JSON/,
+      );
+    }
+  });
+
+  it("takes application/json with a charset", async () => {
+    countedFetch("application/json; charset=utf-8");
+    await expect(fetchManageRows()).resolves.toEqual({ rows: [] });
+    await expect(fetchManageRows(false, new AbortController().signal)).resolves.toEqual({
+      rows: [],
+    });
+  });
+});
 
 describe("sharedGet", () => {
   /// The Dashboard's four sections each read the Sources table on every

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
@@ -422,6 +422,7 @@ pub fn build(
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front: front(&facts, project),
     }
 }
 
@@ -511,20 +512,22 @@ fn tree<'t, 'a>(tasks: &[&'t Task<'a>]) -> Vec<(&'t Task<'a>, usize)> {
     out
 }
 
-fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
-    let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(&facts.name)));
-    s.push_str(&format!("provider: {}\n", Provider::Todoist));
-    s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-    s.push_str(&format!("markdown_uuid: {}\n", facts.id.uuid));
-    s.push_str(&format!("project_id: {}\n", yaml_scalar(&facts.project_id)));
+/// The document's front matter.
+fn front(facts: &ProjectFacts, project: Option<&Value>) -> Front {
+    let mut front = Front::new()
+        .name("title", &facts.name)
+        .plain("provider", Provider::Todoist)
+        .text("source_label", SOURCE_LABEL)
+        .plain("markdown_uuid", &facts.id.uuid)
+        .text("project_id", &facts.project_id);
     for k in ["created_at", "updated_at"] {
-        if let Some(v) = project.and_then(|p| str_of(p, k)) {
-            s.push_str(&format!("{k}: {}\n", yaml_scalar(v)));
-        }
+        front = front.text_if(k, project.and_then(|p| str_of(p, k)));
     }
-    s.push_str(&format!("source_url: {}\n", yaml_scalar(&facts.url)));
-    s.push_str("---\n\n");
+    front.text("source_url", &facts.url)
+}
+
+fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
+    let mut s = front(facts, project).draw();
     s.push_str(
         &Title {
             text: &facts.name,

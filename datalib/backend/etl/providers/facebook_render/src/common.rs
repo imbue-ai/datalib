@@ -39,7 +39,8 @@ use serde_json::Value;
 /// v13: the tables no feed reads are counted on record.
 /// v14: a Messenger conversation and the comments and reactions feeds are
 ///     one document each, under the chat's own uuid, not one per year.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: the tables no feed reads are a note, not a warning.
+pub const RENDER_VERSION: u32 = 15;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

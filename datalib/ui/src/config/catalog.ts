@@ -514,16 +514,11 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
       { heading: "Projects", fields: ["api.projects"] },
+      { heading: "Cowork", fields: ["api.cowork"] },
       { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
@@ -547,10 +542,29 @@ export const CATALOG: CatalogEntry[] = [
         help: "Each project's description, custom instructions and knowledge documents.",
       },
       {
+        kind: "bool",
+        target: "api.cowork",
+        label: "Also copy Cowork tasks",
+        default: true,
+        help: "Each task that ran in the cloud, as a conversation: your prompts, Claude's steps and its answers.",
+      },
+      {
         kind: "int",
-        target: "api.refresh_most_recent_n_chat_count",
-        label: "Force-refresh the N most recent chats each sync",
-        help: "Empty relies on updated_at alone.",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when updated_at says they have not changed, in each org. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
       },
       {
         kind: "string_list",
@@ -613,12 +627,6 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
@@ -668,6 +676,30 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "int",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when update_time says they have not changed. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
+      },
+      {
+        kind: "int",
+        target: "api.max_listing_pages",
+        label: "Stop listing after (pages of 100)",
+        help: "A listing cut short deletes nothing here. Empty lists them all.",
       },
       {
         kind: "select",
@@ -923,6 +955,56 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "How far back the first sync reads completed tasks. Empty reads back to the day " +
           "the account joined Todoist.",
+      },
+    ],
+  },
+
+  {
+    type: "baby_connect",
+    method: "api",
+    label: "Baby Connect",
+    blurb: "Copy everything you logged for your children: feeds, sleeps, diapers and notes.",
+    keywords: ["baby connect", "baby", "babyconnect", "tracker", "feeding", "sleep", "diaper"],
+    kind: "api",
+    icon: "baby_connect",
+    defaultName: "baby_connect",
+    nameHint: "Baby Connect",
+    wizard: true,
+    intro:
+      "Each child's month becomes a document you can read and search: every entry, with " +
+      "who logged it and the notes you typed. The first sync asks for one day at a time, " +
+      "from your eldest child's birthday.",
+    credentialService: "babyconnect",
+    // A session is two cookies: `seacloud1`, set at sign-in, and `srf`,
+    // which the home page's token must match.
+    credentialRegister: {
+      base_api_url: "https://app.babyconnect.com/",
+      login_url: "https://app.babyconnect.com/login",
+      login_flow: "cookie-capture",
+      login_flow_params: { cookieKeys: ["seacloud1", "srf"] },
+    },
+    fields: [
+      {
+        kind: "text",
+        phase: "render",
+        target: "time_zone",
+        label: "Time zone",
+        help:
+          "Where you were when you logged, as a zone name such as America/Los_Angeles. " +
+          "Baby Connect keeps times without one; empty reads them as UTC. Changing it " +
+          "re-renders; it never re-downloads.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "From",
+        help: "The first day to copy. Empty starts at your eldest child's birthday.",
+      },
+      {
+        kind: "date",
+        target: "api.until",
+        label: "Until",
+        help: "The last day to copy. Empty copies up to today.",
       },
     ],
   },

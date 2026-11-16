@@ -60,6 +60,7 @@ inputs = [
   "airvisual/render_time_series",
   "apple_messages/render_markdown",
   "apple_photos/render_markdown",
+  "baby_connect/render_markdown",
   "beeper/render_markdown",
   "calendar-google/render_markdown",
   "calendar-google/render_occurrences",
@@ -117,6 +118,8 @@ inputs = [
   "airvisual/keyword_index",
   "apple_messages/keyword_index",
   "apple_messages/embed",
+  "baby_connect/keyword_index",
+  "baby_connect/embed",
   "beeper/keyword_index",
   "beeper/embed",
   "calendar-google/keyword_index",
@@ -377,6 +380,66 @@ group = "apple_photos"
 function = "render_markdown"
 command = "datalib-step"
 inputs = ["apple_photos/ingest"]
+
+# --- baby_connect by `api` ----------------------------------------------
+
+# Your Baby Connect history, signed in through latchkey (by browser), with
+# every option set.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+group = "baby_connect"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "beverly@enterprise.test"
+
+# Baby Connect answers one day at a time. `since` and `until` bound the
+# days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back
+# from each sync ("-90d"). Without them the read starts at the eldest
+# child's birthday and ends today.
+[steps.params.api]
+since = "2368-01-01"
+until = "2372-12-31"
+
+# One document per child: every entry, with its notes. Baby
+# Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
+# name) says where the clock was, daylight saving included. Unset reads the
+# times as UTC, and the Manage row says so.
+[[steps]]
+group = "baby_connect"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["baby_connect/ingest"]
+
+[steps.params]
+time_zone = "America/Los_Angeles"
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "baby_connect"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["baby_connect/render_markdown"]
+
+[[steps]]
+group = "baby_connect"
+function = "embed"
+command = "datalib-step"
+inputs = ["baby_connect/keyword_index"]
 
 # --- beeper by `texts` --------------------------------------------------
 
@@ -808,15 +871,20 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
-                       # or "-30d" from the sync); move it back later to backfill;
-                       # default: all
-max_pages = 20         # stop listing after this many pages (100 conversations each);
-                       # default: no cap
-limit = 100            # fetch at most this many conversations per run; default: no cap
-sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
-conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
-                       # only these conversations, by id or pasted link; omit for all
+since = "2025-01-01"              # only conversations updated at or after this (a day,
+                                  # RFC 3339, or "-30d" from the sync); move it back later
+                                  # to backfill; default: all
+max_listing_pages = 20            # stop listing after this many pages (100 conversations
+                                  # each); a listing cut short deletes nothing; default: all
+max_conversations_per_run = 100   # fetch at most this many per run, the never-fetched
+                                  # first; default: every one that changed
+refetch_newest_conversations = 3  # fetch the 3 most recently updated conversations
+                                  # again every run; unset fetches only what changed
+seconds_between_requests = 0.5    # wait between requests (0 to 3600); default: none
+conv_uuids = [                    # only these conversations, by id or pasted link, and
+  "https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789",  # no listing, so every
+]                                 # setting above but the wait is ignored, with a
+                                  # warning; omit for all
 
 # Start from a data export of this same account: the `.zip`, or the
 # folder it was unzipped into. It fills in every conversation the store
@@ -930,15 +998,24 @@ account = "enterprise"
 since = "2025-01-01"                  # only conversations updated on or after this (a day,
                                       # RFC 3339, or "-30d" from the sync); move it back to
                                       # backfill; unset is all
-refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+max_conversations_per_run = 100       # fetch at most this many per run, the never-fetched
+                                      # first; default: every one that changed
+refetch_newest_conversations = 3      # fetch each org's 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
-conv_uuids = [                        # only these conversations, by id or pasted link;
-  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
-]
+seconds_between_requests = 0.5        # wait between requests (0 to 3600); default: none
+conv_uuids = [                        # only these conversations, by id or pasted link, and
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # no listing, so every
+]                                     # setting above but the wait is ignored, with a
+                                      # warning; default [] is all
 projects = true                       # also mirror Claude Projects: description, instructions
                                       # and knowledge documents; default true
 project_uuids = [                     # only these projects, by id or pasted link;
   "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
 ]
 
 [[steps]]

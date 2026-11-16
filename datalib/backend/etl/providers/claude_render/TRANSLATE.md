@@ -45,6 +45,24 @@ own, placed just before its message's answer:
 A block's id is keyed on the upstream `tool_use` id where it has one,
 else on `(message_uuid, block_index)` (`src/render/ids.rs`).
 
+## Cowork tasks
+
+A Cowork task stored as a session (`cowork_sessions` and its
+`cowork_events`) is turned into a conversation by
+`cowork::to_export_shape` in the download crate, and from there renders
+exactly as a conversation does. Each prompt the person typed is a
+`human` message, without the `<system-reminder>` blocks the app attaches
+to it, and with the files attached to it (`file_attachments`) as its
+`files`, which render draws from their bytes as it does a chat's. What Claude did until the next prompt is one `assistant`
+message: its `thinking` (a block sent as its signature alone is left
+out), `text` and `tool_use` blocks, each `tool_result` beside its call
+and named after it. Every block of a reply is dated when the reply
+ended, as claude.ai dates a task it has made a chat, so the steps read
+before the answer. The harness's own events (`system`,
+`control_request`, `result` and the like) and a subagent's inner turns
+(those with a `parent_tool_use_id`) are not drawn; the raw store keeps
+them. A task claude.ai has made a chat is a conversation already.
+
 ## Projects
 
 A Project renders as a page of its own through the same renderer, with
@@ -59,8 +77,9 @@ with a visible marker; the raw store keeps all of it. A conversation's
 Ids are minted in `src/render/ids.rs` under `IdNamespace::Claude`,
 scoped to the group, never Anthropic's UUIDs passed through
 (`docs/dev/entity_ids.md`). The document keeps the upstream UUID as
-`external_id` and links back to `https://claude.ai/chat/<uuid>` or
-`https://claude.ai/project/<uuid>`. The account is the account's email.
+`external_id` and links back to `https://claude.ai/chat/<uuid>`,
+`https://claude.ai/cowork/<id>` or `https://claude.ai/project/<uuid>`.
+The account is the account's email.
 
 [`RENDER_VERSION`](src/render/render.rs) is bumped whenever this
 crate's output changes.
@@ -68,5 +87,6 @@ crate's output changes.
 ## Tests
 
 `claude/:claude_tests` (its `claude_render` module) snapshots the
-render of `../claude/tests/fixtures/claude_export/`;
+render of `../claude/tests/fixtures/claude_export/`, and its `cowork`
+module the page of the fixture's Cowork task;
 `:claude_tests.update` rewrites the snapshots.

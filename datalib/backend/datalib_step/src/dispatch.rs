@@ -279,6 +279,12 @@ pub fn plan(
             datalib_etl_google_takeout,
             datalib_etl_google_takeout_render
         ),
+        SourceType::BabyConnect => arm!(
+            datalib_etl_baby_connect_config::BabyConnectConfig,
+            datalib_etl_baby_connect_config::BabyConnectRenderConfig,
+            datalib_etl_baby_connect,
+            datalib_etl_baby_connect_render
+        ),
         SourceType::Airvisual => arm!(
             datalib_etl_airvisual_config::AirvisualConfig,
             datalib_etl_airvisual_config::AirvisualRenderConfig,
@@ -407,6 +413,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::Facebook => datalib_etl_facebook::processor::migrate(raw_dir).await,
         SourceType::GoogleTakeout => datalib_etl_google_takeout::processor::migrate(raw_dir).await,
         SourceType::Airvisual => datalib_etl_airvisual::processor::migrate(raw_dir).await,
+        SourceType::BabyConnect => datalib_etl_baby_connect::processor::migrate(raw_dir).await,
         SourceType::Media => datalib_etl_media::processor::migrate(raw_dir).await,
         SourceType::Pdf => datalib_etl_pdf::processor::migrate(raw_dir).await,
         SourceType::Perseus => datalib_etl_perseus::processor::migrate(raw_dir).await,
@@ -675,6 +682,7 @@ mod tests {
     fn every_render_knob_is_a_render_param() {
         use serde_json::json;
         let changed = [
+            ("baby_connect", json!({"time_zone": "America/Los_Angeles"})),
             ("beeper", json!({"networks": ["signal"]})),
             ("claude", json!({"max_project_doc_bytes": 1000})),
             ("claude_code", json!({"max_tool_result_bytes": 1})),

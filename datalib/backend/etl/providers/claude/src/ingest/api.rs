@@ -7,14 +7,55 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
-use tracing::instrument;
+use tracing::{info_span, instrument, Instrument};
 
 use datalib_etl::upstream::Upstream;
-use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{
+    latchkey_curl, percent_encode, HttpError, HttpRequest, HttpService, LatchkeySettings,
+};
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CLAUDE_ORIGIN: &str = "https://claude.ai";
+
+/// Where claude.ai's own client reads Cowork tasks: the sessions API it
+/// shares with Claude Code on the web, under the same cookie.
+pub const SESSIONS_BASE: &str = "https://claude.ai/v1/code/sessions";
+/// The listing shows a Cowork task only when asked for its tag.
+pub const COWORK_TAG: &str = "cowork-remote";
+const SESSIONS_PAGE: usize = 100;
+const EVENTS_PAGE: usize = 500;
+
+/// One page of an org's Cowork tasks.
+pub fn cowork_sessions_url(cursor: Option<&str>) -> String {
+    let mut url = format!("{SESSIONS_BASE}?tags={COWORK_TAG}&limit={SESSIONS_PAGE}");
+    if let Some(c) = cursor {
+        url.push_str(&format!("&cursor={}", percent_encode(c)));
+    }
+    url
+}
+
+/// One page of a Cowork task's log, oldest first.
+pub fn cowork_events_url(session_id: &str, cursor: Option<&str>) -> String {
+    let mut url = format!(
+        "{SESSIONS_BASE}/{}/events?limit={EVENTS_PAGE}&sort_order=asc",
+        percent_encode(session_id)
+    );
+    if let Some(c) = cursor {
+        url.push_str(&format!("&cursor={}", percent_encode(c)));
+    }
+    url
+}
+
+/// The sessions API answers only with its version, its beta and the org
+/// named in a header; the cookie alone is refused.
+pub fn sessions_request(url: &str, org_uuid: &str) -> HttpRequest {
+    HttpRequest::get(HttpService::Claude, url)
+        .header("Accept", "application/json")
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "ccr-byoc-2025-07-29")
+        .header("x-organization-uuid", org_uuid)
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum ClaudeError {
@@ -88,8 +129,12 @@ impl ClaudeClient {
     #[instrument(skip(self), fields(path = path))]
     pub async fn get(&self, path: &str) -> Result<Value, ClaudeError> {
         let url = format!("{BASE}{path}");
-        let req = HttpRequest::get(HttpService::Claude, &url)
-            .header("Accept", "application/json")
+        let req = HttpRequest::get(HttpService::Claude, &url).header("Accept", "application/json");
+        self.send(req, path).await
+    }
+
+    async fn send(&self, req: HttpRequest, path: &str) -> Result<Value, ClaudeError> {
+        let req = req
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
         let resp = latchkey_curl(&req).await.map_err(map_transport_error)?;
@@ -189,6 +234,79 @@ impl ClaudeClient {
         ))
         .await
     }
+
+    /// Every Cowork task of one org that is a session only, page by
+    /// page. A task claude.ai has turned into a chat is not listed here.
+    pub async fn list_cowork_sessions(&self, org_uuid: &str) -> Result<Vec<Value>, ClaudeError> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let url = cowork_sessions_url(cursor.as_deref());
+            let page = self
+                .send(sessions_request(&url, org_uuid), "/v1/code/sessions")
+                .instrument(info_span!("claude_cowork_listing"))
+                .await?;
+            out.extend(data_of(&page, "/v1/code/sessions")?);
+            match next_cursor(&page) {
+                Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => return Ok(out),
+            }
+        }
+    }
+
+    /// One Cowork task as one request answers it, by id.
+    pub async fn get_cowork_session(
+        &self,
+        org_uuid: &str,
+        session_id: &str,
+    ) -> Result<Value, ClaudeError> {
+        let url = format!("{SESSIONS_BASE}/{}", percent_encode(session_id));
+        let v = self
+            .send(sessions_request(&url, org_uuid), "/v1/code/sessions/{id}")
+            .await?;
+        // Answered wrapped; the listing's entries are not.
+        Ok(v.get("response_shape").cloned().unwrap_or(v))
+    }
+
+    /// A Cowork task's whole log, oldest first.
+    pub async fn cowork_events(
+        &self,
+        org_uuid: &str,
+        session_id: &str,
+    ) -> Result<Vec<Value>, ClaudeError> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let url = cowork_events_url(session_id, cursor.as_deref());
+            let page = self
+                .send(
+                    sessions_request(&url, org_uuid),
+                    "/v1/code/sessions/{id}/events",
+                )
+                .await?;
+            let data = data_of(&page, "/v1/code/sessions/{id}/events")?;
+            let empty = data.is_empty();
+            out.extend(data);
+            match next_cursor(&page) {
+                Some(next) if !empty && Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => return Ok(out),
+            }
+        }
+    }
+}
+
+fn data_of(page: &Value, what: &str) -> Result<Vec<Value>, ClaudeError> {
+    page.get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| ClaudeError::permanent(format!("{what}: expected a `data` array")))
+}
+
+fn next_cursor(page: &Value) -> Option<String> {
+    page.get("next_cursor")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 fn map_transport_error(e: HttpError) -> ClaudeError {

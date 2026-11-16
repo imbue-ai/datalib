@@ -9,6 +9,7 @@ use std::path::Path;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
 use datalib_schema::filings::FilingRow;
+use datalib_schema::sections::{AddressRole, Addressee};
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -95,7 +96,7 @@ use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 use crate::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
 };
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{
     close_open_blocks, escape_attr, escape_md_block, escape_md_inline, md_code_span, md_link_dest,
     without_bidi_controls,
@@ -418,6 +419,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         sections,
+        front: front(profile, chat, doc, &chat_title),
         edges,
         contacts: crate::people::document_contacts(
             source_id,
@@ -481,34 +483,33 @@ fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
 
 // Markdown
 
+/// The document's front matter.
+fn front(
+    profile: &RenderProfile,
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+    chat_title: &str,
+) -> Front {
+    Front::new()
+        .name("title", chat_title)
+        .plain("provider", profile.provider)
+        .text("source_label", &profile.source_label)
+        .plain("chat_uuid", &chat.chat_uuid)
+        .plain("markdown_uuid", &doc.markdown_uuid)
+        .text("display", &chat.display)
+        .text_if("account", chat.account.as_deref())
+        .text_if("project", chat.project.as_deref())
+        .text_if("external_id", chat.external_id.as_deref())
+        .plain("item_count", message_count(doc))
+}
+
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
 ) -> Vec<Section> {
-    let mut s = String::with_capacity(1024);
-    s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(chat_title)));
-    s.push_str(&format!("provider: {}\n", profile.provider));
-    s.push_str(&format!(
-        "source_label: {}\n",
-        yaml_scalar(&profile.source_label)
-    ));
-    s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
-    s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
-    s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
-    if let Some(a) = &chat.account {
-        s.push_str(&format!("account: {}\n", yaml_scalar(a)));
-    }
-    if let Some(p) = &chat.project {
-        s.push_str(&format!("project: {}\n", yaml_scalar(p)));
-    }
-    if let Some(e) = &chat.external_id {
-        s.push_str(&format!("external_id: {}\n", yaml_scalar(e)));
-    }
-    s.push_str(&format!("item_count: {}\n", message_count(doc)));
-    s.push_str("---\n\n");
+    let mut s = front(profile, chat, doc, chat_title).draw();
 
     s.push_str(
         &Title {
@@ -524,11 +525,11 @@ fn render_markdown(
 
     if doc.items.is_empty() {
         s.push_str("_(no messages)_\n");
-        return vec![Section::unkeyed(s)];
+        return vec![Section::frame(s)];
     }
 
     let first_unread = doc.items.iter().position(|it| it.unread);
-    let mut sections = vec![Section::unkeyed(s)];
+    let mut sections = vec![Section::frame(s)];
     let mut open_branches: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < doc.items.len() {
@@ -540,7 +541,7 @@ fn render_markdown(
             .count();
         while open_branches.len() > shared {
             open_branches.pop();
-            sections.push(Section::unkeyed("</details>\n\n".to_string()));
+            sections.push(Section::frame("</details>\n\n".to_string()));
         }
         while open_branches.len() < item.branch.len() {
             let depth = open_branches.len();
@@ -548,7 +549,7 @@ fn render_markdown(
                 .iter()
                 .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
                 .count();
-            sections.push(Section::unkeyed(branch_opener(inside)));
+            sections.push(Section::frame(branch_opener(inside)));
             open_branches.push(&item.branch[depth]);
         }
         let run_end = doc.items[i..]
@@ -569,10 +570,10 @@ fn render_markdown(
         }
     }
     for _ in open_branches {
-        sections.push(Section::unkeyed("</details>\n\n".to_string()));
+        sections.push(Section::frame("</details>\n\n".to_string()));
     }
     if let Some(orphans) = render_orphan_reactions(doc) {
-        sections.push(Section::unkeyed(orphans));
+        sections.push(Section::frame(orphans));
     }
     sections
 }
@@ -638,14 +639,14 @@ fn render_aside_run(
     first_unread: Option<usize>,
 ) {
     let plural = if items.len() == 1 { "" } else { "s" };
-    sections.push(Section::unkeyed(format!(
+    sections.push(Section::frame(format!(
         "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
         n = items.len(),
     )));
     for (i, item) in items.iter().enumerate() {
         sections.push(render_item(profile, item, first_unread == Some(i)));
     }
-    sections.push(Section::unkeyed("</details>\n\n".to_string()));
+    sections.push(Section::frame("</details>\n\n".to_string()));
 }
 
 fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {
@@ -672,13 +673,13 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 .as_deref()
                 .or(item.text.as_deref())
                 .unwrap_or("(system event)");
+            let summary = escape_md_inline(summary);
             s.push_str(&format!(
                 "*<small>{ts} — system: {summary}</small>*\n\n",
                 ts = timestamp_html(item.date_ms, item.date_offset_secs),
-                summary = escape_md_inline(summary),
             ));
             s.push_str("</div>\n\n");
-            return Section::keyed(&item.message_uuid, s);
+            return Section::item(&item.message_uuid, s, summary, Vec::new());
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -712,31 +713,30 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             format!("🏷 {}\n\n{text}", labels.join(" · "))
         }
     };
-    match item.kind {
-        ItemKind::Text => {
-            let text = labelled(body(item.text.as_deref().unwrap_or("")));
-            if !text.is_empty() {
-                s.push('\n');
-                s.push_str(&text);
-                s.push('\n');
-            }
-        }
-        ItemKind::Attachment => {
-            let caption = labelled(body(item.text.as_deref().unwrap_or("")));
-            if !caption.is_empty() {
-                s.push('\n');
-                s.push_str(&caption);
-                s.push('\n');
-            }
-            if item.attachments.is_empty() {
-                s.push_str("\n*[attachment metadata missing]*\n");
-            }
-            for att in &item.attachments {
-                render_attachment(&mut s, att);
-            }
-        }
-        ItemKind::System => unreachable!(),
+    // What the item says: its text, then its attachments. The labels
+    // line above it is where it is filed, not what it says.
+    let said = body(item.text.as_deref().unwrap_or(""));
+    let text = labelled(said.clone());
+    if !text.is_empty() {
+        s.push('\n');
+        s.push_str(&text);
+        s.push('\n');
     }
+    let mut attached = String::new();
+    if item.kind == ItemKind::Attachment {
+        if item.attachments.is_empty() {
+            attached.push_str("\n*[attachment metadata missing]*\n");
+        }
+        for att in &item.attachments {
+            render_attachment(&mut attached, att);
+        }
+    }
+    s.push_str(&attached);
+    let item_body = [said.trim(), attached.trim()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     if !item.reactions.is_empty() {
         s.push('\n');
@@ -766,7 +766,30 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     }
 
     s.push_str("\n</div>\n\n");
-    Section::keyed(&item.message_uuid, s)
+    Section::item(
+        &item.message_uuid,
+        s,
+        item_body,
+        addressed(&item.recipients),
+    )
+}
+
+/// Who an item says it was addressed to, by name, for the search's
+/// envelope line: those the recipients line draws.
+fn addressed(recipients: &[crate::types::Recipient]) -> Vec<Addressee> {
+    use crate::types::RecipientRole;
+    recipients
+        .iter()
+        .filter(|r| r.drawn && !r.display.is_empty())
+        .map(|r| Addressee {
+            role: match r.role {
+                RecipientRole::To => AddressRole::To,
+                RecipientRole::Cc => AddressRole::Cc,
+                RecipientRole::Bcc => AddressRole::Bcc,
+            },
+            name: r.display.clone(),
+        })
+        .collect()
 }
 
 fn replies_line(replies: Replies) -> Option<String> {
@@ -1503,7 +1526,7 @@ mod tests {
         rows
     }
     use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
-    use datalib_etl_render::section::msg_div_open;
+    use datalib_etl_render::section::{msg_div_open, Kept};
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -1777,6 +1800,66 @@ mod tests {
         let md = join(&render_markdown(&profile, &chat, &chat.buckets[0], "Test"));
         assert!(md.contains("🏷 Starred\n\nSpot's portrait"), "{md}");
         assert!(md.contains("spot.png"), "{md}");
+    }
+
+    /// An item's body is what it says and nothing drawn around it: no
+    /// author, time, labels or reactions, but its caption and its files.
+    #[test]
+    fn an_items_body_leaves_out_its_header_labels_and_reactions() {
+        let profile = test_profile();
+        let mut chat = mk_chat();
+        let item = &mut chat.buckets[0].items[0];
+        item.kind = ItemKind::Attachment;
+        item.labels = vec!["Starred".to_string()];
+        item.text = Some("Spot's portrait".to_string());
+        item.attachments = vec![NormalizedAttachment {
+            href: None,
+            file_name: Some("spot.png".to_string()),
+            mime_type: Some("image/png".to_string()),
+            byte_len: None,
+            source_url: None,
+            ref_id: None,
+        }];
+        item.recipients = vec![
+            crate::types::Recipient {
+                role: crate::types::RecipientRole::Cc,
+                display: "Deanna Troi".into(),
+                handle: None,
+                drawn: true,
+            },
+            crate::types::Recipient {
+                role: crate::types::RecipientRole::To,
+                display: "Undrawn".into(),
+                handle: None,
+                drawn: false,
+            },
+        ];
+        let sections = render_markdown(&profile, &chat, &chat.buckets[0], "Test");
+        let item = sections
+            .iter()
+            .find(|s| s.uuid.as_deref() == Some("33333333-3333-3333-3333-333333333333"))
+            .unwrap();
+        let Kept::Body {
+            text: body,
+            addressed,
+        } = &item.kept
+        else {
+            panic!("chat-common splits the body off: {:?}", item.kept)
+        };
+        assert_eq!(
+            addressed,
+            &vec![Addressee {
+                role: AddressRole::Cc,
+                name: "Deanna Troi".into()
+            }],
+            "only the recipients the item draws"
+        );
+        assert!(body.starts_with("Spot's portrait\n\n"), "{body}");
+        assert!(body.contains("spot.png"), "{body}");
+        for drawn in ["Picard", "Starred", "Riker", "🫡", "<div", "<time", "Troi"] {
+            assert!(!body.contains(drawn), "{drawn} in {body}");
+            assert!(item.md.contains(drawn), "{drawn} not drawn in {}", item.md);
+        }
     }
 
     #[test]

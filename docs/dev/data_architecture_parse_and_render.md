@@ -81,7 +81,12 @@ database per source, at
     (the primary key for the `.md`), its `renderer_version`, its
     `md_path` and the `bucket_key` it was rendered from. Nothing on it
     is stamped per run — a re-render of an unchanged document writes
-    an identical row.
+    an identical row. Its `front` is the document's front
+    matter as its renderer handed it: facts in order
+    (`etl/render/src/front_matter.rs`'s `Front`), which one function
+    draws as the YAML block the document opens with. Every renderer
+    hands its front matter this way and its document as sections, and
+    the fixture test refuses a provider that does not.
   - `grid_rows` — the document's projected rows. Each carries, in its
     `supplied_terms` column, what it answers to in search beyond its
     other columns: an email's To, Cc and Bcc by handle, the people a
@@ -95,6 +100,16 @@ database per source, at
     own up to the top of the source, and what they are filed under
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.
+  - `sections` — what each piece of the document says, in order, kept
+    apart from how it is drawn. An item a renderer has split (chat-common
+    does) keeps its body alone, with no header or wrapper, and who it was
+    addressed to by name; the store draws its header again from its row.
+    Any other piece is kept whole and marked `framed`, so whatever reads
+    it draws nothing around it; a piece that is layout alone (front
+    matter, a `<details>` opener) the renderer marks as frame, and it is
+    not kept. The grid index does not copy it
+    ([`messages_not_documents.md`](plans/messages_not_documents.md)
+    §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
@@ -1127,7 +1142,7 @@ If [object identity](data_architecture_ingestion.md#object-identity-ship-of-thes
 
 The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** What `created_at`, `modified_at` and `touched_at` each mean, for a document row and for a row inside one, is in [`grid_rows.md`](grid_rows.md#created_at-modified_at-and-touched_at). For any of them:
 
-- **Real upstream timestamp when one exists**, on the clock it was written on: an email's `Date:` offset, a Slack author's profile zone.
+- **Real upstream timestamp when one exists**, on the clock it was written on: an email's `Date:` offset, a calendar event's zone.
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
 - **Strict RFC 3339 with an offset, never naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
 - **`Z` means the clock is unknown, `+00:00` that it was UTC** ([RFC 9557](https://www.rfc-editor.org/rfc/rfc9557.html) §2, which updated RFC 3339; its older `-00:00` for "unknown" is read but never written, since ISO 8601 refuses it). A message whose source records only an instant (epoch milliseconds, a service's own `Z`, a Slack author with no profile zone) is written `Z`, in its header and its rows' `created_at`, so the viewer can show it on its reader's clock rather than claim the sender was on UTC. Every parser reads `Z` and `+00:00` as the same instant, so sorting and `before:` / `after:` are unaffected.
@@ -1158,10 +1173,9 @@ RFC 3339 instant, a `YYYY-MM-DD` day, or else the text as written. A
 stamp keeps the offset the source gave it: a message header takes it
 beside the instant (`MessageHeader::offset_secs`, which chat-common fills
 from `NormalizedChatItem::date_offset_secs`), and the message's grid row
-keeps the same offset in `created_at`. A Slack message takes its
-author's profile zone (`tz`). A message whose source names no clock (epoch
-milliseconds, a service's own `Z`, a Slack author with no zone) is
-written in `Z`, which RFC 9557 defines as "local offset unknown"
+keeps the same offset in `created_at`. A message whose source names no
+clock (epoch milliseconds, a service's own `Z`, a Slack `ts`: a profile's
+`tz` is where its author is now, not where they were) is written in `Z`, which RFC 9557 defines as "local offset unknown"
 (`datalib_time::with_unknown_offset`), in the header and in
 `created_at`, and the viewer reads it on its reader's clock. A real UTC
 clock (an email dated `+0000`) stays `+00:00`. A grid

@@ -30,6 +30,7 @@ import type {
   Column,
   CurrentColumn,
   CurrentSorter,
+  DockingSide,
   Formatter,
   GridOption,
   GridStateChange,
@@ -155,6 +156,7 @@ import SearchField from "@/search/SearchField.vue";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows, muteProblems } = useApi();
 
@@ -510,10 +512,11 @@ const boxEl = ref<HTMLDivElement | null>(null);
 let restoring = false;
 
 /// What the URL keeps of the grid's shape: every column in order with
-/// whether it is hidden and how wide it is, and the grouping. A card
-/// saved by an older build also has its sort here.
+/// whether it is hidden, how wide it is and the edge it is pinned to,
+/// and the grouping. A card saved by an older build also has its sort
+/// here.
 type Layout = {
-  cols: { id: string; hidden?: boolean; width?: number }[];
+  cols: { id: string; hidden?: boolean; width?: number; pinned?: DockingSide }[];
   sort?: { id: string; asc: boolean }[];
   group?: string[];
 };
@@ -577,6 +580,7 @@ function readLayout(): Layout {
     id: String(c.id),
     ...(c.hidden ? { hidden: true } : {}),
     ...(c.width ? { width: c.width } : {}),
+    ...(c.pinned ? { pinned: c.pinned } : {}),
   }));
   const group = groupingPlugin?.columnsGroupBy.map((c) => String(c.id)) ?? [];
   return { cols, ...(group.length ? { group } : {}) };
@@ -593,8 +597,10 @@ function updateCols() {
 
 /// Give the grid a column order, visibility and widths. Every column
 /// the grid has is named, in the order wanted; one left out keeps its
-/// place at the end.
-function applyColumns(cols: CurrentColumn[]) {
+/// place at the end. The pinned columns stay pinned: the grid rebuilds
+/// its columns from their definitions, which a pin made from the header
+/// menu is not part of.
+function applyColumns(cols: CurrentColumn[], pins = pinsOf(vueGrid?.slickGrid.getColumns() ?? [])) {
   if (!vueGrid) return;
   const known = new Set(cols.map((c) => c.columnId));
   const rest = vueGrid.slickGrid
@@ -603,8 +609,21 @@ function applyColumns(cols: CurrentColumn[]) {
     .map((c) => ({ columnId: String(c.id), hidden: !!c.hidden, width: c.width }));
   restoring = true;
   vueGrid.gridStateService.applyColumnLayout([...cols, ...rest], false);
+  for (const [id, side] of pins) vueGrid.slickGrid.setColumnPinning(id, side);
   restoring = false;
   fitRowsToPictures();
+}
+
+/// Each pinned column and the edge it is held to. A layout comes from
+/// the card's link, which anyone can write, so only the two edges count.
+function pinsOf(cols: { id: string | number; pinned?: unknown }[]) {
+  return new Map(
+    cols.flatMap((c) =>
+      c.pinned === "left" || c.pinned === "right"
+        ? [[String(c.id), c.pinned as DockingSide] as const]
+        : [],
+    ),
+  );
 }
 
 /// Tall enough for two lines of clamped snippet text plus padding.
@@ -1638,12 +1657,22 @@ function applyInitialLayout() {
   applyPresetColumns();
   const layout = colsEncoded ? decodeLayout(colsEncoded) : null;
   if (layout) {
-    applyColumns(layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })));
+    applyColumns(
+      layout.cols.map((c) => ({ columnId: c.id, hidden: !!c.hidden, width: c.width })),
+      pinsOf(layout.cols),
+    );
   }
   applySort(sortersOf(sortOrder.value));
-  if (layout?.group?.length && groupingPlugin) {
+  // Only columns this grid has, with a header drawn: the grouping throws
+  // on any other, and the link that carried the layout may name anything.
+  const grid = vueGrid.slickGrid;
+  const known = new Set(grid.getColumns().map((c) => String(c.id)));
+  const group = (layout?.group ?? []).filter(
+    (id) => typeof id === "string" && known.has(id) && grid.getHeaderColumn(id) != null,
+  );
+  if (group.length && groupingPlugin) {
     restoring = true;
-    groupingPlugin.setDroppedGroups(layout.group);
+    groupingPlugin.setDroppedGroups(group);
     restoring = false;
   }
 }
@@ -2024,7 +2053,9 @@ function gridOptions(): GridOption {
   return {
     datasetIdPropertyName: rowsSpec?.row_key ?? "uuid",
     // Cells are text, never markup: a row's snippet is the source's own.
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
+    // A pin the header menu asks for that the box is too narrow to hold.
+    errorCallback: (message: string) => pushToast(message.replace(/^\[SlickGrid\]\s*/, ""), "warn"),
     enableEmptyDataWarningMessage: false,
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
@@ -2083,7 +2114,7 @@ function gridOptions(): GridOption {
       commandItems: menuItems,
       // Ours copies the cell as its row's copy does; the grid's copies
       // the raw field, an object as "[object Object]".
-      hideCopyCellValueCommand: true,
+      hideCommands: ["copy"],
       // The scope first, which the chip's slots read.
       onBeforeMenuShow: (e, args) => {
         scopes.onBeforeMenuShow(e, args);
@@ -2192,8 +2223,6 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     // Load pages until the row is held, as scrolling to it would.
     seek,
-    // What a header dropped on the search bar does, without the mouse.
-    dropOnSearch,
     // A search, a page, or a group's page on its way.
     busy: () =>
       loading.value ||
@@ -2220,12 +2249,11 @@ function createGrid() {
         .getColumns()
         .filter((c) => c.hidden)
         .map((c) => String(c.id)),
-    // What the column picker and the group bar do, without the mouse.
+    // What the column picker does, without the mouse.
     showColumns: (ids: string[]) => {
       setHidden(Object.fromEntries(ids.map((id) => [id, false])));
       onColumnsShown();
     },
-    groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),
   };
   applyInitialLayout();
   // The rows are already loaded by the time the grid exists — the
@@ -2243,9 +2271,7 @@ const searchWrapEl = ref<HTMLDivElement | null>(null);
 function viewRowRef(el: unknown) {
   if (inToolbar) searchWrapEl.value = el as HTMLDivElement | null;
 }
-type Sortable = { destroy(): void };
-type SortableClass = { create(el: HTMLElement, options: object): Sortable };
-let searchDrop: Sortable | null = null;
+let removeSearchDrop: (() => void) | null = null;
 
 function dropOnSearch(colId: string) {
   const key = columns.value.find((c) => c.field === colId)?.search?.key;
@@ -2257,25 +2283,39 @@ function dropOnSearch(colId: string) {
   appendFilterToQuery(`${key}:*`);
 }
 
+/// The column whose header this grid is dragging, if any: the grid marks
+/// the header for as long as the drag lasts.
+function headerBeingDragged(): string | null {
+  const header = vueGrid?.slickGrid
+    .getContainerNode()
+    .querySelector<HTMLElement>(".slick-header-column-active[data-id]");
+  return header?.dataset.id ?? null;
+}
+
 function installSearchDrop() {
   const el = searchWrapEl.value;
-  const bar = groupingPlugin?.droppableInstance;
-  if (!el || !bar || !vueGrid) return;
-  // The Sortable the grouping bar is: a header's drag is offered to every
-  // list in its `shared` group, and the search bar joins it.
-  const Sortable = bar.constructor as unknown as SortableClass;
-  const uid = vueGrid.slickGrid.getUID();
-  searchDrop = Sortable.create(el, {
-    group: "shared",
-    // Nothing of its own to drag.
-    draggable: ".search-drop-none",
-    onAdd: (evt: { item: HTMLElement }) => {
-      const id = evt.item.getAttribute("id") ?? "";
-      evt.item.remove();
-      // Another grid's header, dropped here, is not a column of this one.
-      if (id.startsWith(uid)) dropOnSearch(id.slice(uid.length));
-    },
-  });
+  if (!el || !vueGrid) return;
+  // Only this grid's own header is taken. Anything else dragged here —
+  // text into the box, another grid's header — is left to the browser.
+  const over = (e: DragEvent) => {
+    if (!headerBeingDragged()) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  };
+  const drop = (e: DragEvent) => {
+    const id = headerBeingDragged();
+    if (!id) return;
+    e.preventDefault();
+    dropOnSearch(id);
+  };
+  el.addEventListener("dragenter", over);
+  el.addEventListener("dragover", over);
+  el.addEventListener("drop", drop);
+  removeSearchDrop = () => {
+    el.removeEventListener("dragenter", over);
+    el.removeEventListener("dragover", over);
+    el.removeEventListener("drop", drop);
+  };
 }
 
 /// The records selected as of the last change the grid reported.
@@ -2555,8 +2595,8 @@ if (inToolbar) {
 }
 
 onBeforeUnmount(() => {
-  searchDrop?.destroy();
-  searchDrop = null;
+  removeSearchDrop?.();
+  removeSearchDrop = null;
   themeWatch?.disconnect();
   themeWatch = null;
   vueGrid?.dispose();

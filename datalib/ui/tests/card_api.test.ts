@@ -46,7 +46,7 @@ describe("cardApi", () => {
   it("leaves the scope when the call returns", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("{}")),
+      vi.fn(async () => new Response("{}", { headers: { "Content-Type": "application/json" } })),
     );
     await cardApi(ctx).fetchDag();
     expect(cardBeingServed()).toBeNull();

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 
 use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
@@ -225,6 +225,24 @@ enum Content {
 const FILE_CHANGED: &str = "This file has changed since the last sync read it, so its pages \
      are not shown. The next sync reads it as it is now.";
 
+/// The document's front matter.
+fn front(t: &RenderTarget, title: &str) -> Front {
+    let mut front = Front::new()
+        .plain("provider", grid_rows::PROVIDER)
+        .text("blake3", &t.blake3)
+        .name("title", title)
+        .text_if("author", t.author.as_deref())
+        .plain("page_count", t.page_count)
+        .text("pdf_type", &t.pdf_type)
+        .text("source_path", &t.rel_path);
+    if t.copy_count > 1 {
+        front = front.plain("copies", t.copy_count);
+    }
+    front
+        .text_if("created_at", t.doc_created_at.as_deref())
+        .text_if("modified_at", t.doc_modified_at.as_deref())
+}
+
 fn render_one(
     t: &RenderTarget,
     content: Content,
@@ -241,27 +259,8 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let mut body = String::new();
-    body.push_str("---\n");
-    body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
-    body.push_str(&format!("blake3: {}\n", yaml_scalar(&t.blake3)));
-    body.push_str(&format!("title: {}\n", yaml_name(&title)));
-    if let Some(a) = &t.author {
-        body.push_str(&format!("author: {}\n", yaml_scalar(a)));
-    }
-    body.push_str(&format!("page_count: {}\n", t.page_count));
-    body.push_str(&format!("pdf_type: {}\n", yaml_scalar(&t.pdf_type)));
-    body.push_str(&format!("source_path: {}\n", yaml_scalar(&t.rel_path)));
-    if t.copy_count > 1 {
-        body.push_str(&format!("copies: {}\n", t.copy_count));
-    }
-    if let Some(c) = &t.doc_created_at {
-        body.push_str(&format!("created_at: {}\n", yaml_scalar(c)));
-    }
-    if let Some(m) = &t.doc_modified_at {
-        body.push_str(&format!("modified_at: {}\n", yaml_scalar(m)));
-    }
-    body.push_str("---\n\n");
+    let front = front(t, &title);
+    let mut body = front.draw();
     let doc_stamp =
         grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
     let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
@@ -352,6 +351,7 @@ fn render_one(
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front,
     })
 }
 

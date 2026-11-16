@@ -49,6 +49,9 @@ pub enum SourceType {
     /// which next to `media` would name nothing; the vendor earns its
     /// place here the way it does in `google_takeout`.
     ApplePhotos,
+    /// Baby Connect, the baby tracker, over the web app's own requests:
+    /// every entry logged for each child.
+    BabyConnect,
     Beeper,
     /// Calendars: Google's API, a CalDAV server (Fastmail, iCloud, …) or
     /// `.ics` files, one raw store.
@@ -118,7 +121,8 @@ impl SourceType {
     pub const fn uses_latchkey_account(self) -> bool {
         matches!(
             self,
-            SourceType::Calendar
+            SourceType::BabyConnect
+                | SourceType::Calendar
                 | SourceType::Contacts
                 | SourceType::Chatgpt
                 | SourceType::Claude

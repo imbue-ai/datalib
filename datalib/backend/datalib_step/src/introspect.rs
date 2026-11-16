@@ -35,8 +35,10 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
 use datalib_columns::Entity;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{entity_link, stamp_text_html};
+use datalib_etl_render::section::{self, Section};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
@@ -307,29 +309,35 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
 }
 
 /// Everything one measured source contributes: the document to store,
-/// the samples to append to its series, and the report body that has
-/// to reach disk before the document is stored.
+/// whose sections are the report that has to reach disk before it is
+/// stored, and the samples to append to its series.
 pub struct Measured {
     pub doc: RenderedMarkdown,
     pub samples: Vec<SourceMeasurementRow>,
-    /// Written by [`Measured::write_report`], never by [`plan`]. The
-    /// split is load-bearing: the caller skips a source whose numbers
-    /// have not moved, and writing the file before that check would
-    /// restamp `measured_at_utc` on every run — churning the rendered tree,
-    /// whose content hash is what the scheduler uses to decide that
-    /// `grid_index` has nothing to do.
-    body: String,
 }
 
 impl Measured {
+    /// Never called by [`plan`]. The split is load-bearing: the caller
+    /// skips a source whose numbers have not moved, and writing the file
+    /// before that check would restamp `measured_at_utc` on every run —
+    /// churning the rendered tree, whose content hash is what the
+    /// scheduler uses to decide that `grid_index` has nothing to do.
     pub fn write_report(&self) -> Result<()> {
         let path = &self.doc.md_path;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
-        std::fs::write(path, &self.body).with_context(|| format!("write {}", path.display()))
+        std::fs::write(path, section::join(&self.doc.sections))
+            .with_context(|| format!("write {}", path.display()))
     }
+}
+
+fn report_front(source_id: &str, now: &str) -> Front {
+    Front::new()
+        .plain("title", format!("{source_id} storage"))
+        .plain("source", source_id)
+        .plain("measured_at", now)
 }
 
 fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
@@ -338,8 +346,8 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     let group = entity_link(source_id, &Entity::Group(source_id).uri(), source_id);
     let measured = stamp_text_html(now);
     let mut out = format!(
-        "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
-         # {group} — storage\n\nMeasured {measured}.\n\n"
+        "{}# {group} — storage\n\nMeasured {measured}.\n\n",
+        report_front(source_id, now).draw()
     );
     // One table, not one wrapped `<div>` per measurement. A source with
     // a dozen stores and tables used to render a dozen bordered cards
@@ -476,6 +484,8 @@ pub fn plan(
         row.read_uuid = inside.read_uuid.clone();
     }
 
+    let front = report_front(source_id, now);
+    let body = report_body(source_id, &subjects, now);
     Ok(Some(Measured {
         doc: RenderedMarkdown {
             section_layout: None,
@@ -487,7 +497,8 @@ pub fn plan(
             md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            sections: vec![Section::unkeyed(body)],
+            front,
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: vec![node],
@@ -496,7 +507,6 @@ pub fn plan(
             problems: Vec::new(),
         },
         samples,
-        body: report_body(source_id, &subjects, now),
     }))
 }
 

@@ -120,16 +120,24 @@ impl Account {
         self.run_noting(conv_uuids).await.0
     }
 
+    async fn run_with(&self, tweak: impl FnOnce(&mut FetchOptions)) -> FetchSummary {
+        self.run_inner(tweak).await.unwrap()
+    }
+
     /// A run, and the give-up it said to the step, which ends the step
     /// `incomplete`.
     async fn run_noting(
         &self,
         conv_uuids: &[&str],
     ) -> (anyhow::Result<FetchSummary>, Option<String>) {
-        noting_give_up(self.run_inner(conv_uuids)).await
+        let named: Vec<String> = conv_uuids.iter().map(|s| s.to_string()).collect();
+        noting_give_up(self.run_inner(|o| o.conv_uuids = named)).await
     }
 
-    async fn run_inner(&self, conv_uuids: &[&str]) -> anyhow::Result<FetchSummary> {
+    async fn run_inner(
+        &self,
+        tweak: impl FnOnce(&mut FetchOptions),
+    ) -> anyhow::Result<FetchSummary> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
         let control = datalib_etl::control::DownloadControl::default();
         // One failure is the give-up: a 429 ends as `RateLimited` at once.
@@ -141,14 +149,12 @@ impl Account {
             fast,
             control.stop.clone(),
         );
-        let download = retry::scope(
-            guard,
-            fetch(FetchOptions {
-                conv_uuids: conv_uuids.iter().map(|s| s.to_string()).collect(),
-                control,
-                ..FetchOptions::new(db.clone())
-            }),
-        );
+        let mut o = FetchOptions {
+            control,
+            ..FetchOptions::new(db.clone())
+        };
+        tweak(&mut o);
+        let download = retry::scope(guard, fetch(o));
         let s = playback::scope(&self.playback, download).await;
         // As the processor does: a failed run commits nothing.
         if s.is_ok() {
@@ -519,4 +525,68 @@ async fn a_rate_limit_keeps_the_config_rows_it_did_not_recheck() {
         acct.keys().await,
         ["config:conv_uuids:c-gone", "phase:conversations"]
     );
+}
+
+/// Beside `conv_uuids` no listing runs, so every listing setting did
+/// nothing and nothing said so. Each is a warning row; the wait, which a
+/// named fetch keeps, is not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_listing_settings_beside_named_conversations_are_warnings() {
+    let acct = Account::new(&[conversation("c-a", 1.0)]);
+    let s = acct
+        .run_with(|o| {
+            o.conv_uuids = vec!["c-a".into()];
+            o.since = Some("2369-01-01".into());
+            o.max_listing_pages = Some(1);
+            o.max_conversations_per_run = Some(5);
+            o.refetch_newest_conversations = Some(2);
+            o.wait_between_requests = Duration::from_millis(1);
+        })
+        .await;
+    assert_eq!(s.fetched, 1, "{s:?}");
+    assert_eq!(
+        acct.keys().await,
+        [
+            "config:max_conversations_per_run:5",
+            "config:max_listing_pages:1",
+            "config:refetch_newest_conversations:2",
+            "config:since:2369-01-01",
+        ]
+    );
+}
+
+/// A run fetches at most `max_conversations_per_run`, and the next run
+/// the rest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_fetches_at_most_its_cap() {
+    let acct = Account::new(&[
+        conversation("c-a", 3.0),
+        conversation("c-b", 2.0),
+        conversation("c-c", 1.0),
+    ]);
+    let capped = |o: &mut FetchOptions| o.max_conversations_per_run = Some(2);
+    assert_eq!(acct.run_with(capped).await.fetched, 2);
+    assert_eq!(acct.run_with(capped).await.fetched, 1);
+    assert_eq!(acct.stored_conversations().await, 3);
+}
+
+/// `refetch_newest_conversations` fetches the newest again though the
+/// copy here is at the version listed, and only those: the others'
+/// details are gone from the tape, so asking for one would be an error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_newest_conversations_are_fetched_again_every_run() {
+    let acct = Account::new(&[
+        conversation("c-b", 2.0),
+        conversation("c-a", 3.0),
+        conversation("c-c", 1.0),
+    ]);
+    assert_eq!(acct.run_with(|_| {}).await.fetched, 3);
+    assert_eq!(acct.run_with(|_| {}).await.fetched, 0);
+
+    acct.forget(&conversation_request("c-b"));
+    acct.forget(&conversation_request("c-c"));
+    let s = acct
+        .run_with(|o| o.refetch_newest_conversations = Some(1))
+        .await;
+    assert_eq!((s.fetched, s.errors), (1, 0), "{s:?}");
 }

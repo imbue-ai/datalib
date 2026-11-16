@@ -195,7 +195,7 @@ FACEBOOK_GROUP_LEFT_SINCE = (
 )
 # Tables each export holds that no feed reads, one row a source.
 FACEBOOK_TABLES_NOT_READ = (
-    "0062f189-273d-5e65-99f6-8209086dad23|warning|render|entity|unrendered_tables:all|||"
+    "0062f189-273d-5e65-99f6-8209086dad23|info|render|entity|unrendered_tables:all|||"
     "deliberate_loss|Stored and not searchable, 3 rows in table(s): "
     "ads_information_story_views_in_past_7_days, "
     "logged_information_search_your_search_history, "
@@ -1942,6 +1942,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ),
             self._scalar(self._index_db, "SELECT COUNT(*) FROM markdowns;"),
             "the document rows and the markdowns are the same set",
+        )
+        # Every renderer hands a document the one way: as sections, the
+        # first opening with its front matter, which it hands as facts the
+        # render store keeps (`etl/render/src/front_matter.rs`). Without
+        # sections the store keeps none of what the document says.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT provider, COUNT(*) FROM markdowns "
+                "WHERE front IS NULL OR section_layout IS NULL "
+                "GROUP BY provider ORDER BY provider;",
+            ),
+            [],
+            "these providers hand documents without front matter or sections",
         )
         # A document's stamps are the document row's, on every provider:
         # created no later than modified, and `markdowns` a copy of them.

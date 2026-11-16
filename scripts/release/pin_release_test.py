@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from pin_release import (
     pin_install,
     release_problems,
     tarball_hashes,
+    unattested,
 )
 from publish_release import IMAGE_DIGEST, TARBALL_TRIPLES
 
@@ -190,6 +192,111 @@ class WhichReleasesTest(unittest.TestCase):
             checked_image_digest(release, b"sha256:" + b"d" * 64 + b"\n")
         with self.assertRaises(ValueError):
             checked_image_digest({"assets": []}, contents)
+
+
+class FakeGh:
+    """Serves each tarball's bytes, and says yes to verifying only what release.yml attested."""
+
+    def __init__(self, tag: str, commit: str) -> None:
+        self.tag = tag
+        self.commit = commit
+        self.served = {
+            f"datalib-{triple}.tar.gz": triple.encode() for triple in TARBALL_TRIPLES
+        }
+        self.attested = {hashlib.sha256(b).hexdigest() for b in self.served.values()}
+        self.image_attested = True
+        self.verified: list[str] = []
+
+    def hashes(self) -> dict[str, str]:
+        return {
+            triple: hashlib.sha256(self.served[f"datalib-{triple}.tar.gz"]).hexdigest()
+            for triple in TARBALL_TRIPLES
+        }
+
+    def __call__(self, *args: str) -> bool:
+        if args[:2] == ("release", "download"):
+            name = args[args.index("--pattern") + 1]
+            if name not in self.served:
+                return False
+            directory = Path(args[args.index("--dir") + 1])
+            (directory / name).write_bytes(self.served[name])
+            return True
+        assert args[:2] == ("attestation", "verify"), args
+        subject, flags = args[2], args[3:]
+        self.verified.append(subject)
+        identity = (
+            flags[flags.index("--signer-workflow") + 1]
+            == f"imbue-ai/datalib/{RELEASE_WORKFLOW}"
+            and flags[flags.index("--source-ref") + 1] == f"refs/tags/{self.tag}"
+            and flags[flags.index("--source-digest") + 1] == self.commit
+        )
+        if subject.startswith("oci://"):
+            return identity and self.image_attested
+        digest = hashlib.sha256(Path(subject).read_bytes()).hexdigest()
+        return identity and digest in self.attested
+
+
+class AttestedTest(unittest.TestCase):
+    TAG = "v9.9.9"
+    COMMIT = "a" * 40
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.directory = Path(temp.name)
+        self.gh = FakeGh(self.TAG, self.COMMIT)
+        self.hashes = self.gh.hashes()
+
+    def problems(self) -> list[str]:
+        return unattested(
+            self.gh, self.TAG, self.COMMIT, self.hashes, IMAGE, self.directory
+        )
+
+    def test_attested_tarballs_and_image_pin(self) -> None:
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(len(self.gh.verified), len(TARBALL_TRIPLES) + 1)
+        self.assertEqual(
+            self.gh.verified[-1], f"oci://ghcr.io/imbue-ai/datalib@{IMAGE}"
+        )
+
+    def test_a_tarball_nobody_attested_is_refused(self) -> None:
+        """A writer's own release on a tag, or one built by any other workflow."""
+        name = f"datalib-{TARBALL_TRIPLES[0]}.tar.gz"
+        self.gh.attested.discard(self.hashes[TARBALL_TRIPLES[0]])
+        self.assertEqual(
+            self.problems(),
+            [f"{name}: no attestation from {RELEASE_WORKFLOW} at {self.TAG}"],
+        )
+
+    def test_an_attestation_for_another_tag_or_commit_is_refused(self) -> None:
+        for field, value in {"tag": "v9.9.8", "commit": "b" * 40}.items():
+            with self.subTest(field):
+                gh = FakeGh(self.TAG, self.COMMIT)
+                setattr(gh, field, value)
+                self.gh = gh
+                self.assertEqual(len(self.problems()), len(TARBALL_TRIPLES) + 1)
+
+    def test_bytes_other_than_the_pinned_ones_are_never_verified(self) -> None:
+        """Verifying another file would vouch for bytes install.sh does not name."""
+        name = f"datalib-{TARBALL_TRIPLES[1]}.tar.gz"
+        self.gh.served[name] = b"attested, but not what the release reports"
+        self.gh.attested.add(hashlib.sha256(self.gh.served[name]).hexdigest())
+        self.assertEqual(
+            self.problems(),
+            [f"{name}: what was downloaded is not what the release holds"],
+        )
+        self.assertNotIn(str(self.directory / name), self.gh.verified)
+
+    def test_an_image_nobody_attested_is_refused(self) -> None:
+        self.gh.image_attested = False
+        problems = self.problems()
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn(IMAGE, problems[0])
+
+    def test_a_tarball_that_will_not_download_is_refused(self) -> None:
+        name = f"datalib-{TARBALL_TRIPLES[2]}.tar.gz"
+        del self.gh.served[name]
+        self.assertEqual(self.problems(), [f"{name}: could not be downloaded"])
 
 
 if __name__ == "__main__":

@@ -10,12 +10,14 @@ use std::borrow::Cow;
 pub mod cache;
 pub mod chunk;
 mod file;
+pub mod holdings;
 pub mod owed;
 pub mod prompt;
 pub mod read;
 mod store;
 
 pub use cache::InferenceCache;
+pub use holdings::{holdings, Holding};
 pub use owed::{owed, Owed};
 pub use read::{Held, HeldChunk, HeldDoc, MessageHit, Reader};
 pub use store::{ChunkSpan, Index};

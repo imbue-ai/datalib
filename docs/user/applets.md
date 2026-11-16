@@ -85,6 +85,7 @@ has the parameters.
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
 | `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
+| `GET /children/{uuid}?at=&limit=` | a container's children in order, a page each way around an anchor (below) |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
@@ -95,6 +96,32 @@ has the parameters.
 
 How a document names people, times and attachments, for an app that
 shows one: [showing a rendered document](rendered_documents.md).
+
+### A container's children
+
+Everything in the index sits in a container: a message in its thread, a
+thread in its channel, a channel in its workspace, an email thread in
+its account and under each of its labels. `GET /children/{uuid}` lists
+what one holds, oldest first: the rows it holds, the containers it
+holds, and whatever is filed under it, each once.
+
+- `at=` is where to open: a child's uuid (that child, `limit` before it
+  and `limit` after), a moment such as `2026-11-02T09:00:00Z` (`limit`
+  before it and `limit` from it on), or `now`. With none it opens at
+  the first child. A uuid that is not one of its children is a 404
+  saying so.
+- The answer is `{"children": […], "before": …, "after": …, "at": …}`.
+  `before` and `after` are cursors, null at the end of the list; send
+  one back as `?after=<cursor>` or `?before=<cursor>` for the next page
+  that way. A cursor is the edge row's place, not a count, so a message
+  that arrives while you page lands in its place and shifts nothing.
+  `at` is the commit the page was read at.
+- Each child has its `uuid`, its `sort_key`, whether it is a
+  `container` with children of its own, its `kind` and `name`, and,
+  where it has a row, its `author`, `created_at`, `preview`, the
+  `markdown_uuid` of its document and the `link` that opens it.
+- `limit=` is 1 to 1000, 50 by default. A malformed request is a 400,
+  and every error is `{"error": "…"}`.
 
 ### Reading any store with SQL
 

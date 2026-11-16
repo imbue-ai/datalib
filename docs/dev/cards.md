@@ -578,11 +578,14 @@ besides components:
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 
 - `gridView(opts: { url, q?, columns?, name?, placeholder? })` — the
-  general-purpose grid: a search bar + a SlickGrid over `url`, any
+  general-purpose grid: a search bar + a SlickGrid over `url`, a
   table that pages, sorts and groups the way the search does (the
   Manage screen's problems cell opens `/applet/unified_document_index/problems`
   this way). `url` is required; without one the card says so and names
-  `searchView()` for the search. Each answer says which field names a
+  `searchView()` for the search. Since a link can write card source,
+  `url` must be one of the tables `cards/tableUrls.ts` names in full
+  (`GRID_TABLES`); any other is refused with a card error, before
+  anything is fetched. Each answer says which field names a
   row, which document a row opens and whether qmd ranks its free text
   (`RowsSpec`). Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
@@ -627,9 +630,10 @@ besides components:
   minted, agent-bound component is seeded with (the gallery's agent
   entry stores `() => agentSeedView("<name>")` as the alias source);
   the agent's first save replaces it.
-- `tableView({ url })` — the typed table viewer over any endpoint that
-  answers `{columns, rows}` (plus `tree: true` when each row carries a
-  `path`). See "Typed tables" below.
+- `tableView({ url })` — the typed table viewer over one of the app's
+  tables that answer `{columns, rows}` (plus `tree: true` when each row
+  carries a `path`): `TYPED_TABLES` in `cards/tableUrls.ts`, refused
+  otherwise, as for `gridView`. See "Typed tables" below.
 - `sourcesView(opts?: { add? })` — the Manage screen as a card
   (`cards/SourcesCard.ce.vue`); `add: true` opens it on the add-source
   form, which is what the Dashboard's "Add source" does. It shows the
@@ -873,11 +877,12 @@ again, and the only ones that should know the grid's DOM or options:
   Ctrl or Shift adds. `GridCard` turns the grid's own keeping
   (`syncGridSelection`) off for this, since that one keeps a row a
   search hid even after a plain click.
-- `grid/rowHover.ts` — lights both halves of a row that pinned columns
-  split in two; the theme's `:hover` reaches only the half under the
-  pointer.
 - `grid/gridFrame.ts` — how a grid sits in its card: the resize options
   that make it follow the card's frame, and the theme test.
+- `grid/textOnly.ts` — `TEXT_ONLY_GRID`, which every grid spreads: what
+  a grid draws from a string is text (row values are strangers'), its
+  sanitizer lets no markup through, and it warns rather than `alert()`s.
+  `//:lint_repo` refuses a grid without it.
 - `grid/columnLayout.ts` — how every grid treats its columns: never
   fitted to the viewport, so a width a person drags stays, and carried
   across a rebuild. Each of the four spreads its `KEEP_COLUMN_WIDTHS`.

@@ -8,6 +8,9 @@
 //! a photo's caption) keeps its controls: right-to-left prose needs them.
 //! The page is the renderer's, and its names go through the shared
 //! writers (`Title`, `message::chip_link`, `html::escape_name_inline`).
+//! One thing here is not a name: a container that is also a row of its
+//! document (a thread, a chat) sorts among its siblings as that row does,
+//! unless its renderer gave it an order of its own.
 
 use std::borrow::Cow;
 
@@ -44,6 +47,7 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
     let mut data_nodes = md.data_nodes.clone();
     for node in &mut data_nodes {
         changed |= settle_node(node);
+        changed |= settle_node_key(node, &rows);
     }
     if !changed {
         return Cow::Borrowed(md);
@@ -59,6 +63,7 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
         sections: md.sections.clone(),
         section_layout: md.section_layout.clone(),
         content_hash: md.content_hash.clone(),
+        front: md.front.clone(),
         edges,
         contacts,
         data_nodes,
@@ -76,6 +81,19 @@ fn settle_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
         changed |= strip(name);
     }
     changed
+}
+
+fn settle_node_key(node: &mut datalib_schema::data_nodes::DataNodeRow, rows: &[GridRow]) -> bool {
+    if !node.sort_key.is_empty() {
+        return false;
+    }
+    match rows.iter().find(|r| r.uuid == node.uuid) {
+        Some(row) if !row.sort_key.is_empty() => {
+            node.sort_key = row.sort_key.clone();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// A string column not named here is an id, a path, a stamp or a body;
@@ -232,6 +250,7 @@ mod tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             section_layout: None,
             content_hash: None,
             edges: Vec::new(),
@@ -256,6 +275,33 @@ mod tests {
             .body("Orders \u{202E}exe.live stays as written in a body")
             .is_document(true)
             .item_count(Some(1))
+    }
+
+    /// A chat's container sorts among a channel's threads by when its
+    /// document row says it started; one its renderer ordered keeps that
+    /// order, and one with no row of its own keeps none.
+    #[test]
+    fn a_container_with_a_row_sorts_as_its_row() {
+        use datalib_schema::data_nodes::DataNodeRow;
+        let mut d = doc(row()
+            .created_at(Some("2026-03-01T09:00:00-05:00".to_string()))
+            .build()
+            .unwrap());
+        d.data_nodes = vec![
+            DataNodeRow::new("md-1", "row-1", "src", "Chat"),
+            DataNodeRow::new("md-1", "channel", "src", "Channel"),
+        ];
+        let settled = settled(&d);
+        let keys: Vec<&str> = settled
+            .data_nodes
+            .iter()
+            .map(|n| n.sort_key.as_str())
+            .collect();
+        assert_eq!(keys, ["2026-03-01T14:00:00.000000Z", ""]);
+
+        d.data_nodes =
+            vec![DataNodeRow::new("md-1", "row-1", "src", "Chat").sort_key(Some("0007".into()))];
+        assert!(matches!(super::settled(&d), Cow::Borrowed(_)));
     }
 
     fn photo() -> NormalizedPhoto {

@@ -222,7 +222,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="fetch-only/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]'),
   ).toHaveCount(0);
 
   // A step under a group edits its source: the step row's button opens
@@ -296,7 +296,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="no-render/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
   ).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
@@ -382,43 +382,50 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
 test("a provider with render options writes them on the render step, from the one form", async ({
   page,
 }) => {
-  // Signal's render step has a `period` option. Before the one-dialog
-  // wizard it came as a second dialog, and the remount between the two
-  // once wrote the render step under the group's id instead of its own
-  // — a config `datalib-dag` refuses with "a step writes only the tree
-  // its id names". One dialog has no second mount to get wrong; the
-  // assertion on the composed id stays because that is the config bug
-  // it would catch.
+  // Apple Mail's render step has an option, the mailboxes it renders.
+  // Before the one-dialog wizard it came as a second dialog, and the
+  // remount between the two once wrote the render step under the
+  // group's id instead of its own — a config `datalib-dag` refuses with
+  // "a step writes only the tree its id names". One dialog has no second
+  // mount to get wrong; the assertion on the composed id stays because
+  // that is the config bug it would catch.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
+    .locator(".wiz-tile", {
+      hasText: "Copy the accounts of the Mail app on this Mac, from its own files.",
+    })
     .click();
-  await nameField(page).fill("Signal Work");
-  await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
-  await expect(idField(page)).toHaveValue("signal-work");
+  await nameField(page).fill("Mac Mail");
+  await wizard(page).locator("input.wiz-path").fill("/tmp/Library/Mail");
+  await expect(idField(page)).toHaveValue("mac-mail");
 
-  // The render option sits under the Rendering heading, in this form.
-  const section = wizard(page).locator(".wiz-section");
-  await expect(section).toContainText("signal-work/render_markdown");
-  await expect(field(page, "Document span")).toHaveValue("month");
+  await openAdvanced(page);
+  await wizard(page)
+    .locator(
+      '.wiz-field:has(> .wiz-label:text-is("Render only these mailboxes")) .wiz-listfield > .wiz-input',
+    )
+    .fill("Inbox");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Signal Work.")).toBeVisible();
+  await expect(page.getByText("Added Mac Mail.")).toBeVisible();
 
-  await expandGroup(page, "signal-work");
-  await expect(row(page, "signal-work/render_markdown")).toBeVisible();
-  await expect(stepChip(page, "signal-work/render_markdown")).toHaveAttribute(
+  await expandGroup(page, "mac-mail");
+  await expect(row(page, "mac-mail/render_markdown")).toBeVisible();
+  await expect(stepChip(page, "mac-mail/render_markdown")).toHaveAttribute(
     "aria-label",
     /, Render step/,
   );
 
-  await expect(editor).toHaveValue(/group = "signal-work"/);
+  await expect(editor).toHaveValue(/group = "mac-mail"/);
   const text = await editor.inputValue();
-  expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
-  expect(text).toContain('inputs = ["signal-work/ingest"]');
-  expect(text).toContain('period = "month"');
+  expect(text).toContain('group = "mac-mail"\nfunction = "render_markdown"');
+  expect(text).toContain('inputs = ["mac-mail/ingest"]');
+  expect(text).toContain('only_render_labels = ["Inbox"]');
+  expect(text.indexOf("only_render_labels")).toBeGreaterThan(
+    text.indexOf('function = "render_markdown"'),
+  );
   // One group, written once.
-  expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
+  expect(text.match(/id = "mac-mail"/g)).toHaveLength(1);
 });
 
 test("a download-only source gets its render step, and no Rendering section", async ({ page }) => {
@@ -540,12 +547,10 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   );
 
   // The group went with its last step, so its row is gone too.
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/ingest"]'),
-  ).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/render_markdown"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/ingest"]')).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(
+    0,
+  );
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -574,9 +579,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
   );
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key^="whole-group/"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);

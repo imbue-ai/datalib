@@ -16,6 +16,7 @@ use axum::{
     Router,
 };
 mod body_sections;
+mod children;
 pub(crate) mod columns;
 mod grouping;
 mod local_embedder;
@@ -218,6 +219,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/values", get(problems::values_handler))
             .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
+            .route("/children/{uuid}", get(children::handler))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))
             .route(
@@ -2326,6 +2328,7 @@ mod tests {
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),

@@ -41,9 +41,10 @@ async fn run_fetch_since(
     // takes one writer at a time.
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let download = fetch(FetchOptions {
-        max_pages: None,
-        limit: None,
-        sleep_between: Duration::ZERO,
+        max_listing_pages: None,
+        max_conversations_per_run: None,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         since: since.map(String::from),
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())

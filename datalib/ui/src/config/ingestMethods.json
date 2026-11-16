@@ -17,6 +17,12 @@
       "reach": "local"
     }
   ],
+  "baby_connect": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "beeper": [
     {
       "path": "texts",

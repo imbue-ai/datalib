@@ -77,7 +77,7 @@ impl Listing {
                 None,
                 &format!("Not Google Docs, so not searchable: {}", kinds.join(", ")),
             )
-            .severity(Severity::Warning),
+            .severity(Severity::Info),
             Some(render_version),
         ))
     }

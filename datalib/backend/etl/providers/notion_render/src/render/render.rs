@@ -15,11 +15,12 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
-use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_etl_render::message::{chip_link, message_stamp_text_html};
+use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::grid_rows::GridRow;
@@ -49,7 +50,8 @@ use datalib_etl_render::pages::batches;
 ///      under the shared title line, with its ids in the front matter.
 /// v13: a source has a table of contents, the path above a page links it
 ///      where the path used to link Notion, and a trashed page says so.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
+pub const RENDER_VERSION: u32 = 14;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -98,27 +100,23 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     out
 }
 
-/// The front matter and the title line: the page's ids, its times, and
-/// the link back to Notion.
-fn head(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> String {
-    let mut fm = String::from("---\n");
-    fm.push_str(&format!("title: {}\n", yaml_name(title)));
-    fm.push_str(&format!("provider: {}\n", Provider::Notion));
-    fm.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
-    fm.push_str(&format!("page_id: {}\n", yaml_scalar(page_id)));
-    for (k, v) in [
-        ("created_at", "created_time"),
-        ("last_edited_at", "last_edited_time"),
-    ] {
-        if let Some(t) = page.get(v).and_then(|x| x.as_str()) {
-            fm.push_str(&format!("{k}: {}\n", yaml_scalar(t)));
-        }
-    }
-    if let Some(u) = page.get("url").and_then(|x| x.as_str()) {
-        fm.push_str(&format!("source_url: {}\n", yaml_scalar(u)));
-    }
-    fm.push_str("source_label: Notion\n");
-    fm.push_str("---\n\n");
+/// A page's front matter: its ids, its times, and the link back to Notion.
+fn page_front(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> Front {
+    let field = |k: &str| page.get(k).and_then(|x| x.as_str());
+    Front::new()
+        .name("title", title)
+        .plain("provider", Provider::Notion)
+        .plain("markdown_uuid", markdown_uuid)
+        .text("page_id", page_id)
+        .text_if("created_at", field("created_time"))
+        .text_if("last_edited_at", field("last_edited_time"))
+        .text_if("source_url", field("url"))
+        .plain("source_label", "Notion")
+}
+
+/// The front matter and the title line.
+fn head(front: &Front, title: &str, markdown_uuid: &str, page: &Value) -> String {
+    let mut fm = front.draw();
     let url = page.get("url").and_then(|x| x.as_str());
     fm.push_str(
         &Title {
@@ -307,17 +305,19 @@ fn names_of(v: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn thread_markdown(
+/// A thread's front matter, and its sections: the head, then one per
+/// comment.
+fn thread_sections(
     stanza: &str,
     page_title: &str,
     members: &[&Value],
     anchor: Option<&str>,
     author_of: &dyn Fn(&Value) -> Option<Handle>,
-) -> String {
-    let mut out = format!(
-        "---\ntitle: {}\nsource_label: Notion\n---\n\n",
-        yaml_scalar(page_title)
-    );
+) -> (Front, Vec<Section>) {
+    let front = Front::new()
+        .text("title", page_title)
+        .plain("source_label", "Notion");
+    let mut out = front.draw();
     // A comment names the block it hangs off and carries no quote of
     // it, so without this the thread opens with no indication of what
     // it is about.
@@ -333,6 +333,7 @@ fn thread_markdown(
     {
         out.push_str("*The commented-on content has been deleted upstream.*\n\n");
     }
+    let mut sections = vec![Section::unkeyed(std::mem::take(&mut out))];
     for c in members {
         let uuid = super::ids::comment(
             stanza,
@@ -355,11 +356,12 @@ fn thread_markdown(
             Some(h) => chip_link(author, &h),
             None => format!("**{}**", escape_name_inline(author)),
         };
-        out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
+        out.push_str(&format!("{who} · {}\n\n", message_stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
+        sections.push(Section::keyed(&uuid, std::mem::take(&mut out)));
     }
-    out
+    (front, sections)
 }
 
 /// Write a document to `md_path`, and point each of its rows at that file.
@@ -584,7 +586,8 @@ pub fn render_notion(
             } else {
                 body
             };
-            let mut out = head(page_title, markdown_uuid, page_uuid, page);
+            let front = page_front(page_title, markdown_uuid, page_uuid, page);
+            let mut out = head(&front, page_title, markdown_uuid, page);
             if in_trash(page) {
                 out.push_str("*This page is in Notion's trash.*\n\n");
             }
@@ -607,7 +610,8 @@ pub fn render_notion(
                 md_path,
                 render_version: RENDER_VERSION,
                 rows,
-                sections: Vec::new(),
+                front,
+                sections: vec![Section::unkeyed(out)],
                 edges: Vec::new(),
                 contacts: Vec::new(),
                 data_nodes: doc.data_nodes.clone(),
@@ -651,9 +655,9 @@ pub fn render_notion(
             .map(String::as_str);
         let emails = inputs.lookup("users", &parsed.user_emails);
         let author_of = |c: &Value| comment_author_handle(c, emails);
-        let body = thread_markdown(stanza, page_title, members, anchor, &author_of);
+        let (front, sections) = thread_sections(stanza, page_title, members, anchor, &author_of);
         let md_path = doc_md_path(&render_root, markdown_uuid);
-        let (md_path, rows) = file_document(root, md_path, &doc.rows, &body)?;
+        let (md_path, rows) = file_document(root, md_path, &doc.rows, &join(&sections))?;
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
@@ -664,7 +668,8 @@ pub fn render_notion(
             md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            front,
+            sections,
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: doc.data_nodes.clone(),
@@ -692,7 +697,8 @@ pub fn render_notion(
             md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            front: doc.front,
+            sections: vec![Section::unkeyed(doc.markdown)],
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes: Vec::new(),
@@ -720,6 +726,16 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    fn thread_markdown(
+        stanza: &str,
+        page_title: &str,
+        members: &[&Value],
+        anchor: Option<&str>,
+        author_of: &dyn Fn(&Value) -> Option<Handle>,
+    ) -> String {
+        join(&thread_sections(stanza, page_title, members, anchor, author_of).1)
+    }
 
     /// A page's attachments are read from the store its parse read, a
     /// batch at a time, and the page links each where the blob store

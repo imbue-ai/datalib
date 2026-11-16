@@ -62,6 +62,8 @@ pub enum IdNamespace {
     /// Apple's Messages app: chats and messages by the guids Messages
     /// mints for them.
     AppleMessages,
+    /// Baby Connect's own ids: a child, and every entry logged for one.
+    BabyConnect,
     Beeper,
     /// Every calendar method — Google, CalDAV, `.ics` — one keyspace:
     /// events keyed by their calendar and their own id.

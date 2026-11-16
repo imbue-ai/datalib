@@ -77,7 +77,7 @@ pub fn tables_not_read_row(
                 names.join(", "),
             ),
         )
-        .severity(Severity::Warning),
+        .severity(Severity::Info),
         Some(render_version),
     ))
 }
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(found, [("education".to_string(), 2)]);
         let row = tables_not_read_row("li", &found, 1).unwrap();
         assert_eq!(row.scope_key, "unrendered_tables:all");
-        assert_eq!(row.severity, Severity::Warning);
+        assert_eq!(row.severity, Severity::Info);
         assert_eq!(
             row.sample,
             "Stored and not searchable, 2 rows in table(s): education"

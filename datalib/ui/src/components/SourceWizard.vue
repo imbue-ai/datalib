@@ -1706,8 +1706,8 @@ function submit() {
         </p>
         <p v-if="orphanRender" class="wiz-cred">
           Rendering is off under Advanced options, and this source has a render step,
-          <code>{{ orphanRender }}</code
-          >. Saving removes it, and takes it out of the index steps’ inputs.
+          <code>{{ orphanRender }}</code>. Saving removes it, and takes it out of the index steps’
+          inputs.
         </p>
         <p v-if="untouched.length" class="wiz-cred">
           This form has no field for
@@ -1728,8 +1728,7 @@ function submit() {
             <input v-model="name" class="wiz-input" :placeholder="nameHint" />
             <small class="wiz-help">
               Optional. What Datalib calls this source; left blank, it is shown as
-              <code>{{ groupId || "…" }}</code
-              >. You can rename it at any time.
+              <code>{{ groupId || "…" }}</code>. You can rename it at any time.
             </small>
           </span>
         </label>
@@ -1761,8 +1760,9 @@ function submit() {
               </svg>
               <span class="wiz-ok-text">
                 Connected as
-                <b>{{ reachedName(check.report) }}</b
-                ><!-- A message estimate is only shown when the provider gave
+                <b>{{
+                  reachedName(check.report)
+                }}</b><!-- A message estimate is only shown when the provider gave
                       one for free: Gmail's profile carries it, JMAP's
                       session does not. --><template v-if="check.report.account.message_estimate">
                   — about
@@ -1805,8 +1805,7 @@ function submit() {
               </p>
               <p v-if="installsPlugin && signInWays.length" class="wiz-help wiz-plugin-note">
                 Signing in to {{ chosen.label }} first installs a plugin into
-                <code>{{ installsPlugin }}</code
-                >.
+                <code>{{ installsPlugin }}</code>.
               </p>
               <!-- How a credential gets into latchkey under the name above. A
                    tab per way the service offers; a lone way is shown bare. -->
@@ -1918,10 +1917,9 @@ function submit() {
                     </div>
                     <p v-if="!signsInToSeveral" class="wiz-help">
                       A browser opens on the Google Cloud console. latchkey makes a project there
-                      named <code>{{ oauthClientProject }}</code
-                      >, turns on the APIs and creates the client, which takes a few minutes. Google
-                      asks you to accept its terms the first time, and wants 2-Step Verification on
-                      the account.
+                      named <code>{{ oauthClientProject }}</code>, turns on the APIs and creates the
+                      client, which takes a few minutes. Google asks you to accept its terms the
+                      first time, and wants 2-Step Verification on the account.
                     </p>
                     <label class="wiz-item">
                       <span class="wiz-sublabel">{{
@@ -2038,14 +2036,12 @@ function submit() {
                       stored under that name.
                     </template>
                     <template v-else-if="pasteLandsOn.kind === 'replaces'">
-                      Stored as <code>{{ pasteLandsOn.account }}</code
-                      >, replacing the <code>{{ service }}</code> credential already stored under
-                      that name — every source that uses it gets this one. Choose another name above
-                      to keep it.
+                      Stored as <code>{{ pasteLandsOn.account }}</code>, replacing the
+                      <code>{{ service }}</code> credential already stored under that name — every
+                      source that uses it gets this one. Choose another name above to keep it.
                     </template>
                     <template v-else>
-                      Stored as <code>{{ accountValue }}</code
-                      >.
+                      Stored as <code>{{ accountValue }}</code>.
                       <template v-if="pasteLandsOn.besideUnnamed">
                         An unnamed <code>{{ service }}</code> credential is stored too; with both, a
                         source that names no account cannot be given one, so name an account in
@@ -2521,9 +2517,10 @@ function submit() {
                     <span>
                       Render this source into markdown
                       <small class="wiz-help">
-                        Step <code>{{ stepIdFor(groupId || "…", "render") }}</code
-                        >. Off: the data is still copied, but it reaches neither the grid nor
-                        search.<template v-if="renderWanted && !hasRenderFields">
+                        Step <code>{{ stepIdFor(groupId || "…", "render") }}</code>. Off: the data
+                        is still copied, but it reaches neither the grid nor search.<template
+                          v-if="renderWanted && !hasRenderFields"
+                        >
                           It has no settings of its own.</template
                         >
                       </small>
@@ -2539,9 +2536,10 @@ function submit() {
                     <span>
                       Keyword-index the markdown
                       <small class="wiz-help">
-                        Step <code>{{ `${groupId || "…"}/keyword_index` }}</code
-                        >. Off: the source stays in the grid, but the search bar will not find
-                        it.<template v-if="!renderWanted">
+                        Step <code>{{ `${groupId || "…"}/keyword_index` }}</code>. Off: the source
+                        stays in the grid, but the search bar will not find it.<template
+                          v-if="!renderWanted"
+                        >
                           Nothing to index while rendering is off.</template
                         >
                       </small>
@@ -2557,9 +2555,10 @@ function submit() {
                     <span>
                       Embed it for search by meaning
                       <small class="wiz-help">
-                        Step <code>{{ `${groupId || "…"}/embed` }}</code
-                        >. Adds search by meaning and places the source on the map. The slow part of
-                        a sync.<template v-if="renderWanted && !keywordWanted">
+                        Step <code>{{ `${groupId || "…"}/embed` }}</code>. Adds search by meaning
+                        and places the source on the map. The slow part of a sync.<template
+                          v-if="renderWanted && !keywordWanted"
+                        >
                           It reads the keyword index, so it needs that on.</template
                         >
                       </small>

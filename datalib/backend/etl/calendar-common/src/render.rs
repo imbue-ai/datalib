@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{
     escape_md_block, escape_md_inline, escape_name_inline, md_code_span, md_link_dest,
@@ -99,6 +99,7 @@ fn render_one(
         .collect();
     let start = resolve_start(event, source_id, profile, &mut problems);
 
+    let front = front(profile, event, source_id, start.as_deref());
     let sections = render_markdown(profile, event, source_id, start.as_deref());
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
     let md_rel = md_path
@@ -133,6 +134,7 @@ fn render_one(
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front,
     })
 }
 
@@ -268,6 +270,29 @@ fn repeats_lines(event: &NormalizedEvent) -> Vec<String> {
     rules.iter().map(|r| rrule::describe(r, tz)).collect()
 }
 
+/// The document's front matter.
+fn front(
+    profile: &CalendarRenderProfile,
+    event: &NormalizedEvent,
+    source_id: &str,
+    start_instant: Option<&str>,
+) -> Front {
+    let mut front = Front::new()
+        .plain("markdown_uuid", &event.event_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.provider)
+        .plain("kind", kind_of(event))
+        .text("calendar", &event.calendar_label)
+        .name("title", title_of(event))
+        .text("external_id", &event.upstream_id);
+    if let Some(s) = start_instant {
+        front = front.plain("start", s);
+    }
+    front
+        .text_if("created", event.created.as_deref())
+        .text_if("modified_at", event.modified_at.as_deref())
+}
+
 fn render_markdown(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
@@ -275,31 +300,7 @@ fn render_markdown(
     start_instant: Option<&str>,
 ) -> Vec<Section> {
     let uuid = &event.event_uuid;
-    let mut fm = String::with_capacity(512);
-    fm.push_str("---\n");
-    fm.push_str(&format!("markdown_uuid: {uuid}\n"));
-    fm.push_str(&format!("source_id: {source_id}\n"));
-    fm.push_str(&format!("provider: {}\n", profile.provider));
-    fm.push_str(&format!("kind: {}\n", kind_of(event)));
-    fm.push_str(&format!(
-        "calendar: {}\n",
-        yaml_scalar(&event.calendar_label)
-    ));
-    fm.push_str(&format!("title: {}\n", yaml_name(title_of(event))));
-    fm.push_str(&format!(
-        "external_id: {}\n",
-        yaml_scalar(&event.upstream_id)
-    ));
-    if let Some(s) = start_instant {
-        fm.push_str(&format!("start: {s}\n"));
-    }
-    if let Some(ts) = &event.created {
-        fm.push_str(&format!("created: {}\n", yaml_scalar(ts)));
-    }
-    if let Some(ts) = &event.modified_at {
-        fm.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
-    }
-    fm.push_str("---\n\n");
+    let fm = front(profile, event, source_id, start_instant).draw();
 
     let mut out = String::with_capacity(2048);
     out.push_str(

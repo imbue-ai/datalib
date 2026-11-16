@@ -399,6 +399,7 @@ _RELEASE_WRITE_GRANTS = {
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
     "docker-publish": {"packages"},
+    "attest": {"id-token", "attestations", "packages"},
 }
 # Publishes on a tag, so what holds for a release holds for it.
 _READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
@@ -1557,8 +1558,10 @@ def _check_no_playback_set_var(root: Path) -> int:
 # HTML — set as markup, parsed into a document or a fragment, or made a
 # frame's document — or a module imported from a computed URL, is
 # allowed only where the entry below says why the string is not data
-# someone else wrote. And every SlickGrid says `enableHtmlRendering:
-# false`, or a cell's formatter output is drawn as HTML.
+# someone else wrote. And every SlickGrid spreads `TEXT_ONLY_GRID`
+# (datalib/ui/src/grid/textOnly.ts), or a cell's formatter output is
+# drawn as HTML; nothing else turns HTML rendering on or swaps the
+# grid's sanitizer.
 _UI_EVAL = re.compile(
     r"(?<![\w$.])Function\s*\(|\bnew\s+Function\b|\beval\s*\("
     r"|\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"
@@ -1573,7 +1576,9 @@ _UI_HTML_OR_IMPORT = re.compile(
     re.IGNORECASE,
 )
 _UI_SLICKGRID = re.compile(r"\bnew\s+SlickVanillaGridBundle\b")
-_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\benableHtmlRendering\s*:\s*false\b")
+_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\.\.\.TEXT_ONLY_GRID\b")
+_UI_SLICKGRID_TEXT_ONLY_HOME = "datalib/ui/src/grid/textOnly.ts"
+_UI_SLICKGRID_HTML_OPTION = re.compile(r"\benableHtmlRendering\s*:|\bsanitizer\s*:")
 _UI_SINK_ALLOWED = {
     "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
     "sanitizer, into the document frame, whose CSP has script-src 'none'",
@@ -1596,15 +1601,20 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         for lineno, line in enumerate(text.splitlines(), 1):
             if line.strip().startswith(("//", "*", "/*")):
                 continue
-            sink = _UI_EVAL.search(line) or (
-                rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line)
+            sink = (
+                _UI_EVAL.search(line)
+                or (rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line))
+                or (
+                    rel != _UI_SLICKGRID_TEXT_ONLY_HOME
+                    and _UI_SLICKGRID_HTML_OPTION.search(line)
+                )
             )
             if sink:
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
         grids = len(_UI_SLICKGRID.findall(text))
         if grids > len(_UI_SLICKGRID_TEXT_ONLY.findall(text)):
             hits.append(
-                f"  {rel}: {grids} SlickGrid(s), not each with `enableHtmlRendering: false`"
+                f"  {rel}: {grids} SlickGrid(s), not each spreading `TEXT_ONLY_GRID`"
             )
     if not hits:
         print(
