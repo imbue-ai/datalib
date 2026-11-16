@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::download_problems::DownloadProblem;
+use datalib_etl::download_problems::{ignored_beside, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
@@ -515,6 +515,10 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .map(parse_since_secs)
         .transpose()
         .with_context(|| format!("sync.since {:?}", ctx.opts.since))?;
+    ctx.config_problems
+        .lock()
+        .unwrap()
+        .extend(ignored_beside_conv_uuids(ctx.opts));
     let mut rate_limited = if ctx.opts.conv_uuids.is_empty() {
         ctx.listed(s, since_secs).await?
     } else {
@@ -530,6 +534,22 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
             .config(std::mem::take(&mut *ctx.config_problems.lock().unwrap()));
     }
     Ok(())
+}
+
+/// The listing's settings a run that names its conversations has no use
+/// for, each a warning row.
+fn ignored_beside_conv_uuids(opts: &FetchOptions) -> Vec<DownloadProblem> {
+    if opts.conv_uuids.is_empty() {
+        return Vec::new();
+    }
+    ignored_beside(
+        "conv_uuids",
+        &[
+            ("since", opts.since.clone()),
+            ("max_pages", opts.max_pages.map(|n| n.to_string())),
+            ("limit", opts.limit.map(|n| n.to_string())),
+        ],
+    )
 }
 
 /// Of `listed`, what `table` does not hold at or after the version

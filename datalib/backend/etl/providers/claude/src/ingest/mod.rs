@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::download_problems::{DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{ignored_beside, DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::RunBar;
 use datalib_etl::run_problems::{self, RunProblems};
@@ -1027,6 +1027,12 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let mut rate_limited = false;
     if ctx.opts.projects {
         rate_limited = ctx.projects(&orgs, s).await?;
+    }
+    if !ctx.opts.conv_uuids.is_empty() {
+        ctx.config_problems.lock().unwrap().extend(ignored_beside(
+            "conv_uuids",
+            &[("since", ctx.opts.since.clone())],
+        ));
     }
     if !rate_limited {
         rate_limited = if ctx.opts.conv_uuids.is_empty() {

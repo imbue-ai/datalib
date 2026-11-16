@@ -93,15 +93,16 @@ pub struct ChatgptApiSync {
     /// never detail-fetched, and the listing walk stops early once it
     /// pages past the cutoff (the listing is newest-updated-first). One
     /// already mirrored stays. Moving the start further back later
-    /// backfills on the next run. Unset syncs everything.
+    /// backfills on the next run. Unset syncs everything. Ignored, with a
+    /// warning, beside `conv_uuids`.
     #[serde(default)]
     pub since: Option<String>,
     /// Stop listing after this many pages of 100 conversations. Unset
-    /// lists them all.
+    /// lists them all. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
     pub max_pages: Option<i64>,
     /// Fetch at most this many conversations per run. Unset fetches every
-    /// one that is owed.
+    /// one that is owed. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
     pub limit: Option<i64>,
     /// Seconds to wait between requests, from 0 to 3600. Unset waits
