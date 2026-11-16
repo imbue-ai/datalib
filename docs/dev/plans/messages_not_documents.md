@@ -1,7 +1,8 @@
 # Messages, not documents: grouping chosen when a search runs
 
 **Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
-#1770); nothing else is built.** Facts about
+#1770); step 3a is being built on branch `tree-step-3`; nothing else
+is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 
@@ -461,7 +462,18 @@ against the eval before the next.
    switch for meaning. After the fold it is the source's absence from
    the aggregator's inputs, which already drops any source it does not
    name, and the config upgrade rewrites every existing root's
-   `keyword_index` steps into that.
+   `keyword_index` steps into that. In three parts:
+   - **3a. Bodies.** An `item_bodies` table in the render store, one
+     row per keyed section. chat-common hands each item's body; every
+     other renderer's section is kept whole and marked `framed`, and
+     each splits its own body off later. A re-render, and nothing a
+     person sees.
+   - **3b. Index text from the store.** The search index draws each
+     item's index text from its body and its row, and stops reading
+     files. A framed body is drawn as it is, so its chunks' text and
+     hashes do not move; only chat-common's sources re-embed.
+   - **3c. The fold.** `keyword_index` into `grid_index`, with the
+     config upgrade above.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
