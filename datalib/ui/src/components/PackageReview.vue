@@ -212,8 +212,7 @@ onMounted(() => {
         <dd>
           <template v-if="adds.length">
             <div v-for="a in adds" :key="a.name">
-              {{ a.what }}, <b>{{ a.name }}</b
-              >, {{ a.where }}
+              {{ a.what }}, <b>{{ a.name }}</b>, {{ a.where }}
             </div>
           </template>
           <template v-else>Nothing it declares</template>
@@ -229,15 +228,14 @@ onMounted(() => {
       </dl>
       <p v-if="!unchanged" class="pkr-warn">
         <b>A package runs as you.</b> Its programs can read everything in this library and anything
-        else your account can. Add it only if you trust whoever publishes <b>{{ host }}</b
-        >.
+        else your account can. Add it only if you trust whoever publishes <b>{{ host }}</b>.
       </p>
       <details v-if="!unchanged" class="pkr-details">
         <summary>Details</summary>
         <p>
-          manifest <code>{{ found.url }}</code
-          ><br />sha256 <code>{{ found.sha256 }}</code
-          ><br />pinned in config.toml, so this exact build is what runs until you update.
+          manifest <code>{{ found.url }}</code><br />sha256
+          <code>{{ found.sha256 }}</code><br />pinned in config.toml, so this exact build is what
+          runs until you update.
         </p>
       </details>
       <div class="pkr-actions">
