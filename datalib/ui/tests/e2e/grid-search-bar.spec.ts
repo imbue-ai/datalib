@@ -87,6 +87,37 @@ test("a header dragged onto the search row becomes a term", async ({ page }) => 
   await expect(searchHeader(page, "author_ref")).toBeVisible();
 });
 
+/// A column pinned from its header menu is still pinned after a reload:
+/// the card keeps the pin in its layout, and carries it across the
+/// grid's own re-layouts, which rebuild columns without it. Under e2e the
+/// layout is kept in this tab's session storage, which a reload keeps.
+test("a column pinned from its header menu stays pinned across a reload", async ({ page }) => {
+  const source = searchHeader(page, "source_ref");
+  // The columns the saved layout pins, read off every card's `cols`.
+  const savedPins = () =>
+    page.evaluate(() => {
+      const tree = sessionStorage.getItem("datalib-layout") ?? "";
+      return [...tree.matchAll(/cols(?:=|%3D)([A-Za-z0-9_-]+)/g)].flatMap((m) => {
+        const json = decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/"))));
+        const layout = JSON.parse(json) as { cols: { id: string; pinned?: string }[] };
+        return layout.cols.filter((c) => c.pinned).map((c) => `${c.id}:${c.pinned}`);
+      });
+    });
+
+  await openGrid(page);
+  await source.hover();
+  await source.locator(".slick-header-menu-button").click();
+  await page.locator(".slick-header-menu .slick-menu-item", { hasText: "Column Pinning" }).hover();
+  await page.locator(".slick-menu-item", { hasText: "Pin to Left" }).click();
+  await expect(source).toHaveClass(/\bslick-column-pinned-left\b/);
+  await expect.poll(savedPins).toEqual(["source_ref:left"]);
+
+  await page.reload();
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
+  await gridSettled(page);
+  await expect(source).toHaveClass(/\bslick-column-pinned-left\b/);
+});
+
 /// Every column but Score and Contents has a search key, so a cell's
 /// right-click can keep only its value: here Touched, a stamp.
 test("a cell's right-click keeps only its value, in any column", async ({ page }) => {
