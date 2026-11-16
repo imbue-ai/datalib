@@ -19,7 +19,7 @@ maximum_sequential_failed_requests = 50        # the default
 # Which stored latchkey account to use (`latchkey auth list`). Omit it to
 # use the only one.
 [steps.params.latchkey_settings]
-account = "keiko@enterprise.test"
+account = "beverly@enterprise.test"
 
 # Baby Connect answers one day at a time. `since` and `until` bound the
 # days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back

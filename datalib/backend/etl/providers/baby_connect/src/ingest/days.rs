@@ -6,6 +6,19 @@ use chrono::{Datelike, Duration, NaiveDate};
 use datalib_etl_web::coverage::Span;
 use serde_json::Value;
 
+/// The `Kid` a day's request names: the one child's id when there is
+/// one, else `0` for every child, as the web page asks.
+pub fn kid_param(kids: &[Value]) -> String {
+    match kids {
+        [only] => match only.get("Id") {
+            Some(Value::Number(n)) => n.to_string(),
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
+            _ => "0".to_string(),
+        },
+        _ => "0".to_string(),
+    }
+}
+
 /// A child's birthday as the home page writes it, `M/D/YYYY`.
 pub fn birthday(kid: &Value) -> Option<NaiveDate> {
     let s = kid.get("BDay")?.as_str()?;
@@ -109,6 +122,14 @@ mod tests {
     }
 
     #[test]
+    fn one_child_is_asked_for_by_id_and_several_all_at_once() {
+        let wesley: Value = serde_json::from_str(r#"{"Id": 5629499534213121}"#).unwrap();
+        assert_eq!(kid_param(std::slice::from_ref(&wesley)), "5629499534213121");
+        assert_eq!(kid_param(&[wesley.clone(), json!({"Id": 7})]), "0");
+        assert_eq!(kid_param(&[]), "0");
+    }
+
+    #[test]
     fn a_day_is_written_yymmdd() {
         assert_eq!(pdt(d("2031-03-17")), 310317);
         assert_eq!(pdt(d("2008-01-02")), 80102);
@@ -165,10 +186,10 @@ mod tests {
 
     #[test]
     fn people_keyed_by_id_carry_their_id() {
-        let answer = json!({"users": {"5066549580791808": {"Name": "Keiko"}}});
+        let answer = json!({"users": {"5066549580791808": {"Name": "Beverly"}}});
         let users = users_of(&answer);
         assert_eq!(users[0]["Id"].to_string(), "5066549580791808");
-        assert_eq!(users[0]["Name"], "Keiko");
+        assert_eq!(users[0]["Name"], "Beverly");
         assert_eq!(users_of(&json!({"users": [{"Id": 7}]})).len(), 1);
         assert!(users_of(&json!({})).is_empty());
     }

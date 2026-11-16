@@ -122,6 +122,8 @@ datalib-doltlite -readonly <root>/<group>/ingest/entities.doltlite_db \
 ## Tests
 
 `tests/baby_connect_tests/` replays made-up TNG tapes (`tape.rs`) in the
-shapes above: a first run, a second run that asks only for the unsettled
-days, an entry edited after its day, a `since`/`until` window, and a
-signed-out session.
+shapes above. Beverly Crusher's account, with Wesley its one child,
+covers a first run, a second run that asks only for the unsettled days,
+an entry edited after its day, a `since`/`until` window and a
+signed-out session. The Enterprise nursery's account, with Wesley and
+Alexander, covers asking for every child at once.

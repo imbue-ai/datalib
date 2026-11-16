@@ -6,7 +6,7 @@ has no document.
 
 ## The document
 
-- **Title**: the child's name and the month, `Molly — October 2068`.
+- **Title**: the child's name and the month, `Wesley — October 2048`.
 - **Days**: a `##` heading per day, a `<time>` of the date, in order.
 - **Entries**: one `msg` block each, in clock order, keyed by the
   entry's uuid. Its first line is the time, the kind of entry in bold

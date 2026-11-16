@@ -444,25 +444,25 @@ mod tests {
         let mut s = Store::default();
         s.kids.insert(
             "11".into(),
-            json!({"Id": 11, "Name": "Molly", "BDay": "10/12/2068"}),
+            json!({"Id": 11, "Name": "Wesley", "BDay": "10/12/2048"}),
         );
         s.users.insert(
             "7".into(),
-            json!({"Id": 7, "Name": "Keiko O'Brien", "Email": "keiko@enterprise.test"}),
+            json!({"Id": 7, "Name": "Beverly Crusher", "Email": "beverly@enterprise.test"}),
         );
         s.entries.insert(
             "2".into(),
-            json!({"Id": 2, "Kid": 11, "Pdt": 681013, "Utm": 905, "Cat": 2600, "By": 7,
-                   "Txt": "Diary", "n": "She grabbed Miles's finger.\nChief is smitten."}),
+            json!({"Id": 2, "Kid": 11, "Pdt": 481013, "Utm": 905, "Cat": 2600, "By": 7,
+                   "Txt": "Diary", "n": "He grabbed Jack's finger.\nJack says he has an engineer's grip."}),
         );
         s.entries.insert(
             "1".into(),
-            json!({"Id": 1, "Kid": 11, "Pdt": 681012, "Utm": 210, "Cat": 352, "By": 7,
-                   "Txt": "Molly nursed (left) for 15 min"}),
+            json!({"Id": 1, "Kid": 11, "Pdt": 481012, "Utm": 210, "Cat": 352, "By": 7,
+                   "Txt": "Wesley nursed (left) for 15 min"}),
         );
         s.entries.insert(
             "3".into(),
-            json!({"Id": 3, "Kid": 12, "Pdt": 681012, "Utm": 300, "Cat": 402, "By": 7,
+            json!({"Id": 3, "Kid": 12, "Pdt": 481012, "Utm": 300, "Cat": 402, "By": 7,
                    "Txt": "Another child's diaper"}),
         );
         s
@@ -474,18 +474,21 @@ mod tests {
             "bc",
             &store(),
             "11",
-            "2068-10",
+            "2048-10",
             Some(&la()),
             &Inputs::default(),
         );
         let md = join(&doc.sections);
-        assert!(md.contains("Molly — October 2068"), "{md}");
+        assert!(md.contains("Wesley — October 2048"), "{md}");
         let nursed = md.find("nursed").unwrap();
         let diary = md.find("grabbed").unwrap();
         assert!(nursed < diary, "{md}");
-        assert!(md.contains("> Chief is smitten."), "{md}");
+        assert!(
+            md.contains("> Jack says he has an engineer's grip."),
+            "{md}"
+        );
         assert!(!md.contains("Another child"), "{md}");
-        assert!(md.contains("2068-10-12T02:10:00-07:00"), "{md}");
+        assert!(md.contains("2048-10-12T02:10:00-07:00"), "{md}");
 
         assert_eq!(doc.rows.iter().filter(|r| r.is_document).count(), 1);
         let entry_rows: Vec<&GridRow> = doc.rows.iter().filter(|r| !r.is_document).collect();
@@ -493,21 +496,21 @@ mod tests {
         assert_eq!(entry_rows[0].kind, "Nursing");
         assert_eq!(entry_rows[1].kind, "Diary");
         assert!(
-            entry_rows[1].preview.contains("Chief is smitten."),
+            entry_rows[1].preview.contains("engineer's grip"),
             "{}",
             entry_rows[1].preview
         );
-        assert_eq!(entry_rows[1].author.as_deref(), Some("Keiko O'Brien"));
+        assert_eq!(entry_rows[1].author.as_deref(), Some("Beverly Crusher"));
         assert_eq!(
             entry_rows[1].author_handle.as_deref(),
-            Some("email:keiko@enterprise.test")
+            Some("email:beverly@enterprise.test")
         );
         assert!(doc.problems.is_empty(), "{:?}", doc.problems);
     }
 
     #[test]
     fn a_month_with_no_zone_says_its_times_are_read_as_utc() {
-        let doc = build("bc", &store(), "11", "2068-10", None, &Inputs::default());
+        let doc = build("bc", &store(), "11", "2048-10", None, &Inputs::default());
         assert_eq!(doc.problems.len(), 1);
         assert!(join(&doc.sections).contains("read as UTC"));
     }

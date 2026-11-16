@@ -68,13 +68,13 @@ async fn the_first_run_reads_every_day_since_the_eldest_birthday() {
     )
     .await;
     let s = r.unwrap();
-    assert_eq!((s.kids, s.days, s.days_settled), (2, 5, 3), "{}", s.line());
+    assert_eq!((s.kids, s.days, s.days_settled), (1, 5, 3), "{}", s.line());
     assert_eq!(asked.count("StatusList"), 5);
     let ids: Vec<(String, String)> =
         rows(store.path(), "SELECT id, '' FROM kids ORDER BY id").await;
     assert_eq!(
         ids.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
-        vec![tape::MOLLY.to_string(), tape::YOSHI.to_string()]
+        vec![tape::WESLEY.to_string()]
     );
     let coverage = rows(
         store.path(),
@@ -83,13 +83,13 @@ async fn the_first_run_reads_every_day_since_the_eldest_birthday() {
     .await;
     assert_eq!(
         coverage,
-        vec![("2068-10-12".to_string(), "2068-10-14".to_string())]
+        vec![("2048-10-12".to_string(), "2048-10-14".to_string())]
     );
     let users = rows(store.path(), "SELECT id, '' FROM users ORDER BY id").await;
     assert_eq!(users.len(), 2);
 
     let spilled = entry(store.path(), tape::SPILLED).await.unwrap();
-    assert_eq!(spilled["Pdt"], 681013, "kept from its own day's answer");
+    assert_eq!(spilled["Pdt"], 481013, "kept from its own day's answer");
     let diary = rows(
         store.path(),
         "SELECT id, json_extract(payload, '$.n') FROM entries WHERE json_extract(payload, '$.Cat') = 2600",
@@ -127,7 +127,7 @@ async fn later_runs_read_only_the_days_not_yet_settled() {
     assert_eq!((later.days, later.days_settled), (4, 2), "{}", later.line());
     assert_eq!(asked.count("StatusList"), 4);
     let edited = entry(store.path(), tape::EDITED).await.unwrap();
-    assert_eq!(edited["Txt"], "Yoshi slept 3 hrs");
+    assert_eq!(edited["Txt"], "Wesley slept 3 hrs");
     assert_eq!(edited["n"], "Fixed: it was three hours, not two.");
     assert!(
         edited.get("readby").is_none(),
@@ -140,7 +140,7 @@ async fn later_runs_read_only_the_days_not_yet_settled() {
     .await;
     assert_eq!(
         coverage,
-        vec![("2068-10-12".to_string(), "2068-10-16".to_string())]
+        vec![("2048-10-12".to_string(), "2048-10-16".to_string())]
     );
 }
 
@@ -150,12 +150,34 @@ async fn the_window_bounds_the_days_read() {
     let (store, before) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     tape::write(before.path(), Edition::Before);
     let sync = BabyConnectSync {
-        since: Some("2068-10-13".to_string()),
-        until: Some("2068-10-14".to_string()),
+        since: Some("2048-10-13".to_string()),
+        until: Some("2048-10-14".to_string()),
     };
     let (r, asked) = run(store.path(), before.path(), Edition::Before, sync).await;
     assert_eq!(r.unwrap().days, 2);
     assert_eq!(asked.count("StatusList"), 2);
+}
+
+/// With more than one child on the account, a day is asked for every
+/// child at once, and each entry is filed under its own child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_nursery_account_asks_for_every_child_at_once() {
+    let (store, tape_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    tape::write_nursery(tape_dir.path());
+    let sync = BabyConnectSync {
+        since: Some(tape::NURSERY_DAY.to_string()),
+        until: Some(tape::NURSERY_DAY.to_string()),
+    };
+    let (r, asked) = run(store.path(), tape_dir.path(), Edition::Nursery, sync).await;
+    let s = r.unwrap();
+    assert_eq!((s.kids, s.days, s.entries), (2, 1, 2), "{}", s.line());
+    assert_eq!(asked.count("StatusList"), 1);
+    let kids = rows(
+        store.path(),
+        "SELECT DISTINCT CAST(json_extract(payload, '$.Kid') AS TEXT), '' FROM entries",
+    )
+    .await;
+    assert_eq!(kids, vec![(tape::ALEXANDER.to_string(), String::new())]);
 }
 
 /// A signed-out session is shown the login page in place of the home

@@ -49,8 +49,8 @@ mod tests {
     const PAGE: &str = r#"<html><script>
         var x = localStorage.getItem('__srf_token__');
         __srf_token__ = 'AbC+/9=';
-        var _uinfo = {"Name":"Keiko","myKids":[{"Id":5629499534213121,"Name":"Molly",
-            "BDay":"10/12/2368","Note":"a ] in a string"}],"other":1};
+        var _uinfo = {"Name":"Beverly","myKids":[{"Id":5629499534213121,"Name":"Wesley",
+            "BDay":"10/12/2348","Note":"a ] in a string"}],"other":1};
     </script></html>"#;
 
     #[test]
@@ -58,7 +58,7 @@ mod tests {
         let home = parse(PAGE).unwrap();
         assert_eq!(home.token, "AbC+/9=");
         assert_eq!(home.kids.len(), 1);
-        assert_eq!(home.kids[0]["Name"], "Molly");
+        assert_eq!(home.kids[0]["Name"], "Wesley");
         assert_eq!(home.kids[0]["Note"], "a ] in a string");
         assert_eq!(home.kids[0]["Id"].to_string(), "5629499534213121");
     }

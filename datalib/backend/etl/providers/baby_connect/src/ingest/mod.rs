@@ -173,12 +173,7 @@ impl Ctx<'_> {
             );
             return Ok(());
         };
-        // The web page asks for one child by id when there is only one,
-        // and for every child at once (`0`) otherwise.
-        let kid = match home.kids.as_slice() {
-            [only] => db::id_of(only).unwrap_or_else(|| "0".to_string()),
-            _ => "0".to_string(),
-        };
+        let kid = days::kid_param(&home.kids);
         let mut held = coverage::held(&mut **self.writes.tx().await?, DAYS_SCOPE).await?;
         let owed = days::owed(from, to, &held);
         self.opts.progress.set_message(ENTRIES.table);
