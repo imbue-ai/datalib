@@ -12,12 +12,14 @@
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
 # origin v0.1.0`). Each tarball has a stable, un-versioned filename.
 #
-# No release exists until every job has succeeded. Then `publish-release`, the
-# one job that can write to a release, creates a draft, uploads, checks what
-# GitHub holds against what the jobs made, and publishes. The repository's
+# No release exists until every job has succeeded. Then `attest` signs a build
+# provenance attestation for every asset and for the image, and
+# `publish-release`, the one job that can write to a release, creates a draft,
+# uploads what `attest` signed, checks what GitHub holds against what the jobs
+# made, and publishes. The repository's
 # immutable-releases setting locks its assets and tag from that moment, so
 # nothing can be added afterwards: a failed job holds the release back
-# until a re-run finishes it (docs/dev/release_steps.md §"Draft, then publish").
+# until a re-run finishes it (docs/dev/release_steps.md §"Attest, then draft, then publish").
 #
 # Every artifact is downloaded under `runner.temp`, never into the checkout,
 # where it would replace whatever is at the same path. A job's build scripts
@@ -849,11 +851,112 @@ jobs:
           DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${digest}" \
               datalib/docker/doc_test.sh
 
+  # Signs a build provenance attestation (a SLSA statement, signed through
+  # Sigstore with this job's OIDC identity) for every asset the release will
+  # hold and for the image by digest: that this workflow, at this tag and
+  # commit, in this run, made those bytes. GitHub keeps them with the
+  # repository, and the image's also goes beside it on ghcr.io, so
+  # `gh attestation verify` checks any download.
+  #
+  # Builds nothing and runs nothing it downloaded. `id-token: write` lets any
+  # process in a job sign as this workflow, so a build script in a job that
+  # held it could attest bytes of its own; that is why no build job does. It signs what
+  # publish_release.py's checks pass, chosen by the same code
+  # `publish-release` runs, and hands that job the hash of the list as an
+  # output, which a later artifact upload cannot change. No `if`, as on
+  # `publish-release`: nothing is attested unless everything is published.
+  attest:
+    name: attest the release
+    needs:
+      - runtime
+      - build
+      - macos-app-verify
+      - docker-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write      # the Sigstore signing identity
+      attestations: write  # store the attestations with the repository
+      packages: write      # push the image's attestation beside it on ghcr.io
+    outputs:
+      subjects_sha256: ${{ steps.subjects.outputs.subjects_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: runtime-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tarball-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+          path: ${{ runner.temp }}/release-artifacts/macos-app-dmg
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-digest
+
+      - name: Check the assets and list them
+        id: subjects
+        env:
+          ARTIFACTS: ${{ runner.temp }}/release-artifacts
+          DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+        run: |
+          set -euo pipefail
+          subjects="${RUNNER_TEMP}/subjects.sha256"
+          python3 -I scripts/release/publish_release.py subjects "$ARTIFACTS" "$DMG_SHA256" > "$subjects"
+          cat "$subjects"
+          {
+              echo "subjects=${subjects}"
+              echo "subjects_sha256=$(sha256sum "$subjects" | cut -d' ' -f1)"
+              echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+              echo "image_digest=$(cat "${ARTIFACTS}/docker-image-digest/docker-image.digest")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest the assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ steps.subjects.outputs.subjects }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No storage record: that would take `artifact-metadata: write` too, for
+      # an entry on the organization's Linked Artifacts page.
+      - name: Attest the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.subjects.outputs.image }}
+          subject-digest: ${{ steps.subjects.outputs.image_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      # The check a person runs, with this run's tag and commit, so a release
+      # never publishes with an attestation nobody can verify.
+      - name: Verify what was attested
+        env:
+          ARTIFACTS: ${{ runner.temp }}/release-artifacts
+          DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.subjects.outputs.image }}
+        run: python3 -I scripts/release/publish_release.py verify "$ARTIFACTS" "$DMG_SHA256" "$IMAGE"
+
   # The only job that can write to a release, and the last. Immutable from the
   # end of its one step: it becomes `releases/latest`, and its assets and tag
   # are locked. No `if`, so anything failing up the chain skips it and no
   # release exists; re-running the failed jobs finishes it. The script says what
   # it refuses, and `//:publish_release_test` runs it against a stand-in GitHub.
+  # It uploads only the bytes `attest` signed.
   publish-release:
     name: publish the release
     needs:
@@ -861,6 +964,7 @@ jobs:
       - build
       - macos-app-verify
       - docker-publish
+      - attest
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -889,7 +993,8 @@ jobs:
         env:
           ARTIFACTS: ${{ runner.temp }}/release-artifacts
           DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+          SUBJECTS_SHA256: ${{ needs.attest.outputs.subjects_sha256 }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
-        run: python3 -I scripts/release/publish_release.py "$REF_NAME" "$ARTIFACTS" "$DMG_SHA256"
+        run: python3 -I scripts/release/publish_release.py publish "$REF_NAME" "$ARTIFACTS" "$DMG_SHA256" "$SUBJECTS_SHA256"

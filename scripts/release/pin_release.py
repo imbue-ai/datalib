@@ -10,7 +10,10 @@ of its own, whose CI is the first run in the new devcontainer image.
 
 Refuses a release that is a draft, is not immutable, or that no successful
 release.yml run on this tag's commit built: during that run the tag has no
-release, and a writer could publish their own on it.
+release, and a writer could publish their own on it. Then refuses any tarball,
+and the image, without a build provenance attestation that release.yml signed
+at this tag and commit, so the hashes it writes name only attested bytes. That
+downloads the five tarballs, about 450 MB, and needs `gh` signed in.
 """
 
 from __future__ import annotations
@@ -21,10 +24,18 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from publish_release import IMAGE_DIGEST, IMAGE_DIGEST_SHAPE, TARBALL_TRIPLES
+from publish_release import (
+    IMAGE_DIGEST,
+    IMAGE_DIGEST_SHAPE,
+    TARBALL_TRIPLES,
+    attestation_identity,
+    sha256_of,
+)
 
 REPO = "imbue-ai/datalib"
 ROOT = Path(__file__).resolve().parents[2]
@@ -145,6 +156,50 @@ def checked_image_digest(release: dict[str, Any], contents: bytes) -> str:
     return text.strip()
 
 
+def unattested(
+    gh_succeeds: Callable[..., bool],
+    tag: str,
+    commit: str,
+    hashes: dict[str, str],
+    image_digest: str,
+    directory: Path,
+) -> list[str]:
+    """What is about to be pinned and has no attestation from release.yml at this tag and commit."""
+    identity = attestation_identity(REPO, f"refs/tags/{tag}", commit)
+    problems: list[str] = []
+    for triple in TARBALL_TRIPLES:
+        name = f"datalib-{triple}.tar.gz"
+        path = directory / name
+        print(f"Checking {name}", flush=True)
+        if not gh_succeeds(
+            "release",
+            "download",
+            tag,
+            "--repo",
+            REPO,
+            "--pattern",
+            name,
+            "--dir",
+            str(directory),
+        ):
+            problems.append(f"{name}: could not be downloaded")
+        elif sha256_of(path) != hashes[triple]:
+            problems.append(
+                f"{name}: what was downloaded is not what the release holds"
+            )
+        elif not gh_succeeds("attestation", "verify", str(path), *identity):
+            problems.append(f"{name}: no attestation from {RELEASE_WORKFLOW} at {tag}")
+    image = f"oci://ghcr.io/imbue-ai/datalib@{image_digest}"
+    print(f"Checking {image}", flush=True)
+    if not gh_succeeds("attestation", "verify", image, *identity):
+        problems.append(f"{image}: no attestation from {RELEASE_WORKFLOW} at {tag}")
+    return problems
+
+
+def run_gh(*args: str) -> bool:
+    return subprocess.run(["gh", *args], check=False).returncode == 0
+
+
 def gh_bytes(*args: str) -> bytes:
     return subprocess.run(["gh", *args], check=True, stdout=subprocess.PIPE).stdout
 
@@ -197,14 +252,22 @@ def main() -> int:
         "-",
     )
     image_digest = checked_image_digest(release, contents)
+    hashes = tarball_hashes(release)
+    with tempfile.TemporaryDirectory() as directory:
+        problems = unattested(
+            run_gh, args.version, commit, hashes, image_digest, Path(directory)
+        )
+    if problems:
+        print(f"ERROR: not pinning {args.version}:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
     ci_image = devcontainer_digest(
         json.loads(gh_bytes("api", DEVCONTAINER_VERSIONS)), args.version
     )
 
     install = ROOT / INSTALL
-    install.write_text(
-        pin_install(install.read_text(), args.version, tarball_hashes(release))
-    )
+    install.write_text(pin_install(install.read_text(), args.version, hashes))
     doc = ROOT / DOCKER_DOC
     doc.write_text(pin_docker_doc(doc.read_text(), image_digest))
     for rel, wanted in DEVCONTAINER_PINS.items():

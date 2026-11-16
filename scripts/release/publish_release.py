@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Create a release, upload to it, check what GitHub holds, and publish it.
+"""Choose a release's assets, attest them, then create, upload, check and publish.
 
-release.yml's last job, and the only one that can write to a release. It takes
-each asset only from the artifact that should hold it, so a build's artifact
-cannot carry a file named like another job's. What it uploads it then reads
-back by digest, immediately before publishing and again after, because
-publishing locks whatever is there.
+release.yml's last two jobs, `attest` and `publish-release`. Each takes every
+asset only from the artifact that should hold it, so a build's artifact cannot
+carry a file named like another job's. `attest` signs what those checks pass;
+`publish-release` uploads it only if it is still what `attest` signed, then
+reads it back by digest, immediately before publishing and again after,
+because publishing locks whatever is there.
 
-    publish_release.py <tag> <artifacts dir> <dmg sha256>
+    publish_release.py subjects <artifacts dir> <dmg sha256>
+    publish_release.py verify <artifacts dir> <dmg sha256> <image>
+    publish_release.py publish <tag> <artifacts dir> <dmg sha256> <subjects sha256>
 
-<artifacts dir> holds one directory per artifact. GH_REPO names the repository.
+<artifacts dir> holds one directory per artifact. `subjects` prints, in
+`shasum`'s format, every asset but the sidecars; <subjects sha256> is the hash
+of that text. `verify` checks each of those assets, and <image> by its digest,
+has an attestation from this workflow at this run's tag and commit, read from
+GITHUB_REPOSITORY, GITHUB_REF and GITHUB_SHA. GH_REPO names the repository.
 """
 
 from __future__ import annotations
@@ -156,6 +163,62 @@ def read_artifacts(root: Path) -> tuple[dict[str, Path], list[str]]:
     return assets, problems
 
 
+def subjects_text(assets: dict[str, Path], hashes: dict[str, str]) -> str:
+    """What `attest` signs: every asset but the sidecars, which only repeat a hash."""
+    return "".join(
+        f"{hashes[name]}  {name}\n"
+        for name in sorted(assets)
+        if not name.endswith(".sha256")
+    )
+
+
+def subjects_problems(
+    assets: dict[str, Path], hashes: dict[str, str], subjects_sha256: str
+) -> list[str]:
+    """An artifact can be replaced after `attest` read it; its job output cannot."""
+    text = subjects_text(assets, hashes)
+    if hashlib.sha256(text.encode()).hexdigest() == subjects_sha256:
+        return []
+    return [
+        f"the assets are not the ones the attest job signed ({subjects_sha256}):\n"
+        + text
+    ]
+
+
+def attestation_identity(repo: str, ref: str, commit: str) -> list[str]:
+    """`gh attestation verify`'s flags for an attestation release.yml signed at `ref` and `commit`."""
+    return [
+        "--repo",
+        repo,
+        "--signer-workflow",
+        f"{repo}/.github/workflows/release.yml",
+        "--source-ref",
+        ref,
+        "--source-digest",
+        commit,
+        "--deny-self-hosted-runners",
+    ]
+
+
+def attestation_checks(
+    assets: dict[str, Path], image: str, env: dict[str, str]
+) -> list[list[str]]:
+    """The `gh attestation verify` calls that show each asset and the image came from this run's workflow."""
+    identity = attestation_identity(
+        env["GITHUB_REPOSITORY"], env["GITHUB_REF"], env["GITHUB_SHA"]
+    )
+    image_digest = assets[IMAGE_DIGEST].read_text().strip()
+    image_ref = f"oci://{image}@{image_digest}"
+    checks = [
+        ["attestation", "verify", str(assets[name]), *identity]
+        for name in sorted(assets)
+        if not name.endswith(".sha256")
+    ]
+    checks.append(["attestation", "verify", image_ref, *identity])
+    checks.append(["attestation", "verify", image_ref, "--bundle-from-oci", *identity])
+    return checks
+
+
 def held_problems(wanted: dict[str, str], release: dict[str, Any]) -> list[str]:
     """Differences between what we made and what GitHub says this release holds."""
     held = {asset["name"]: asset for asset in release["assets"]}
@@ -290,26 +353,51 @@ def run_gh(*args: str) -> str:
     ).stdout
 
 
+def checked_assets(
+    artifacts: Path, dmg_sha256: str
+) -> tuple[dict[str, Path], dict[str, str], list[str]]:
+    """The assets, their hashes, and every reason not to attest or publish them."""
+    if not SHA256_SHAPE.fullmatch(dmg_sha256):
+        return {}, {}, [f"{dmg_sha256!r} is not a sha256"]
+    assets, problems = read_artifacts(artifacts)
+    hashes = {name: sha256_of(path) for name, path in assets.items()}
+    if not problems:
+        problems = content_problems(assets, hashes, dmg_sha256)
+    return assets, hashes, problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tag")
-    parser.add_argument("artifacts", type=Path)
-    parser.add_argument("dmg_sha256")
+    commands = parser.add_subparsers(dest="command", required=True)
+    subjects = commands.add_parser("subjects")
+    verify = commands.add_parser("verify")
+    publishing = commands.add_parser("publish")
+    publishing.add_argument("tag")
+    for command in (subjects, verify, publishing):
+        command.add_argument("artifacts", type=Path)
+        command.add_argument("dmg_sha256")
+    verify.add_argument("image")
+    publishing.add_argument("subjects_sha256")
     args = parser.parse_args()
-    if not SHA256_SHAPE.fullmatch(args.dmg_sha256):
-        print(f"ERROR: {args.dmg_sha256!r} is not a sha256", file=sys.stderr)
-        return 1
-    assets, problems = read_artifacts(args.artifacts)
-    wanted = {name: sha256_of(path) for name, path in assets.items()}
-    if not problems:
-        problems = content_problems(assets, wanted, args.dmg_sha256)
+
+    assets, hashes, problems = checked_assets(args.artifacts, args.dmg_sha256)
+    if not problems and args.command == "publish":
+        problems = subjects_problems(assets, hashes, args.subjects_sha256)
     if problems:
-        print("ERROR: not publishing; no release was created:", file=sys.stderr)
+        print(f"ERROR: {args.command}: no release was created:", file=sys.stderr)
         for problem in problems:
             print(f"  {problem}", file=sys.stderr)
         return 1
+    if args.command == "subjects":
+        sys.stdout.write(subjects_text(assets, hashes))
+        return 0
+    if args.command == "verify":
+        for check in attestation_checks(assets, args.image, dict(os.environ)):
+            print(f"gh {' '.join(check)}", flush=True)
+            subprocess.run(["gh", *check], check=True)
+        return 0
     try:
-        publish(run_gh, os.environ["GH_REPO"], args.tag, assets, wanted)
+        publish(run_gh, os.environ["GH_REPO"], args.tag, assets, hashes)
     except Refused as refusal:
         print(f"ERROR: {refusal}", file=sys.stderr)
         return 1

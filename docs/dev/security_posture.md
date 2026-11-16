@@ -124,7 +124,7 @@ That does nothing about the build scripts that run once one starts.
 | Two BuildBuddy orgs | A laptop or a PR run writing what `main`'s CI replays | Anything that runs on `main` |
 | The write key is a secret of the `main-ci` environment, which only `main` may use (check 21, and a setting below) | A PR's code, or a workflow edited on a branch, getting the key before it merges | Anything that runs on `main` |
 | BuildKit pinned by digest, and each image built on its own architecture, so no emulator image runs (check 21) | Whoever controls a tag on Docker Hub running code in a job that can push the image, or changing what assembles it | A bad version someone pins deliberately, and the runner image itself |
-| Publish and sign jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, or rewriting a published release | Bad code in what it builds |
+| Publish, sign and attest jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, signing an attestation as `release.yml`, or rewriting a published release | Bad code in what it builds |
 | What a build made reaches those jobs outside the checkout, and the sign job's archive passes `unpack_compiled_app.py` (check 21) | A build replacing a script or the Tauri CLI that the sign job then runs with the key in reach, by an archive entry or a planted artifact | A bad binary inside the allowed paths, which gets signed. Nothing in the sign job runs it (`sign-staged.sh`), and `macos-app-verify` runs it with no key |
 | The `v*` tag ruleset | Anyone outside the team starting or moving a release | What a release does once started |
 
@@ -167,12 +167,14 @@ tag ruleset says nothing about this: no tag moves.
 |---|---|---|
 | `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
 | `pin_release.py` pins only a release whose tag's commit has a successful `release.yml` run on a tag push | A writer's own release, on a new tag or an old one, being written into `install.sh` and the Docker page. A branch named like the tag does not pass: its run is on another commit. None of the 28 `v*` tags with no release has a successful run (measured) | Anyone reading the release page or naming the tag themselves |
+| `pin_release.py` downloads each tarball it pins and refuses it, and the image, unless `gh attestation verify` passes for `release.yml` at that tag and commit (`pin_release_test`) | An asset nobody attested reaching `curl \| sh` or the Docker page, so those install only bytes `release.yml` built, with no `gh` on the person's machine. v0.54.1, which has no attestations, was refused (measured) | Whoever pins skipping the script, and a merge to `main` that changes it. The runtime assets are checked only through the hashes in an attested tarball's `runtime.manifest` |
 | `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
 | `test.yml` and `cargo-update.yml` name the devcontainer image by digest, moved by `pin_release.py` (`pin_release_test`) | A moved `datalib_devcontainer` tag running in `main`'s CI, which holds the write key | Reading `:X.Y.Z` when pinning, so a tag moved between the build and the pin is pinned; that PR's CI runs in the image first, which holds no write key. `--config=remote`, which names `:latest` and only a dispatch of `test.yml` uses, with no write key |
 | Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
-| One job creates, uploads, reads back and publishes (`release_steps.md` §"Draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
+| One job creates, uploads, reads back and publishes (`release_steps.md` §"Attest, then draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
 | The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing under a new tag name | A release on a tag that already exists, and marking an older release latest, which GitHub allows even on an immutable one |
 | The Mac app's signature and notarization | A swapped dmg passing Gatekeeper, for someone who clicks through `releases/latest` | Bad code we signed ourselves |
+| Build provenance: `release.yml`'s `attest` job signs that this workflow, at this tag and commit, made each asset but the `.sha256` sidecars, and the image by digest. `publish-release` uploads only the bytes `attest` signed, and `attest` runs a person's check on them before anything publishes | A writer's own release, or an image pushed by another workflow or from a branch, passing `gh attestation verify --signer-workflow imbue-ai/datalib/.github/workflows/release.yml --source-ref refs/tags/<tag>`. Those flags refused another workflow, tag and commit, measured on a `latchkey-curl-shims` release the same action signed | Anyone who does not run the check, and `install.sh` does not (below). A workflow changed on `main` and then tagged, which signs as `release.yml`. Releases up to v0.54.1, which carry none |
 
 ### What is still open
 
@@ -209,18 +211,35 @@ tag ruleset says nothing about this: no tag moves.
   GitHub Actions stops a status posted by hand and nothing more. An unreviewed
   merge is the easiest way into a signed release, and immutability then locks that
   release in.
-- **Nothing outside GitHub vouches for a tarball.** The Mac app is signed, and
-  the tarballs are not; a person trusts GitHub's account of what the tag built.
-  GitHub attests each immutable release (`gh release verify v0.51.0` passes;
-  v0.50.0 has no attestation). As we read it, that says what a release held when
-  it locked, not who built it, so a writer's own release on an old tag would
-  likely get one too (not tried). A build attestation from `release.yml` would
-  say who built it, but `curl | sh` has no `gh` to check one with.
+- **A build attestation is GitHub's word, logged in public.** It is signed
+  with a certificate Sigstore issues for the job's GitHub OIDC token, so it
+  says what GitHub says ran, and it is entered in Sigstore's public
+  transparency log, `rekor.sigstore.dev`, which GitHub cannot quietly edit
+  (measured on a `latchkey-curl-shims` attestation; datalib's first one comes
+  with the next tag). GitHub also attests each immutable release
+  (`gh release verify v0.51.0` passes). As we read it, that says what a release
+  held when it locked, not who built it, so a writer's own release on an old
+  tag would likely get one too (not tried); the build attestation is the one
+  that names the workflow and commit.
+- **`curl | sh` does not check the attestation, on purpose.** `install.sh`
+  checks each tarball against a hash pinned in the script, which names exact
+  bytes and is as trusted as the script: whoever can change the script can also
+  remove a check from it. `gh attestation verify` needs `gh` signed in, so a
+  check run "when `gh` is present" would run on few machines and pass by not
+  running on the rest. The check runs before the pin instead: `pin_release.py`
+  writes no hash it has not verified (the row on it above). A tarball named with
+  `DATALIB_VERSION` is checked only against its sidecar, unless the person
+  runs the check in [`first_time_user.md`](../user/first_time_user.md)
+  §"Checking who built what you downloaded" by hand.
 
 ### What has not been shown
 
 `publish_release.py` has run only against a stand-in for GitHub's API, so its
-real calls are first tried by a tag's run. Whether the settings below hold is
+real calls are first tried by a tag's run. So is the `attest` job: its place in
+the job graph and its hand-off to `publish-release` ran on a branch with steps
+that only echo, and its `gh attestation verify` flags against another
+repository's attestation, but the attest action reading the subjects file and
+pushing the image's attestation to ghcr.io first run on a tag. Whether the settings below hold is
 something only those commands can say.
 
 ## A bad wheel reaches PyPI

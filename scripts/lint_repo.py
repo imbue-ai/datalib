@@ -399,6 +399,7 @@ _RELEASE_WRITE_GRANTS = {
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
     "docker-publish": {"packages"},
+    "attest": {"id-token", "attestations", "packages"},
 }
 # Publishes on a tag, so what holds for a release holds for it.
 _READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
