@@ -171,6 +171,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+  attest:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
 """
 
     def test_the_table_passes(self) -> None:
@@ -202,6 +208,20 @@ jobs:
         self.assertEqual(
             release_grant_problems(text),
             ["job macos-app-compile grants id-token: write"],
+        )
+
+    def test_attesting_from_a_build_job_is_refused(self) -> None:
+        """A build script there could sign bytes of its own as this workflow."""
+        text = self.GOOD.replace(
+            "    runs-on: x\n",
+            "    permissions:\n      id-token: write\n      attestations: write\n    runs-on: x\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            [
+                "job runtime grants attestations: write",
+                "job runtime grants id-token: write",
+            ],
         )
 
     def test_a_build_in_a_job_holding_a_grant_is_refused(self) -> None:

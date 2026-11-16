@@ -41,15 +41,17 @@ files, the commit, a stand-in for `cargo-about`). The header of each
 script lists them. A script calls another through `"$BASH"`, so the
 bash that runs the outer one runs the inner one too.
 
-Publishing is a script too, `scripts/release/publish_release.py`, and
-`//:publish_release_test` runs it against a stand-in for GitHub's API. Only
+Attesting and publishing are one script too, `scripts/release/publish_release.py`,
+and `//:publish_release_test` runs it against a stand-in for GitHub's API. Only
 a tag's run shows that the real API takes its calls.
 
-## Draft, then publish
+## Attest, then draft, then publish
 
-No release exists until every other job has succeeded. Then
-`publish-release`, the one job that can write to a release, does all of this
-in one step:
+No release exists until every other job has succeeded. Then two jobs run,
+one after the other.
+
+`attest` (`publish_release.py subjects`, then `verify`) signs what the release
+will hold:
 
 1. **Takes each asset from the artifact that should hold it.** Each artifact
    has an exact list of files, and anything missing or extra stops the job
@@ -58,6 +60,24 @@ in one step:
    `.sha256` against its file, and the dmg against the hash `macos-app-verify`
    reported, because a later upload can replace an artifact but cannot change
    another job's output.
+2. **Signs a build provenance attestation** for every asset but the `.sha256`
+   sidecars, listed in `shasum`'s format, and one for the image by the digest
+   `docker-publish` tagged, pushed beside it on ghcr.io. Each is a SLSA
+   statement signed through Sigstore with the job's OIDC identity: this
+   workflow, this tag, this commit, this run.
+3. **Runs the check a person would**, `gh attestation verify` with this
+   workflow, tag and commit, on every asset and on the image, both from GitHub
+   and from ghcr.io. The commands are in
+   [`first_time_user.md`](../user/first_time_user.md) and
+   [`docker.md`](../user/docker.md).
+4. **Hands on the hash of the list it signed** as a job output.
+
+`publish-release` (`publish_release.py publish`), the one job that can write
+to a release, then does all of this in one step:
+
+1. **Takes each asset as `attest` did**, with the same checks, and stops
+   unless the list hashes to what `attest` signed, so an artifact uploaded
+   again in between cannot be published.
 2. **Removes any draft already on this tag**, a failed attempt's or anyone
    else's, and stops if the tag already has a published release.
 3. **Creates a draft and uploads**, trying once more if the upload fails.
@@ -70,7 +90,8 @@ in one step:
    immutable, or if `releases/latest` is not this tag. It cannot undo a
    publish, so this is an alarm rather than a guard.
 
-So a release is writable by us only for as long as the upload takes, rather
+A release made this way never lacks an attestation, and an asset nobody
+attested never reaches one. So a release is writable by us only for as long as the upload takes, rather
 than for the whole run (50 minutes for v0.50.0), and a failed job leaves
 nothing open.
 
@@ -129,9 +150,10 @@ a matrix job that failed runs only its failed legs.
 
 | what failed | what runs again |
 |---|---|
-| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `publish-release` |
+| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `attest`, `publish-release` |
 | a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
-| a `macos-app-*` job | the rest of that chain, `publish-release` |
+| a `macos-app-*` job | the rest of that chain, `attest`, `publish-release` |
+| `attest` | it and `publish-release`. It signs again, which adds a second attestation for the same bytes |
 | `publish-release` | it alone, which removes its own draft and starts again |
 
 So re-running a failed `build` leg rebuilds both images, and the version tag
@@ -234,11 +256,15 @@ any process in a job can read the runner's memory, where every secret
 that job holds is kept. `id-token: write` also puts the variables that
 mint an OIDC token into every step's environment, so a build script in
 a job with that grant could get the Vault token itself, with no export
-to wait for.
+to wait for, or sign a build provenance attestation as `release.yml`
+for bytes of its own. That is why the attestations come from a job of
+their own, after the builds, rather than from the jobs that make the
+files.
 
 | job | runs on it | holds |
 |---|---|---|
 | `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
+| `attest` | `actions/attest-build-provenance`, `gh`, nothing built | `id-token: write`, `attestations: write`, `packages: write` |
 | `publish-release` | `gh`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
@@ -476,6 +502,12 @@ matches.
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
+- The attestations. Their verify flags were tried on a
+  `latchkey-curl-shims` release signed by the same action, and the job's
+  place in the graph on a branch, but the action reading the subjects file,
+  the image's attestation going to ghcr.io and the check passing on our own
+  first happen on a tag. A failure there holds the release back, as any job's
+  does.
 - Publishing and `releases/latest` moving to it: these need a real release,
   and a tag's run is the only one this workflow makes. A mistake there fails
   `publish-release`, and since a tag's run executes the tag's own tree, the fix
