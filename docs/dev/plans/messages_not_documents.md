@@ -320,7 +320,9 @@ function per output:
   hash, so any change to this function re-embeds every chunk of every
   source. So it carries the body, who wrote it and when (the eval is
   not yet good enough to say a timestamp can go), and nothing for
-  show: no URLs, a chip as its name. It has a version, and moving it is
+  show: no URLs, a chip as its name. A date is written with its day of
+  the week and its month as words ("Tue 3 Mar 2026 14:05"), so a search
+  for "a Tuesday in March" has words to meet. It has a version, and moving it is
   as deliberate as a render-version bump; it costs a re-embed, never a
   re-render or a re-download.
 
