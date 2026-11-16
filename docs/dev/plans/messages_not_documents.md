@@ -118,6 +118,15 @@ than one per conversation. Grouping by thread then means the same thing
 for every source. Reply-to is the one relation that can be empty,
 because it is a fact about one item, not a grouping.
 
+**An item keeps the upstream record it came from**, as
+`upstream_entity_kind` and `upstream_id`, the pair `grid_rows` already
+carries. A problem names what its step was holding when it arose (that
+pair, an item uuid or a path) and never a document or a parent, and is
+linked to its item when it is read
+([`problems_as_step_events.md`](problems_as_step_events.md)). So the
+pair must reach the stored item, and the item's parents must be
+reachable from it.
+
 A conversation and a thread are rows too, each with its own uuid, so a
 parent column points at something a person can open. Each item carries
 its position in its conversation and in its thread, so "the children of
@@ -223,6 +232,11 @@ against the eval before the next.
 - **Notion and Drive.** A page is one item today with no rows for its
   blocks. Are blocks items, so a hit lands on a paragraph, or is the
   page the item and its comments the children?
+- **Is a section's uuid always its row's uuid?** In `chat-common` the
+  `data-section-uuid` wrapper and the message's grid row share one uuid.
+  That has not been checked for every renderer outside it (email,
+  Notion, Drive, GitHub); step 1 checks it, since the problems plan
+  rests on it too.
 - **Reactions.** An item of their own (they have an author and a time)
   or an attribute of the item they react to?
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
