@@ -1,8 +1,9 @@
 //! Every request the app makes leaves a line in the server's log —
 //! `system/runs/runs.sqlite`, read back through `GET /api/log` — except the
 //! reads of the log itself, which would otherwise wake the log panel
-//! into refetching forever. One test, because the subscriber it
-//! installs is the process's only one.
+//! into refetching forever; and a path under the home directory is
+//! stored as `~/…`. One test, because the subscriber it installs is the
+//! process's only one.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -96,9 +97,16 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     // writer is still up, so a line for it would be flushed with the rest.
     let (status, _) = send(root, "/api/log", true).await;
     assert_eq!(status, StatusCode::OK);
+    let home = std::env::var("HOME").expect("HOME is set");
+    tracing::info!(path = %format!("{home}/notes/x.md"), "read a file");
 
     // The writer flushes on an interval; dropping it is the final flush.
     drop(log);
+
+    let (_, body) = send(root, "/api/log", true).await;
+    let all: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    let read_a_file = all.iter().find(|l| l["msg"] == "read a file").unwrap();
+    assert_eq!(fields(read_a_file)["path"], "~/notes/x.md");
 
     let lines = request_lines(root).await;
     let paths: Vec<&str> = lines
