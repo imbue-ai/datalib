@@ -92,4 +92,26 @@ describe("filterToken", () => {
     expect(quoteValue("a:b")).toBe('"a:b"');
     expect(filterToken("from", "Data", false, true)).toBe('from:"Data"');
   });
+
+  /// JS `\s` lacks U+0085 (NEXT LINE), which the server's tokenizer
+  /// (Rust's `char::is_whitespace`) splits on: "Keep only" on a cell
+  /// holding `a\u0085-source:gmail` sent two terms under a one-term label.
+  it("quotes a value holding any character the server splits on", () => {
+    // Every Unicode White_Space character, which is what Rust's
+    // `char::is_whitespace` tests for.
+    const splitters = [
+      ..."\t\n\v\f\r \u0085      　",
+      ...Array.from({ length: 11 }, (_, i) => String.fromCharCode(0x2000 + i)),
+    ];
+    for (const ch of splitters) {
+      const value = `a${ch}-source:gmail`;
+      const hex = ch.codePointAt(0)!.toString(16);
+      expect(filterToken("k", value, false), hex).toBe(`k:"${value}"`);
+      expect(filterToken("k", value, true), hex).toBe(`-k:"${value}"`);
+      expect(quoteValue(value), hex).toBe(`"${value}"`);
+    }
+    // A character that only looks like a gap is not one to the server,
+    // and stays bare: quoting it would change what a bare value matches.
+    expect(filterToken("k", "a​b", false)).toBe("k:a​b");
+  });
 });

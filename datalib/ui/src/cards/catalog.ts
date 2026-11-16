@@ -49,7 +49,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
   // Not in the gallery: it needs the url of the table to show.
   gridView: {
     title: "Grid",
-    description: "A table over any endpoint that pages, sorts and groups the way the search does.",
+    description: "A table over the problems, which page, sort and group the way the search does.",
     icon: "table",
   },
   umapView: {
@@ -102,7 +102,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
   },
   tableView: {
     title: "Table",
-    description: "Any endpoint that declares its columns, drawn as a typed table.",
+    description: "One of the app's own tables that declare their columns, drawn as a typed table.",
     icon: "table",
     devTool: true,
     gallery: 'tableView({ url: "/api/manage/rows" })',
