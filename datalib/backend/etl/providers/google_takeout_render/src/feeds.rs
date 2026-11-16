@@ -246,7 +246,6 @@ pub fn feed_chat(
             orphan_reactions: Vec::new(),
             markdown_uuid: feed.uuid,
             source_ref: None,
-            period_key: "all".to_string(),
             items,
         }],
     }

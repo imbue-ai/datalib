@@ -289,7 +289,6 @@ fn build_chats(
         }];
         let conversation = ids::conversation(source_id, &id);
         let whole = NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: conversation.uuid.clone(),
             source_ref: None,
             items,

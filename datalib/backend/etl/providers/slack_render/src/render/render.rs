@@ -399,7 +399,6 @@ fn build_chat(
         org_name: lookups.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: thread_uuid,
             source_ref: None,
             items,

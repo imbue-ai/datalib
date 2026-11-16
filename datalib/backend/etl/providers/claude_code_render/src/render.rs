@@ -301,7 +301,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: id.uuid,
             // A subagent's transcript is its own kind of document; the
             // profile's `chat_entity_kind` names the session's.

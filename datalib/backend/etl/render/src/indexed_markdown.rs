@@ -359,7 +359,7 @@ impl IndexedMarkdownStore {
     /// rows, and doltlite's content-addressed tables then carry no diff
     /// for it — that, and nothing here, is how "unchanged" is decided.
     /// Write one document: its rows here and, when the document moved —
-    /// a re-keyed path prefix, a chat re-periodized under another
+    /// a re-keyed path prefix, a document filed under another
     /// directory — the `.md` it used to be at goes, for the same reason
     /// [`Self::remove_documents`] unlinks: a file nothing names is still
     /// served and still indexed. A document with no rows is removed the
@@ -2233,8 +2233,8 @@ mod tests {
     }
 
     /// A row that moved between two documents of one source — a message
-    /// re-bucketed into another period, a chat whose document id is
-    /// minted from a name that changed — is taken over by the document
+    /// in a chat whose document id is minted from a name that changed —
+    /// is taken over by the document
     /// that now emits it, whichever of the two renders first. Found by
     /// the provider contract harness on google_takeout: the incoming
     /// document failed on `UNIQUE constraint failed: grid_rows.uuid`

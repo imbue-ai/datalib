@@ -479,7 +479,6 @@ fn build_chat(
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
             source_ref: None,
             items,
@@ -636,7 +635,6 @@ fn build_project_page(
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: page_uuid,
             source_ref: None,
             items,

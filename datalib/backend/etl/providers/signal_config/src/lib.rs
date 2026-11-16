@@ -49,13 +49,6 @@ impl SignalConfig {
 pub struct SignalRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// Retired: a chat is one document whatever this says. Still read so
-    /// a config that sets it loads; out of the schema so `datalib-step
-    /// help` does not offer it. It goes once `datalib-step` drops it as an
-    /// inert param before parsing.
-    #[serde(default)]
-    #[schemars(skip)]
-    pub period: Option<String>,
 }
 
 /// The `backup` table. The extractor reads every `signal-backup-*`
@@ -75,13 +68,6 @@ pub struct SignalSync {
     /// Name a different one per source to keep two accounts' passphrases apart.
     #[serde(default)]
     pub aep_env_var: Option<String>,
-    /// Where `period` used to go. It now belongs on the render step's
-    /// params; an older config that still sets it here loads, and the
-    /// ingest step refuses it with a pointer to the render step. Out of
-    /// the schema, so `datalib-step help` does not offer it.
-    #[serde(default)]
-    #[schemars(skip)]
-    pub period: Option<String>,
 }
 
 impl SignalSync {

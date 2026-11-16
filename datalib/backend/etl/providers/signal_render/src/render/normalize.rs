@@ -95,7 +95,6 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             org_name: None,
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
-                period_key: "all".to_string(),
                 markdown_uuid: chat_id.uuid,
                 source_ref: None,
                 items,

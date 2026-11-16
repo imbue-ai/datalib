@@ -387,7 +387,6 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
             orphan_reactions: Vec::new(),
             markdown_uuid: chat_id.uuid,
             source_ref: None,
-            period_key: "all".to_string(),
             items,
         }],
     }

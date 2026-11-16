@@ -451,7 +451,6 @@ async fn parse_async(
         let mut items = ch.items;
         items.sort_by_key(|i| i.date_ms);
         let whole = NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: chat_id.uuid.clone(),
             source_ref: None,
             items,

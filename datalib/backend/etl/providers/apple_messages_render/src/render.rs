@@ -549,7 +549,6 @@ impl ChatBuild {
         }
         let chat_uuid = chat_uuid(source_id, &self.guid);
         let whole = NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: chat_uuid.clone(),
             source_ref: None,
             items: self.items,

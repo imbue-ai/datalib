@@ -1,4 +1,4 @@
-//! `render_all` — drives every `(chat, period)` bucket through
+//! `render_all` — drives every chat's documents through
 //! [`render_one`] and feeds rendered docs into the orchestrator's
 //! `on_doc_complete` callback.
 
@@ -58,7 +58,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v24: a `Markdown` body that leaves a fence or an HTML block open is
 /// closed at its end, so the messages after it are not swallowed.
 /// v25: titles, names, filenames and labels lose their bidi controls.
-pub const LAYOUT_VERSION: u32 = 25;
+/// v26: a chat is one document; the front matter has no `period`, and
+/// no title says which months it holds.
+pub const LAYOUT_VERSION: u32 = 26;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -80,7 +82,6 @@ pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
@@ -480,26 +481,15 @@ fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
 
 // Markdown
 
-/// `(2024-03)` for a time bucket; nothing for the one bucket that holds
-/// the whole chat, where "(all)" would tell the reader nothing.
-fn period_suffix(period_key: &str) -> Option<String> {
-    (period_key != Period::key_for_all()).then(|| format!("({period_key})"))
-}
-
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
 ) -> Vec<Section> {
-    let period = period_suffix(&doc.period_key);
-    let title = match &period {
-        Some(p) => format!("{chat_title} {p}"),
-        None => chat_title.to_string(),
-    };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(&title)));
+    s.push_str(&format!("title: {}\n", yaml_name(chat_title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
     s.push_str(&format!(
         "source_label: {}\n",
@@ -507,7 +497,6 @@ fn render_markdown(
     ));
     s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
     s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
-    s.push_str(&format!("period: {}\n", doc.period_key));
     s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
     if let Some(a) = &chat.account {
         s.push_str(&format!("account: {}\n", yaml_scalar(a)));
@@ -521,13 +510,10 @@ fn render_markdown(
     s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
 
-    // The chat's name and the period go in separately: a long title is
-    // clamped, and `(2024-03)` — which says *which slice of the
-    // conversation this file is* — must survive that.
     s.push_str(
         &Title {
             text: chat_title,
-            suffix: period.as_deref(),
+            suffix: None,
             markdown_uuid: Some(&doc.markdown_uuid),
             // Public per-chat URL when the provider has one (LinkedIn
             // post, Slack permalink, …); None for backup-based providers.
@@ -1539,7 +1525,6 @@ mod tests {
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
-                period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
                 source_ref: None,
                 orphan_reactions: Vec::new(),
@@ -2828,37 +2813,6 @@ mod tests {
         assert_eq!(chat_heading(&chat), "WhatsApp user …0108");
         chat.title = Some("#bridge: Make it so.".to_string());
         assert_eq!(chat_heading(&chat), "#bridge: Make it so.");
-    }
-
-    /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a
-    /// monthly bucket keeps its "(2364-04)".
-    #[test]
-    fn only_a_real_time_bucket_suffixes_the_title() {
-        let profile = test_profile();
-        let mut chat = mk_chat();
-
-        let monthly = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Bridge Crew",
-        ));
-        assert!(
-            monthly.contains("title: \"Bridge Crew (2364-04)\"\n"),
-            "{monthly}"
-        );
-        assert!(monthly.contains(">Bridge Crew (2364-04)</h1>"), "{monthly}");
-
-        chat.buckets[0].period_key = Period::key_for_all().to_string();
-        let whole = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Bridge Crew",
-        ));
-        assert!(whole.contains("title: \"Bridge Crew\"\n"), "{whole}");
-        assert!(whole.contains(">Bridge Crew</h1>"), "{whole}");
-        assert!(!whole.contains("(all)"), "{whole}");
     }
 
     #[test]

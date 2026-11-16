@@ -202,7 +202,6 @@ fn conversation(
             markdown_uuid: chat.uuid,
             source_ref: None,
             items,
-            period_key: "all".to_string(),
             orphan_reactions: Vec::new(),
         }],
     }

@@ -287,7 +287,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
             source_ref: None,
             items,

@@ -202,7 +202,6 @@ fn to_chat(
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: ids::room(source_id, &room.native_room_id).uuid,
             source_ref: None,
             items,

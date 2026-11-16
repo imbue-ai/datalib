@@ -524,7 +524,6 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
                 orphan_reactions: Vec::new(),
                 markdown_uuid: conversation.uuid,
                 source_ref: None,
-                period_key: "all".to_string(),
                 items,
             }],
         });

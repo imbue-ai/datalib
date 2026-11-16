@@ -311,7 +311,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: id.uuid,
             // One document per thread, keyed on the thread's own id and
             // kind, so the row's backpointer is the chat's.
