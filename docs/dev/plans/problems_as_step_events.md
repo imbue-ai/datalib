@@ -77,11 +77,13 @@ Two new lines on stdout (or fd 3), beside `metric` and `log`
   arose, in the terms the step already holds. **A step never names
   something it has not seen**, such as an id another step will mint
   later. Every field is optional:
-  - `kind` and `id`: the upstream record, as upstream names it (a
-    Slack message's channel and timestamp, a Gmail message id). This
-    is the pair every grid row already carries as
-    `upstream_entity_kind` and `upstream_id`, so a download, which
-    sees only upstream's record, can name it exactly.
+  - `kind`, `id` and `account`: the upstream record, as upstream names
+    it (a Slack message's channel and timestamp, a Gmail message id).
+    These are the three values every grid row already carries as
+    `upstream_entity_kind`, `upstream_id` and `upstream_account`, so a
+    download, which sees only upstream's record, can name it exactly
+    — provided both sides spell it the same way (§"What the tree does
+    today").
   - `message`: the uuid of the message, for a step that wrote or read
     one (a render, a time-series render). Never a document's uuid or
     a byte range: in `messages_not_documents.md` documents become
@@ -138,7 +140,7 @@ One table, one row per `(step_id, key)`:
 | `step_id`, `group_id` | who found it; the group is the source |
 | `key` | the step's own name for it |
 | `severity`, `outcome`, `reason`, `sample` | as sent |
-| `about_kind`, `about_id`, `about_message`, `about_path` | as sent |
+| `about_kind`, `about_id`, `about_account`, `about_message`, `about_path` | as sent |
 | `first_seen_at_utc`, `changed_at_utc`, `tz_offset` | stamps (§"Timestamp convention" in `AGENTS.md`) |
 | `run_id` | the run that last sent it, for the run's log |
 
@@ -176,6 +178,61 @@ fetched at all) is shown at once, unlinked, and links when a later
 run brings the message in. `item_of_entity` and `upstream_of_entity`
 go.
 
+## What the tree does today
+
+Surveyed 2026-11-16 across every render crate and the downloads'
+failure keys. Two questions: is a message's `data-section-uuid` its
+grid row's `uuid`, and does a download name a failed record with the
+same upstream values the record's row carries?
+
+**Section uuids: yes, nearly everywhere.** Every `chat-common` source
+writes the message's uuid on both. So do Garmin, the time-series
+pages, Google Drive comments, Notion comments, Todoist, LinkedIn
+skills and PDF pages. The exceptions, none of which a problem needs:
+
+- GitHub and GitLab key the description's section with the document
+  row's uuid; each comment's section is its own row's.
+- Calendar, contacts and Lightroom write no message wrapper; their one
+  section is the event's, contact's or photo's row.
+- Notion's table-of-contents spans and Perseus's sentence spans have
+  no rows; they anchor links only.
+
+**Upstream values on the row: yes, but contacts.** Every provider
+fills `upstream_entity_kind` and `upstream_id`, except that a contact
+with an empty key gets no `upstream_id`. A time-bucketed chat's
+document row (a Beeper or Signal month) has an id datalib composed;
+its messages' ids are upstream's.
+
+**A download's failure key: rarely the row's values.** Today a failed
+record is named `<table>:<id>` (`record_object_error`) or
+`record:<table>:<id>` (`RecordProblem`): a raw table name, never the
+row's `upstream_entity_kind`, and the id is the raw store's key, which
+often is not spelled as render spells it:
+
+| source | download names | the row says | |
+|---|---|---|---|
+| ChatGPT, Claude, Google Drive, Notion pages, Apple Mail, Takeout Maps photos | the upstream id | the same id | match, given the table → kind name |
+| Slack | `{team}#{channel}#{ts}` | `{channel}#{ts}`, team in `upstream_account` | split differently |
+| GitLab | `{path}!{iid}` | `{path}#{iid}` | spelled differently |
+| Gmail | upstream's hex id | 16 digits, zero-padded, lowercase | normalised differently |
+| Calendly | the event id | `{calendar}#{event}` | composed differently |
+| PDF | the file's path | the file's blake3 | a different thing |
+| Claude Code, Codex | the transcript's path | the session id | a different thing |
+| Beeper, Signal, WhatsApp, AirVisual, Lightroom | a media file, snapshot or backup | no row at all | names a file |
+
+So the plan adds one rule: **a record's upstream values are spelled
+by one recipe in the provider's ingest crate, and both the download's
+problem and the render's row call it.** The recipes already belong on
+the ingest side (`AGENTS.md` §"Ingest and render are separate
+crates"). The rows of the table above that say "spelled",
+"normalised" or "composed differently" each move their render onto
+the download's recipe or the reverse; which way is the one that keeps
+the row's uuid, since a uuid is minted from these values and moving
+it is a re-key. A problem about a file names it by `path`, and links
+to nothing until something shows files. YoLink's downloads, Garmin's
+day and activity keys, Takeout's other modules and Claude's project
+docs were not read.
+
 ## Forward path for existing data
 
 A root that works today has problem rows in its raw stores, render
@@ -207,7 +264,8 @@ keyed by today's ids.
    `run_problems` and the render's `problems` become senders,
    `step_problems.rs` goes.
 4. The problems grid and the banner read the store, linking through
-   the message.
+   the message. Each provider's mismatch in §"What the tree does
+   today" is fixed by the step that gives it its recipe.
 5. The migrate pass, the mute rewrite and the config rewrite.
 6. Remove the copies: render's re-mint, `grid_index`'s
    `replace_source_problems` and `copy_own_store_problems`,
@@ -218,13 +276,6 @@ once.
 
 ## Open questions
 
-- Is a message's `data-section-uuid` always its grid row's `uuid`, in
-  every provider? `messages_not_documents.md`'s survey is checking.
-  The banner's lookup depends on it.
-- Does every grid row carry `upstream_entity_kind` and
-  `upstream_id`, and does a download always know the same pair for
-  the record it failed on? Where it does not, that provider's
-  problems show unlinked until it does.
 - How many problems can one run send? A source with a broken
   credential may fail every record. Today's
   "N back-to-back failures trip a budget" rule keeps that to one
