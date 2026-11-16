@@ -41,7 +41,12 @@ fn golden() -> Vec<Piece> {
         ("to", "", Some("email:laforge@enterprise.starfleet")),
     ]);
     email.labels = vec!["Away missions".into(), " ".into(), "Inbox".into()];
-    let mut slack = item("Data", "2026-03-03T22:05:00Z", "Acknowledged.");
+    let mut slack = item(
+        "Data",
+        "2026-03-03T22:05:00Z",
+        "[@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD \"@Jean-Luc Picard \
+         (slack:T_NCC1701D/U_PICARD)\"), acknowledged.",
+    );
     slack.author_handle = Some("slack:T_NCC1701D/U_DATA".into());
     vec![
         email,
@@ -76,7 +81,7 @@ const DRAWN: &[(u32, &str)] = &[
     ),
     (
         2,
-        "2d3c1fa43b9a762628b7c400b4d812b4d67678acde7305d21c5b098b17c740fa",
+        "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
     ),
 ];
 
@@ -124,6 +129,10 @@ fn an_item_is_its_envelope_its_labels_then_its_body() {
         drawn[1].lead.as_deref(),
         Some("Data — Tue 3 Mar 2026 22:05")
     );
+    assert_eq!(
+        drawn[1].text,
+        "Data — Tue 3 Mar 2026 22:05\n\n@Jean-Luc Picard, acknowledged.\n\n"
+    );
 }
 
 /// A date is drawn on the clock its source wrote, never the machine's:
@@ -149,4 +158,37 @@ fn a_framed_piece_is_drawn_as_it_is_and_an_empty_item_as_its_envelope() {
     assert_eq!(drawn[3].lead, None);
     assert_eq!(drawn[3].text, "A note with no author and no time.\n\n");
     assert_eq!(draw(&[item("", "", "")])[0].text, "");
+}
+
+/// A body's links say what a person reads: a mention its name, an email
+/// or phone link the address beside it, an image its alt text, a shared
+/// link its text. Code keeps its brackets.
+#[test]
+fn a_bodys_links_are_drawn_as_their_text() {
+    for (body, drawn) in [
+        (
+            "[@Geordi](slack://user?team=T&id=U \"@Geordi (slack:T/U)\") ready?",
+            "@Geordi ready?",
+        ),
+        (
+            "ask [Deanna Troi](mailto:troi@enterprise.starfleet \"Deanna Troi\")",
+            "ask Deanna Troi <troi@enterprise.starfleet>",
+        ),
+        ("call [+17015550101](tel:+17015550101)", "call +17015550101"),
+        (
+            "![a tribble](/data/x/blob/1) and [the log](https://x.test/a)",
+            "a tribble and the log",
+        ),
+        (
+            "`arr[i](x)` stays, [Q] is no link",
+            "`arr[i](x)` stays, [Q] is no link",
+        ),
+        ("```\n[a](b)\n```\n[a](b)", "```\n[a](b)\n```\na"),
+        (
+            "[nested [brackets]](https://x.test \"a ) in a title\")",
+            "nested [brackets]",
+        ),
+    ] {
+        assert_eq!(flatten_links(body), drawn, "{body}");
+    }
 }

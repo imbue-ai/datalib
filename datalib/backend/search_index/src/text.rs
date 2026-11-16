@@ -61,7 +61,8 @@ fn draw_one(piece: &Piece) -> IndexSection {
         .filter(|l| !l.is_empty())
         .collect();
     let labels = (!labels.is_empty()).then(|| format!("Labels: {}", labels.join(", ")));
-    let body = piece.text.trim();
+    let body = flatten_links(piece.text.trim());
+    let body = body.trim();
     let text: String = [lead.as_deref(), labels.as_deref(), Some(body)]
         .into_iter()
         .flatten()
@@ -129,6 +130,123 @@ fn person(name: &str, handle: Option<&str>) -> Option<String> {
         (true, Some(t)) => Some(t),
         (true, None) => None,
     }
+}
+
+/// A body's links as their text: `[@Jean-Luc Picard](slack://user?… "…")`
+/// says `@Jean-Luc Picard`, an image its alt text, and an email or phone
+/// link `Name <address>`, the address one would type. The rest of a link
+/// (an id, a URL, a hover) is for show. Code is left as written: a fenced
+/// block, and an inline span.
+fn flatten_links(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut fenced = false;
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fenced = !fenced;
+            out.push_str(line);
+        } else if fenced {
+            out.push_str(line);
+        } else {
+            flatten_line(line, &mut out);
+        }
+    }
+    out
+}
+
+fn flatten_line(line: &str, out: &mut String) {
+    let mut rest = line;
+    while let Some(at) = rest.find(['`', '[']) {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        if from.starts_with('`') {
+            let ticks = from.len() - from.trim_start_matches('`').len();
+            let fence = &from[..ticks];
+            match from[ticks..].find(fence) {
+                Some(end) => {
+                    out.push_str(&from[..ticks + end + ticks]);
+                    rest = &from[ticks + end + ticks..];
+                }
+                None => {
+                    out.push_str(from);
+                    return;
+                }
+            }
+            continue;
+        }
+        match link_at(from) {
+            Some((text, dest, len)) => {
+                if out.ends_with('!') {
+                    out.pop();
+                }
+                out.push_str(text);
+                let typed = dest
+                    .strip_prefix("mailto:")
+                    .or_else(|| dest.strip_prefix("tel:"))
+                    .filter(|a| !a.is_empty() && *a != text);
+                if let Some(address) = typed {
+                    out.push_str(&format!(" <{address}>"));
+                }
+                rest = &from[len..];
+            }
+            None => {
+                out.push('[');
+                rest = &from[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+}
+
+/// The markdown link `s` opens with, `[text](dest "title")`: its text, its
+/// destination and its length. `None` for a `[` that opens no link.
+fn link_at(s: &str) -> Option<(&str, &str, usize)> {
+    let mut depth = 0;
+    let mut close = None;
+    let mut chars = s.char_indices().skip(1);
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '[' => depth += 1,
+            ']' if depth == 0 => {
+                close = Some(i);
+                break;
+            }
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    let close = close?;
+    let after = &s[close + 1..];
+    if !after.starts_with('(') {
+        return None;
+    }
+    let mut quoted = false;
+    let mut end = None;
+    let mut chars = after.char_indices().skip(1);
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            ')' if !quoted => {
+                end = Some(i);
+                break;
+            }
+            '\n' => return None,
+            _ => {}
+        }
+    }
+    let end = end?;
+    let inside = after[1..end].trim();
+    let dest = inside
+        .strip_prefix('<')
+        .and_then(|d| d.split_once('>').map(|(d, _)| d))
+        .unwrap_or_else(|| inside.split_whitespace().next().unwrap_or(""));
+    Some((&s[1..close], dest, close + 1 + end + 1))
 }
 
 /// The weekday and month as words, on the clock the source wrote: a search
