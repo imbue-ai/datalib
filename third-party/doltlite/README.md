@@ -138,8 +138,9 @@ Steps:
    build fails if not), and the BLAKE3 the new amalgamation embeds:
    grep `BLAKE3_VERSION_STRING` in it, and move `@blake3_c` in
    `MODULE.bazel` to that version (`:blake3_kernels_test` fails until
-   they agree). If the release ships the kernels itself, drop the patch
-   and `@blake3_c` instead.
+   they agree). If the release ships the kernels itself
+   ([dolthub/doltlite#4956](https://github.com/dolthub/doltlite/issues/4956)),
+   drop the patch and `@blake3_c` instead.
 4. Check the chunk-store format before anything else: grep
    `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. A different
    number means every existing `.doltlite_db` is refused at open — a
