@@ -35,7 +35,7 @@ pub(crate) struct Done {
 }
 
 /// A document the search covers: one with a file, outside `unindexed/`.
-fn searchable(row: &MarkdownRow) -> bool {
+pub(crate) fn searchable(row: &MarkdownRow) -> bool {
     row.md_path.as_deref().is_some_and(|p| {
         !Path::new(p)
             .components()

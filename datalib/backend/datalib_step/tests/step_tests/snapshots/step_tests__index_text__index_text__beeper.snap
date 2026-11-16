@@ -1,0 +1,123 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== beeper 00000000-0000-8594-aca2-4aa5aabd1723 Dr. Beverly Crusher
+--- 018ec961-9780-8f10-8e88-1c035a0571ac
+Dr. Beverly Crusher <+15551234002> — Wed 10 Apr 2024 19:00
+
+Jean-Luc, dinner tonight in my quarters?
+
+--- 018ec962-81e0-8a3d-8973-dda498fe68e0
+Jean-Luc Picard — Wed 10 Apr 2024 19:01
+
+Earl Grey, hot — at 19:00.
+
+=== beeper 00000000-0000-86c6-9b0f-a87d76d8912c William T. Riker
+--- 018e5c27-dc60-85c1-8a9e-49fdc74294c2
+@googlechatbot:beeper.local — Wed 20 Mar 2024 13:58
+
+hidden: m.room.create
+
+--- 018e5c28-0370-8149-bab6-ef333bf34f3f
+@googlechatbot:beeper.local — Wed 20 Mar 2024 13:58
+
+hidden: m.bridge
+
+--- 018e5c29-6300-80ae-98a8-e082c6f248ef
+William T. Riker <riker@enterprise.org> — Wed 20 Mar 2024 14:00
+
+Captain, the away team report is ready for your review.
+
+--- 018e5c2d-f6e0-85c4-8154-5d888db98bf7
+Jean-Luc Picard — Wed 20 Mar 2024 14:05
+
+Send it through, Number One.
+
+--- 018e5c32-8ac0-8697-8620-6e080b42992e
+William T. Riker <riker@enterprise.org> — Wed 20 Mar 2024 14:10
+
+📎 away-team-report.pdf — 38 B
+
+=== beeper 00000000-0000-8b2d-bd38-e68431f325dd Bridge crew
+--- 0b50e80c-2800-8174-8afa-57c01863c808
+Jean-Luc Picard — Sat 11 Apr 2364 00:00
+
+Status report.
+
+--- 0b50e80d-1260-8c48-bb33-153f2b2d1863
+Will Riker — Sat 11 Apr 2364 00:01
+
+All decks at green status, Captain.
+
+--- 0b50e815-4fc0-8853-86ba-17d7b35737db
+Q — Sat 11 Apr 2364 00:10
+
+Mon capitaine, you are so predictable.
+
+=== beeper 00000000-0000-8c53-b909-d898f9ac9d58 Mr. Data
+--- 018e4156-ee80-858a-b95b-fb88e2500f50
+Jean-Luc Picard — Fri 15 Mar 2024 09:00
+
+Mr. Data, regarding the Iconian artifact analysis...
+
+--- 018e415b-8260-8b83-b444-b46320d4d948
+Mr. Data <+15551234001> — Fri 15 Mar 2024 09:05
+
+> ↪ in reply to `$tng-data-001:ba_TNG.local-signal.localhost`
+
+I have analyzed the artifact, Captain. It appears to be a quantum lattice.
+
+--- 018e4160-1640-8e42-9ba2-3d0926e6ec1a
+Jean-Luc Picard — Fri 15 Mar 2024 09:10
+
+iconian-schematic.png
+
+--- 018e9e92-bac0-8575-a654-7ea75f4efd30
+Mr. Data <+15551234001> — Tue 2 Apr 2024 11:30
+
+Captain, I have located three similar structures in the Federation database.
+
+--- 018e9e97-4ea0-8a9f-9fbe-483c8a294f33
+Jean-Luc Picard — Tue 2 Apr 2024 11:35
+
+Excellent. Brief the senior staff at oh-eight-hundred.
+
+=== beeper 00000000-0000-8db2-bb39-6c4732048194 #bridge
+--- 018e61f4-8a80-824d-8c8d-16ea42498a93
+Worf — Thu 21 Mar 2024 17:00
+
+Captain, a Romulan warbird is decloaking off the port bow.
+
+--- 018e61f5-74e0-831b-923a-ef97d75bb84e
+Jean-Luc Picard — Thu 21 Mar 2024 17:01
+
+> ↪ in reply to `$tng-slack-001:beeper.com`
+
+Shields up. Red alert.
+
+=== beeper 00000000-0000-8e89-ade7-0034cbfbbf3b beeper storage
+--- -
+---
+title: beeper storage
+source: beeper
+measured_at: 2369-04-15T00:00:00+00:00
+---
+
+# [beeper](datalib:group/beeper "beeper") — storage
+
+Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+
+| Kind | Step | What | Size | Count | Id |
+|---|---|---|---|---|---|
+| Source Size | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest` | <size> | 3 files | <span id="m-00000000-0000-8e89-ade7-0034cbfbbf3b" data-section-uuid="00000000-0000-8e89-ade7-0034cbfbbf3b">`00000000`</span> |
+| Store | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8ddf-8c7c-a461ab616caa" data-section-uuid="00000000-0000-8ddf-8c7c-a461ab616caa">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8938-af40-d9d73386596e" data-section-uuid="00000000-0000-8938-af40-d9d73386596e">`00000000`</span> |
+| Store | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8981-a851-1084589395fd" data-section-uuid="00000000-0000-8981-a851-1084589395fd">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#beeper_media_files` |  | 4 rows | <span id="m-00000000-0000-8dad-9a6a-cc4e1a00c391" data-section-uuid="00000000-0000-8dad-9a6a-cc4e1a00c391">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#message` |  | 11 rows | <span id="m-00000000-0000-8106-985c-1d75dc5ec19a" data-section-uuid="00000000-0000-8106-985c-1d75dc5ec19a">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#mx_reactions` |  | 2 rows | <span id="m-00000000-0000-8d11-9a3c-5c2f908c5d7e" data-section-uuid="00000000-0000-8d11-9a3c-5c2f908c5d7e">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#mx_room_messages` |  | 17 rows | <span id="m-00000000-0000-8538-8d35-6537bc9c8f71" data-section-uuid="00000000-0000-8538-8d35-6537bc9c8f71">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#participant_identifiers` |  | 4 rows | <span id="m-00000000-0000-8411-b340-21f776cf2dd4" data-section-uuid="00000000-0000-8411-b340-21f776cf2dd4">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#participants` |  | 11 rows | <span id="m-00000000-0000-8734-8dd9-e7384e373644" data-section-uuid="00000000-0000-8734-8dd9-e7384e373644">`00000000`</span> |
+| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#threads` |  | 6 rows | <span id="m-00000000-0000-8f0e-a84e-253dfe991df0" data-section-uuid="00000000-0000-8f0e-a84e-253dfe991df0">`00000000`</span> |
