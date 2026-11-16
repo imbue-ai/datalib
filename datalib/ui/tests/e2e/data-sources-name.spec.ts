@@ -392,7 +392,9 @@ test("a provider with render options writes them on the render step, from the on
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Copy the accounts of the Mail app on this Mac, from its own files." })
+    .locator(".wiz-tile", {
+      hasText: "Copy the accounts of the Mail app on this Mac, from its own files.",
+    })
     .click();
   await nameField(page).fill("Mac Mail");
   await wizard(page).locator("input.wiz-path").fill("/tmp/Library/Mail");
