@@ -21,8 +21,8 @@ importers:
         specifier: 6.43.15
         version: 6.43.15
       '@slickgrid-universal/common':
-        specifier: 10.11.3
-        version: 10.11.3
+        specifier: 11.0.0
+        version: 11.0.0
       '@slickgrid-universal/event-pub-sub':
         specifier: 10.10.0
         version: 10.10.0
@@ -598,8 +598,15 @@ packages:
   '@slickgrid-universal/binding@10.11.2':
     resolution: {integrity: sha512-wxckeGHWyh0PG7qadv/EK1u9t+kmLsHnie1FDRltpmI44H7Ylc2kuw4uddOsIItJwUvlTsDfAlbLRqnsdAbnPA==}
 
+  '@slickgrid-universal/binding@11.0.0':
+    resolution: {integrity: sha512-GePdzu3ptNivw9QzNhySItkaPvL3P0BVF8xcl0jCNPJfojb1KJ1qS//wBx2tNY3jleff5aonmFc9tmQTZdR9cA==}
+
   '@slickgrid-universal/common@10.11.3':
     resolution: {integrity: sha512-vURyq55n8+/B4HKipq84FqW9DlkCTQ28JH7SX+KulMeLYxmzSTwwSYLMqB/UUBecaw5VBGDmDM2MUVOfhYw7qQ==}
+    engines: {node: ^20.0.0 || >=22.0.0}
+
+  '@slickgrid-universal/common@11.0.0':
+    resolution: {integrity: sha512-Ph3J/l1B1WSlQ9//JydN3eI67Q1IlKje1/WDfPgyFVoTAmxn6HfKZwd92x1RAAx43UMuYkSD1jB2WLJDDp8EqQ==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
   '@slickgrid-universal/custom-footer-component@10.11.3':
@@ -611,11 +618,17 @@ packages:
   '@slickgrid-universal/event-pub-sub@10.10.0':
     resolution: {integrity: sha512-FKCTlV272lUNolIYeYYPggE3ducmmUeD+pxvHd+pCb1885080drQIr+k5wd+Q1eZj2P7BrlPKFEVF79ZL0QUmA==}
 
+  '@slickgrid-universal/event-pub-sub@11.0.0':
+    resolution: {integrity: sha512-mThHVdU/vHmlB6uGjCAlg2kRAqI5lwO9+wMpFg9Dz5ku4lZYk5CFm7Lq9+Q6aFfOfeWx+bWy5Ho3qmRIpPTucQ==}
+
   '@slickgrid-universal/pagination-component@10.11.3':
     resolution: {integrity: sha512-3QTbRokIFZgpRONXP9MJfE4YKVsnXS4MVq6Avz1yKCey5XuFepq17MUcs+cUaQip3GHMeWQIorT2gtGrxzHSDw==}
 
   '@slickgrid-universal/utils@10.10.0':
     resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
+
+  '@slickgrid-universal/utils@11.0.0':
+    resolution: {integrity: sha512-ozi8vY/fQ2KkAnDy32gM98AhxSx4cWllmInWFN1DeXlzh1UX7yFHzrHbKrYSnJBuknQNMGFBO51cj9RzPxWPZQ==}
 
   '@slickgrid-universal/vanilla-bundle@10.11.3':
     resolution: {integrity: sha512-YhIfW+liuSOyoFN7J81FujuDnuRl0pzUtJQcOtmLgUfBSnwGIWOOdh3LGTHOaDeizRo2fiztqdyA4HpEHCP88g==}
@@ -1073,6 +1086,9 @@ packages:
 
   multiple-select-vanilla@5.2.3:
     resolution: {integrity: sha512-2M8grjlGMEGY6ZsgFTgZhDrpCcoxdv8Bw+xAR647E2EPySTYLc+abSGfTx5A8ueTuyRyhw3gxFz499mv51PQJw==}
+
+  multiple-select-vanilla@5.2.6:
+    resolution: {integrity: sha512-s0GKONZMJL199QQz/n/pe84n1YYrgB6q3zhkSkkT2LM1exKuIottLV7bhXcj9vsfe4RV3s7p9esrmfB77u8vRg==}
 
   nanoid@3.3.20:
     resolution: {integrity: sha512-uKdg2G3GNCKQn9byYOpxbGqrT2fGO5KRt5J/8b3pok8rT6qxGWF6hxMyJiEYtAf+FVyYuD9hRaDqX5uPFYJ4ZQ==}
@@ -1778,6 +1794,8 @@ snapshots:
 
   '@slickgrid-universal/binding@10.11.2': {}
 
+  '@slickgrid-universal/binding@11.0.0': {}
+
   '@slickgrid-universal/common@10.11.3':
     dependencies:
       '@excel-builder-vanilla/types': 5.3.1
@@ -1791,6 +1809,19 @@ snapshots:
       dequal: 2.0.3
       multiple-select-vanilla: 5.2.3
       sortablejs: 1.15.7
+      vanilla-calendar-pro: 3.4.0
+
+  '@slickgrid-universal/common@11.0.0':
+    dependencies:
+      '@excel-builder-vanilla/types': 5.3.1
+      '@formkit/tempo': 1.1.0
+      '@slickgrid-universal/binding': 11.0.0
+      '@slickgrid-universal/event-pub-sub': 11.0.0
+      '@slickgrid-universal/utils': 11.0.0
+      '@types/trusted-types': 2.0.7
+      autocompleter: 10.0.0
+      dequal: 2.0.3
+      multiple-select-vanilla: 5.2.6
       vanilla-calendar-pro: 3.4.0
 
   '@slickgrid-universal/custom-footer-component@10.11.3':
@@ -1807,12 +1838,18 @@ snapshots:
     dependencies:
       '@slickgrid-universal/utils': 10.10.0
 
+  '@slickgrid-universal/event-pub-sub@11.0.0':
+    dependencies:
+      '@slickgrid-universal/utils': 11.0.0
+
   '@slickgrid-universal/pagination-component@10.11.3':
     dependencies:
       '@slickgrid-universal/binding': 10.11.2
       '@slickgrid-universal/common': 10.11.3
 
   '@slickgrid-universal/utils@10.10.0': {}
+
+  '@slickgrid-universal/utils@11.0.0': {}
 
   '@slickgrid-universal/vanilla-bundle@10.11.3':
     dependencies:
@@ -2301,6 +2338,10 @@ snapshots:
   muggle-string@0.4.1: {}
 
   multiple-select-vanilla@5.2.3:
+    dependencies:
+      '@types/trusted-types': 2.0.7
+
+  multiple-select-vanilla@5.2.6:
     dependencies:
       '@types/trusted-types': 2.0.7
 

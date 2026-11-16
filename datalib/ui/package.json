@@ -18,7 +18,7 @@
     "@codemirror/commands": "6.11.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
-    "@slickgrid-universal/common": "10.11.3",
+    "@slickgrid-universal/common": "11.0.0",
     "@slickgrid-universal/event-pub-sub": "10.10.0",
     "@slickgrid-universal/vanilla-bundle": "10.11.3",
     "@tauri-apps/api": "^2.12.4",
