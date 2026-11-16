@@ -195,7 +195,7 @@ FACEBOOK_GROUP_LEFT_SINCE = (
 )
 # Tables each export holds that no feed reads, one row a source.
 FACEBOOK_TABLES_NOT_READ = (
-    "0062f189-273d-5e65-99f6-8209086dad23|warning|render|entity|unrendered_tables:all|||"
+    "0062f189-273d-5e65-99f6-8209086dad23|info|render|entity|unrendered_tables:all|||"
     "deliberate_loss|Stored and not searchable, 3 rows in table(s): "
     "ads_information_story_views_in_past_7_days, "
     "logged_information_search_your_search_history, "
