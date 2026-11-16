@@ -341,13 +341,8 @@ impl UpstreamRef {
 
 /// Reactions to a message the mirror does not have.
 ///
-/// **Not** "a message in another period" — a provider that buckets by
-/// period is expected to file a reaction under its *target's* period,
-/// not its own, so a reaction to a March message lands in the March
-/// document however late it arrived. What is left over is the case
-/// nothing can place: the target event is not in the store at all,
-/// because it was never downloaded or it belongs to another
-/// conversation. The renderer lists those at the end rather than
+/// The target event is not in the store at all, because it was never
+/// downloaded or it belongs to another conversation. The renderer lists those at the end rather than
 /// dropping a real event with nothing to say it happened.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrphanReactions {
@@ -357,26 +352,18 @@ pub struct OrphanReactions {
     pub reactions: Vec<NormalizedReaction>,
 }
 
-/// One rendered-markdown bucket: a slice of a chat covering a single
-/// period key (`2024-03`, `2024-03-15`, `2024`, or `all`). Drives the
-/// .md file and its sidecar.
+/// One rendered document of a chat: the whole chat, or a part of it
+/// that is read on its own.
 #[derive(Debug, Clone, Serialize)]
 pub struct NormalizedDoc {
-    pub period_key: String,
-    /// Stable per-bucket UUID minted by the provider: the chat's own
-    /// for a chat rendered whole, else one minted from `(chat,
-    /// period_key)`.
+    /// The chat's own uuid for the whole chat.
     pub markdown_uuid: String,
-    /// What this bucket is upstream, for the document row's backpointer
-    /// columns, when `markdown_uuid` was minted from something other
-    /// than the chat's own key and kind — a period of a chat, a
-    /// subagent's transcript within a session. `None` means the row
+    /// What this document is upstream, for the document row's backpointer
+    /// columns, when it is not simply the chat: a subagent's transcript. `None` means the row
     /// takes the chat's (`external_id`, `RenderProfile::chat_entity_kind`).
     pub source_ref: Option<UpstreamRef>,
     pub items: Vec<NormalizedChatItem>,
-    /// Empty for every provider that buckets a whole chat into one
-    /// document, which is most of them, and empty for a period-bucketed
-    /// one whose targets all resolve.
+    /// Empty unless a reaction's target is not in the store.
     pub orphan_reactions: Vec<OrphanReactions>,
 }
 
@@ -392,12 +379,12 @@ pub struct NormalizedChat {
     /// workspace and channel. Each document of the chat carries them, with
     /// its own `markdown_uuid`; their places in the tree are filled from
     /// this order. Empty for a chat with nothing above it.
-    pub containers: Vec<datalib_schema::nodes::NodeRow>,
+    pub containers: Vec<datalib_schema::data_nodes::DataNodeRow>,
     /// What the chat is filed under besides its containers: an email
     /// thread's labels. Each is a path of containers, top first (a nested
     /// label's parents, then the label); the chat is filed under the last.
     /// Paths may share their top: one container, carried once.
-    pub filed_under: Vec<Vec<datalib_schema::nodes::NodeRow>>,
+    pub filed_under: Vec<Vec<datalib_schema::data_nodes::DataNodeRow>>,
     /// Human-readable label that goes into the chat-level grid_row's
     /// `conversation_name` (and the page title when `title` is unset).
     /// E.g. "Will Riker" or "Bridge Crew".
@@ -445,7 +432,7 @@ pub struct NormalizedChat {
     /// default.
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
-    /// Buckets sorted by period_key.
+    /// Its documents: one for most chats.
     pub buckets: Vec<NormalizedDoc>,
     /// Who `display` names, when the chat has no title of its own and is
     /// called by its people instead: a direct message's other party, a

@@ -41,7 +41,7 @@ mod tests {
             commit: "0".repeat(40),
             dup_groups: vec![],
             dup_wasted: 0,
-            nodes: vec![],
+            data_nodes: vec![],
         }
     }
 
@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn a_closing_script_tag_in_the_data_cannot_escape_the_script_element() {
         let mut result = empty();
-        result.left.nodes.push(Node::plain(
+        result.left.data_nodes.push(Node::plain(
             "</script><img src=x onerror=alert(1)>",
             "file",
             0,

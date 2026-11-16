@@ -7,7 +7,7 @@ rust_library(
         "src/grid_rows.rs",
         "src/grid_rows_builder.rs",
         "src/edges.rs",
-        "src/nodes.rs",
+        "src/data_nodes.rs",
         "src/filings.rs",
         "src/search_terms.rs",
         "src/markdowns.rs",

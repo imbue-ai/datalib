@@ -40,12 +40,7 @@ pub struct Unrendered {
     pub why: String,
 }
 
-/// Group every bucket by network, then by room.
-///
-/// One `NormalizedChat` per *bucket* rather than per room, so a room
-/// spanning three periods yields three chats over one `chat_uuid`. That
-/// keeps the chat-level grid row per-document, which is what beeper has
-/// always emitted, and it keeps each bucket's attachments keyed apart.
+/// Every room's chat, grouped by network.
 pub fn to_networks(
     parsed: &ParsedBeeper,
     source_id: &str,
@@ -59,7 +54,7 @@ pub fn to_networks(
         // should not happen; the bucket is dropped rather than the pass.
         let Some(room) = parsed.rooms.get(&doc.room_uuid) else {
             unrendered.push(Unrendered {
-                markdown_uuid: ids::period(source_id, &doc.room_uuid, &doc.period_key).uuid,
+                markdown_uuid: ids::room(source_id, &doc.room_uuid).uuid,
                 why: format!(
                     "its events name room {}, which the parse did not read",
                     doc.room_uuid
@@ -90,9 +85,9 @@ pub fn to_networks(
     (networks, unrendered)
 }
 
-/// The bundle key for a bucket — matches `NormalizedChat::id`.
+/// The bundle key for a room's document — matches `NormalizedChat::id`.
 pub fn bundle_key(doc: &DocBucket) -> String {
-    format!("{}#{}", doc.room_uuid, doc.period_key)
+    doc.room_uuid.clone()
 }
 
 pub fn profile_for(network: &str) -> RenderProfile {
@@ -125,19 +120,22 @@ fn to_chat(
     doc: &DocBucket,
     inputs: &Inputs,
 ) -> NormalizedChat {
+    let uuid_of: HashMap<&str, String> = doc
+        .messages
+        .iter()
+        .map(|m| {
+            let uuid = ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid;
+            (m.native_event_id.as_str(), uuid)
+        })
+        .collect();
     let items: Vec<NormalizedChatItem> = doc
         .messages
         .iter()
-        .map(|m| to_item(source_id, room, doc, m))
+        .map(|m| to_item(source_id, room, doc, m, &uuid_of))
         .collect();
 
-    // Reactions whose target is not one of this bucket's messages.
-    //
-    // Parse already routes a reaction to its *target's* period bucket,
-    // resolving the target against every event in the store — so this
-    // is not "the message is in another document". It is the case
-    // nothing can place: the target event is not in the store at all,
-    // and parse fell back to filing the reaction under its own period.
+    // Reactions whose target event is not in the store at all: never
+    // downloaded, or in another room.
     let known: std::collections::HashSet<&str> = doc
         .messages
         .iter()
@@ -203,20 +201,24 @@ fn to_chat(
         source_url: room.source_url.clone(),
         org_uuid: None,
         org_name: None,
-        buckets: vec![{
-            let period = ids::period(source_id, &room.native_room_id, &doc.period_key);
-            NormalizedDoc {
-                period_key: doc.period_key.clone(),
-                markdown_uuid: period.uuid,
-                source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
-                items,
-                orphan_reactions,
-            }
+        buckets: vec![NormalizedDoc {
+            markdown_uuid: ids::room(source_id, &room.native_room_id).uuid,
+            source_ref: None,
+            items,
+            orphan_reactions,
         }],
     }
 }
 
-fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> NormalizedChatItem {
+/// `uuid_of` is the room's messages' uuids by their event id, so a
+/// reply finds the message it answers.
+fn to_item(
+    source_id: &str,
+    room: &Room,
+    doc: &DocBucket,
+    m: &Event,
+    uuid_of: &HashMap<&str, String>,
+) -> NormalizedChatItem {
     let reactions: Vec<NormalizedReaction> = doc
         .reactions_by_target
         .get(&m.native_event_id)
@@ -226,6 +228,10 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
     let attachments: Vec<NormalizedAttachment> =
         m.blobs.iter().map(|b| to_attachment(m, b)).collect();
 
+    let reply_to = m
+        .reply_to_native_event_id
+        .as_deref()
+        .and_then(|id| uuid_of.get(id).cloned());
     let body = message_body(
         m.reply_to_native_event_id.as_deref(),
         m.text_content.as_deref(),
@@ -237,7 +243,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
         // the small italic line every provider's system events get, and
         // kept out of the chat row's search text.
         return NormalizedChatItem {
-            reply_to: None,
+            reply_to,
             message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
             author_handle: m.sender_handle.clone(),
             author_kind: AuthorKind::Named,
@@ -264,7 +270,7 @@ fn to_item(source_id: &str, room: &Room, doc: &DocBucket, m: &Event) -> Normaliz
     }
 
     NormalizedChatItem {
-        reply_to: None,
+        reply_to,
         message_uuid: ids::event(source_id, &m.native_event_id, m.timestamp_ms).uuid,
         author_handle: m.sender_handle.clone(),
         author_kind: AuthorKind::Named,
@@ -347,10 +353,8 @@ fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
 }
 
 /// A message's markdown: what was typed, escaped, under a line naming
-/// the message it replies to. The reply keeps the bridge id it points
-/// at rather than linking the target's anchor: the native↔matrix id
-/// bridge makes that fiddly when the target lives in another period's
-/// file.
+/// the message it replies to, by the id upstream gave it; the reply
+/// edge is what links the two.
 fn message_body(reply_to: Option<&str>, text: Option<&str>) -> Option<String> {
     let reply_line = reply_to.map(|id| format!("> ↪ in reply to {}", md_code_span(id)));
     let typed = text.filter(|s| !s.is_empty()).map(escape_md_block);
@@ -414,7 +418,6 @@ mod tests {
     fn a_bucket_with_no_room_is_unrendered() {
         let bucket = |room_uuid: &str| DocBucket {
             room_uuid: room_uuid.into(),
-            period_key: "2364-03".into(),
             messages: Vec::new(),
             reactions_by_target: BTreeMap::new(),
         };
@@ -443,7 +446,7 @@ mod tests {
         assert_eq!(unrendered.len(), 1);
         assert_eq!(
             unrendered[0].markdown_uuid,
-            ids::period("beeper", "!enterprise:beeper.local", "2364-03").uuid
+            ids::room("beeper", "!enterprise:beeper.local").uuid
         );
     }
 

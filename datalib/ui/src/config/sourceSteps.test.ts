@@ -120,26 +120,26 @@ describe("seedFieldValues", () => {
   // and an ingest field the ingest step's, so a knob with the same
   // spelling on both sides could never be read off the wrong one.
   it("reads each phase's fields off its own step", () => {
-    const SIGNAL = catalogFor("signal")!;
+    const BEEPER = catalogFor("beeper")!;
     const ingest: ConfiguredStep = {
-      ...step({ backup: { path: "~/backups" } }),
-      id: "signal/ingest",
-      group: "signal",
-      type: "signal",
+      ...step({ texts: { path: "~/BeeperTexts" } }),
+      id: "beeper/ingest",
+      group: "beeper",
+      type: "beeper",
     };
     const render: ConfiguredStep = {
       ...ingest,
-      id: "signal/render_markdown",
+      id: "beeper/render_markdown",
       function: "render_markdown",
       phase: "render",
-      inputs: ["signal/ingest"],
-      params: { period: "year" },
+      inputs: ["beeper/ingest"],
+      params: { networks: ["signal"] },
     };
-    const seeded = seedFieldValues(SIGNAL, { ingest, render });
-    expect(seeded["backup.path"]).toBe("~/backups");
-    expect(seeded["period"]).toBe("year");
-    // With no render step yet, the render field takes its default.
-    expect(seedFieldValues(SIGNAL, { ingest })["period"]).toBe("month");
+    const seeded = seedFieldValues(BEEPER, { ingest, render });
+    expect(seeded["texts.path"]).toBe("~/BeeperTexts");
+    expect(seeded["networks"]).toEqual(["signal"]);
+    // With no render step yet, the render field starts empty.
+    expect(seedFieldValues(BEEPER, { ingest })["networks"]).toEqual([]);
   });
 
   it("keeps an int a person cleared out of the form empty", () => {

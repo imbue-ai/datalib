@@ -49,10 +49,6 @@ impl SignalConfig {
 pub struct SignalRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// How much time each rendered document spans — `month` (default),
-    /// `day`, `year`, or `all`. Every chat source offers the same choice.
-    #[serde(default)]
-    pub period: Option<String>,
 }
 
 /// The `backup` table. The extractor reads every `signal-backup-*`
@@ -72,13 +68,6 @@ pub struct SignalSync {
     /// Name a different one per source to keep two accounts' passphrases apart.
     #[serde(default)]
     pub aep_env_var: Option<String>,
-    /// Where `period` used to go. It now belongs on the render step's
-    /// params; an older config that still sets it here loads, and the
-    /// ingest step refuses it with a pointer to the render step. Out of
-    /// the schema, so `datalib-step help` does not offer it.
-    #[serde(default)]
-    #[schemars(skip)]
-    pub period: Option<String>,
 }
 
 impl SignalSync {

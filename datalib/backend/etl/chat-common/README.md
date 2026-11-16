@@ -231,20 +231,14 @@ worth knowing about before you invent a third:
   "Google Chat Message"), so it groups its chats by network and calls
   `render_all` once per group.
 - **`NormalizedDoc::orphan_reactions`** carries reactions to a message
-  the mirror does not have. A period-bucketed provider is expected to
-  file a reaction under its *target's* period rather than its own — a
-  reaction to a March message belongs in the March document however
-  late it arrived, and beeper's parse resolves that against every event
-  in the store. What is left is the case nothing can place: the target
-  was never downloaded. Only beeper produces these, and the TNG fixture
+  the mirror does not have: the target was never downloaded. Only beeper produces these, and the TNG fixture
   has none; the one test that renders one is
   `every_timestamp_carries_the_full_instant` in `src/render.rs`.
 
-One `NormalizedChat` per *bucket* rather than per chat is the idiom for
-a period-bucketed source (beeper, signal): attachment bundles are keyed
-by `NormalizedChat::id`, and those sources load a bundle per bucket.
-Nothing downstream notices — each document is filed by its own id
-either way, and the chat-level grid row was already one per document.
+A chat is one document whose id is the chat's own. A chat with more
+than one (a document that is part of a chat and read on its own) has
+each of them as a container inside the chat; `render.rs`'s `tree_of`
+places them, and every row, in the chat's tree.
 
 ## `LAYOUT_VERSION`
 

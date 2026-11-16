@@ -1,11 +1,7 @@
 //! What the activity feeds share. Gemini, YouTube and Google Maps are
 //! each a timeline of things the account did, so each is one chat datalib
-//! composes, a document per year; YouTube's subscriptions have no dates
-//! and are one document.
+//! composes, one document per feed.
 
-use std::collections::BTreeMap;
-
-use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
@@ -206,39 +202,25 @@ pub fn str_at<'a>(v: &'a Value, pointer: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-/// The feed `chat_id` as one chat, a document per year.
-pub fn yearly(
+/// A timeline feed as one chat, oldest first; the undated last, in the
+/// order given.
+pub fn timeline(
+    source_id: &str,
+    chat_id: &str,
+    display: &str,
+    mut items: Vec<NormalizedChatItem>,
+    inputs: Inputs,
+) -> NormalizedChat {
+    items.sort_by_key(|i| (i.date_ms.is_none(), i.date_ms));
+    feed_chat(source_id, chat_id, display, items, inputs)
+}
+
+/// The feed `chat_id` as one chat in one document, in the order given.
+pub fn feed_chat(
     source_id: &str,
     chat_id: &str,
     display: &str,
     items: Vec<NormalizedChatItem>,
-    inputs: Inputs,
-) -> NormalizedChat {
-    chat(source_id, chat_id, display, by_year(items), inputs)
-}
-
-/// The feed `chat_id` as one chat in one document.
-pub fn whole(
-    source_id: &str,
-    chat_id: &str,
-    display: &str,
-    items: Vec<NormalizedChatItem>,
-    inputs: Inputs,
-) -> NormalizedChat {
-    chat(
-        source_id,
-        chat_id,
-        display,
-        BTreeMap::from([("all".to_string(), items)]),
-        inputs,
-    )
-}
-
-fn chat(
-    source_id: &str,
-    chat_id: &str,
-    display: &str,
-    periods: BTreeMap<String, Vec<NormalizedChatItem>>,
     inputs: Inputs,
 ) -> NormalizedChat {
     let feed = ids::feed(source_id, chat_id);
@@ -249,7 +231,7 @@ fn chat(
         id: chat_id.to_string(),
         containers: Vec::new(),
         filed_under: Vec::new(),
-        chat_uuid: feed.uuid,
+        chat_uuid: feed.uuid.clone(),
         display: display.to_string(),
         title: None,
         author: Some(ME.to_string()),
@@ -260,19 +242,12 @@ fn chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: periods
-            .into_iter()
-            .map(|(period_key, items)| {
-                let period = ids::feed_period(source_id, chat_id, &period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    markdown_uuid: period.uuid,
-                    source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
-                    period_key,
-                    items,
-                }
-            })
-            .collect(),
+        buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
+            markdown_uuid: feed.uuid,
+            source_ref: None,
+            items,
+        }],
     }
 }
 

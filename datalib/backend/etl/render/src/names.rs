@@ -41,8 +41,8 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
     for photo in &mut photos {
         changed |= settle_photo(photo);
     }
-    let mut nodes = md.nodes.clone();
-    for node in &mut nodes {
+    let mut data_nodes = md.data_nodes.clone();
+    for node in &mut data_nodes {
         changed |= settle_node(node);
     }
     if !changed {
@@ -61,7 +61,7 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
         content_hash: md.content_hash.clone(),
         edges,
         contacts,
-        nodes,
+        data_nodes,
         filings: md.filings.clone(),
         photos,
         problems: md.problems.clone(),
@@ -70,7 +70,7 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
 
 /// A container's kind and name are read by a person; the rest are ids,
 /// keys and stamps.
-fn settle_node(node: &mut datalib_schema::nodes::NodeRow) -> bool {
+fn settle_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
     let mut changed = strip(&mut node.kind);
     if let Some(name) = node.name.as_mut() {
         changed |= strip(name);
@@ -236,7 +236,7 @@ mod tests {
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes: Vec::new(),
             filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),

@@ -238,6 +238,7 @@ mod tests {
             uuid: "u".into(),
             row_id: "r".into(),
             container: "o/repo".into(),
+            container_node: None,
             number: 7,
             title: MARKUP.into(),
             body: "**Engage**".into(),

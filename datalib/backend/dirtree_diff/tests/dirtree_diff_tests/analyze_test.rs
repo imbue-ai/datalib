@@ -436,7 +436,7 @@ fn the_root_row_is_never_a_finding() {
         ..Default::default()
     }
     .run();
-    assert!(r.left.nodes.is_empty());
+    assert!(r.left.data_nodes.is_empty());
 }
 
 // in-tree duplicates

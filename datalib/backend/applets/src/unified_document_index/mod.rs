@@ -2328,7 +2328,7 @@ mod tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes: Vec::new(),
             filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),

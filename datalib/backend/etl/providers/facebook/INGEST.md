@@ -200,12 +200,12 @@ them against the render cursor, then six feeds:
 |---|---|---|
 | posts | `…posts_your_posts_check_ins_photos_and_videos` + `…posts_on_other_pages_and_profiles` + `…groups_group_posts_and_comments` | post: the text, its media as attachments, a `📍 Place — address` line per check-in (the export lists a place twice, with and without its page URL; the one with the URL wins), a life event as a bold title and description, and `— with A, B` for tags |
 | albums | `…posts_album` | album: the description first, then every photo in creation order, captioned where the photo has one of its own |
-| comments | `…comments_and_reactions_comments` + `…groups_your_comments_in_groups` | year: the comment, with Facebook's sentence about it in italics beneath, any photo attached and any link |
-| reactions | `…comments_and_reactions_likes_and_reactions` | year: `👍 X liked Y's post.`, the URL as the header's `↗` |
+| comments | `…comments_and_reactions_comments` + `…groups_your_comments_in_groups` | the whole feed: the comment, with Facebook's sentence about it in italics beneath, any photo attached and any link |
+| reactions | `…comments_and_reactions_likes_and_reactions` | the whole feed: `👍 X liked Y's post.`, the URL as the header's `↗` |
 | friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field, and their name as their handle |
-| Messenger | `messenger_threads` + `messenger_messages` | year of a conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
+| Messenger | `messenger_threads` + `messenger_messages` | conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
 
-Comments and reactions are bucketed by year because the export does not
+Comments and reactions are each one feed, oldest first, because the export does not
 say which post they were left on in any form we can resolve: a comment
 record has a `title` sentence and no link, a reaction has a URL to a post
 that is usually somebody else's. LinkedIn's export names the post, so it

@@ -1,7 +1,7 @@
 # Showing a rendered document in your app
 
 Every source's render step writes its records as markdown documents: an
-email thread, a Slack channel's month, a calendar's week. The markdown
+email thread, a Slack thread, a calendar's week. The markdown
 names people and times in two fixed shapes, so that any markdown viewer
 shows something sensible and an app that knows the shapes can do more:
 draw a person as who they are, and show every time in the zone its reader

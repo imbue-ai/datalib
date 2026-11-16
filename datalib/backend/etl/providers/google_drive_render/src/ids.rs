@@ -10,6 +10,7 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::GoogleDrive;
 pub const KIND_FILE: &str = "file";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_REPLY: &str = "reply";
+pub const KIND_FOLDER: &str = "folder";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 
@@ -17,6 +18,11 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 /// find the same document.
 pub fn file(source_id: &str, file_id: &str) -> Identity {
     IDS.mint(source_id, KIND_FILE, file_id.to_string(), None)
+}
+
+/// No stamp: a folder is a container, and its files carry the times.
+pub fn folder(source_id: &str, folder_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_FOLDER, folder_id.to_string(), None)
 }
 
 /// `comment_key` is the raw store's, `{file}#{comment}`.
@@ -49,6 +55,7 @@ mod tests {
         let at = Some("2364-03-02T09:00:00.000Z");
         for got in [
             file("src", "1Log"),
+            folder("src", "0Logs"),
             comment("src", "1Log#AAA", at),
             reply("src", "1Log#AAA#BBB", at),
         ] {

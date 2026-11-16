@@ -405,8 +405,6 @@ command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
-period = "month"                     # span of each page: month (default), day, year,
-                                     # or all (one page per chat)
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 
@@ -2305,9 +2303,6 @@ group = "signal"
 function = "render_markdown"
 command = "datalib-step"
 inputs = ["signal/ingest"]
-
-[steps.params]
-period = "month"  # span of each rendered doc: month (default), day, year or all
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.

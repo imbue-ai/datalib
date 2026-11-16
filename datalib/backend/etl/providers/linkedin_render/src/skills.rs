@@ -14,6 +14,7 @@ use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -141,6 +142,16 @@ pub fn build(
     }
     skills.sort_by_key(|(_, name)| name.to_lowercase());
 
+    // The one document is read together, and each skill sits in it.
+    let node = DataNodeRow::new(&doc_id.uuid, &doc_id.uuid, source_id, KIND_SKILLS)
+        .named(Some(TITLE.to_string()))
+        .upstream(
+            doc_id.entity_kind,
+            doc_id.natural_key.clone(),
+            account.map(str::to_string),
+        )
+        .read_together();
+    let in_doc = Lineage::top().below(&node);
     let mut sections = vec![Section::unkeyed(head(&doc_id))];
     let mut rows_out: Vec<GridRow> = Vec::new();
     // The body is the escaped name, as on the page: the preview reads the
@@ -169,6 +180,7 @@ pub fn build(
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
             .markdown_uuid(Some(doc_id.uuid.clone()))
+            .lineage(&in_doc)
             .build_or_record(source_id, row_id, RENDER_VERSION, &mut problems);
         rows_out.extend(row);
     }
@@ -205,7 +217,7 @@ pub fn build(
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes: vec![node],
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
@@ -285,6 +297,17 @@ mod tests {
             "{diplomacy}"
         );
         assert_eq!(inputs.len(), 2, "both rows declared: {inputs:?}");
+        assert_eq!(doc.data_nodes.len(), 1);
+        assert!(doc.data_nodes[0].read_together);
+        assert_eq!(doc.data_nodes[0].uuid, doc.rows[0].uuid);
+        assert_eq!(doc.rows[0].parent_uuid, None);
+        for skill in &doc.rows[1..] {
+            assert_eq!(
+                skill.parent_uuid.as_deref(),
+                Some(doc.rows[0].uuid.as_str())
+            );
+            assert_eq!(skill.read_uuid.as_deref(), Some(doc.rows[0].uuid.as_str()));
+        }
     }
 
     /// A skill is what the person typed: escaped on the page, as typed in

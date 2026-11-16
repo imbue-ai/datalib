@@ -99,7 +99,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: album.uuid,
             source_ref: None,
             items,

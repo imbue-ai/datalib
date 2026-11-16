@@ -1,13 +1,12 @@
 //! The owner's comments and reactions. Neither names the post it was
 //! left on in any way the export lets us resolve, so each feed is one
-//! chat bucketed by year rather than a thread per post.
+//! chat, one document, rather than a thread per post.
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::period::year_of;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
-    AuthorKind, NormalizedChat, NormalizedChatItem, NormalizedDoc, UpstreamRef,
+    AuthorKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_facebook::ingest::schema_raw::GROUP_COMMENTS_TABLE;
 use datalib_etl_facebook::ingest::schema_raw::{
@@ -172,19 +171,13 @@ pub fn build_comments(
             }
         }
     }
-    vec![yearly_chat(
-        COMMENTS_CHAT,
-        "Comments",
-        groups,
-        inputs,
-        owner,
-    )]
+    vec![feed_chat(COMMENTS_CHAT, "Comments", groups, inputs, owner)]
 }
 
 const COMMENT_VERSION: &str = "Facebook Comment Version";
 
-/// Items that read together, filed by one time: a comment and the
-/// versions folded in above it go into the year the comment was made.
+/// Items that read together, ordered by one time: a comment and the
+/// versions folded in above it go where the comment was made.
 struct Group {
     at: Option<i64>,
     items: Vec<NormalizedChatItem>,
@@ -282,7 +275,7 @@ pub fn build_reactions(reactions: &[(String, Value)], owner: &Owner) -> Vec<Norm
             items: vec![item],
         })
         .collect();
-    vec![yearly_chat(
+    vec![feed_chat(
         REACTIONS_CHAT,
         "Reactions",
         groups,
@@ -339,18 +332,15 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-fn yearly_chat(
+fn feed_chat(
     id: &str,
     display: &str,
     mut groups: Vec<Group>,
     inputs: Inputs,
     owner: &Owner,
 ) -> NormalizedChat {
-    groups.sort_by_key(|g| g.at);
-    let mut years: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-    for g in groups {
-        years.entry(year_of(g.at)).or_default().extend(g.items);
-    }
+    groups.sort_by_key(|g| (g.at.is_none(), g.at));
+    let items: Vec<NormalizedChatItem> = groups.into_iter().flat_map(|g| g.items).collect();
     for input in &owner.inputs {
         inputs.read(&input.table, &input.id);
     }
@@ -362,7 +352,7 @@ fn yearly_chat(
         id: id.to_string(),
         containers: Vec::new(),
         filed_under: Vec::new(),
-        chat_uuid: feed.uuid,
+        chat_uuid: feed.uuid.clone(),
         display: display.to_string(),
         title: None,
         author: Some(owner.name.clone()),
@@ -373,19 +363,12 @@ fn yearly_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: years
-            .into_iter()
-            .map(|(period_key, items)| {
-                let year = ids::feed_year(&owner.source_id, id, &period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    markdown_uuid: year.uuid,
-                    source_ref: Some(UpstreamRef::new(year.entity_kind, year.natural_key)),
-                    period_key,
-                    items,
-                }
-            })
-            .collect(),
+        buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
+            markdown_uuid: feed.uuid,
+            source_ref: None,
+            items,
+        }],
     }
 }
 
@@ -412,7 +395,7 @@ mod tests {
     const NEXT_YEAR: i64 = MARCH + 365 * 86_400;
 
     #[test]
-    fn comments_bucket_by_year_and_keep_the_title() {
+    fn comments_spanning_two_years_are_one_document_and_keep_the_title() {
         let rows = vec![
             (
                 "c1".to_string(),
@@ -434,19 +417,17 @@ mod tests {
         ];
         let chats = build_comments(&rows, &[], &[], &owner());
         assert_eq!(chats.len(), 1);
-        let years: Vec<&str> = chats[0]
-            .buckets
-            .iter()
-            .map(|b| b.period_key.as_str())
-            .collect();
-        assert_eq!(years, ["2369", "2370"], "one document per year");
-        let first = &chats[0].buckets[0].items[0];
+        let [doc] = chats[0].buckets.as_slice() else {
+            panic!("one document: {:?}", chats[0].buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
+        let first = &doc.items[0];
         assert_eq!(
             first.text.as_deref(),
             Some("Enjoy the chair, Will.\n\n*Jean-Luc Picard commented on William Riker's post.*")
         );
         assert_eq!(first.author_display, owner().name);
-        let second = &chats[0].buckets[1].items[0];
+        let second = &doc.items[1];
         assert_eq!(second.kind, ItemKind::Attachment);
         assert_eq!(second.attachments[0].ref_id.as_deref(), Some("m/4.png"));
         // Two comment rows, plus the media edge the second one shows.

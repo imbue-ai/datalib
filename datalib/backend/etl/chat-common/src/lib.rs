@@ -8,7 +8,6 @@ pub mod changed;
 pub mod findings;
 pub mod normalize;
 pub mod people;
-pub mod period;
 pub mod render;
 pub mod samples;
 pub mod types;

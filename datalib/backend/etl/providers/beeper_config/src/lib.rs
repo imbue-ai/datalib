@@ -49,13 +49,6 @@ impl BeeperConfig {
 pub struct BeeperRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// Period each rendered markdown document covers. One of
-    /// `"month"` (default), `"day"`, `"year"`, or `"all"` (single
-    /// file per conversation). Reactions render in the period of
-    /// the message they target, regardless of when the reaction
-    /// itself landed.
-    #[serde(default)]
-    pub period: Option<String>,
     /// Canonical chat network names to render (`"signal"`,
     /// `"googlechat"`, `"slack"`, …). Unset renders every network the
     /// mirror holds; the download mirrors them all either way.

@@ -38,7 +38,6 @@ chats.
    function = "render_markdown"
    inputs = ["beeper/ingest"]
    [steps.params]
-   # period = "month"                     # or "day", "year", "all"
    # networks = ["signal", "googlechat"]  # unset: every network
    ```
 

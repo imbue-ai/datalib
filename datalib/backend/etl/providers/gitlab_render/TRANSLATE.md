@@ -21,6 +21,9 @@ GitLab `ForgeProfile` (`src/render/mod.rs`). What differs:
   and the like are GitLab's audit log, not conversation.
 - **Rows**: the MR's own row is `kind = "GitLab MR"`; a note's is
   `"GitLab Discussion Note"` or `"GitLab Inline Note"`.
+- **The project** is the place, keyed by the MR's `project_id`, which a
+  rename or a move keeps. A note after a discussion's first is a
+  `ReplyTo` edge to that first note.
 
 ## Tests
 

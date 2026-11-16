@@ -50,6 +50,16 @@ pub struct Catalog {
     pub images: BTreeMap<i64, ImageRow>,
 }
 
+/// A keyword or a collection a photo is filed under, with the keywords or
+/// sets above it, top first: each its table's `id_local` and its name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filed {
+    /// The table the ids are in: `AgLibraryKeyword`, `AgLibraryCollection`
+    /// or `AgLibraryPublishedCollection`.
+    pub table: &'static str,
+    pub path: Vec<(i64, String)>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ImageRow {
     pub id_local: i64,
@@ -88,6 +98,9 @@ pub struct ImageRow {
     /// Each collection it is in, as its path from the top: the sets
     /// above it, then its own name.
     pub albums: Vec<Vec<String>>,
+    /// Each keyword and collection it is filed under, by the catalog's
+    /// ids, which a rename keeps.
+    pub filed: Vec<Filed>,
     pub xmp: Option<Vec<u8>>,
     pub duration: Option<String>,
 }
@@ -125,6 +138,10 @@ pub async fn load(pool: &SqlitePool) -> Result<Catalog> {
     for image in images.values_mut() {
         image.albums.sort();
         image.albums.dedup();
+        image
+            .filed
+            .sort_by(|a, b| (a.table, &a.path).cmp(&(b.table, &b.path)));
+        image.filed.dedup();
     }
     if xmp_mirrored {
         load_xmp(pool, &mut images).await?;
@@ -334,23 +351,10 @@ async fn load_keywords(
         )
     })
     .collect();
-    let path = |mut id: i64| {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        while let Some(k) = tree.get(&id) {
-            if !seen.insert(id) {
-                break;
-            }
-            if let Some(name) = &k.name {
-                out.push(name.clone());
-            }
-            match k.parent {
-                Some(p) => id = p,
-                None => break,
-            }
-        }
-        out.reverse();
-        out
+    let path = |id: i64| {
+        named_path(id, |id| {
+            tree.get(&id).map(|k| (k.name.as_deref(), k.parent))
+        })
     };
 
     if faces {
@@ -419,7 +423,16 @@ async fn load_keywords(
                     });
                 }
             }
-            (Some(_), false) => image.keywords.push(path(tag)),
+            (Some(_), false) => {
+                let path = path(tag);
+                image
+                    .keywords
+                    .push(path.iter().map(|(_, n)| n.clone()).collect());
+                image.filed.push(Filed {
+                    table: "AgLibraryKeyword",
+                    path,
+                });
+            }
             (None, _) => {}
         }
     }
@@ -496,23 +509,10 @@ async fn load_albums(
         ))
     })
     .collect();
-    let path = |mut id: i64| {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        while let Some(c) = tree.get(&id) {
-            if !seen.insert(id) {
-                break;
-            }
-            if let Some(name) = &c.name {
-                out.push(name.clone());
-            }
-            match c.parent {
-                Some(p) => id = p,
-                None => break,
-            }
-        }
-        out.reverse();
-        out
+    let path = |id: i64| {
+        named_path(id, |id| {
+            tree.get(&id).map(|c| (c.name.as_deref(), c.parent))
+        })
     };
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT DISTINCT CAST(image AS INTEGER) AS image, \
@@ -527,13 +527,49 @@ async fn load_albums(
         if !tree.contains_key(&collection) {
             continue;
         }
-        let album = path(collection);
-        if let (Some(image), false) = (images.get_mut(&r.get::<i64, _>("image")), album.is_empty())
-        {
-            image.albums.push(album);
+        let path = path(collection);
+        if let (Some(image), false) = (images.get_mut(&r.get::<i64, _>("image")), path.is_empty()) {
+            image
+                .albums
+                .push(path.iter().map(|(_, n)| n.clone()).collect());
+            if !image
+                .filed
+                .iter()
+                .any(|f| f.table == tables.collections && f.path == path)
+            {
+                image.filed.push(Filed {
+                    table: tables.collections,
+                    path,
+                });
+            }
         }
     }
     Ok(())
+}
+
+/// The named entries from the top of a tree down to `id`, by following
+/// each entry's parent. One with no name (Lightroom's hidden root
+/// keyword) is walked through; a loop stops the walk.
+fn named_path<'t>(
+    mut id: i64,
+    entry: impl Fn(i64) -> Option<(Option<&'t str>, Option<i64>)>,
+) -> Vec<(i64, String)> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    while let Some((name, parent)) = entry(id) {
+        if !seen.insert(id) {
+            break;
+        }
+        if let Some(name) = name {
+            out.push((id, name.to_string()));
+        }
+        match parent {
+            Some(p) => id = p,
+            None => break,
+        }
+    }
+    out.reverse();
+    out
 }
 
 async fn load_xmp(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
@@ -626,6 +662,20 @@ mod tests {
         let mut images: BTreeMap<i64, ImageRow> = [(10, ImageRow::default())].into();
         load_albums(&pool, &mut images, COLLECTIONS).await.unwrap();
         load_albums(&pool, &mut images, PUBLISHED).await.unwrap();
+        let filed: Vec<(&str, Vec<i64>)> = images[&10]
+            .filed
+            .iter()
+            .map(|f| (f.table, f.path.iter().map(|(id, _)| *id).collect()))
+            .collect();
+        assert_eq!(
+            filed,
+            [
+                ("AgLibraryCollection", vec![1, 2]),
+                ("AgLibraryCollection", vec![3]),
+                ("AgLibraryPublishedCollection", vec![1, 2]),
+            ],
+            "each collection by its ids, the set above it first"
+        );
         let mut albums = images[&10].albums.clone();
         albums.sort();
         assert_eq!(

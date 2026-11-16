@@ -13,6 +13,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_signal::ingest::{self, FetchOptions};
 use datalib_etl_signal_render::render::{parse_raw_dir, render_all};
+use datalib_schema::edges::EdgeKind;
 use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -151,8 +152,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Render runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the
     // .doltlite_db extension) — ingest::fetch normalized it the
-    // same way internally. Default period (Month) is fine here; all
-    // 4 messages share a single month (2364-04) so one bucket.
+    // same way internally.
     let parsed = tokio::task::spawn_blocking({
         let raw = raw_db_path.clone();
         move || parse_raw_dir(&raw)
@@ -160,16 +160,11 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     .await??;
     assert_eq!(parsed.chats.len(), 1, "expected 1 chat parsed");
     assert_eq!(parsed.recipients.len(), 3, "expected 3 recipients parsed");
-    assert_eq!(
-        parsed.docs.len(),
-        1,
-        "expected 1 (chat, period_key) bucket; all messages in same month"
-    );
+    assert_eq!(parsed.docs.len(), 1, "expected one document, the chat");
     assert_eq!(
         parsed.docs_skipped, 0,
         "first parse: no render cursor → cold start → nothing skipped"
     );
-    assert_eq!(parsed.docs[0].period_key, "2364-04");
 
     let progress = Progress::noop();
     let mut rendered_docs: Vec<RenderedMarkdown> = Vec::new();
@@ -207,7 +202,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // markdown `# …` line) so the Vue side can hook a copy-id button
     // off `data-page-title-uuid`.
     assert!(
-        md.contains("class=\"page-title\"") && md.contains(">Will Riker (2364-04)"),
+        md.contains("class=\"page-title\"") && md.contains(">Will Riker<"),
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
@@ -294,7 +289,6 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             let stale = std::collections::HashSet::new();
             datalib_etl_signal_render::render::parse(
                 &raw,
-                datalib_etl::periodize::Period::Month,
                 "signal-tng",
                 datalib_etl_render::inputs::RawRange {
                     cursor: Some(last_hash.as_str()),
@@ -1383,12 +1377,7 @@ async fn render_signal(
             pin: None,
             stale: cursor.as_ref().map(|_| &nothing_stale),
         };
-        let parsed = datalib_etl_signal_render::render::parse(
-            &store,
-            datalib_etl::periodize::Period::Month,
-            "signal-tng",
-            range,
-        )?;
+        let parsed = datalib_etl_signal_render::render::parse(&store, "signal-tng", range)?;
         let mut docs = Vec::new();
         render_all(
             &parsed,
@@ -1611,5 +1600,83 @@ async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> 
     .await?;
     db.close().await;
     assert_eq!(changed, ["chat_items", "read_marks"]);
+    Ok(())
+}
+
+/// A chat whose messages run from one month into the next is one
+/// document under the chat's own uuid; it was a document per month.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let mut frames = bridge_crew();
+    frames.extend([
+        chat_item(100, 1, APRIL_11_MS, "Status report.", true),
+        incoming(100, 2, APRIL_11_MS + 30 * DAY_MS, "All decks green.", true),
+    ]);
+    write_day(&snapshots, 0, &frames)?;
+    fetch_once(&snapshots, &store, &tmp.path().join("fingerprints.sqlite")).await?;
+
+    let (docs, _) = render_signal(&store, &tmp.path().join("out"), None).await?;
+    assert_eq!(docs.len(), 1);
+    let chat = datalib_etl_signal_render::render::ids::chat("signal-tng", BRIDGE).uuid;
+    assert_eq!(docs[0].markdown_uuid, chat);
+    let md = std::fs::read_to_string(&docs[0].md_path)?;
+    assert!(
+        md.contains("Status report.") && md.contains("All decks green."),
+        "{md}"
+    );
+    Ok(())
+}
+
+/// A message that quotes another is a reply edge to it, found by the
+/// quoted message's `date_sent`; a quote nothing in the chat was sent at
+/// is no edge. Quotes were counted as not shown and linked nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quote_is_a_reply_edge_to_the_message_it_quotes() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let store = tmp.path().join("raw").join("signal");
+    let quoting = |date_sent: u64, text: &str, quotes: u64| {
+        let mut frame = incoming(100, 2, date_sent, text, true);
+        if let Some(backup::frame::Item::ChatItem(ci)) = &mut frame.item {
+            if let Some(backup::chat_item::Item::StandardMessage(sm)) = &mut ci.item {
+                sm.quote = Some(backup::Quote {
+                    target_sent_timestamp: Some(quotes),
+                    author_id: 1,
+                    ..Default::default()
+                });
+            }
+        }
+        frame
+    };
+    let mut frames = bridge_crew();
+    frames.extend([
+        chat_item(100, 1, APRIL_11_MS, "Status report.", true),
+        quoting(APRIL_11_MS + 60_000, "All decks green.", APRIL_11_MS),
+        quoting(APRIL_11_MS + 120_000, "As I said.", APRIL_11_MS - 1),
+    ]);
+    write_day(&snapshots, 0, &frames)?;
+    fetch_once(&snapshots, &store, &tmp.path().join("fingerprints.sqlite")).await?;
+
+    let (docs, _) = render_signal(&store, &tmp.path().join("out"), None).await?;
+    let message = |author: &str, sent: u64| {
+        datalib_etl_signal_render::render::ids::message("signal-tng", BRIDGE, author, sent as i64)
+            .uuid
+    };
+    let replies: Vec<_> = docs[0]
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::ReplyTo.as_i64())
+        .map(|e| (e.src_anchor_uuid.clone(), e.dst_anchor_uuid.clone()))
+        .collect();
+    assert_eq!(
+        replies,
+        [(
+            Some(message(RIKER, APRIL_11_MS + 60_000)),
+            Some(message(PICARD, APRIL_11_MS))
+        )]
+    );
     Ok(())
 }

@@ -29,6 +29,9 @@ one. A personal record whose `typeId` is not in the table in
 `src/render/records.rs` is shown as `Record type N` with its raw value
 rather than guessed at.
 
+Each document is read together at the top of the source, and every
+other row it holds (a device, a day, a listing) sits in it.
+
 The minute-by-minute series (heart rate, stress, Body Battery,
 respiration, steps) are mirrored but not drawn. The activities' FIT
 files are read into time series (§"Time series"), not into the pages.

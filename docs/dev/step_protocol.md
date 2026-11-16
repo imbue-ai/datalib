@@ -859,7 +859,7 @@ store from the first entry of `DATALIB_DAG_INPUTS`. It reads the
 params file as the provider's **function-specific** config — the ingest
 step carries the provider's download config (`common` envelope, the method table
 block, …), the render step only the render knobs (nothing for most
-providers; beeper/signal `period`, perseus `alignment_pairs`, email
+providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
 `--reset`, `--migrate`, `--compact` and `--collect`, stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the grid

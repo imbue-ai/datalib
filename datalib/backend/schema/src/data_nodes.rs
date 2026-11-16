@@ -9,8 +9,8 @@ use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
-#[portable_table(table = "nodes", primary_key = "markdown_uuid, uuid")]
-pub struct NodeRow {
+#[portable_table(table = "data_nodes", primary_key = "markdown_uuid, uuid")]
+pub struct DataNodeRow {
     /// The document that carries this row.
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: String,
@@ -66,7 +66,7 @@ impl Lineage {
     }
 
     /// Where the children of `node` sit.
-    pub fn below(&self, node: &NodeRow) -> Self {
+    pub fn below(&self, node: &DataNodeRow) -> Self {
         let own = || Some(node.uuid.clone());
         Lineage {
             parent_uuid: own(),
@@ -84,14 +84,14 @@ impl Lineage {
     }
 }
 
-impl NodeRow {
+impl DataNodeRow {
     pub fn new(
         markdown_uuid: impl Into<String>,
         uuid: impl Into<String>,
         source_id: impl Into<String>,
         kind: impl Into<String>,
     ) -> Self {
-        NodeRow {
+        DataNodeRow {
             markdown_uuid: markdown_uuid.into(),
             uuid: uuid.into(),
             source_id: source_id.into(),
@@ -158,9 +158,9 @@ mod tests {
     /// it lacks passes down from above.
     #[test]
     fn lineage_passes_each_role_down_from_the_nearest_container_that_has_it() {
-        let channel = NodeRow::new("md", "channel", "s", "Slack channel").place();
+        let channel = DataNodeRow::new("md", "channel", "s", "Slack channel").place();
         let in_channel = Lineage::top().below(&channel);
-        let thread = NodeRow::new("md", "thread", "s", "Slack thread")
+        let thread = DataNodeRow::new("md", "thread", "s", "Slack thread")
             .read_together()
             .under(&in_channel);
         assert_eq!(thread.parent_uuid.as_deref(), Some("channel"));

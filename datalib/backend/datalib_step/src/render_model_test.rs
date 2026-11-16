@@ -428,7 +428,7 @@ fn to_rendered(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
-        nodes: Vec::new(),
+        data_nodes: Vec::new(),
         filings: Vec::new(),
         photos: Vec::new(),
         problems: Vec::new(),

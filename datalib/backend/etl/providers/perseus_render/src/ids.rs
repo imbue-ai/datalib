@@ -13,6 +13,8 @@ pub const KIND_BOOK: &str = "book";
 pub const KIND_CHAPTER: &str = "chapter";
 pub const KIND_SECTION: &str = "section";
 pub const KIND_SENTENCE: &str = "sentence";
+pub const KIND_WORK: &str = "work";
+pub const KIND_EDITION: &str = "edition";
 
 const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
@@ -21,6 +23,21 @@ pub fn passage_urn(edition: Option<&str>, locator: &str) -> String {
         Some(edition) => format!("{WORK_URN}.{edition}:{locator}"),
         None => format!("{WORK_URN}:{locator}"),
     }
+}
+
+/// The work, by its CTS URN.
+pub fn work(source_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_WORK, WORK_URN.to_string(), None)
+}
+
+/// One edition of the work, by its CTS URN (`…tlg001.perseus-grc2`).
+pub fn edition(source_id: &str, version: &str) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_EDITION,
+        format!("{WORK_URN}.{version}"),
+        None,
+    )
 }
 
 pub fn book(source_id: &str, book_n: &str) -> Identity {
@@ -86,6 +103,8 @@ mod tests {
     fn natural_key_regenerates_the_uuid() {
         for got in [
             book("perseus", "1"),
+            work("perseus"),
+            edition("perseus", "perseus-grc2"),
             chapter("perseus", "1", "1", "perseus-grc2"),
             section("perseus", "1", "1", "1", "perseus-grc2"),
             sentence("perseus", "1", "1", "1", "perseus-grc2", 3),

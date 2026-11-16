@@ -157,22 +157,22 @@ FACEBOOK_VIDEO_NOT_IN_EXPORT = (
 # alone, on the document and at the item's section, so a run over a real
 # export says what it left out (INGEST.md §"What render reports").
 FACEBOOK_CALL_DURATION_UNREAD = (
-    "01212325-894c-5374-87de-1d1815eeceb2"
+    "7bda7474-935d-53d5-8ee0-9202b4093c5c"
     "|warning|parse|markdown"
-    "|00000000-0000-83cd-81f6-03463a36a7ff"  # Riker's conversation, 2369
+    "|00000000-0000-8c82-8a32-5b80abc87553"  # Riker's conversation
     "|0b75aa8d-8300-8a42-b652-9507008d5441"  # the video-chat message
     "|call_duration|uncovered_type|int"
 )
-FACEBOOK_TEN_FORWARD = "00000000-0000-8c0a-a597-b3f178ded27c"  # its 2369 document
+FACEBOOK_TEN_FORWARD = "00000000-0000-8ef0-a5ad-33a9d1bb3c0b"  # its document
 FACEBOOK_SENDER_WHO_LEFT = (
-    "bc107a95-a158-587e-85e2-16d746246397"
+    "4351998a-60ae-52f5-a8d4-3721f9bb495c"
     f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
     "|0b75aab9-7500-8649-a7c9-bcf2a91acd15"  # Wesley's message
     "|sender_name|noted|a sender the conversation's participants do not list "
     "(left the conversation?)"
 )
 FACEBOOK_DELETED_ACCOUNTS_TOGETHER = (
-    "cf96cab7-5e94-5468-8b3f-5b53932267da"
+    "0cee67d6-5f70-5431-b534-070a8a93ecec"
     f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
     "|0b75aab3-f6c0-82ed-9976-ca875cebaeb6"  # the conversation's first message
     "|participants|noted|3 deleted accounts among 7 participants; "
@@ -223,9 +223,9 @@ PDF_THAT_WILL_NOT_IDENTIFY = (
 # The TNG backup keeps the message row of a photo deleted off the phone;
 # the other attachments resolve and say nothing.
 WHATSAPP_PHOTO_NOT_IN_BACKUP = (
-    "75ba5daf-7447-52d6-9873-7e01a563a8f5"
+    "4a7fcf9d-734b-5848-8e07-f0cd6bcd7491"
     "|warning|parse|markdown"
-    "|00000000-0000-8cd7-b2e8-b8443ce69b19"
+    "|00000000-0000-8d08-85b0-d2533cc3a460"
     "|0b50e817-2480-8dbf-8855-78fecef33dc9"  # message TNG0013
     "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
     " is not among the media files the backup holds"
@@ -290,14 +290,14 @@ TAKEOUT_UNREAD_FILES = [
 # `Comment`: a note on the review and on the saved place, not text.
 TAKEOUT_NO_LOCATION_NOTES = [
     (
-        "46f72732-7bb5-57ca-abfc-f0926e0cea9a|info|parse|markdown"
-        "|00000000-0000-8274-a762-150808777b86"
+        "42bdbe92-e618-52c7-b981-842c32d5c701|info|parse|markdown"
+        "|00000000-0000-84b4-80af-50ab120b27f4"
         "|019d7bfb-e900-8689-b06f-03ee09f0819c"
         "|Comment|noted|Google has no location for this place"
     ),
     (
-        "53e76917-0f9b-58fc-838c-8561c5681fda|info|parse|markdown"
-        "|00000000-0000-8274-a762-150808777b86"
+        "6c79e982-d90c-5ced-b21c-6f1af19ff4f6|info|parse|markdown"
+        "|00000000-0000-84b4-80af-50ab120b27f4"
         "|019ca869-5000-8c1e-8c4a-e9f5104df6a9"
         "|Comment|noted|Google has no location for this place"
     ),
@@ -306,15 +306,15 @@ TAKEOUT_NO_LOCATION_NOTES = [
 # noted on its first message.
 TAKEOUT_CHAT_SPACE_NOTES = [
     (
-        "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
-        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "51769ff0-5881-5d20-ab49-fc6aa76b8e52|info|parse|markdown"
+        "|00000000-0000-8e5f-8eb1-967f63ffb4eb"
         "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
         "|membership_state|noted"
         "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER"
     ),
     (
-        "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
-        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "46197332-6763-5662-989b-93a88c804f68|info|parse|markdown"
+        "|00000000-0000-8e5f-8eb1-967f63ffb4eb"
         "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
         "|starred_group_id|noted|the account starred this conversation"
     ),

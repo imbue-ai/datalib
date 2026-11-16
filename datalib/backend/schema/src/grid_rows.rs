@@ -178,9 +178,9 @@ pub struct GridRow {
     /// `uuid` for thread-level rows.
     #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
     pub conversation_uuid: String,
-    /// The container this row lives in, a `nodes.uuid`: the chat, thread,
+    /// The container this row lives in, a `data_nodes.uuid`: the chat, thread,
     /// page or session that holds it. Null where no container holds it.
-    /// Its siblings are the rows and nodes with the same parent.
+    /// Its siblings are the rows and data_nodes with the same parent.
     #[col(sql = "VARCHAR(96)")]
     pub parent_uuid: Option<String>,
     /// How the row sorts among its parent's children: its

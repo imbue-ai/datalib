@@ -1,10 +1,9 @@
-//! Messenger: one conversation per chat, one document per year of it.
+//! Messenger: one conversation per chat, one document.
 //! People are names here, and an account deleted since is `Facebook user`
 //! or no name at all; `People` decides who each name is.
 
 use std::collections::BTreeMap;
 
-use datalib_etl_chat_common::period::by_year;
 use datalib_etl_chat_common::render::{RenderProfile, TextFormat};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -180,20 +179,6 @@ fn conversation(
     }
     note_senders_not_listed(&mut items, &participants);
 
-    let buckets = by_year(items)
-        .into_iter()
-        .map(|(period_key, items)| {
-            let doc = ids::conversation_year(&owner.source_id, row_id, &period_key);
-            NormalizedDoc {
-                markdown_uuid: doc.uuid,
-                source_ref: Some(UpstreamRef::new(doc.entity_kind, doc.natural_key)),
-                items,
-                period_key,
-                orphan_reactions: Vec::new(),
-            }
-        })
-        .collect();
-
     let chat = ids::conversation(&owner.source_id, row_id);
     NormalizedChat {
         named_after: named_after(thread, &participants, owner, &people),
@@ -202,7 +187,7 @@ fn conversation(
         id: format!("conversation:{row_id}"),
         containers: Vec::new(),
         filed_under: Vec::new(),
-        chat_uuid: chat.uuid,
+        chat_uuid: chat.uuid.clone(),
         display: display(row_id, thread, &participants, owner),
         title: None,
         author: None,
@@ -213,7 +198,12 @@ fn conversation(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets,
+        buckets: vec![NormalizedDoc {
+            markdown_uuid: chat.uuid,
+            source_ref: None,
+            items,
+            orphan_reactions: Vec::new(),
+        }],
     }
 }
 
@@ -606,8 +596,10 @@ mod tests {
         assert_eq!(a[2].1.as_deref(), Some("facebook:name/Worf"));
     }
 
+    /// A conversation was a document per year, each under a uuid minted
+    /// from the year; it is one document under the conversation's own.
     #[test]
-    fn messages_read_oldest_first_and_split_by_year() {
+    fn a_conversation_spanning_two_years_is_one_document_oldest_first() {
         // 2369-01-01 and 2370-01-01, roughly, in ms.
         let y1 = 12_600_000_000_000;
         let y2 = y1 + 366 * 86_400_000;
@@ -639,19 +631,13 @@ mod tests {
             ],
             &owner(),
         );
-        let years: Vec<(&str, Vec<&str>)> = chats[0]
-            .buckets
-            .iter()
-            .map(|b| {
-                (
-                    b.period_key.as_str(),
-                    b.items.iter().filter_map(|i| i.text.as_deref()).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(years.len(), 2, "{years:?}");
-        assert_eq!(years[0].1, ["Engage.", "Now."]);
-        assert_eq!(years[1].1, ["later"]);
+        let [doc] = chats[0].buckets.as_slice() else {
+            panic!("one document: {:?}", chats[0].buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
+        assert!(doc.source_ref.is_none());
+        let texts: Vec<&str> = doc.items.iter().filter_map(|i| i.text.as_deref()).collect();
+        assert_eq!(texts, ["Engage.", "Now.", "later"]);
     }
 
     #[test]

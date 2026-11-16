@@ -331,6 +331,7 @@ fn render_one(
         qmd_path: Some(&qmd_rel),
     };
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
+    let node = grid_rows::document_node(source_id, &meta);
 
     Ok(RenderedMarkdown {
         section_layout: None,
@@ -347,7 +348,7 @@ fn render_one(
         sections,
         edges: Vec::new(),
         contacts: Vec::new(),
-        nodes: Vec::new(),
+        data_nodes: vec![node],
         filings: Vec::new(),
         photos: Vec::new(),
         problems,

@@ -453,13 +453,13 @@ async fn run_sync(
     let mailbox_filter: Option<BTreeSet<String>> = if opts.only_mailbox_labels.is_empty() {
         None
     } else {
-        let nodes: Vec<crate::mailbox_labels::MailboxNode> = db
+        let data_nodes: Vec<crate::mailbox_labels::MailboxNode> = db
             .load_mailboxes()
             .await?
             .iter()
             .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
             .collect();
-        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
+        let resolved = crate::mailbox_labels::resolve(&data_nodes, &opts.only_mailbox_labels);
         for spec in &resolved.unmatched {
             summary
                 .problems

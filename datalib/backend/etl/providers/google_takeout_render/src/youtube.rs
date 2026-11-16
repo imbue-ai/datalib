@@ -39,7 +39,7 @@ pub fn build_history(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat> {
             item
         })
         .collect();
-    vec![feeds::yearly(
+    vec![feeds::timeline(
         source_id,
         feeds::YOUTUBE_HISTORY,
         "YouTube history",
@@ -69,7 +69,7 @@ pub fn build_subscriptions(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat>
         })
         .collect();
     items.sort_by(|a, b| a.text.cmp(&b.text));
-    vec![feeds::whole(
+    vec![feeds::feed_chat(
         source_id,
         feeds::YOUTUBE_SUBSCRIPTIONS,
         "YouTube subscriptions",
@@ -106,7 +106,7 @@ mod tests {
         }];
         let chats = build_history("gt", &rows);
         let item = &chats[0].buckets[0].items[0];
-        assert_eq!(chats[0].buckets[0].period_key, "2364");
+        assert_eq!(chats[0].buckets[0].markdown_uuid, chats[0].chat_uuid);
         assert_eq!(
             item.text.as_deref(),
             Some(
@@ -127,7 +127,7 @@ mod tests {
         let [doc] = chats[0].buckets.as_slice() else {
             panic!("one document")
         };
-        assert_eq!(doc.period_key, "all");
+        assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
         let titles: Vec<_> = doc.items.iter().map(|i| i.text.as_deref()).collect();
         assert_eq!(titles, [Some("Data"), Some("Riker")]);
     }

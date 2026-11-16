@@ -18,6 +18,7 @@ use datalib_etl_render::message::stamp_text_html;
 use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -152,7 +153,8 @@ impl Out<'_> {
             .to_string_lossy()
             .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
-        let rows = build_rows(&md_rel, &mut problems);
+        let mut rows = build_rows(&md_rel, &mut problems);
+        let data_nodes = place(self.source_id, m_uuid, &mut rows);
         (self.on_doc)(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
@@ -168,13 +170,35 @@ impl Out<'_> {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
-            nodes: Vec::new(),
+            data_nodes,
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
         })
         .with_context(|| format!("on_doc_complete {m_uuid}"))
     }
+}
+
+/// Each document is read together at the top of the source, and every
+/// other row it holds (a device, a day, a listing) sits in it. The
+/// document is the container its own row describes.
+fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow> {
+    let Some(doc) = rows.iter().find(|r| r.uuid == m_uuid) else {
+        return Vec::new();
+    };
+    let mut node = DataNodeRow::new(m_uuid, m_uuid, source_id, doc.kind.clone())
+        .named(doc.conversation_name.clone())
+        .read_together();
+    if let (Some(kind), Some(id)) = (&doc.upstream_entity_kind, &doc.upstream_id) {
+        node = node.upstream(kind.clone(), id.clone(), doc.upstream_account.clone());
+    }
+    let inside = Lineage::top().below(&node);
+    for row in rows.iter_mut().filter(|r| r.uuid != m_uuid) {
+        row.parent_uuid = inside.parent_uuid.clone();
+        row.read_uuid = inside.read_uuid.clone();
+        row.place_uuid = inside.place_uuid.clone();
+    }
+    vec![node]
 }
 
 /// Front matter and the title: what every document opens with.
@@ -829,6 +853,36 @@ mod tests {
         assert_ne!(document_uuid("garmin"), document_uuid("garmin-2"));
         assert_ne!(device_uuid("g", "1"), device_uuid("g", "2"));
         assert_ne!(document_uuid("1"), device_uuid("1", "1"));
+    }
+
+    /// A document is read together and its own row sits at the top; a
+    /// device's row sits inside it.
+    #[test]
+    fn a_documents_other_rows_sit_in_it() {
+        let row = |uuid: &str, doc: bool| {
+            GridRow::builder()
+                .uuid(uuid.to_string())
+                .provider(Provider::Garmin)
+                .kind("k")
+                .source_label("Garmin")
+                .is_document(doc)
+                .conversation_uuid("page".to_string())
+                .entire_chat("/chat/page".to_string())
+                .body("b".to_string())
+                .upstream_id(Some("g".to_string()))
+                .upstream_entity_kind(Some(KIND_PAGE.to_string()))
+                .markdown_uuid(Some("page".to_string()))
+                .build()
+                .unwrap()
+        };
+        let mut rows = vec![row("page", true), row("device", false)];
+        let data_nodes = place("garmin", "page", &mut rows);
+        assert_eq!(data_nodes.len(), 1);
+        assert!(data_nodes[0].read_together && data_nodes[0].parent_uuid.is_none());
+        assert_eq!(data_nodes[0].upstream_id.as_deref(), Some("g"));
+        assert_eq!(rows[0].parent_uuid, None);
+        assert_eq!(rows[1].parent_uuid.as_deref(), Some("page"));
+        assert_eq!(rows[1].read_uuid.as_deref(), Some("page"));
     }
 
     #[test]
