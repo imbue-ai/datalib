@@ -22,11 +22,11 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
-use crate::pieces::Pieces;
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
 use crate::text::{human_gap, iso, median_gap, stamp, thousands};
 use crate::time_series::time_series_chart;
 use crate::units::{series_label, spec_in, Axis, MetricSpec, Quantity};
+use datalib_etl_render::section::Pieces;
 
 const KIND_PAGE: &str = "timeseries";
 const KIND_DEVICE: &str = "device";

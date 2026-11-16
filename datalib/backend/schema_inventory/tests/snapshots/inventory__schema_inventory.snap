@@ -1949,6 +1949,7 @@ markdowns
     bucket_key
     section_layout
     content_hash
+    front
 problems
     problem_uuid
     source_id

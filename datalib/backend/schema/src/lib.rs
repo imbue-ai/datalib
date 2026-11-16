@@ -148,6 +148,7 @@ mod tests {
     bucket_key VARCHAR(256),
     section_layout TEXT,
     content_hash VARCHAR(64),
+    front TEXT,
     PRIMARY KEY (markdown_uuid)
 )"#;
         let derived = super::markdowns::DDL[0].1;
