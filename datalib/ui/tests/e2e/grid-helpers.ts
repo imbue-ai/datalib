@@ -46,6 +46,14 @@ export const syncAllButton = (page: Page) =>
 /// One of its column headers.
 export const searchHeader = (page: Page, colId: string) =>
   page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
+/// Group the search grid by a column the way a person does: its header
+/// dragged onto the row-group bar, with the browser's own drag-and-drop.
+export async function groupByDragging(page: Page, colId: string) {
+  await searchHeader(page, colId).dragTo(
+    page.locator(".grid-box .slick-preheader-panel .slick-dropzone"),
+  );
+  await expect(page.locator(".grid-box .slick-dropped-grouping")).toHaveCount(1);
+}
 /// The grid itself, for a "did it paint" check.
 export const searchGrid = (page: Page) => page.locator(".grid-box .slickgrid-container");
 /// The right-click menu the grid appends to <body>.
@@ -60,8 +68,6 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
-  /// What a header dropped on the search bar does.
-  dropOnSearch: (colId: string) => void;
   /// A search, a page, or a group's page on its way.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
@@ -73,7 +79,6 @@ export type GridApi = {
   activeUuid: () => string | null;
   hiddenColumns: () => string[];
   showColumns: (ids: string[]) => void;
-  groupBy: (ids: string[]) => void;
 };
 
 /// Wait until nothing the grid asked for is still on its way.
@@ -292,11 +297,8 @@ export async function searchAndSettle(
 
 /// The rows of any `TableGrid` on the page — the Manage tree, the
 /// commit history — scoped by a caller that has more than one open.
-/// A grid with pinned columns draws each row in two halves; this is the
-/// half that scrolls, which holds every cell but the pinned Name
-/// (`nameCell`), so a row is still one element.
-export const TABLE_ROWS = ".tg-grid .slick-row:not([data-pinned])";
-/// A row's Name cell, in whichever half of the row the grid draws it.
+export const TABLE_ROWS = ".tg-grid .slick-row";
+/// A row's Name cell.
 export const nameCell = (page: Page, key: string) =>
   page.locator(`.tg-grid .slick-row[data-key="${key}"] [col-id="name"]`);
 /// The right-click menu the grid appends to <body>, and its entries.
