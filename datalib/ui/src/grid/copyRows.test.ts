@@ -29,6 +29,27 @@ describe("rows as TSV", () => {
     expect(tsvField("line\nnext")).toBe('"line\nnext"');
     expect(tsvField('say "hi"')).toBe('"say ""hi"""');
   });
+
+  /// An email subject `=HYPERLINK("https://…","Click")` pasted into
+  /// Sheets or Excel as a live formula.
+  it("keeps a field that starts like a formula as text", () => {
+    expect(tsvField("=1+1")).toBe("'=1+1");
+    expect(tsvField("+1 555 0100")).toBe("'+1 555 0100");
+    expect(tsvField("@SUM(A1:A9)")).toBe("'@SUM(A1:A9)");
+    expect(tsvField("-2+3")).toBe("'-2+3");
+    expect(tsvField('=HYPERLINK("https://x.example","Click")')).toBe(
+      `"'=HYPERLINK(""https://x.example"",""Click"")"`,
+    );
+    expect(tsvField("\t=1+1")).toBe('"\'\t=1+1"');
+    expect(tsvField("\r=1+1")).toBe('"\'\r=1+1"');
+  });
+
+  /// A negative number is a number to the spreadsheet, and nothing more.
+  it("leaves numbers and ordinary text as they are", () => {
+    for (const v of ["-3", "-3.25", "-.5", "42", "3.14", "a=b", "x-1", "", "'quoted'"]) {
+      expect(tsvField(v), v).toBe(v);
+    }
+  });
 });
 
 describe("what the copy key copies", () => {

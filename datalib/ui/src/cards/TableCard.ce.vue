@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// `tableView({ url })`: any endpoint that answers with `columns` and
-// `rows` — `/api/manage/rows`, say — drawn by the typed viewer, and
+// `tableView({ url })`: one of the app's tables that answer with
+// `columns` and `rows` (cards/tableUrls.ts) — `/api/manage/rows`, say —
+// drawn by the typed viewer, and
 // refetched when the data root says what it reads changed. No actions:
 // a table of somebody else's rows can be read, not driven.
 import { onBeforeUnmount, onMounted, ref } from "vue";

@@ -283,6 +283,9 @@ describe("copy", () => {
       "Q (signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f)",
     );
     expect(copyText("tel:+15550123456", "+15550123456")).toBe("+15550123456");
+    expect(copyText("email:riker@enterprise.org", "Will Riker <Riker@Enterprise.org>")).toBe(
+      "Will Riker <Riker@Enterprise.org>",
+    );
   });
 
   /** A copied chip once came out as "WWill Riker": the initial disc's

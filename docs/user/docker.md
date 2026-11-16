@@ -320,6 +320,29 @@ Add the same `-v "$LATCHKEY_DIR:/root/.latchkey:ro"` to the
 `datalib-http` command in step 2 and **Sync everything** in the app
 works too.
 
+## Checking who built the image
+
+The digest says which image you run, and this page names the one the
+release made. To see for yourself that an image was built by datalib's
+release workflow from a release's own commit, ask for its *build
+provenance attestation*, a statement that workflow signed when it
+pushed the image. You need GitHub's CLI, `gh`, signed in to any
+account, and the release tag (its version):
+
+```sh
+tag=v0.55.0
+gh attestation verify "oci://$IMG" -R imbue-ai/datalib \
+  --signer-workflow imbue-ai/datalib/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+```
+
+The attestation is also stored next to the image on ghcr.io, so adding
+`--bundle-from-oci` reads it from there rather than from GitHub. Check
+the digest you run, as `$IMG` does: given a tag, `gh` checks whatever
+image the tag points at when you ask. Images up to v0.54.1 carry no
+attestation. The check says where the image came from, not that the
+code in it is good.
+
 ## What the container can see
 
 | Host path | In the container | Mode | Holds |

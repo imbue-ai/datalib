@@ -40,7 +40,7 @@ fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRow {
         conversation_name: None,
         conversation_uuid: uuid.into(),
         parent_uuid: None,
-        sort_key: None,
+        sort_key: String::new(),
         read_uuid: None,
         place_uuid: None,
         message_index: None,

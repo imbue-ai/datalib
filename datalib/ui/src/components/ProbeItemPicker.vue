@@ -20,6 +20,7 @@ import type {
 import type { ProbeItem, ProbeItemKind } from "@/api";
 import { KEEP_COLUMN_WIDTHS } from "@/grid/columnLayout";
 import { stampRowKeys } from "@/grid/rowKeys";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const props = defineProps<{
   items: ProbeItem[];
@@ -247,7 +248,7 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
 function options(): GridOption {
   return {
     datasetIdPropertyName: "path",
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
     enableEmptyDataWarningMessage: false,
     darkMode: document.documentElement.dataset.theme === "dark",
     enableAutoResize: true,
@@ -299,7 +300,7 @@ onBeforeUnmount(() => {
 });
 
 watch(layout, (l) => {
-  if (bundle) bundle.columnDefinitions = l.columns;
+  if (bundle) bundle.columns = l.columns;
 });
 watch(shown, (rows) => {
   if (!bundle) return;

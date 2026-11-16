@@ -1767,6 +1767,16 @@ mod tests {
             .expect("a committed store is readable");
         let pin = rd.pin().unwrap().clone();
         let docs = rd.documents_matching(td.path(), None, &pin).unwrap();
+        // The thread is the document's own row, so it sorts as that row.
+        let row_key = d
+            .rows
+            .iter()
+            .find(|r| r.uuid == "a")
+            .unwrap()
+            .sort_key
+            .clone();
+        assert!(!row_key.is_empty());
+        let thread = thread.sort_key(Some(row_key));
         assert_eq!(docs[0].data_nodes, vec![thread, channel, label]);
         assert_eq!(docs[0].filings, vec![FilingRow::new("a", "a", "label")]);
         rd.close();

@@ -424,7 +424,8 @@ impl GridRowBuilder {
         }
         let sort_key = self
             .sort_key
-            .or_else(|| split(self.created_at.as_deref()).map(|(utc, _)| utc));
+            .or_else(|| split(self.created_at.as_deref()).map(|(utc, _)| utc))
+            .unwrap_or_default();
         let touched_at = self
             .touched_at
             .or_else(|| self.modified_at.clone())

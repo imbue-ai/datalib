@@ -329,14 +329,11 @@ export function chipTooltip(
 export function copyText(handle: string, label: string): string {
   const value = handleValue(handle);
   if (!label || label === value) return value;
-  switch (handleKind(handle)) {
-    case "email":
-      return `${label} <${value}>`;
-    case "tel":
-      return `${label} (${value})`;
-    default:
-      return `${label} (${handle})`;
-  }
+  const kind = handleKind(handle);
+  const beside = kind === "email" ? `<${value}>` : kind === "tel" ? `(${value})` : `(${handle})`;
+  // An email's sender is shown as its `From:` reads, address and all.
+  if (label.toLowerCase().endsWith(beside.toLowerCase())) return label;
+  return `${label} ${beside}`;
 }
 
 /** Replace every chip in a copied fragment with the link it was written

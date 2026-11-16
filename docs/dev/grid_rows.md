@@ -296,7 +296,16 @@ named by many threads has a row under each, one container when read).
 it sorts among that container's children: its `created_at` in UTC
 unless the source orders children without times, as a page orders its
 blocks, never a position counted by us, so a row that arrives late
-moves none of its siblings. A container is **read together** (what a
+moves none of its siblings. A row with neither has `""`, which sorts
+first; the column is never null, because a page of children is read
+past a `(sort_key, uuid)` pair and a null in that comparison would put
+the row on no page. A container that is also a row of its document (a
+thread, a chat) takes that row's sort key unless its renderer gave it
+one. The applet's `GET /children/{uuid}` lists a container's children
+in that order, a page each way around an anchor
+([the applets](../user/applets.md#unified_document_index)), off indexes
+on `(parent_uuid, sort_key, uuid)` that only the grid index has
+(`data_nodes::CHILDREN_INDEXES`). A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
 **place** (what a person browses: a channel, a mailbox, a calendar), or
 both; `read_uuid` and `place_uuid` are the nearest container above the

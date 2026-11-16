@@ -289,6 +289,8 @@ mod tests {
             "a:b",
             "-leading",
             "say \"hi\" \\ done",
+            // U+0085 is whitespace to the tokenizer; JS `\s` lacks it.
+            "a\u{85}-source:gmail",
         ] {
             let tok = term("k", value, true);
             let quoted = if tok.ends_with('"') { tq } else { t };

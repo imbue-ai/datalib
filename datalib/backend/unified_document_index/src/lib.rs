@@ -1,6 +1,7 @@
 //! The unified document index: the grid index and the qmd index, the query
 //! language over them, and the repo that reads them.
 
+pub mod children;
 pub mod db;
 pub mod dolt_repo;
 pub mod embedding_map;

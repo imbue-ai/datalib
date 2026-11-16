@@ -243,6 +243,100 @@ fn sql_reads_a_store_it_lists() {
     child.kill().ok();
 }
 
+/// `/children` over the TNG fixture's index: a Slack channel's threads,
+/// paged on from the start to the end in order, a window around one of
+/// them and around now, and a refusal for an anchor elsewhere or a cursor
+/// it never gave.
+#[test]
+fn children_page_through_a_channel() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        // The fixture is dated in the 2360s.
+        .env(super::SEARCH_NOW_ENV, "2400-01-01T00:00:00Z")
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+    let (status, body) = post(
+        port,
+        "/sql",
+        &serde_json::json!({
+            "store": "unified_document_index/grid_index/db.sqlite",
+            "sql": "SELECT DISTINCT uuid FROM data_nodes WHERE kind = 'Slack Channel' AND name = '#bridge'",
+        })
+        .to_string(),
+    );
+    assert_eq!(status, 200, "{body}");
+    let bridge = body["rows"][0][0].as_str().expect("#bridge").to_string();
+
+    let mut threads: Vec<serde_json::Value> = Vec::new();
+    let mut path = format!("/children/{bridge}?limit=2");
+    loop {
+        let (status, body) = get(port, &path, Some(SECRET));
+        assert_eq!(status, 200, "{body}");
+        threads.extend(body["children"].as_array().unwrap().iter().cloned());
+        let Some(after) = body["after"].as_str() else {
+            break;
+        };
+        path = format!("/children/{bridge}?after={after}&limit=2");
+    }
+    let keys: Vec<&str> = threads
+        .iter()
+        .map(|t| t["sort_key"].as_str().unwrap())
+        .collect();
+    assert!(threads.len() > 2, "{threads:?}");
+    assert!(keys.windows(2).all(|w| w[0] < w[1]), "{keys:?}");
+    for t in &threads {
+        assert_eq!(t["container"], true, "{t}");
+        assert_eq!(t["kind"], "Slack Thread", "{t}");
+        assert!(
+            t["link"]
+                .as_str()
+                .is_some_and(|l| l.starts_with("datalib:doc/")),
+            "{t}"
+        );
+    }
+
+    let third = threads[2]["uuid"].as_str().unwrap();
+    let (status, body) = get(
+        port,
+        &format!("/children/{bridge}?at={third}&limit=1"),
+        Some(SECRET),
+    );
+    assert_eq!(status, 200, "{body}");
+    let around: Vec<&serde_json::Value> = body["children"].as_array().unwrap().iter().collect();
+    assert_eq!(around, threads[1..4].iter().collect::<Vec<_>>(), "{body}");
+
+    let (status, body) = get(
+        port,
+        &format!("/children/{bridge}?at=now&limit=1"),
+        Some(SECRET),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["children"][0], threads[threads.len() - 1], "{body}");
+    assert_eq!(body["after"], serde_json::Value::Null, "{body}");
+
+    let (status, body) = get(
+        port,
+        &format!("/children/{third}?at={bridge}"),
+        Some(SECRET),
+    );
+    assert_eq!(status, 404, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("is not a child of"),
+        "{body}"
+    );
+    let (status, body) = get(port, &format!("/children/{bridge}?after=40"), Some(SECRET));
+    assert_eq!(status, 400, "{body}");
+    child.kill().ok();
+}
+
 fn percent_encoded(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
