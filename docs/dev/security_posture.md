@@ -167,6 +167,7 @@ tag ruleset says nothing about this: no tag moves.
 |---|---|---|
 | `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
 | `pin_release.py` pins only a release whose tag's commit has a successful `release.yml` run on a tag push | A writer's own release, on a new tag or an old one, being written into `install.sh` and the Docker page. A branch named like the tag does not pass: its run is on another commit. None of the 28 `v*` tags with no release has a successful run (measured) | Anyone reading the release page or naming the tag themselves |
+| `pin_release.py` downloads each tarball it pins and refuses it, and the image, unless `gh attestation verify` passes for `release.yml` at that tag and commit (`pin_release_test`) | An asset nobody attested reaching `curl \| sh` or the Docker page, so those install only bytes `release.yml` built, with no `gh` on the person's machine. v0.54.1, which has no attestations, was refused (measured) | Whoever pins skipping the script, and a merge to `main` that changes it. The runtime assets are checked only through the hashes in an attested tarball's `runtime.manifest` |
 | `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
 | `test.yml` and `cargo-update.yml` name the devcontainer image by digest, moved by `pin_release.py` (`pin_release_test`) | A moved `datalib_devcontainer` tag running in `main`'s CI, which holds the write key | Reading `:X.Y.Z` when pinning, so a tag moved between the build and the pin is pinned; that PR's CI runs in the image first, which holds no write key. `--config=remote`, which names `:latest` and only a dispatch of `test.yml` uses, with no write key |
 | Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
@@ -225,8 +226,8 @@ tag ruleset says nothing about this: no tag moves.
   bytes and is as trusted as the script: whoever can change the script can also
   remove a check from it. `gh attestation verify` needs `gh` signed in, so a
   check run "when `gh` is present" would run on few machines and pass by not
-  running on the rest. Where a check pays is before the pin, by whoever pins,
-  and `pin_release.py` does not do that yet. A tarball named with
+  running on the rest. The check runs before the pin instead: `pin_release.py`
+  writes no hash it has not verified (the row on it above). A tarball named with
   `DATALIB_VERSION` is checked only against its sidecar, unless the person
   runs the check in [`first_time_user.md`](../user/first_time_user.md)
   §"Checking who built what you downloaded" by hand.

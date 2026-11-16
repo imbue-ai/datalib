@@ -185,22 +185,28 @@ def subjects_problems(
     ]
 
 
-def attestation_checks(
-    assets: dict[str, Path], image: str, env: dict[str, str]
-) -> list[list[str]]:
-    """The `gh attestation verify` calls that show each asset and the image came from this run's workflow."""
-    repo = env["GITHUB_REPOSITORY"]
-    identity = [
+def attestation_identity(repo: str, ref: str, commit: str) -> list[str]:
+    """`gh attestation verify`'s flags for an attestation release.yml signed at `ref` and `commit`."""
+    return [
         "--repo",
         repo,
         "--signer-workflow",
         f"{repo}/.github/workflows/release.yml",
         "--source-ref",
-        env["GITHUB_REF"],
+        ref,
         "--source-digest",
-        env["GITHUB_SHA"],
+        commit,
         "--deny-self-hosted-runners",
     ]
+
+
+def attestation_checks(
+    assets: dict[str, Path], image: str, env: dict[str, str]
+) -> list[list[str]]:
+    """The `gh attestation verify` calls that show each asset and the image came from this run's workflow."""
+    identity = attestation_identity(
+        env["GITHUB_REPOSITORY"], env["GITHUB_REF"], env["GITHUB_SHA"]
+    )
     image_digest = assets[IMAGE_DIGEST].read_text().strip()
     image_ref = f"oci://{image}@{image_digest}"
     checks = [

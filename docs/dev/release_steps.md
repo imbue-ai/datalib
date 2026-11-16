@@ -122,7 +122,10 @@ After a release publishes, `uv run python scripts/release/pin_release.py vX.Y.Z`
 rewrites all four from what GitHub reports, which needs `gh` to hold
 `read:packages` (`gh auth refresh -s read:packages`). Wait for that tag's
 `devcontainer.yml` first, or it stops for want of the image. It refuses a release that is a draft, is not immutable, or has no
-successful `release.yml` run on its tag's commit. Until that PR lands, people
+successful `release.yml` run on its tag's commit. It then downloads the five
+tarballs, about 450 MB, and refuses any of them, and the image, that
+`gh attestation verify` does not pass for `release.yml` at that tag and
+commit, so a hash it writes always names attested bytes. Until that PR lands, people
 get the previous release, which still works, and CI stays on the previous image.
 
 ### What one failed job costs

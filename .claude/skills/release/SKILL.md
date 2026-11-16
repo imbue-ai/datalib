@@ -204,6 +204,9 @@ published from a local machine — the tag is the trigger.
     uv run python scripts/release/pin_release.py vX.Y.Z
     ```
 
+    It downloads the five tarballs (about 450 MB) to check each one's
+    attestation before writing its hash, and refuses the release if any
+    check fails: say so rather than editing the pins by hand.
     Open a PR with what it changed, and land it like any other.
 13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
