@@ -75,6 +75,9 @@ impl HttpMethod {
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum HttpService {
+    /// The Baby Connect web app (`app.babyconnect.com`), signed in by the
+    /// session cookies latchkey captured.
+    BabyConnect,
     /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
     Caldav,
     /// Calendly's REST API (`api.calendly.com`), the `calendar` source's

@@ -24,6 +24,9 @@ impl SourceDocs {
 pub fn source_docs(t: SourceType) -> SourceDocs {
     use SourceType as T;
     match t {
+        T::BabyConnect => docs::<datalib_etl_baby_connect_config::BabyConnectConfig>(
+            datalib_etl_baby_connect_config::EXAMPLES,
+        ),
         T::Airvisual => docs::<datalib_etl_airvisual_config::AirvisualConfig>(
             datalib_etl_airvisual_config::EXAMPLES,
         ),

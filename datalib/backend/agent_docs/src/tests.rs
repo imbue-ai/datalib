@@ -9,6 +9,7 @@ const GUIDE_LINKS_SERVED_RAW: &[&str] = &[
     "AGENTS.md",
     "docs/dev/docker.md",
     "datalib/backend/runtime/src/node_runtime.rs",
+    "datalib/backend/etl/providers/baby_connect/INGEST.md",
     "datalib/backend/etl/providers/calendar/INGEST.md",
     "datalib/backend/etl/providers/linear/INGEST.md",
     "datalib/backend/etl/providers/todoist/INGEST.md",
