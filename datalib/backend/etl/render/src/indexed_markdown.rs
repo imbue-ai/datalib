@@ -64,6 +64,36 @@ pub struct KeptSection {
     pub created_at: Option<String>,
 }
 
+impl KeptSection {
+    fn piece(self) -> datalib_search_index::text::Piece {
+        let addressed = self
+            .addressed
+            .as_deref()
+            .and_then(datalib_schema::sections::parse_addressed)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| (a.role.as_str().to_string(), a.name))
+            .collect();
+        datalib_search_index::text::Piece {
+            uuid: self.uuid,
+            text: self.text,
+            framed: self.framed,
+            author: self.author,
+            created_at: self.created_at,
+            addressed,
+        }
+    }
+}
+
+/// What the search index files a document under: its render's hash and
+/// the drawing's version, so a change to either draws it again. `None` for
+/// a document its renderer handed without sections, which has no text kept.
+pub fn index_key(row: &datalib_schema::markdowns::MarkdownRow) -> Option<String> {
+    row.content_hash
+        .as_ref()
+        .map(|h| format!("{h}.t{}", datalib_search_index::text::INDEX_TEXT_VERSION))
+}
+
 /// Replace what the store keeps of `md`'s sections. The grid index keeps
 /// none, so this is the render store's own write beside
 /// `grid_index::apply_one`. A document read back from the store has no
@@ -945,6 +975,42 @@ impl IndexedMarkdownStore {
             .await
             .context("read kept sections")
         })
+    }
+
+    /// These documents as the search index takes them, drawn from what
+    /// the store keeps of them (`datalib_search_index::text`), all read at
+    /// the one commit this reader is at, so a document's key always names
+    /// the sections it was drawn from. A document with no [`index_key`] is
+    /// left out.
+    pub fn index_docs(
+        &self,
+        source_id: &str,
+        markdown_uuids: &[String],
+    ) -> Result<Vec<datalib_search_index::IndexDoc>> {
+        let rows = self.markdown_rows_in(markdown_uuids)?;
+        let mut kept: HashMap<String, Vec<KeptSection>> = HashMap::new();
+        for k in self.kept_sections(markdown_uuids)? {
+            kept.entry(k.markdown_uuid.clone()).or_default().push(k);
+        }
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let content_hash = index_key(&row)?;
+                let pieces: Vec<_> = kept
+                    .remove(&row.markdown_uuid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(KeptSection::piece)
+                    .collect();
+                Some(datalib_search_index::IndexDoc {
+                    source_id: source_id.to_string(),
+                    markdown_uuid: row.markdown_uuid,
+                    content_hash,
+                    title: row.title.unwrap_or_default(),
+                    sections: datalib_search_index::text::draw(&pieces),
+                })
+            })
+            .collect())
     }
 
     /// Every document this store holds. The other half of a sweep: a

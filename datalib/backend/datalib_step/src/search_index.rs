@@ -8,11 +8,10 @@ use anyhow::{Context, Result};
 use datalib_embedder::{Device, Embedder};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_etl_render::indexed_markdown::KeptSection;
+use datalib_etl_render::indexed_markdown::{index_key, IndexedMarkdownStore};
 use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
-use datalib_schema::sections::parse_addressed;
+#[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
 use datalib_search_index::{ChunkSpan, Index, IndexDoc, InferenceCache};
 
@@ -79,65 +78,8 @@ async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, Ma
     .context("render store read panicked")?
 }
 
-/// What the index files a document under: its render's hash and the
-/// drawing's version, so a change to either draws it again. `None` for a
-/// document its renderer handed without sections, which has no text kept.
-fn index_key(row: &MarkdownRow) -> Option<String> {
-    row.content_hash
-        .as_ref()
-        .map(|h| format!("{h}.t{INDEX_TEXT_VERSION}"))
-}
-
-/// These documents as the index takes them, drawn from what the render
-/// store keeps of them, all read at the one commit the store opened at, so
-/// a document's key always names the sections it was drawn from.
-fn drawn(store: &IndexedMarkdownStore, group: &str, uuids: &[String]) -> Result<Vec<IndexDoc>> {
-    let rows = store.markdown_rows_in(uuids)?;
-    let mut kept: BTreeMap<String, Vec<KeptSection>> = BTreeMap::new();
-    for k in store.kept_sections(uuids)? {
-        kept.entry(k.markdown_uuid.clone()).or_default().push(k);
-    }
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            let content_hash = index_key(&row)?;
-            let pieces: Vec<Piece> = kept
-                .remove(&row.markdown_uuid)
-                .unwrap_or_default()
-                .into_iter()
-                .map(piece)
-                .collect();
-            Some(IndexDoc {
-                source_id: group.to_string(),
-                markdown_uuid: row.markdown_uuid,
-                content_hash,
-                title: row.title.unwrap_or_default(),
-                sections: text::draw(&pieces),
-            })
-        })
-        .collect())
-}
-
-fn piece(k: KeptSection) -> Piece {
-    let addressed = k
-        .addressed
-        .as_deref()
-        .and_then(parse_addressed)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| (a.role.as_str().to_string(), a.name))
-        .collect();
-    Piece {
-        uuid: k.uuid,
-        text: k.text,
-        framed: k.framed,
-        author: k.author,
-        created_at: k.created_at,
-        addressed,
-    }
-}
-
-/// [`drawn`] off the runtime, opening the store at its head.
+/// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
+/// its head.
 async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<IndexDoc>> {
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
     let group = group.to_string();
@@ -145,7 +87,7 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
         let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
             return Ok(Vec::new());
         };
-        let out = drawn(&store, &group, &uuids);
+        let out = store.index_docs(&group, &uuids);
         store.close();
         out
     })
