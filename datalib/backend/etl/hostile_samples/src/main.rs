@@ -220,6 +220,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         text_format: TextFormat::Plain,
     };
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
@@ -296,6 +297,8 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "hostile-chat".into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: "00000000-0000-8000-8000-0000000000c1".into(),
         display: f.hostile("chat display"),
         title: Some(f.hostile("chat title")),
@@ -308,7 +311,6 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: "00000000-0000-8000-8000-0000000000d1".into(),
             source_ref: None,
             items: vec![said, system, files],
@@ -381,6 +383,8 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         },
         calendar_uuid: "00000000-0000-8000-8000-0000000000e3".into(),
         calendar_label: f.hostile("calendar label"),
+        calendar_entity_kind: "calendar",
+        calendar_upstream_id: "bridge".into(),
         calendar_time_zone: Some("America/Los_Angeles".into()),
         upstream_id: f.hostile("event upstream id"),
         upstream_entity_kind: "event",
@@ -483,6 +487,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         contact,
         doc_uuid: "00000000-0000-8000-8000-0000000000f1".into(),
         group_label: f.hostile("contact group"),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
@@ -549,6 +554,7 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         uuid: "00000000-0000-8000-8000-000000000101".into(),
         row_id: "r".into(),
         container: "o/repo".into(),
+        container_node: None,
         number: 7,
         title: f.hostile("change request title"),
         // Authored markdown, shown as markdown.

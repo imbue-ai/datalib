@@ -16,6 +16,7 @@ use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -213,6 +214,7 @@ pub fn render_all(
 
     let m_uuid = profile.document_uuid(source_id);
     let body = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
+    let node = page_node(profile, source_id, &m_uuid);
 
     write_page(
         root,
@@ -220,6 +222,7 @@ pub fn render_all(
         &m_uuid,
         body,
         profile.render_version,
+        vec![node],
         |md_rel, problems| build_grid_rows(profile, page, source_id, &m_uuid, md_rel, problems),
         on_doc_complete,
     )?;
@@ -236,12 +239,14 @@ pub fn render_all(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_page(
     root: &Path,
     source_id: &str,
     m_uuid: &str,
     body: String,
     render_version: u32,
+    data_nodes: Vec<DataNodeRow>,
     build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -276,6 +281,8 @@ pub fn write_page(
         sections: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -559,6 +566,15 @@ fn capitalize(word: &str) -> String {
 /// summary, not an index of every device. A row that will not validate
 /// is dropped and recorded on `problems` rather than failing the
 /// source's render.
+/// The page, read together, at the top of its source: its devices are
+/// rows in it, and it is the source's one document.
+fn page_node(profile: &PageProfile, source_id: &str, m_uuid: &str) -> DataNodeRow {
+    DataNodeRow::new(m_uuid, m_uuid, source_id, "Sensor Timeseries")
+        .named(Some(profile.page_title(source_id)))
+        .upstream(KIND_PAGE, source_id, None)
+        .read_together()
+}
+
 fn build_grid_rows(
     profile: &PageProfile,
     page: &Page<'_>,
@@ -570,6 +586,7 @@ fn build_grid_rows(
     let title = profile.page_title(source_id);
     let by_device = by_device(page.series);
     let version = profile.render_version;
+    let in_page = Lineage::top().below(&page_node(profile, source_id, m_uuid));
 
     let mut doc_text = format!(
         "{title}\n{} devices, {} {}",
@@ -636,6 +653,7 @@ fn build_grid_rows(
                 .upstream_id(Some(dev.key.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
+                .lineage(&in_page)
                 .build_or_record(source_id, m_uuid, version, problems),
         );
     }
@@ -693,5 +711,30 @@ mod tests {
         );
         assert!(!out.contains("<script>"), "{out}");
         assert!(out.contains("row:** `` a`b ``."), "{out}");
+    }
+
+    /// The page is read together, and each device's row sits in it.
+    #[test]
+    fn a_device_sits_in_its_page() {
+        let page = Page {
+            head: None,
+            devices: vec![Device {
+                key: "k1".into(),
+                name: "Engineering".into(),
+                facts: String::new(),
+                grid_text: "Engineering".into(),
+                last_ts_ms: None,
+            }],
+            series: &[],
+            sample_count: 0,
+            store_section: String::new(),
+        };
+        let m_uuid = PROFILE.document_uuid("s");
+        let node = page_node(&PROFILE, "s", &m_uuid);
+        assert!(node.read_together && node.parent_uuid.is_none());
+        let rows = build_grid_rows(&PROFILE, &page, "s", &m_uuid, "x.md", &mut Vec::new());
+        assert_eq!(rows[0].parent_uuid, None);
+        assert_eq!(rows[1].parent_uuid.as_deref(), Some(m_uuid.as_str()));
+        assert_eq!(rows[1].read_uuid.as_deref(), Some(m_uuid.as_str()));
     }
 }

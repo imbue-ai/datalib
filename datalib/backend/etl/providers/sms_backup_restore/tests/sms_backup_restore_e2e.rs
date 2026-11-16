@@ -121,7 +121,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
 
         // Four conversations: Picard (texts + mms + call merged), Worf
         // (text + mms), Deanna Troi (call only), Geordi La Forge (one
-        // text the account sent). All April 2369 → one month bucket each.
+        // text the account sent): one document each.
         assert_eq!(docs.len(), 4, "four conversations, got {}", docs.len());
 
         // A call's row names the other side by number, and a thread only

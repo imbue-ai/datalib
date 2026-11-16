@@ -66,6 +66,13 @@ The look is `documentBody.css` (`.contact-head`, `.contact-fields`,
 (linked) are `chip.css`. A new class or tag has to pass the sanitizer
 (`ui/src/cards/sanitize.ts`).
 
+**Where a row sits** (`docs/dev/grid_rows.md` §"`parent_uuid`…"). A
+card is read together inside its address book, a place, when the
+provider names one in `ContactDoc::address_book`: the `contacts` source
+does, keyed by its `addressbooks` row, which a rename keeps; LinkedIn's
+connections and Facebook's friends keep no list of their own, so their
+cards sit at the top of the source.
+
 A change to what this crate writes bumps the `RENDER_VERSION` of every
 provider that calls it: `contacts`, `linkedin` and `facebook`.
 

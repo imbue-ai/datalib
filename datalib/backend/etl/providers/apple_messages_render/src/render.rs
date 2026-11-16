@@ -14,7 +14,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
@@ -27,7 +26,7 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
-use datalib_id::{composite_key, entity_id_str, IdNamespace};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
@@ -44,15 +43,16 @@ use crate::typedstream::attributed_body_text;
 /// v7: a body that cannot be decoded is a problem on its message.
 /// v8: a body archived as an NSMutableAttributedString decodes; a
 ///     message in no chat is a problem.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: a chat is one document, keyed on the chat's own uuid, rather than
+///     one per month; an inline reply is a reply edge to its thread's
+///     first message.
+pub const RENDER_VERSION: u32 = 9;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_MESSAGE: &str = "message";
 /// A tapback: a message row in `chat.db`, keyed on its own guid.
 pub const KIND_REACTION: &str = "reaction";
-/// One period of a chat: keyed on `(chat_guid, period_key)`.
-pub const KIND_DOCUMENT: &str = "document";
 
 /// The tables whose diff names a changed chat: the chat itself, a
 /// message, or a join that puts a message in a chat or a file on a
@@ -145,7 +145,6 @@ pub fn render(
     raw_dir: &Path,
     out_root: &Path,
     source_id: &str,
-    period: Period,
     progress: &Progress,
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -170,7 +169,7 @@ pub fn render(
                 reader.close().await;
                 return Ok(Loaded::default());
             }
-            let loaded = load(reader.pool(), source_id, period, range, reader.pin()).await;
+            let loaded = load(reader.pool(), source_id, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             reader.close().await;
@@ -223,7 +222,6 @@ struct Loaded {
 async fn load(
     pool: &SqlitePool,
     source_id: &str,
-    period: Period,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<Loaded> {
@@ -254,6 +252,7 @@ async fn load(
             participants: Vec::new(),
             items: Vec::new(),
             reactions: Vec::new(),
+            replies: Vec::new(),
             inputs,
         });
     }
@@ -336,12 +335,20 @@ async fn load(
             });
     }
 
-    let messages = sqlx::query(
+    // An older `chat.db` predates inline replies.
+    let thread_originator =
+        if doltlite_raw::column_exists(pool, "message", "thread_originator_guid").await? {
+            "thread_originator_guid"
+        } else {
+            "NULL AS thread_originator_guid"
+        };
+    let messages = sqlx::query(sqlx::AssertSqlSafe(format!(
+        // Safe: the one interpolation is one of two literals above.
         "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
-                associated_message_type, associated_message_emoji \
-           FROM message ORDER BY date, ROWID",
-    )
+                associated_message_type, associated_message_emoji, {thread_originator} \
+           FROM message ORDER BY date, ROWID"
+    )))
     .fetch_all(pool)
     .await
     .context("select message")?;
@@ -420,7 +427,11 @@ async fn load(
         };
         let mut problems = Vec::new();
         let text = body_text(r.get("text"), r.get("attributedBody"), &mut problems);
+        if let Some(target) = r.get::<Option<String>, _>("thread_originator_guid") {
+            chat.replies.push((chat.items.len(), target));
+        }
         chat.items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: message_uuid(source_id, &guid, date_ms),
             author_handle,
             author_kind,
@@ -453,10 +464,7 @@ async fn load(
         .await?
         .map(|changed| forward_chats(&changed, &chats, &chat_idx, &chat_of_message));
     Ok(Loaded {
-        chats: chats
-            .into_iter()
-            .map(|c| c.finish(source_id, period))
-            .collect(),
+        chats: chats.into_iter().map(|c| c.finish(source_id)).collect(),
         forward,
         head: Some(pin.commit().to_string()),
         dropped,
@@ -495,6 +503,10 @@ struct ChatBuild {
     participants: Vec<String>,
     items: Vec<NormalizedChatItem>,
     reactions: Vec<Tapback>,
+    /// Each inline reply, by its index in `items`, and the guid of the
+    /// first message of the thread it was sent in, which is all `chat.db`
+    /// records of what it answers.
+    replies: Vec<(usize, String)>,
     inputs: Inputs,
 }
 
@@ -505,7 +517,7 @@ struct Tapback {
 }
 
 impl ChatBuild {
-    fn finish(mut self, source_id: &str, period: Period) -> NormalizedChat {
+    fn finish(mut self, source_id: &str) -> NormalizedChat {
         // Tapbacks, in date order: an add lands on its message, a
         // removal takes the same person's same tapback off it again.
         let index: HashMap<String, usize> = self
@@ -530,29 +542,18 @@ impl ChatBuild {
             }
         }
 
-        let mut by_period: HashMap<String, Vec<NormalizedChatItem>> = HashMap::new();
-        for item in self.items {
-            let key = match item.date_ms {
-                Some(ms) => period.key_for_ms(ms),
-                None => period.key_for_undated(),
-            };
-            by_period.entry(key).or_default().push(item);
+        for (i, target) in &self.replies {
+            if let Some(&t) = index.get(target) {
+                self.items[*i].reply_to = Some(self.items[t].message_uuid.clone());
+            }
         }
-        let mut keys: Vec<String> = by_period.keys().cloned().collect();
-        keys.sort();
-        let buckets = keys
-            .into_iter()
-            .map(|period_key| {
-                let key = composite_key(&[&self.guid, &period_key]);
-                NormalizedDoc {
-                    markdown_uuid: uuid(source_id, KIND_DOCUMENT, &key, None),
-                    source_ref: Some(UpstreamRef::new(KIND_DOCUMENT, key)),
-                    items: by_period.remove(&period_key).unwrap_or_default(),
-                    period_key,
-                    orphan_reactions: Vec::new(),
-                }
-            })
-            .collect();
+        let chat_uuid = chat_uuid(source_id, &self.guid);
+        let whole = NormalizedDoc {
+            markdown_uuid: chat_uuid.clone(),
+            source_ref: None,
+            items: self.items,
+            orphan_reactions: Vec::new(),
+        };
         let title = self.display_name.filter(|s| !s.trim().is_empty());
         // A chat with no name of its own is called by its people.
         let named_after = match title {
@@ -574,7 +575,9 @@ impl ChatBuild {
             named_after,
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
-            chat_uuid: chat_uuid(source_id, &self.guid),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
+            chat_uuid,
             external_id: Some(self.guid.clone()),
             id: self.guid,
             display,
@@ -586,7 +589,7 @@ impl ChatBuild {
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets,
+            buckets: vec![whole],
         }
     }
 }

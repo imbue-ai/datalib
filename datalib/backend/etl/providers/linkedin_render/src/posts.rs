@@ -247,6 +247,8 @@ fn build_post_chats(
                 .collect(),
             inputs: thread.inputs.declared(),
             id: format!("posts:{key}"),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: post.uuid.clone(),
             display: thread_title(thread.share.map(|(_, s)| s), &comment_payloads),
             title: None,
@@ -261,7 +263,6 @@ fn build_post_chats(
             org_name: None,
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
-                period_key: "all".to_string(),
                 markdown_uuid: post.uuid,
                 source_ref: None,
                 items,
@@ -291,6 +292,7 @@ fn me_item(
     let date_ms = own_stamp_ms(Some(date), "Date", parse_date_ms, &mut problems);
     let id = mint(date_ms);
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: author_handle.cloned(),
         author_kind: AuthorKind::Account,
@@ -328,6 +330,7 @@ fn post_placeholder(
     };
     let id = ids::post_origin(source_id, key, date_ms);
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Named,

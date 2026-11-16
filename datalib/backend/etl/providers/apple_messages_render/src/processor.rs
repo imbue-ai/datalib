@@ -5,7 +5,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_apple_messages_config::AppleMessagesRenderConfig;
 use datalib_etl_render::processor::{
@@ -39,13 +38,11 @@ impl SourceRender for AppleMessagesRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        let period = Period::from_config(None).context("default apple_messages period")?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let crate::render::Rendered { outcome, dropped } = crate::render::render(
             raw_path,
             ctx.root,
             ctx.name,
-            period,
             ctx.progress,
             ctx.raw_range(),
             &mut on_doc,

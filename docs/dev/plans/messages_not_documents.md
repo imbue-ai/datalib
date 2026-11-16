@@ -1,6 +1,7 @@
 # Messages, not documents: grouping chosen when a search runs
 
-**Status: proposal (2026-11-16). Nothing here is built.** Facts about
+**Status: proposal (2026-11-16). Step 1 is being built (draft PR, branch
+`tree-step-1`); nothing else is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 
@@ -143,7 +144,8 @@ differently, and no fixed set of levels fits them all:
 | Google Drive | folder › … › file › comment thread › reply |
 | Claude Code | project › session › sub-agent session › message |
 
-So every node (an item, or a container that holds items) names **one
+So every **data node** (an item, or a container that holds items; "node"
+below, never a DAG step, and the `data_nodes` table) names **one
 parent and how it sorts among its siblings**, and that is all the tree
 stores. A container is a row too, with a uuid a person can open; some
 containers have text of their own (a Notion page, a Slack thread's
@@ -265,6 +267,52 @@ re-embeds without changing anything a person sees.
 opens it at an item and asks for the items around it in order. A
 ten-year group chat opens as fast as a short one.
 
+**A list starts at an anchor and grows both ways.** Every list of a
+node's children, or of everything under it, is asked for at an
+**anchor**: an item (`at=<uuid>`), or a moment (`at=<stamp>`: the first
+item at or after it; "now" is the common one). The answer is a window
+around the anchor with a cursor at each end, and scrolling asks for the
+next page past either one: older above, newer below, as a chat's "jump
+to message" does. A cursor is the edge row's `(sort key, uuid)`, never
+a position counted from the start, so an item that arrives late, or
+during the scroll, lands in its place and moves nothing on screen. A
+moment means nothing among children the source orders without times (a
+page's blocks); those are anchored on an item. The UI keeps the window
+the way the grid already does, in the pure core of `pagedWindow.ts`,
+which holds the reader still when a page lands above them
+([`paged_grids.md`](paged_grids.md)); the two are one design.
+
+**A view per kind of node.** Opening a node shows it the way its kind
+is read: a message in its context, a thread's items a page at a time,
+a channel's threads to browse. A shared layer supplies the views for
+everything that goes through it (chat-common for every chat source's
+message, thread and channel), and a provider or an applet adds one for
+a kind of its own. That is a registry keyed on the node's kind, which
+is what [`dispatch_on_kind.md`](dispatch_on_kind.md) proposes for
+chips and cards. So the kinds become a small closed set (channel,
+thread, chat, mailbox, label, folder, page, calendar, project,
+collection, …) designed with that registry, beside the free-text
+`kind` a person reads, and `/chat` gives way to it.
+
+## The same thing in two sources
+
+The same email in Gmail and in Fastmail is two records in two sources,
+each in its own tree, and for now nothing says they are the same: two
+copies. Not one node with two parents. If it is ever worth knowing, it
+is an edge between the two, matched on a key the sources share (an
+email's Message-ID), and neither tree changes.
+
+## Contacts in the tree
+
+A card sits in its address book. The groups a source keeps (vCard
+`CATEGORIES`, a CardDAV group card, a Google contact group) are filings,
+as an email's labels are. A label a person makes in the contacts app is
+one too, with one difference: its writer is the applet, whose store is
+under `datalib_curated/`, not a render step. So the applet owns its
+labels' data nodes and filings, and the ancestors table reads them
+beside the render stores'. A person the app merged from several cards
+is the same: two records, not a parent.
+
 ## What changes, and for whom
 
 Every place that assumes a document, from the read side of the tree:
@@ -277,7 +325,7 @@ Every place that assumes a document, from the read side of the tree:
 | `Keyed` / `Kept::Sections` | what the filters keep, per document | what the filters keep is a set of items |
 | `WithoutVectors` | documents without vectors | items not covered by any embedded chunk |
 | Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | the items of what is read together, a page at a time, opened at one |
-| The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
+| The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/data_node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
 | Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with what holds it looked up |
 | Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
 | Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
@@ -332,9 +380,9 @@ against the eval before the next.
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
 2. **Children in order.** The index on `(parent, sort key, uuid)`, made
-   with the first query that uses it, and one route that lists a container's
-   children in order, a page at a time. The viewer can use it
-   beside the file.
+   with the first query that uses it, and one route that lists a
+   container's children around an anchor, a page each way at a time.
+   The viewer can use it beside the file.
 3. **Text in the render store.** Each item's rendered text is stored
    with its row. The search index reads items from the store instead of
    cutting files, and `keyword_index` folds into `grid_index`, which
@@ -354,8 +402,12 @@ against the eval before the next.
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
    together, and the eval picks the window.
-8. **Browsing the tree.** The ancestors table in `grid_index`,
-   `under:` and `at:` as search keys, and the tree card. `keyword:` and
+8. **Browsing the tree.** The ancestors table in `grid_index`, with
+   each row's sort key copied in so everything under a node is one
+   index range around an anchor; `under:` and `at:` as search keys; and
+   the tree card. Whether a large subtree pages off that index or by
+   the grid's list-then-slice (measured at 74k rows, not at today's
+   941k) is measured then. `keyword:` and
    collections inside sets become `under:` their node, with the old keys
    kept as aliases.
 9. **The rest of the table above:** the map, links, the problems banner

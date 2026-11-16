@@ -41,6 +41,10 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
     for photo in &mut photos {
         changed |= settle_photo(photo);
     }
+    let mut data_nodes = md.data_nodes.clone();
+    for node in &mut data_nodes {
+        changed |= settle_node(node);
+    }
     if !changed {
         return Cow::Borrowed(md);
     }
@@ -57,9 +61,21 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
         content_hash: md.content_hash.clone(),
         edges,
         contacts,
+        data_nodes,
+        filings: md.filings.clone(),
         photos,
         problems: md.problems.clone(),
     })
+}
+
+/// A container's kind and name are read by a person; the rest are ids,
+/// keys and stamps.
+fn settle_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
+    let mut changed = strip(&mut node.kind);
+    if let Some(name) = node.name.as_mut() {
+        changed |= strip(name);
+    }
+    changed
 }
 
 /// A string column not named here is an id, a path, a stamp or a body;
@@ -220,6 +236,8 @@ mod tests {
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
@@ -391,6 +409,7 @@ mod tests {
     fn an_edge_s_label_loses_its_controls() {
         let mut d = doc(row().build().unwrap());
         d.edges = vec![EdgeRow {
+            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
             edge_uuid: "e-1".into(),
             src_markdown_uuid: "md-1".into(),
             src_anchor_uuid: None,
@@ -476,6 +495,10 @@ mod tests {
             "author_handle",
             "org_uuid",
             "conversation_uuid",
+            "parent_uuid",
+            "sort_key",
+            "read_uuid",
+            "place_uuid",
             "entire_chat",
             "preview",
             "content_hash",

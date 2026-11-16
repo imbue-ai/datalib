@@ -1807,6 +1807,10 @@ fn retired_subcommand(command: &str) -> Option<&str> {
 /// config that writes one loads; this check is what tells the person.
 const INERT_PARAM_PATHS: &[(&str, &str)] = &[
     (
+        "backup.period",
+        "has no effect: a chat is one document now, whatever its length",
+    ),
+    (
         "common.always_clear_before_ingest",
         "has no effect: a local source decides what its input's absence means",
     ),
@@ -1819,6 +1823,10 @@ const INERT_PARAM_PATHS: &[(&str, &str)] = &[
         "gmail.request_concurrency",
         "has no effect: Gmail messages are fetched one at a time, and the per-minute quota \
          (`quota_units_per_minute`) is what bounds the rate",
+    ),
+    (
+        "period",
+        "has no effect: a chat is one document now, whatever its length",
     ),
 ];
 
@@ -4328,6 +4336,23 @@ command = "datalib-applet unified_document_index"
             "{d:?}"
         );
         assert!(d.message.contains("quota_units_per_minute"), "{d:?}");
+    }
+
+    /// Beeper and Signal cut a chat into months or days by `period`; a chat
+    /// is one document now. A config that still sets it loads, and the
+    /// warning says why it does nothing.
+    #[test]
+    fn a_retired_period_only_warns_at_its_line() {
+        let check = check_text(
+            "[[groups]]\nid = \"texts\"\ntype = \"beeper\"\n\n\
+             [[steps]]\ngroup = \"texts\"\nfunction = \"render_markdown\"\n\
+             [steps.params]\nperiod = \"day\"\n",
+        );
+        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
+        let d = &check.diagnostics[0];
+        assert_eq!((d.severity, d.line), (Severity::Warning, Some(9)), "{d:?}");
+        assert!(d.message.starts_with("`period` has no effect"), "{d:?}");
+        assert!(d.message.contains("one document"), "{d:?}");
     }
 
     /// A group whose only step was rejected is not empty — somebody filled

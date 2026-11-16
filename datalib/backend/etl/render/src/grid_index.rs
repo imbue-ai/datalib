@@ -27,7 +27,9 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
+use datalib_schema::data_nodes::{DataNodeRow, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
+use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::{layout_json, SectionSpan, DDL as MARKDOWNS_TABLE_DDL};
 use datalib_schema::problems::{ProblemRow, Severity, Stage, DDL as PROBLEMS_DDL};
@@ -633,6 +635,8 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -1086,6 +1090,12 @@ pub struct RenderedMarkdown {
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
     pub edges: Vec<EdgeRow>,
+    /// The containers this document's rows live in, from its own up to the
+    /// top of the source; owned by the document like its contacts, so a
+    /// channel named by many threads has a row under each.
+    pub data_nodes: Vec<DataNodeRow>,
+    /// What its rows and containers are filed under besides their parent.
+    pub filings: Vec<FilingRow>,
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
     pub contacts: Vec<NormalizedContact>,
@@ -1996,6 +2006,8 @@ pub(crate) const DELETE_DOCUMENT_GRID_ROWS: &str =
     "DELETE FROM grid_rows WHERE markdown_uuid IN (SELECT value FROM json_each(?)) RETURNING uuid";
 pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
     "DELETE FROM edges WHERE src_markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM filings WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_contact_handles WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_photos WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
@@ -2093,6 +2105,22 @@ async fn apply_markdown(
         .context("delete prior edges")?;
     for edge in &md.edges {
         insert_edge(conn, edge).await?;
+    }
+    for sql in [
+        "DELETE FROM data_nodes WHERE markdown_uuid = ?",
+        "DELETE FROM filings WHERE markdown_uuid = ?",
+    ] {
+        sqlx::query(sql)
+            .bind(&md.markdown_uuid)
+            .execute(&mut **conn)
+            .await
+            .context("delete prior containers")?;
+    }
+    for node in &md.data_nodes {
+        insert_node(conn, &md.markdown_uuid, node).await?;
+    }
+    for filing in &md.filings {
+        insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
     for sql in [
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
@@ -2305,8 +2333,9 @@ async fn insert_edge(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO edges \
-         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, label) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, \
+          label, kind) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&edge.edge_uuid)
     .bind(&edge.src_markdown_uuid)
@@ -2314,9 +2343,75 @@ async fn insert_edge(
     .bind(&edge.dst_markdown_uuid)
     .bind(&edge.dst_anchor_uuid)
     .bind(&edge.label)
+    .bind(edge.kind)
     .execute(&mut **conn)
     .await
     .with_context(|| format!("insert edge {}", edge.edge_uuid))?;
+    Ok(())
+}
+
+/// One container under the document that carries it. A renderer that
+/// names another document as the carrier has a bug: the row would
+/// outlive the document that wrote it.
+async fn insert_node(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    node: &DataNodeRow,
+) -> Result<()> {
+    if node.markdown_uuid != markdown_uuid {
+        bail!(
+            "document {markdown_uuid} carries container {} under document {}",
+            node.uuid,
+            node.markdown_uuid
+        );
+    }
+    sqlx::query(
+        "INSERT OR REPLACE INTO data_nodes \
+         (markdown_uuid, uuid, source_id, kind, name, parent_uuid, sort_key, read_together, \
+          is_place, read_uuid, place_uuid, upstream_entity_kind, upstream_id, upstream_account) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&node.markdown_uuid)
+    .bind(&node.uuid)
+    .bind(&node.source_id)
+    .bind(&node.kind)
+    .bind(&node.name)
+    .bind(&node.parent_uuid)
+    .bind(&node.sort_key)
+    .bind(node.read_together)
+    .bind(node.is_place)
+    .bind(&node.read_uuid)
+    .bind(&node.place_uuid)
+    .bind(&node.upstream_entity_kind)
+    .bind(&node.upstream_id)
+    .bind(&node.upstream_account)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert container {}", node.uuid))?;
+    Ok(())
+}
+
+async fn insert_filing(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    filing: &FilingRow,
+) -> Result<()> {
+    if filing.markdown_uuid != markdown_uuid {
+        bail!(
+            "document {markdown_uuid} carries a filing of {} under document {}",
+            filing.node_uuid,
+            filing.markdown_uuid
+        );
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO filings (markdown_uuid, node_uuid, under_uuid) VALUES (?, ?, ?)",
+    )
+    .bind(&filing.markdown_uuid)
+    .bind(&filing.node_uuid)
+    .bind(&filing.under_uuid)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("file {} under {}", filing.node_uuid, filing.under_uuid))?;
     Ok(())
 }
 
@@ -2527,6 +2622,10 @@ mod insert_round_trip_tests {
             channel: Some("bridge".into()),
             conversation_name: Some("Klingon Diplomatic Greeting".into()),
             conversation_uuid: "conv-1701".into(),
+            parent_uuid: Some("parent-everything".into()),
+            sort_key: Some("2026-06-02T20:00:00Z".into()),
+            read_uuid: Some("read-everything".into()),
+            place_uuid: Some("place-everything".into()),
             message_index: Some(3),
             entire_chat: "/chat/conv-1701".into(),
             preview: "Tea. Earl Grey. Hot.".into(),
@@ -2659,6 +2758,10 @@ mod write_lock_tests {
             channel: None,
             conversation_name: Some(format!("Conv {uuid}")),
             conversation_uuid: uuid.clone(),
+            parent_uuid: None,
+            sort_key: None,
+            read_uuid: None,
+            place_uuid: None,
             message_index: None,
             entire_chat: format!("/chat/{uuid}"),
             preview: format!("body for {uuid}"),
@@ -2695,6 +2798,8 @@ mod write_lock_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
@@ -3147,6 +3252,8 @@ mod source_cursor_tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
@@ -3562,6 +3669,44 @@ mod source_cursor_tests {
         .fetch_all(pool)
         .await
         .unwrap()
+    }
+
+    /// The grid holds each document's containers as the store does, and a
+    /// re-render that names none takes them out of the grid too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grid_carries_each_documents_containers() {
+        use datalib_schema::data_nodes::DataNodeRow;
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        let mut d = doc(root, "s", "md-a", "body");
+        d.data_nodes = vec![DataNodeRow::new("md-a", "md-a", "s", "Chat").read_together()];
+        d.filings = vec![datalib_schema::filings::FilingRow::new(
+            "md-a", "md-a", "label",
+        )];
+        render(root, "s", &[d]);
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        let count = |table: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                    "SELECT count(*) FROM {table}"
+                )))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!((count("data_nodes").await, count("filings").await), (1, 1));
+
+        render(root, "s", &[doc(root, "s", "md-a", "body again")]);
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!((count("data_nodes").await, count("filings").await), (0, 0));
     }
 
     /// A store from a build before #962 lacked `source_contacts`, failed

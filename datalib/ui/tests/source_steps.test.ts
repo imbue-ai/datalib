@@ -45,7 +45,7 @@ const CLAUDE = catalogFor("claude")!;
 const CHATGPT = catalogFor("chatgpt")!;
 const LIGHTROOM = catalogFor("lightroom")!;
 const APPLE_PHOTOS = catalogFor("apple_photos")!;
-const SIGNAL = catalogFor("signal")!;
+const BEEPER = catalogFor("beeper")!;
 
 /** One source's group and two steps plus the index group and its steps. */
 const PAIR = `data_root = "~/datalib"
@@ -274,17 +274,17 @@ describe("buildSource", () => {
   // deny_unknown_fields refuses at run time.
   it("puts render fields on the render step", () => {
     const out = buildSource({
-      entry: SIGNAL,
-      group: "signal",
+      entry: BEEPER,
+      group: "beeper",
       name: "",
-      values: { "backup.path": "~/backups", period: "year" },
+      values: { "texts.path": "~/BeeperTexts", networks: ["signal"] },
       withGroup: true,
     });
     const [ingest, render] = out.stepsBody.split("\n\n[[steps]]");
-    expect(ingest).toContain('[steps.params.backup]\npath = "~/backups"');
-    expect(ingest).not.toContain("period");
-    expect(render).toContain('period = "year"');
-    expect(render).not.toContain("backup");
+    expect(ingest).toContain('[steps.params.texts]\npath = "~/BeeperTexts"');
+    expect(ingest).not.toContain("networks");
+    expect(render).toContain('networks = ["signal"]');
+    expect(render).not.toContain("texts");
   });
 });
 
@@ -440,30 +440,30 @@ describe("buildStep", () => {
     expect(body).toContain('dm_conversations = ["D024BE7LH", "G0ABC12DE"]');
   });
 
-  // The one `select` field in the catalog. Its value is always written:
-  // the form seeds the backend's own default rather than offering an
-  // "unset" choice, so what the dropdown shows is what the file says.
+  // A select's value is always written: the form seeds the backend's own
+  // default rather than offering an "unset" choice, so what the dropdown
+  // shows is what the file says.
   it("writes a select's value", () => {
     const body = buildStep({
-      entry: SIGNAL,
-      group: "signal",
-      phase: "render",
-      values: { period: "year" },
+      entry: SLACK,
+      group: "slack",
+      phase: "download",
+      values: { "api.scope": "involves_me" },
     });
-    expect(body).toContain('period = "year"');
+    expect(body).toContain('scope = "involves_me"');
   });
 
   // A hand-edited config can hold a value no option offers. Dropping it
   // on save would silently rewrite someone's config; carrying it
-  // through means `Period::from_config` gets to reject it by name.
+  // through means the backend gets to reject it by name.
   it("carries a select value the dropdown doesn't know", () => {
     const body = buildStep({
-      entry: SIGNAL,
-      group: "signal",
-      phase: "render",
-      values: { period: "fortnight" },
+      entry: SLACK,
+      group: "slack",
+      phase: "download",
+      values: { "api.scope": "fortnight" },
     });
-    expect(body).toContain('period = "fortnight"');
+    expect(body).toContain('scope = "fortnight"');
   });
 
   // `SlackApiSync::validate` rejects `dm_conversations` with

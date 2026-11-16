@@ -599,31 +599,28 @@ mod tests {
         .expect("dms = true with an allowlist is the supported shape");
     }
 
+    /// `period`, which cut a chat into months, does nothing now: a config
+    /// that sets it on either step it ever lived on still plans.
     #[test]
-    fn render_knobs_are_rejected_on_download_and_read_on_render() {
+    fn a_retired_period_is_dropped_on_either_step() {
         let td = tempfile::tempdir().unwrap();
-        // `period` used to live in the ingest table; the download
-        // planner points at its new home on the render step.
-        let err = plan(
-            "signal",
-            Phase::Ingest,
-            "signal",
-            raw_dir(td.path(), "signal", Phase::Ingest),
-            serde_json::json!({"backup": {"path": "/backups", "period": "day"}}),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("render step's params"), "{err}");
-
-        let rn = plan(
-            "signal",
-            Phase::Render,
-            "signal",
-            raw_dir(td.path(), "signal", Phase::Render),
-            serde_json::json!({"period": "day"}),
-        )
-        .unwrap();
-        assert_eq!(rn.processors.len(), 1);
+        for (phase, params) in [
+            (
+                Phase::Ingest,
+                serde_json::json!({"backup": {"path": "/backups", "period": "day"}}),
+            ),
+            (Phase::Render, serde_json::json!({"period": "day"})),
+        ] {
+            let planned = plan(
+                "signal",
+                phase,
+                "signal",
+                raw_dir(td.path(), "signal", phase),
+                params,
+            )
+            .unwrap();
+            assert_eq!(planned.processors.len(), 1);
+        }
     }
 
     /// The keys a source type's render config takes, `common` aside,
@@ -670,15 +667,14 @@ mod tests {
     }
 
     /// Every knob of every render config is a render param, so changing
-    /// it renders every document again. Beeper's `period` and claude's
-    /// `max_project_doc_bytes` were not, and changing one re-rendered only
+    /// it renders every document again. Claude's `max_project_doc_bytes`
+    /// was not, and changing it re-rendered only
     /// the documents whose raw rows moved (#1087). A knob added to a
     /// render config fails here until it has a row.
     #[test]
     fn every_render_knob_is_a_render_param() {
         use serde_json::json;
         let changed = [
-            ("beeper", json!({"period": "day"})),
             ("beeper", json!({"networks": ["signal"]})),
             ("claude", json!({"max_project_doc_bytes": 1000})),
             ("claude_code", json!({"max_tool_result_bytes": 1})),
@@ -691,7 +687,6 @@ mod tests {
                 json!({"catalog_path": "/Pictures/Lightroom/Catalog.lrcat"}),
             ),
             ("perseus", json!({"alignment_pairs": [["grc2", "eng2"]]})),
-            ("signal", json!({"period": "day"})),
         ];
         let mut knobs_seen = 0;
         for source_type in SourceType::VARIANTS.iter().map(|t| t.as_str()) {

@@ -41,6 +41,7 @@ fn slack_user(user_id: &str) -> Handle {
 
 fn message(uuid: &str, author: &str, handle: Handle, at: i64, text: &str) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.into(),
         recipients: Vec::new(),
         mentions: Vec::new(),
@@ -76,6 +77,8 @@ fn chat(
     NormalizedChat {
         named_after: Vec::new(),
         id: uuid.into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: uuid.into(),
         display: display.into(),
         title: None,
@@ -88,7 +91,6 @@ fn chat(
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".into(),
             markdown_uuid: uuid.into(),
             source_ref: None,
             items: vec![item],
@@ -219,6 +221,7 @@ fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> Contac
         contact,
         doc_uuid: uuid.into(),
         group_label: "Address Book".into(),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),

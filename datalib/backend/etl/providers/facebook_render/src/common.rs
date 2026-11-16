@@ -37,7 +37,9 @@ use serde_json::Value;
 /// v12: the owner is marked as the account's own, by their name and the
 ///     profile's address, so search reads both as `me`.
 /// v13: the tables no feed reads are counted on record.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a Messenger conversation and the comments and reactions feeds are
+///     one document each, under the chat's own uuid, not one per year.
+pub const RENDER_VERSION: u32 = 14;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -174,6 +176,7 @@ pub fn chat_item(
     attachments: Vec<NormalizedAttachment>,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: item_id.uuid,
         author_handle,
         author_kind,

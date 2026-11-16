@@ -205,6 +205,10 @@ pub struct GridRowBuilder {
     notion_page_uuid: Option<String>,
     notion_block_uuid: Option<String>,
     markdown_uuid: Option<String>,
+    parent_uuid: Option<String>,
+    sort_key: Option<String>,
+    read_uuid: Option<String>,
+    place_uuid: Option<String>,
     byte_size: Option<i64>,
     item_count: Option<i64>,
     image: Option<String>,
@@ -277,6 +281,25 @@ impl GridRowBuilder {
     opt_setter!(notion_page_uuid);
     opt_setter!(notion_block_uuid);
     opt_setter!(markdown_uuid);
+    opt_setter!(parent_uuid);
+    opt_setter!(read_uuid);
+    opt_setter!(place_uuid);
+
+    /// Upstream's own order among siblings that have no time of their
+    /// own (a page's blocks). A row with a time sorts by it unless this
+    /// is set.
+    pub fn sort_key(mut self, v: impl Into<Option<String>>) -> Self {
+        self.sort_key = v.into();
+        self
+    }
+
+    /// Where the row sits in the tree: its parent, and the nearest
+    /// containers above it that are read together and that are a place.
+    pub fn lineage(self, at: &crate::data_nodes::Lineage) -> Self {
+        self.parent_uuid(at.parent_uuid.clone())
+            .read_uuid(at.read_uuid.clone())
+            .place_uuid(at.place_uuid.clone())
+    }
     opt_setter!(image);
 
     /// Where the thing was: latitude and longitude, in degrees.
@@ -399,6 +422,9 @@ impl GridRowBuilder {
                 })?;
             }
         }
+        let sort_key = self
+            .sort_key
+            .or_else(|| split(self.created_at.as_deref()).map(|(utc, _)| utc));
         let touched_at = self
             .touched_at
             .or_else(|| self.modified_at.clone())
@@ -424,6 +450,10 @@ impl GridRowBuilder {
             channel: self.channel,
             conversation_name: self.conversation_name,
             conversation_uuid: self.conversation_uuid,
+            parent_uuid: self.parent_uuid,
+            sort_key,
+            read_uuid: self.read_uuid,
+            place_uuid: self.place_uuid,
             message_index: self.message_index,
             entire_chat: self.entire_chat,
             preview: preview(&self.body),

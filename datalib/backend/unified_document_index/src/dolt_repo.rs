@@ -1425,17 +1425,18 @@ impl IndexRepo for DoltRepo {
         };
         let sql = format!(
             "SELECT e.edge_uuid, e.src_markdown_uuid, e.src_anchor_uuid, \
-                    e.dst_markdown_uuid, e.dst_anchor_uuid, e.label, \
+                    e.dst_markdown_uuid, e.dst_anchor_uuid, e.label, e.kind, \
                     m.title AS dst_title \
              FROM {} e \
              LEFT JOIN {} m ON m.markdown_uuid = e.dst_markdown_uuid \
-             WHERE e.src_markdown_uuid = ?",
+             WHERE e.src_markdown_uuid = ? AND e.kind = ?",
             at.edges, at.markdowns
         );
         // Audited: `at.edges` and `at.markdowns` are literals; the uuid
-        // is bound.
+        // and the kind are bound. The page draws links; a reply is not one.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(markdown_uuid)
+            .bind(datalib_schema::edges::EdgeKind::Link.as_i64())
             .fetch_all(&mut *at.tx)
             .await
         {
@@ -1458,6 +1459,7 @@ impl IndexRepo for DoltRepo {
                     .try_get::<Option<String>, _>("dst_anchor_uuid")
                     .unwrap_or_default(),
                 label: r.try_get::<Option<String>, _>("label").unwrap_or_default(),
+                kind: r.try_get("kind").unwrap_or_default(),
             };
             out.push(EdgeRowOut {
                 edge,

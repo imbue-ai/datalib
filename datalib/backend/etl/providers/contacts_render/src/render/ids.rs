@@ -8,6 +8,7 @@ use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Contacts;
 
 pub const KIND_CONTACT: &str = "contact";
+pub const KIND_ADDRESSBOOK: &str = "addressbook";
 
 const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
@@ -19,6 +20,17 @@ pub fn contact(source_id: &str, addressbook_label: &str, uid: &str) -> Identity 
         source_id,
         KIND_CONTACT,
         composite_key(&[addressbook_label, uid]),
+        None,
+    )
+}
+
+/// `addressbook_id` is the raw store's `addressbooks` key, which a
+/// rename keeps.
+pub fn addressbook(source_id: &str, addressbook_id: &str) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_ADDRESSBOOK,
+        addressbook_id.to_string(),
         None,
     )
 }

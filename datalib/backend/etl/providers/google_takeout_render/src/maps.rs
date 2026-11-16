@@ -96,7 +96,7 @@ pub fn build(
             vec![feeds::attachment(row.id.clone(), name, &row.id)],
         ));
     }
-    vec![feeds::yearly(
+    vec![feeds::timeline(
         source_id,
         feeds::MAPS,
         "Google Maps",
@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn reviews_saved_places_and_photos_share_one_feed_by_year() {
+    fn reviews_saved_places_and_photos_share_one_feed_document() {
         let reviews = [row(
             "r1",
             "2364-06-03T19:30:00Z",
@@ -322,10 +322,14 @@ mod tests {
         let [chat] = chats.as_slice() else {
             panic!("one feed")
         };
-        let years: Vec<&str> = chat.buckets.iter().map(|b| b.period_key.as_str()).collect();
-        assert_eq!(years, ["2364", "2365"]);
-
-        let review = &chat.buckets[0].items[0];
+        // Two years, one document, oldest first.
+        let [doc] = chat.buckets.as_slice() else {
+            panic!("one document: {:?}", chat.buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chat.chat_uuid);
+        let [review, photo, pin] = doc.items.as_slice() else {
+            panic!("{:?}", doc.items)
+        };
         assert_eq!(
             review.text.as_deref(),
             Some(
@@ -333,7 +337,6 @@ mod tests {
                  Deck 10, USS Enterprise-D\n\nSynthehol is *acceptable*."
             )
         );
-        let pin = &chat.buckets[1].items[0];
         assert!(
             pin.text
                 .as_deref()
@@ -346,7 +349,6 @@ mod tests {
             "Google's sentence is a note, not text: {pin:?}"
         );
         assert_eq!(pin.problems.len(), 1, "{:?}", pin.problems);
-        let photo = &chat.buckets[0].items[1];
         assert_eq!(photo.text.as_deref(), Some("View from the bar"));
         assert_eq!(
             photo.attachments[0].ref_id.as_deref(),

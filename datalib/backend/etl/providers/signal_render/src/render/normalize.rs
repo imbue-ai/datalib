@@ -26,15 +26,8 @@ pub struct Unrendered {
     pub why: String,
 }
 
-/// One `NormalizedChat` per *bucket*, not per chat.
-///
-/// `chat-common` keys attachment bundles by `NormalizedChat::id`, and
-/// Signal's parse loads a bundle per bucket rather than per chat — so a
-/// chat spanning three periods carries three bundles with nothing to
-/// merge them. Splitting per bucket keys them apart without copying
-/// bytes around. Nothing downstream notices: each document is filed by
-/// its own id either way, and the chat-level grid row was already one
-/// per document.
+/// One `NormalizedChat` per chat, rendered as one document under the
+/// chat's own uuid.
 pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>, Vec<Unrendered>) {
     let mut chats = Vec::with_capacity(parsed.docs.len());
     let mut unrendered = Vec::new();
@@ -42,7 +35,7 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
             unrendered.push(Unrendered {
-                markdown_uuid: ids::period(source_id, &doc.chat_id, &doc.period_key).uuid,
+                markdown_uuid: ids::chat(source_id, &doc.chat_id).uuid,
                 why: format!(
                     "its messages name chat {}, which the parse did not read",
                     doc.chat_id
@@ -51,9 +44,8 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             continue;
         };
         let chat_id = ids::chat(source_id, &chat.id);
-        let bundle_key = format!("{}#{}", chat.id, doc.period_key);
         // Recipients are declared as they are looked up, on the chat's
-        // inputs — every period of the chat shares one declaration.
+        // inputs.
         let no_inputs = Inputs::default();
         let inputs = parsed.inputs.get(&chat.id).unwrap_or(&no_inputs);
         let recipients = inputs.lookup("recipients", &parsed.recipients);
@@ -63,22 +55,31 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             .filter_map(|r| Some((r.aci.as_deref()?, r.id.as_str())))
             .collect();
 
-        let items: Vec<NormalizedChatItem> = doc
+        // An item with neither text nor an attachment is a ChatUpdate or
+        // a sticker: nothing a transcript can show.
+        let shown: Vec<&ParsedChatItem> = doc
             .items
             .iter()
-            // An item with neither text nor an attachment is a
-            // ChatUpdate or a sticker: nothing a transcript can show.
-            // The old renderer skipped these too, but kept counting
-            // them, so `message_index` disagreed with the rendered
-            // order whenever one appeared.
             .filter(|i| i.text.is_some() || !i.attachments.is_empty())
-            .map(|item| to_item(recipients, &by_aci, chat, item, source_id))
+            .collect();
+        let sent_at = quote_targets(source_id, &chat.id, &shown);
+        let items: Vec<NormalizedChatItem> = shown
+            .iter()
+            .map(|item| {
+                let mut it = to_item(recipients, &by_aci, chat, item, source_id);
+                it.reply_to = item
+                    .quotes_sent
+                    .and_then(|t| sent_at.get(&t).cloned().flatten());
+                it
+            })
             .collect();
 
         chats.push(NormalizedChat {
             named_after: named_after(recipients, chat),
-            id: bundle_key.clone(),
-            chat_uuid: chat_id.uuid,
+            id: chat.id.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
+            chat_uuid: chat_id.uuid.clone(),
             display: recipient_display(recipients, chat),
             // `None`, so chat-common derives the familiar
             // "Signal · {recipient}" heading rather than us restating it.
@@ -92,21 +93,36 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![{
-                let period = ids::period(source_id, &chat.id, &doc.period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    period_key: doc.period_key.clone(),
-                    markdown_uuid: period.uuid,
-                    source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
-                    items,
-                }
+            buckets: vec![NormalizedDoc {
+                orphan_reactions: Vec::new(),
+                markdown_uuid: chat_id.uuid,
+                source_ref: None,
+                items,
             }],
             contacts: contacts_of(recipients, &doc.items, source_id),
             inputs: inputs.declared(),
         });
     }
     (chats, unrendered)
+}
+
+/// Each shown message's uuid by its `date_sent`, which is how a quote
+/// names its target; `None` where two messages share the stamp, since the
+/// quote's author number belongs to the backup that wrote it and cannot
+/// tell them apart.
+fn quote_targets(
+    source_id: &str,
+    chat_id: &str,
+    shown: &[&ParsedChatItem],
+) -> HashMap<i64, Option<String>> {
+    let mut at: HashMap<i64, Option<String>> = HashMap::new();
+    for item in shown {
+        let uuid = ids::message(source_id, chat_id, &item.author_id, item.date_sent).uuid;
+        at.entry(item.date_sent)
+            .and_modify(|held| *held = None)
+            .or_insert(Some(uuid));
+    }
+    at
 }
 
 fn to_item(
@@ -146,6 +162,7 @@ fn to_item(
         None => (None, Vec::new()),
     };
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: author_handle(recipients, item),
         author_kind: author_kind(recipients, item),
@@ -331,7 +348,6 @@ mod tests {
     fn a_bucket_with_no_chat_is_unrendered() {
         let bucket = |chat_id: &str| DocBucket {
             chat_id: chat_id.into(),
-            period_key: "2364-03".into(),
             items: Vec::new(),
         };
         let parsed = ParsedSignal {
@@ -352,7 +368,7 @@ mod tests {
         assert_eq!(unrendered.len(), 1);
         assert_eq!(
             unrendered[0].markdown_uuid,
-            ids::period("signal", "1701", "2364-03").uuid
+            ids::chat("signal", "1701").uuid
         );
         assert!(unrendered[0].why.contains("1701"), "{}", unrendered[0].why);
     }

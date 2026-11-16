@@ -20,6 +20,8 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
+use datalib_etl_email::ingest::labels;
+use datalib_etl_email::mailbox_labels::MailboxNode;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
@@ -28,6 +30,7 @@ use datalib_etl_render::html::{
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::plain_text::plain_text;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
@@ -68,7 +71,9 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v22: a body part is HTML only when its Content-Type says so: a
 ///     plain-text email went through the HTML converter, losing every
 ///     `<…>` and running its lines together.
-pub const RENDER_VERSION: u32 = 22;
+/// v23: a thread sits in its account and is filed under its emails'
+///     labels; an email's `In-Reply-To` is a reply edge.
+pub const RENDER_VERSION: u32 = 23;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -193,6 +198,29 @@ pub struct PageEnd {
 struct Lookups {
     mailbox_name: HashMap<String, String>,
     account_label: HashMap<String, String>,
+    mailboxes: Mailboxes,
+}
+
+/// The mailbox rows, as the tree of labels needs them.
+#[derive(Default)]
+struct Mailboxes {
+    by_id: HashMap<String, MailboxNode>,
+    /// Name → the ids of every mailbox of that name, across accounts.
+    by_name: HashMap<String, Vec<String>>,
+}
+
+impl Mailboxes {
+    fn new(payloads: &[serde_json::Value]) -> Self {
+        let mut out = Mailboxes::default();
+        for node in payloads.iter().filter_map(MailboxNode::from_payload) {
+            out.by_name
+                .entry(node.name.clone())
+                .or_default()
+                .push(node.id.clone());
+            out.by_id.insert(node.id.clone(), node);
+        }
+        out
+    }
 }
 
 /// Each configured label no mailbox has. It selects no thread, and if
@@ -250,6 +278,7 @@ impl Lookups {
         Lookups {
             mailbox_name,
             account_label,
+            mailboxes: Mailboxes::new(&shared.mailboxes),
         }
     }
 }
@@ -391,13 +420,7 @@ fn render_page(
             None => batch.to_vec(),
         };
         for bucket in batch {
-            let (chat, bundle) = build_chat(
-                source_id,
-                bucket,
-                &lookups.mailbox_name,
-                &lookups.account_label,
-                outlink,
-            );
+            let (chat, bundle) = build_chat(source_id, bucket, lookups, outlink);
             renderer
                 .render_chat(&chat, &bundle)
                 .context("email chat-common render")?;
@@ -425,8 +448,7 @@ fn account_contact(source_id: &str, label: Option<&String>) -> Option<Normalized
 fn build_chat(
     source_id: &str,
     bucket: &EmailThreadBucket,
-    mailbox_name: &HashMap<String, String>,
-    account_label: &HashMap<String, String>,
+    lookups: &Lookups,
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
@@ -434,8 +456,8 @@ fn build_chat(
     let tuid = thread_id.uuid.clone();
     // The account row and each mailbox row are looked up per thread,
     // and declared as they are.
-    let mailbox_name = bucket.inputs.lookup("mailboxes", mailbox_name);
-    let account_label = bucket.inputs.lookup("accounts", account_label);
+    let mailbox_name = bucket.inputs.lookup("mailboxes", &lookups.mailbox_name);
+    let account_label = bucket.inputs.lookup("accounts", &lookups.account_label);
     let subject = bucket
         .emails
         .first()
@@ -615,6 +637,7 @@ fn build_chat(
             |_, _| None,
         );
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
             author_kind: AuthorKind::Named,
@@ -650,6 +673,23 @@ fn build_chat(
         });
     }
 
+    let replies = reply_targets(&bucket.emails, &items);
+    for (item, to) in items.iter_mut().zip(replies) {
+        item.reply_to = to;
+    }
+    let account = account_node(
+        source_id,
+        account_id,
+        account_label.get(account_id).cloned(),
+    );
+    let filed_under = label_paths(
+        source_id,
+        bucket,
+        &account,
+        &lookups.mailboxes.by_name,
+        bucket.inputs.lookup("mailboxes", &lookups.mailboxes.by_id),
+    );
+
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
@@ -659,6 +699,8 @@ fn build_chat(
             .collect(),
         inputs: Vec::new(),
         id: tuid.clone(),
+        containers: vec![account],
+        filed_under,
         chat_uuid: tuid.clone(),
         display: subject.clone(),
         title: Some(subject),
@@ -677,7 +719,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: tuid,
             source_ref: None,
             items,
@@ -686,6 +727,166 @@ fn build_chat(
     // After the account lookup above, so it is declared too.
     chat.inputs = bucket.inputs.declared();
     (chat, render_bundle)
+}
+
+/// What each email answers: the email in the thread whose `Message-ID`
+/// its `In-Reply-To` names, as that email's item uuid. `items` are the
+/// emails' items, in the same order.
+fn reply_targets(emails: &[LoadedEmail], items: &[NormalizedChatItem]) -> Vec<Option<String>> {
+    let mut by_message_id: HashMap<&str, &str> = HashMap::new();
+    for (em, item) in emails.iter().zip(items) {
+        if let Some(id) = em.message_id.as_deref().and_then(message_id_key) {
+            by_message_id.entry(id).or_insert(&item.message_uuid);
+        }
+    }
+    emails
+        .iter()
+        .zip(items)
+        .map(|(em, item)| {
+            let to = *by_message_id.get(em.in_reply_to.as_deref().and_then(message_id_key)?)?;
+            (to != item.message_uuid).then(|| to.to_string())
+        })
+        .collect()
+}
+
+/// A `Message-ID` as a key: the first id in the header, without its
+/// angle brackets, which JMAP leaves off and a header keeps.
+fn message_id_key(header: &str) -> Option<&str> {
+    let id = header.split_whitespace().next()?.trim_matches(['<', '>']);
+    (!id.is_empty()).then_some(id)
+}
+
+const LABEL_KIND: &str = "Email Label";
+
+/// The account a thread is in, and the place its labels hang from.
+fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> DataNodeRow {
+    let id = ids::account(source_id, account_id);
+    DataNodeRow::new("", id.uuid, source_id, "Email Account")
+        .named(label)
+        .upstream(id.entity_kind, id.natural_key, account_id.to_string())
+        .place()
+}
+
+/// One path for each mailbox any of the thread's emails is in, from the
+/// account down to it: the thread is filed under a label when any of its
+/// emails carries it. System mailboxes (Inbox, Sent) are labels upstream
+/// and are kept; Starred and Important are keywords, not mailboxes, and
+/// file nothing.
+fn label_paths(
+    source_id: &str,
+    bucket: &EmailThreadBucket,
+    account: &DataNodeRow,
+    by_name: &HashMap<String, Vec<String>>,
+    mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
+) -> Vec<Vec<DataNodeRow>> {
+    let held: BTreeSet<&str> = bucket
+        .joins
+        .mailboxes
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    held.into_iter()
+        .map(|mailbox_id| {
+            let mut path = vec![account.clone()];
+            path.extend(label_path(
+                source_id,
+                &bucket.account_id,
+                mailbox_id,
+                by_name,
+                mailboxes,
+            ));
+            path
+        })
+        .collect()
+}
+
+/// A guard against a cyclic `parentId` chain.
+const MAX_LABEL_DEPTH: usize = 64;
+
+/// The labels from the top down to `mailbox_id`. A JMAP mailbox nests by
+/// `parentId`. A Gmail label, an mbox's or Apple Mail's nests by the `/`
+/// in its name (`Work/Clients/Acme`); a parent is the mailbox of that
+/// name where the account has one, and otherwise a node keyed by its
+/// path, which a rename replaces.
+fn label_path(
+    source_id: &str,
+    account_id: &str,
+    mailbox_id: &str,
+    by_name: &HashMap<String, Vec<String>>,
+    mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
+) -> Vec<DataNodeRow> {
+    let node = |id: &str, name: &str| {
+        let i = ids::mailbox(source_id, account_id, id);
+        DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
+            .named((!name.is_empty()).then(|| name.to_string()))
+            .upstream(i.entity_kind, i.natural_key, account_id.to_string())
+            .place()
+    };
+    let Some(leaf) = mailboxes.get(mailbox_id) else {
+        return vec![node(mailbox_id, "")];
+    };
+    if nests_by_slash(account_id, mailbox_id) {
+        let segments: Vec<&str> = leaf.name.split('/').collect();
+        let mut out = Vec::with_capacity(segments.len());
+        for depth in 1..segments.len() {
+            let prefix = segments[..depth].join("/");
+            let name = segments[depth - 1];
+            out.push(match mailbox_named(account_id, &prefix, by_name) {
+                Some(id) => {
+                    mailboxes.get(id);
+                    node(id, name)
+                }
+                None => {
+                    let i = ids::label_path(source_id, account_id, &prefix);
+                    DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
+                        .named(Some(name.to_string()))
+                        .place()
+                }
+            });
+        }
+        out.push(node(mailbox_id, segments[segments.len() - 1]));
+        return out;
+    }
+    let mut chain = vec![(mailbox_id, leaf)];
+    while let Some(parent) = chain[chain.len() - 1].1.parent_id.as_deref() {
+        if chain.len() >= MAX_LABEL_DEPTH || chain.iter().any(|(id, _)| *id == parent) {
+            break;
+        }
+        let Some(row) = mailboxes.get(parent) else {
+            break;
+        };
+        chain.push((parent, row));
+    }
+    chain
+        .into_iter()
+        .rev()
+        .map(|(id, row)| node(id, &row.name))
+        .collect()
+}
+
+/// Whether a mailbox's `/` means nesting: Gmail's labels and the
+/// name-keyed ones of an mbox or Apple Mail. A JMAP mailbox nests by
+/// `parentId`, and a `/` in its name is just a character.
+fn nests_by_slash(account_id: &str, mailbox_id: &str) -> bool {
+    mailbox_id.starts_with(&labels::gmail_mailbox_prefix(account_id))
+        || mailbox_id.starts_with(labels::NAME_KEYED_PREFIX)
+}
+
+/// This account's mailbox named `name`: a Gmail label of that name, or
+/// the name-keyed row an mbox or Apple Mail would have made for it.
+fn mailbox_named<'a>(
+    account_id: &str,
+    name: &str,
+    by_name: &'a HashMap<String, Vec<String>>,
+) -> Option<&'a str> {
+    let gmail = labels::gmail_mailbox_prefix(account_id);
+    let keyed = labels::mailbox_id(account_id, name);
+    by_name
+        .get(name)?
+        .iter()
+        .find(|id| id.starts_with(&gmail) || **id == keyed)
+        .map(String::as_str)
 }
 
 /// The name a mailbox's label chip shows; empty for one that says
@@ -1470,5 +1671,236 @@ mod account_label_tests {
             account_label_from_payload("acct-1", &json!({})).as_deref(),
             Some("acct-1")
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use datalib_schema::edges::EdgeKind;
+    use serde_json::json;
+
+    const ACCT: &str = "picard@enterprise.example";
+
+    fn email(id: &str, message_id: &str, in_reply_to: Option<&str>) -> LoadedEmail {
+        LoadedEmail {
+            id: id.into(),
+            account_id: ACCT.into(),
+            thread_id: "T1".into(),
+            blob_id: format!("B{id}"),
+            message_id: Some(message_id.into()),
+            in_reply_to: in_reply_to.map(str::to_string),
+            references: None,
+            received_at: Some("2364-03-01T09:00:00+00:00".into()),
+            sent_at: None,
+            size: None,
+            subject: Some("Away team".into()),
+            from_json: None,
+            to_json: None,
+            cc_json: None,
+            has_attachment: false,
+        }
+    }
+
+    /// The thread's one document, rendered from `emails` filed as
+    /// `filed` (email id, mailbox ids) against `mailboxes`.
+    fn render(
+        mailboxes: Vec<serde_json::Value>,
+        emails: Vec<LoadedEmail>,
+        filed: &[(&str, &[&str])],
+    ) -> RenderedMarkdown {
+        let mut bucket = EmailThreadBucket {
+            account_id: ACCT.into(),
+            thread_id: "T1".into(),
+            emails,
+            ..Default::default()
+        };
+        for (email, in_mailboxes) in filed {
+            bucket.joins.mailboxes.insert(
+                email.to_string(),
+                in_mailboxes.iter().map(|m| m.to_string()).collect(),
+            );
+        }
+        let shared = Shared {
+            accounts: vec![(ACCT.into(), json!({"name": ACCT}))],
+            mailboxes,
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &shared,
+            &[bucket],
+            out.path(),
+            "mail",
+            None,
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(docs.len(), 1);
+        docs.pop().unwrap()
+    }
+
+    fn mailbox(id: &str) -> String {
+        ids::mailbox("mail", ACCT, id).uuid
+    }
+
+    /// Each node's (uuid, parent, name), for the data_nodes of `kind`.
+    fn of_kind<'a>(
+        doc: &'a RenderedMarkdown,
+        kind: &str,
+    ) -> Vec<(&'a str, Option<&'a str>, Option<&'a str>)> {
+        doc.data_nodes
+            .iter()
+            .filter(|n| n.kind == kind)
+            .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref(), n.name.as_deref()))
+            .collect()
+    }
+
+    /// A thread sits in its account, the place; it is filed under every
+    /// label any of its emails carries, and a Gmail label nests by the `/`
+    /// in its name. `Work/Clients` has no label of its own, so it is a node
+    /// keyed by its path; `Work` is Google's label.
+    #[test]
+    fn a_thread_is_in_its_account_and_filed_under_its_emails_nested_labels() {
+        let gmail = |label: &str| labels::gmail_mailbox_id(ACCT, label);
+        let doc = render(
+            vec![
+                json!({"id": gmail("INBOX"), "name": "Inbox", "role": "inbox"}),
+                json!({"id": gmail("Label_1"), "name": "Work"}),
+                json!({"id": gmail("Label_3"), "name": "Work/Clients/Acme"}),
+            ],
+            vec![email("E1", "one@x", None), email("E2", "two@x", None)],
+            &[
+                ("E1", &[gmail("INBOX").as_str()]),
+                ("E2", &[gmail("Label_3").as_str(), gmail("INBOX").as_str()]),
+            ],
+        );
+        let account = ids::account("mail", ACCT).uuid;
+        let thread = ids::thread("mail", ACCT, "T1").uuid;
+        assert_eq!(
+            of_kind(&doc, "Email Account"),
+            [(account.as_str(), None, Some(ACCT))]
+        );
+        let chat = doc.data_nodes.iter().find(|n| n.uuid == thread).unwrap();
+        assert_eq!(chat.parent_uuid.as_deref(), Some(account.as_str()));
+        assert!(chat.read_together && !chat.is_place, "{chat:?}");
+        let implied = ids::label_path("mail", ACCT, "Work/Clients").uuid;
+        let (inbox, work, acme) = (
+            mailbox(&gmail("INBOX")),
+            mailbox(&gmail("Label_1")),
+            mailbox(&gmail("Label_3")),
+        );
+        let mut labels = of_kind(&doc, "Email Label");
+        labels.sort();
+        let mut want = vec![
+            (inbox.as_str(), Some(account.as_str()), Some("Inbox")),
+            (work.as_str(), Some(account.as_str()), Some("Work")),
+            (implied.as_str(), Some(work.as_str()), Some("Clients")),
+            (acme.as_str(), Some(implied.as_str()), Some("Acme")),
+        ];
+        want.sort();
+        assert_eq!(labels, want);
+        assert!(doc
+            .data_nodes
+            .iter()
+            .filter(|n| n.kind == "Email Label")
+            .all(|n| n.is_place));
+        let mut filed: Vec<(&str, &str)> = doc
+            .filings
+            .iter()
+            .map(|f| (f.node_uuid.as_str(), f.under_uuid.as_str()))
+            .collect();
+        filed.sort();
+        let mut want = vec![
+            (thread.as_str(), inbox.as_str()),
+            (thread.as_str(), acme.as_str()),
+        ];
+        want.sort();
+        assert_eq!(filed, want);
+        for row in doc.rows.iter().filter(|r| r.uuid != thread) {
+            assert_eq!(row.parent_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.read_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.place_uuid.as_deref(), Some(account.as_str()));
+        }
+    }
+
+    /// A JMAP mailbox nests by `parentId`, keyed on the server's ids; a
+    /// `/` in its name is just a character.
+    #[test]
+    fn a_jmap_mailbox_nests_by_its_parent_id() {
+        let doc = render(
+            vec![
+                json!({"id": "M0", "name": "Work"}),
+                json!({"id": "M1", "name": "Clients", "parentId": "M0"}),
+                json!({"id": "M2", "name": "Q1/Q2"}),
+            ],
+            vec![email("E1", "one@x", None)],
+            &[("E1", &["M1", "M2"])],
+        );
+        let account = ids::account("mail", ACCT).uuid;
+        let (work, clients, quarters) = (mailbox("M0"), mailbox("M1"), mailbox("M2"));
+        let mut labels = of_kind(&doc, "Email Label");
+        labels.sort();
+        let mut want = vec![
+            (work.as_str(), Some(account.as_str()), Some("Work")),
+            (clients.as_str(), Some(work.as_str()), Some("Clients")),
+            (quarters.as_str(), Some(account.as_str()), Some("Q1/Q2")),
+        ];
+        want.sort();
+        assert_eq!(labels, want);
+        let clients_node = doc.data_nodes.iter().find(|n| n.uuid == clients).unwrap();
+        assert_eq!(
+            (
+                clients_node.upstream_entity_kind.as_deref(),
+                clients_node.upstream_id.as_deref()
+            ),
+            (Some("mailbox"), Some("M1"))
+        );
+    }
+
+    /// An email's `In-Reply-To` names the `Message-ID` of the email it
+    /// answers; in the same thread that is a reply edge between the two,
+    /// whether or not either header keeps its angle brackets. One that
+    /// answers an email not in the thread draws none.
+    #[test]
+    fn in_reply_to_is_a_reply_edge_to_the_email_it_names() {
+        let doc = render(
+            Vec::new(),
+            vec![
+                email("E1", "one@x", None),
+                email("E2", "<two@x>", Some("<one@x>")),
+                email("E3", "three@x", Some("elsewhere@x")),
+            ],
+            &[],
+        );
+        let at =
+            |id: &str| ids::email("mail", ACCT, id, iso_to_ms("2364-03-01T09:00:00+00:00")).uuid;
+        let edges: Vec<_> = doc
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    EdgeKind::parse(e.kind),
+                    e.src_anchor_uuid.clone(),
+                    e.dst_anchor_uuid.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            edges,
+            [(Some(EdgeKind::ReplyTo), Some(at("E2")), Some(at("E1")))]
+        );
+    }
+
+    #[test]
+    fn a_message_id_key_drops_its_brackets_and_anything_after_the_first() {
+        assert_eq!(message_id_key(" <a@x> <b@x>"), Some("a@x"));
+        assert_eq!(message_id_key("a@x"), Some("a@x"));
+        assert_eq!(message_id_key("<>"), None);
+        assert_eq!(message_id_key(""), None);
     }
 }

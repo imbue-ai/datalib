@@ -7,6 +7,7 @@ use datalib_id::composite_key;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 
+use crate::tree::Tree;
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
 
 pub(crate) fn rows_for(
@@ -15,6 +16,7 @@ pub(crate) fn rows_for(
     comments: &[&Comment],
     stanza: &str,
     qmd: &str,
+    tree: &Tree,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let entire_chat = format!("/chat/{}", cr.uuid);
@@ -52,6 +54,7 @@ pub(crate) fn rows_for(
             ])))
             .upstream_entity_kind(Some(profile.doc_entity_kind.to_string()))
             .markdown_uuid(Some(cr.uuid.clone()))
+            .lineage(&tree.change_request)
             .build_or_record(stanza, &cr.uuid, version, problems),
     );
 
@@ -85,6 +88,7 @@ pub(crate) fn rows_for(
                 ])))
                 .upstream_entity_kind(Some(c.entity_kind.to_string()))
                 .markdown_uuid(Some(cr.uuid.clone()))
+                .lineage(&tree.inside)
                 .build_or_record(stanza, &cr.uuid, version, problems),
         );
     }

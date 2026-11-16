@@ -11,7 +11,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_apple_messages::processor::mirror_options;
 use datalib_etl_apple_messages_config::AppleMessagesConfig;
@@ -19,6 +18,7 @@ use datalib_etl_apple_messages_render::render::{chat_uuid, render, Dropped, Rend
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_sqlite_mirror::mirror;
+use datalib_schema::edges::EdgeKind;
 use datalib_source_common::LocalPath;
 
 const RIKER: &str = "iMessage;-;+14155550142";
@@ -101,7 +101,6 @@ impl Fixture {
                 &raw,
                 &out,
                 "messages",
-                Period::Month,
                 &Progress::noop(),
                 range,
                 &mut on_doc,
@@ -179,10 +178,10 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         vec![],
         "every fixture message is in a chat"
     );
-    // Riker's chat spans two months; the bridge crew's is one.
+    // One document a chat.
     assert_eq!(
         docs.len(),
-        3,
+        2,
         "{:?}",
         docs.iter().map(|d| &d.md_path).collect::<Vec<_>>()
     );
@@ -322,7 +321,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     let fx = Fixture::new();
     let first = fx.ingest().await?.expect("first ingest commits");
     let (docs, _, _) = fx.render(None).await;
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 2);
 
     // Nothing happened, and the daemons' bookkeeping does not count.
     fx.edit(&[
@@ -334,7 +333,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     let (docs, gone, _) = fx.render(Some(&first)).await;
     assert!(docs.is_empty() && gone.is_empty(), "{docs:?} {gone:?}");
 
-    // Data answers his own question: one chat moves, one month of it.
+    // Data answers his own question: one chat moves.
     fx.edit(&[
         "INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me) \
          VALUES (11, 'A1B2C3D4-0011-4000-8000-000000000011', 'Recalibrating now.', 2, \
@@ -399,7 +398,7 @@ async fn a_store_the_mirror_never_filled_renders_nothing() -> Result<()> {
 
     fx.ingest().await?.expect("first ingest commits");
     let (docs, _, _) = fx.render(None).await;
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 2);
     Ok(())
 }
 
@@ -450,6 +449,69 @@ async fn a_message_in_no_chat_is_reported() -> Result<()> {
     assert_eq!(
         rendered.dropped[0].entity_id(),
         format!("message:{unjoined}")
+    );
+    Ok(())
+}
+
+/// Riker's chat spans two months, and was one document a month, each
+/// minted from its month. It is one document, keyed on the chat itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    let riker = chat_uuid("messages", RIKER);
+    let riker_docs: Vec<_> = docs
+        .iter()
+        .filter(|d| d.bucket_key.as_deref() == Some(riker.as_str()))
+        .collect();
+    assert_eq!(riker_docs.len(), 1);
+    assert_eq!(riker_docs[0].markdown_uuid, riker);
+    let page = std::fs::read_to_string(&riker_docs[0].md_path)?;
+    assert!(page.contains("Make it so."), "April's message: {page}");
+    assert!(
+        page.contains("Captain's log, supplemental."),
+        "May's: {page}"
+    );
+    Ok(())
+}
+
+/// An inline reply names the first message of its thread in
+/// `thread_originator_guid`; that is a reply edge between the two.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inline_reply_is_a_reply_edge_to_its_threads_first_message() -> Result<()> {
+    const READY: &str = "A1B2C3D4-0001-4000-8000-000000000001";
+    const MAKE_IT_SO: &str = "A1B2C3D4-0002-4000-8000-000000000002";
+    let fx = Fixture::new();
+    fx.edit(&[&format!(
+        "UPDATE message SET thread_originator_guid = '{READY}' WHERE guid = '{MAKE_IT_SO}'"
+    )])
+    .await?;
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    let riker = chat_uuid("messages", RIKER);
+    let doc = docs
+        .iter()
+        .find(|d| d.markdown_uuid == riker)
+        .expect("Riker's chat");
+    let uuid_of = |guid: &str| {
+        doc.rows
+            .iter()
+            .find(|r| r.upstream_id.as_deref() == Some(guid))
+            .map(|r| r.uuid.clone())
+            .unwrap_or_else(|| panic!("no row for {guid}"))
+    };
+    let replies: Vec<_> = doc
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::ReplyTo.as_i64())
+        .map(|e| (e.src_anchor_uuid.clone(), e.dst_anchor_uuid.clone()))
+        .collect();
+    assert_eq!(
+        replies,
+        [(Some(uuid_of(MAKE_IT_SO)), Some(uuid_of(READY)))],
+        "{:?}",
+        doc.edges
     );
     Ok(())
 }

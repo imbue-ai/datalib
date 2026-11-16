@@ -7,6 +7,7 @@
 
 mod grid_rows;
 mod markdown;
+mod tree;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -55,6 +56,9 @@ pub struct ChangeRequest {
     pub row_id: String,
     /// The repository or project it belongs to.
     pub container: String,
+    /// The same, as a container in the tree; `None` leaves the change
+    /// request at the top of its source.
+    pub container_node: Option<Container>,
     pub number: u32,
     pub title: String,
     pub body: String,
@@ -71,6 +75,17 @@ pub struct ChangeRequest {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub merged_at: Option<String>,
+}
+
+/// A repository or a project: the place its change requests are in.
+#[derive(Debug, Clone)]
+pub struct Container {
+    pub uuid: String,
+    /// What it is, for a person: "GitHub repository".
+    pub kind: &'static str,
+    /// Its upstream record, as the provider's ids module spells it.
+    pub entity_kind: &'static str,
+    pub upstream_id: String,
 }
 
 /// Where a comment goes in its change request's document.
@@ -223,7 +238,16 @@ pub fn render_all(
             .to_string_lossy()
             .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
-        let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &md_rel, &mut problems);
+        let tree = tree::of(profile, cr, stanza);
+        let rows = grid_rows::rows_for(
+            profile,
+            cr,
+            &comments,
+            stanza,
+            &md_rel,
+            &tree,
+            &mut problems,
+        );
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
@@ -235,10 +259,12 @@ pub fn render_all(
             render_version: profile.render_version,
             rows,
             sections,
-            edges: Vec::new(),
+            edges: tree::reply_edges(&cr.uuid, &comments),
             contacts: account_contact(stanza, parsed.account.as_ref(), cr, &comments)
                 .into_iter()
                 .collect(),
+            data_nodes: tree.data_nodes,
+            filings: Vec::new(),
             photos: Vec::new(),
             problems,
         })?;
@@ -346,6 +372,7 @@ impl<'a> Ordered<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_schema::edges::EdgeKind;
 
     fn comment(id: i64, section: Section, reply_to: Option<i64>, at: &str) -> Comment {
         Comment {
@@ -369,6 +396,140 @@ mod tests {
             updated_at: None,
             state: None,
         }
+    }
+
+    /// A change request is read together inside its repository, a
+    /// place; its comments sit inside it, and a review reply is an edge
+    /// to the comment it answers, not a parent. An issue comment with the
+    /// same number is a different record and is not answered.
+    #[test]
+    fn a_change_request_sits_in_its_repository_and_a_reply_is_an_edge() {
+        let profile = ForgeProfile {
+            provider: Provider::Github,
+            tag: "github",
+            source_label: "GitHub",
+            doc_kind: "GitHub PR",
+            doc_entity_kind: "pull_request",
+            table: "pull_requests",
+            container_key: "repo",
+            number_key: "pr_number",
+            from_ref_key: "head_ref",
+            to_ref_key: "base_ref",
+            number_sigil: '#',
+            reviews: true,
+            render_version: 1,
+        };
+        let cr = ChangeRequest {
+            uuid: "pr".into(),
+            row_id: "pr".into(),
+            container: "enterprise-d/warp".into(),
+            container_node: Some(Container {
+                uuid: "repo".into(),
+                kind: "GitHub repository",
+                entity_kind: "repository",
+                upstream_id: "1701".into(),
+            }),
+            number: 7,
+            title: "Realign the nacelles".into(),
+            body: String::new(),
+            state: None,
+            url: None,
+            head_sha: None,
+            base_sha: None,
+            from_ref: None,
+            to_ref: None,
+            author: None,
+            author_handle: None,
+            created_at: None,
+            updated_at: None,
+            merged_at: None,
+        };
+        let mut first = comment(1, Section::Inline, None, "2364-01-01");
+        first.parent_row_id = "pr".into();
+        first.entity_kind = "pr_review_comment";
+        let mut reply = comment(2, Section::Inline, Some(1), "2364-01-02");
+        reply.parent_row_id = "pr".into();
+        reply.entity_kind = "pr_review_comment";
+        let mut other = comment(1, Section::General, None, "2364-01-03");
+        other.uuid = "u1-issue".into();
+        other.parent_row_id = "pr".into();
+        other.entity_kind = "issue_comment";
+        let parsed = Parsed {
+            change_requests: vec![cr],
+            comments: vec![first, reply, other],
+            ..Parsed::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &profile,
+            &parsed,
+            dir.path(),
+            "gh",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let doc = &docs[0];
+        let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = doc
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            data_nodes,
+            vec![
+                ("repo", None, true, false),
+                ("pr", Some("repo"), false, true)
+            ]
+        );
+        type At<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+        let at: Vec<At<'_>> = doc
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.uuid.as_str(),
+                    r.parent_uuid.as_deref(),
+                    r.read_uuid.as_deref(),
+                    r.place_uuid.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            at,
+            vec![
+                ("pr", Some("repo"), None, Some("repo")),
+                ("u1-issue", Some("pr"), Some("pr"), Some("repo")),
+                ("u1", Some("pr"), Some("pr"), Some("repo")),
+                ("u2", Some("pr"), Some("pr"), Some("repo")),
+            ]
+        );
+        let edges: Vec<(i64, Option<&str>, Option<&str>)> = doc
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    e.kind,
+                    e.src_anchor_uuid.as_deref(),
+                    e.dst_anchor_uuid.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            edges,
+            vec![(EdgeKind::ReplyTo.as_i64(), Some("u2"), Some("u1"))]
+        );
     }
 
     /// A reply is shown in its thread, under the anchor the thread
