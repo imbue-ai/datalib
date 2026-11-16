@@ -131,22 +131,49 @@ page, an event, a tool call. It is one row, and its text is stored with
 the row. Everything is keyed by the item's uuid, which already exists
 and does not move.
 
-**An item names its parents, and its children can be listed in
-order.** Three relations, each a plain column:
+**Containment is a tree of any depth.** Each source's things nest
+differently, and no fixed set of levels fits them all:
 
-| Relation | Meaning | Examples |
-|---|---|---|
-| conversation | the place the item was said; it never ends | a chat (keyed on the chat, not who is in it: a group keeps its id as people join and leave), a Slack channel, an email thread, a Claude conversation, a Notion page with its comments |
-| thread | a run of items read together | a Slack thread, a Google Chat topic, a Drive or Notion discussion; and where upstream has no threads, the whole conversation |
-| reply to | the one item this one answers, where upstream says | a Signal or Beeper quote-reply, an email's `In-Reply-To`, a GitHub review reply |
+| Source | From the top down |
+|---|---|
+| Slack | workspace › channel › thread › reply |
+| Email | account › thread › message |
+| WhatsApp, Signal, Messenger | chat › message |
+| Notion | workspace › page › page › … › block; a discussion on a block |
+| Google Drive | folder › … › file › comment thread › reply |
+| Claude Code | project › session › sub-agent session › message |
 
-**Every item has a thread.** A WhatsApp, Signal, Messenger or LinkedIn
-chat with one person has no threads inside it: it is one long thread,
-and its thread is the conversation itself. So conversation and thread
-are always set, and a source with threads differs only in having more
-than one per conversation. Grouping by thread then means the same thing
-for every source. Reply-to is the one relation that can be empty,
-because it is a fact about one item, not a grouping.
+So every node (an item, or a container that holds items) names **one
+parent and its position among its siblings**, and that is all the tree
+stores. A container is a row too, with a uuid a person can open; some
+containers have text of their own (a Notion page, a Slack thread's
+first message) and some have none (an email thread). "The children of
+X, in order" is one indexed query on `(parent, position)` and needs no
+stored list.
+
+**What each kind of container is for is declared by its kind**, not
+discovered from depth. A container can be:
+
+- **read together**: a Slack thread, an email thread, a WhatsApp chat,
+  a Notion page, a Drive file, a session. This is what a search groups
+  by when it groups, what the viewer opens, and what embedding cuts its
+  windows from. Nested ones stay separate: a Notion subpage is read on
+  its own, not as part of its parent.
+- **a place**: a Slack channel, a mailbox, a Notion workspace, a Drive
+  folder, a Claude Code project. What a person browses or filters by,
+  not what they read through.
+
+A kind may be both: a WhatsApp chat is the place and the thing read
+together. Each item stores the uuid of its nearest ancestor of each
+role, worked out once at render, so grouping by either is one column
+and never a walk up the tree. A source with no threads loses nothing:
+its chat is read together and is its own place.
+
+**Everything that is not containment is an edge.** Reply-to (a Signal
+quote, an email's `In-Reply-To`, a GitHub review reply), a mention, a
+link, a label on an email: each is a relation between two nodes, not a
+parent, so a message that quotes one from last year stays where it was
+said.
 
 **An item keeps the upstream record it came from**, as
 `upstream_entity_kind` and `upstream_id`, the pair `grid_rows` already
@@ -157,31 +184,25 @@ linked to its item when it is read
 pair must reach the stored item, and the item's parents must be
 reachable from it.
 
-A conversation and a thread are rows too, each with its own uuid, so a
-parent column points at something a person can open. Each item carries
-its position in its conversation and in its thread, so "the children of
-X, in order" is one indexed query on `(parent, position)` and needs no
-stored list.
-
 **A group is chosen when a search runs, not when render runs.** A
 search finds items. How its results are shown is a separate choice:
-one row per item, per thread, or per conversation. A group's row is
+one row per item, per thing read together, or per place. A group's row is
 derived from its items: who took part, its first and last time, how
 many matched. Nothing about a group is fixed at render, so there is no
 month to choose and no setting to change.
 
 **What gets embedded is its own choice.** One message embedded alone
 has lost its context; that is why chunks span messages today. So
-embedding still needs a context: a window of nearby items in the
-thread. A Slack thread usually fits in one window; a ten-year chat,
-being one long thread, is many windows. How wide a window is and
+embedding still needs a context: a window of nearby items within the
+one thing they are read together in. A Slack thread usually fits in
+one window; a ten-year chat is many windows; a Notion page's blocks are
+windowed within the page and never mixed with a subpage's. How wide a window is and
 whether windows overlap is decided by the eval, and changing it
 re-embeds without changing anything a person sees.
 
-**A conversation is read in pages, not as a file.** The viewer opens a
-conversation at an item and asks for the items around it by position.
-A ten-year group chat is one conversation and opens as fast as a short
-one.
+**What is read together is read in pages, not as a file.** The viewer
+opens it at an item and asks for the items around it by position. A
+ten-year group chat opens as fast as a short one.
 
 ## What changes, and for whom
 
@@ -189,13 +210,13 @@ Every place that assumes a document, from the read side of the tree:
 
 | Where | Today | After |
 |---|---|---|
-| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message | `group:conversation`, `group:thread`, `group:none`; `is:document` kept as an alias for the first, since people type it |
+| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message | `group:read` (what is read together), `group:place`, `group:none`; `is:document` kept as an alias for `group:read`, since people type it |
 | Search index (`search_documents`, `search_sections`, `search_chunks`) | keyed by document; sections are byte spans of the file | keyed by item; chunks name the items they cover and the group they were cut from |
 | Ranking (`documents_of_hits`, `fuse`, `land`) | ranks documents, then lands each on a message by re-reading the file | ranks items, then groups them; a hit is an item, so there is nothing to land |
 | `Keyed` / `Kept::Sections` | what the filters keep, per document | what the filters keep is a set of items |
 | `WithoutVectors` | documents without vectors | items not covered by any embedded chunk |
-| Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | a conversation's items, a page at a time, opened at one |
-| Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with its conversation looked up |
+| Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | the items of what is read together, a page at a time, opened at one |
+| Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with what holds it looked up |
 | Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
 | Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
 | Feedback anchors (`data-section-uuid`) | a message inside a document | unchanged: already per item |
@@ -223,14 +244,15 @@ config upgrade drops it with a warning at its line, as it did for
 Each step lands on its own, leaves search working, and is checked
 against the eval before the next.
 
-1. **Parent columns.** Render fills `thread_uuid`, `reply_to_uuid` and
-   a conversation-wide position for every source that has them, and
-   gives each conversation and thread a row of its own. `grid_index`
+1. **The tree.** Render gives every container a row of its own and
+   fills each node's parent, its position among its siblings, and its
+   nearest ancestor that is read together and that is a place; reply-to
+   and the other relations go in as edges. `grid_index`
    carries the columns and an index on `(parent, position)`. A re-render
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
-2. **Children in order.** One route that lists a conversation's or a
-   thread's items by position, a page at a time. The viewer can use it
+2. **Children in order.** One route that lists a container's
+   children by position, a page at a time. The viewer can use it
    beside the file.
 3. **Text in the render store.** Each item's rendered text is stored
    with its row. The search index reads items from the store instead of
@@ -239,12 +261,12 @@ against the eval before the next.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
-5. **The viewer reads items.** `DocCard` opens a conversation at an
+5. **The viewer reads items.** `DocCard` opens what is read together at an
    item and pages through it. The `.md` files stop being written.
-6. **No time buckets.** A bucketed source renders one conversation per
+6. **No time buckets.** A bucketed source renders one container per
    chat. The `period` setting goes.
-7. **Embedding context.** Chunks are cut from windows of a thread, and
-   the eval picks the window.
+7. **Embedding context.** Chunks are cut from windows of what is read
+   together, and the eval picks the window.
 8. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
 
@@ -256,12 +278,19 @@ against the eval before the next.
   embedding whole threads; that is one input, not settled.
 - **How a group ranks.** Reciprocal rank fusion per document today.
   Per group it could be the best item's score, or a sum over items;
-  a long conversation must not win by being long.
+  a long chat must not win by being long.
 - **What a group row shows** in the grid when it spans years: first and
   last time, the last few participants, the number of items matched.
-- **Notion and Drive.** A page is one item today with no rows for its
-  blocks. Are blocks items, so a hit lands on a paragraph, or is the
-  page the item and its comments the children?
+- **How deep each source's tree goes.** A Notion page is one row today,
+  with none for its blocks. Making blocks items lets a hit land on a
+  paragraph and a page be windowed for embedding, at the cost of many
+  more rows; Drive's paragraphs are the same question. Which kinds are
+  read together and which are places is each source's to declare, and
+  this plan's tables are a first guess to check source by source.
+- **One parent is enough?** A Drive file could once sit in several
+  folders, and an email carries several labels. Labels are edges, not
+  parents; a second folder would be too. Nothing found so far needs
+  two parents in the tree.
 - **What storing the text costs.** The text goes in the render store,
   versioned with its row, so a reader at a commit sees that commit's
   text. On one real root (186k files) the markdown is 1.25 GB and the
