@@ -70,6 +70,22 @@ http_archive(
     sha256 = "c4f6f5eedb322bcccc06a15618dcb9fb95da1a90fe842fe46b1e0403e71b03d6",
     strip_prefix = "doltlite-amalgamation-0.51.3",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
+    # The amalgamation turns BLAKE3's SIMD kernels off, because a single
+    # file cannot carry their per-kernel `-m` flags; this patch takes
+    # that out, and `@blake3_c` below supplies the kernels.
+    patches = ["//third-party/doltlite:amalgamation_blake3_simd.patch"],
+    patch_args = ["-p1"],
+)
+
+# BLAKE3's C SIMD kernels, at the version the amalgamation embeds:
+# `//third-party/doltlite:blake3_kernels` compiles them for doltlite, and
+# `:blake3_kernels_test` fails if this and the embedded copy part ways.
+http_archive(
+    name = "blake3_c",
+    urls = ["https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.5.tar.gz"],
+    sha256 = "220bd81286e2a0585beac66d41ac3f4c2c33ae8a4e339fc88cf22d5e00514fe9",
+    strip_prefix = "BLAKE3-1.8.5",
+    build_file = "//third-party/doltlite:blake3.BUILD",
 )
 
 # llama.cpp at the release node-llama-cpp 3.20.0 (qmd 2.8.3's) is built on,
