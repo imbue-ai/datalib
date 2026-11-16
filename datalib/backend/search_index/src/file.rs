@@ -60,8 +60,12 @@ async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
         .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
         .pragma("temp_store", "memory")
         .busy_timeout(wait);
+    // The pool waits as long as SQLite does: its own default (30s) would
+    // give up on the connection's first statement while the grid index's
+    // step still holds the file, whatever `busy_timeout` says.
     SqlitePoolOptions::new()
         .max_connections(1)
+        .acquire_timeout(wait)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
