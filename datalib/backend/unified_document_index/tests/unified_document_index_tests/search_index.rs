@@ -75,7 +75,13 @@ async fn the_nearest_documents_come_first_of_the_sources_asked() {
     assert_eq!(documents(&all), ["near", "chat", "far"]);
     let (_, top) = &all[0];
     assert!((top.score - 0.995).abs() < 0.001, "cosine: {}", top.score);
-    assert!(matches!(top.place, Some(Place::Bytes { start: 0, .. })));
+    assert_eq!(
+        top.place,
+        Some(Place::Item {
+            uuid: Some("n1".to_string())
+        }),
+        "a Meaning hit names the first item its chunk covers"
+    );
     assert!(top.path.is_empty(), "a page looks the file up");
 
     let mail = ["mail".to_string()];

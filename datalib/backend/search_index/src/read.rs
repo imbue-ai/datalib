@@ -223,11 +223,11 @@ impl Reader {
         among: Option<&HashSet<String>>,
         limit: usize,
     ) -> Result<Vec<MessageHit>> {
-        let rows: Vec<(String, i64, i64, f64)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>, f64)> = sqlx::query_as(
             "WITH m AS MATERIALIZED ( \
                  SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
                    FROM search_fts WHERE search_fts MATCH ?1) \
-             SELECT d.markdown_uuid, s.start_byte, s.end_byte, m.score \
+             SELECT d.markdown_uuid, s.uuid, m.score \
                FROM m JOIN search_sections s ON s.section_id = m.section_id \
                JOIN search_documents d ON d.doc_id = s.doc_id \
               WHERE (NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3))) \
@@ -409,21 +409,20 @@ const MESSAGES_PER_DOCUMENT: usize = 8;
 pub struct MessageHit {
     pub markdown_uuid: String,
     pub score: f64,
-    pub start: i64,
-    pub end: i64,
+    /// The item the message is, `None` for a piece that is no item's.
+    pub uuid: Option<String>,
 }
 
 /// `rows`, best first, kept at each document's first, at most `limit`.
-fn best_per_document(rows: Vec<(String, i64, i64, f64)>, limit: usize) -> Vec<MessageHit> {
+fn best_per_document(rows: Vec<(String, Option<String>, f64)>, limit: usize) -> Vec<MessageHit> {
     let mut seen = HashSet::new();
     rows.into_iter()
         .filter(|(doc, ..)| seen.insert(doc.clone()))
         .take(limit)
-        .map(|(markdown_uuid, start, end, score)| MessageHit {
+        .map(|(markdown_uuid, uuid, score)| MessageHit {
             markdown_uuid,
             score,
-            start,
-            end,
+            uuid,
         })
         .collect()
 }

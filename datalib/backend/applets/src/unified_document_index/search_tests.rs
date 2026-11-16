@@ -443,6 +443,42 @@ async fn the_words_find_an_item_by_its_labels() {
     );
 }
 
+/// A hit lands on the message holding the words, whatever the document's
+/// file draws around its messages: the index names the item it matched,
+/// and its own text, drawn without the file's front matter and folded tool
+/// steps, gives no place in the file. The Cowork task's narration sits
+/// among several of those.
+#[tokio::test]
+async fn a_hit_lands_on_the_message_that_says_it() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let narration = "0b75b509-f5c0-8c72-9d36-0da912ada9d9";
+    let rows = |found: &SearchResponse| -> Vec<(String, String)> {
+        found
+            .rows
+            .iter()
+            .map(|r| (r.uuid.clone(), r.snippet.clone()))
+            .collect()
+    };
+    let words = tests::search_part(&s, "the crew list first", tests::Part::Words, 0, 10).await;
+    assert_eq!(
+        words.rows.first().map(|r| r.uuid.as_str()),
+        Some(narration),
+        "{:?}",
+        rows(&words)
+    );
+    // A Meaning hit is a chunk, and lands on the first message it covers:
+    // in this short task, the prompt that opens it.
+    let meaning = tests::search_part(&s, "the crew list first", tests::Part::Meaning, 0, 10).await;
+    let task = &words.rows[0].markdown_uuid;
+    assert_eq!(
+        meaning.rows.first().map(|r| &r.markdown_uuid),
+        Some(task),
+        "{:?}",
+        rows(&meaning)
+    );
+}
+
 /// With meaning left out, a search is scoped by `source:` like any other,
 /// and its groups count the same rows its pages list.
 #[tokio::test]

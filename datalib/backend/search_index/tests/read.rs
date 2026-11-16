@@ -70,12 +70,11 @@ fn ids(hits: &[datalib_search_index::MessageHit]) -> Vec<&str> {
     hits.iter().map(|h| h.markdown_uuid.as_str()).collect()
 }
 
-/// A hit is a message holding every word, and lands on it by its bytes: a
+/// A hit is a message holding every word, and names that message: a
 /// thread that says the words in different messages is not one.
 #[tokio::test]
 async fn a_hit_is_a_message_holding_every_word() {
     let t = thread();
-    let text: String = t.sections.iter().map(|s| s.text.as_str()).collect();
     let both = doc(
         "mail",
         "both",
@@ -98,8 +97,9 @@ async fn a_hit_is_a_message_holding_every_word() {
         .unwrap();
     let thread_hit = one.iter().find(|h| h.markdown_uuid == "thread").unwrap();
     assert_eq!(
-        &text[thread_hit.start as usize..thread_hit.end as usize],
-        "deck twelve reports a coolant leak\n"
+        thread_hit.uuid.as_deref(),
+        Some("m2"),
+        "the message saying it"
     );
     f.reader.close().await;
 }
@@ -128,11 +128,7 @@ async fn a_document_answers_once_at_its_best_message() {
     found.sort();
     assert_eq!(found, ["many", "other"]);
     let best = hits.iter().find(|h| h.markdown_uuid == "many").unwrap();
-    let text: String = many.sections.iter().map(|s| s.text.as_str()).collect();
-    assert_eq!(
-        &text[best.start as usize..best.end as usize],
-        "warp warp warp\n"
-    );
+    assert_eq!(best.uuid.as_deref(), Some("m2"), "warp warp warp");
     assert_eq!(
         f.reader
             .words(&all_of(&["warp"]), None, None, 1)
