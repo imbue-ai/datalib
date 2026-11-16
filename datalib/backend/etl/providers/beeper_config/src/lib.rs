@@ -49,12 +49,12 @@ impl BeeperConfig {
 pub struct BeeperRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// Period each rendered markdown document covers. One of
-    /// `"month"` (default), `"day"`, `"year"`, or `"all"` (single
-    /// file per conversation). Reactions render in the period of
-    /// the message they target, regardless of when the reaction
-    /// itself landed.
+    /// Retired: a room is one document whatever this says. Still read so
+    /// a config that sets it loads; out of the schema so `datalib-step
+    /// help` does not offer it. It goes once `datalib-step` drops it as an
+    /// inert param before parsing.
     #[serde(default)]
+    #[schemars(skip)]
     pub period: Option<String>,
     /// Canonical chat network names to render (`"signal"`,
     /// `"googlechat"`, `"slack"`, …). Unset renders every network the

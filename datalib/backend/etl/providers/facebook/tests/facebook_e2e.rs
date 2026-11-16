@@ -143,10 +143,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             render_source(&source, &Progress::noop(), &mut on_doc).context("render")?;
         }
 
-        // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
-        // comments + a year of reactions + 3 friends + a year each of 7
-        // Messenger conversations + the edit of a post deleted since + 3
-        // group posts.
+        // 5 posts (4 timeline + 1 on another page) + 1 album + the
+        // comments + the reactions + 3 friends + 7 Messenger conversations
+        // + the edit of a post deleted since + 3 group posts.
         assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1 + 3, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
@@ -205,18 +204,21 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             2
         );
 
-        // Comments: one document per year, the title folded in, the
-        // mojibake'd 🍸 restored.
+        // Comments: one document, under the feed's own uuid, the title
+        // folded in, the mojibake'd 🍸 restored.
         let comments: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Comment"))
             .collect();
-        let [year] = comments.as_slice() else {
+        let [comments_doc] = comments.as_slice() else {
             let paths: Vec<_> = comments.iter().map(|d| &d.md_path).collect();
-            panic!("two months of comments are one year's document: {paths:?}")
+            panic!("two months of comments are one document: {paths:?}")
         };
-        let md = fs::read_to_string(&year.md_path)?;
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            comments_doc.rows.iter().all(|r| r.conversation_uuid == comments_doc.markdown_uuid),
+            "the document is the feed's own"
+        );
+        let md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
@@ -227,7 +229,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Reaction"))
             .filter(|d| d.rows.iter().all(|r| r.kind != "Facebook Conversation"))
             .collect();
-        assert_eq!(reactions.len(), 1, "two months of reactions, one year");
+        assert_eq!(reactions.len(), 1, "two months of reactions, one document");
         let reaction_rows: Vec<_> = reactions
             .iter()
             .flat_map(|d| d.rows.iter())
@@ -277,7 +279,10 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(md.matches("](/data/").count(), 2, "the photo and the sticker: {md}");
         assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
         assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            riker.rows.iter().all(|r| r.conversation_uuid == riker.markdown_uuid),
+            "the document is the conversation's own"
+        );
 
         // What render could not use is a problem row on the document,
         // at the message's own section, and says what it was by its
@@ -416,7 +421,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(md.contains("William Riker"), "{md}");
         assert!(!md.contains("Another version"), "{md}");
         assert!(!md.contains("@["), "{md}");
-        let md = fs::read_to_string(&year.md_path)?;
+        let md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(
             md.find("Enjoy the chair, Number One.") < md.find("Enjoy the chair, Will."),
             "a comment's first version above it: {md}"
@@ -440,7 +445,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             project_of("Saurian brandy").as_deref(),
             Some("Ten Forward Regulars")
         );
-        let comments_md = fs::read_to_string(&year.md_path)?;
+        let comments_md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(comments_md.contains("Proud of you, Ensign."), "{comments_md}");
 
         // Every document declares the rows it read, so a change to any of

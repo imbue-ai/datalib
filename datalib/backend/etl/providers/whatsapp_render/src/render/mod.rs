@@ -11,6 +11,5 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-pub use datalib_etl::periodize::Period;
 pub use parse::parse;
 pub use render::{render_all, RENDER_VERSION};

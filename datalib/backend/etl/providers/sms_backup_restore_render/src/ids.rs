@@ -2,14 +2,13 @@
 //! minted from the export (number, date, body hash), unique across the
 //! provider; a conversation is keyed on its number.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Minter};
+use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::SmsBackupRestore;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_CONVERSATION: &str = "conversation";
-pub const KIND_MONTH: &str = "conversation_month";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_CALL: &str = "call";
 
@@ -18,15 +17,6 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 /// `key` carries its `sms:` prefix, as the bucket does.
 pub fn conversation(source_id: &str, key: &str) -> Identity {
     IDS.mint(source_id, KIND_CONVERSATION, key.to_string(), None)
-}
-
-pub fn month(source_id: &str, key: &str, period_key: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_MONTH,
-        composite_key(&[key, period_key]),
-        None,
-    )
 }
 
 pub fn message(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
@@ -48,7 +38,6 @@ mod tests {
     fn natural_key_regenerates_the_uuid() {
         for got in [
             conversation("src", "sms:+1555"),
-            month("src", "sms:+1555", "2024-03"),
             message("src", "r1", MS),
             call("src", "r1", MS),
         ] {

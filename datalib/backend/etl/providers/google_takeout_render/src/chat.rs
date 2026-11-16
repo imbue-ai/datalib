@@ -1,4 +1,4 @@
-//! Google Chat: a space or a DM is a conversation, a page per month. A
+//! Google Chat: a space or a DM is a conversation, one document. A
 //! message draws what its `messages.json` entry carries — text, the
 //! message it quotes, its thread, link and Drive previews, a call, its
 //! attachments, reactions and labels — with its earlier versions folded
@@ -24,7 +24,7 @@ use datalib_schema::problems::{Problem, Reason, Severity};
 use serde_json::Value;
 
 use crate::ids;
-use crate::render::{mime_of, month_of};
+use crate::render::mime_of;
 
 const MESSAGE_KEYS: &[&str] = &[
     "message_id",
@@ -307,7 +307,7 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
         }
     }
 
-    let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
+    let mut items: Vec<NormalizedChatItem> = Vec::new();
     for (_, row_id, m) in &ordered {
         inputs.read("chat_messages", row_id);
         let starter = m
@@ -324,24 +324,8 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
             members: &by_email,
             account,
         };
-        let items = message_items(&ctx, m, starter.copied(), &mut inputs);
-        let month = month_of(items.last().and_then(|i| i.date_ms));
-        by_month.entry(month).or_default().extend(items);
+        items.extend(message_items(&ctx, m, starter.copied(), &mut inputs));
     }
-
-    let buckets: Vec<NormalizedDoc> = by_month
-        .into_iter()
-        .map(|(period_key, items)| {
-            let month = ids::space_month(source_id, space, &period_key);
-            NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                markdown_uuid: month.uuid,
-                source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
-                period_key,
-                items,
-            }
-        })
-        .collect();
 
     let mut findings = account.space_findings(space);
     if let Some(dir) = s.dir {
@@ -358,8 +342,7 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
             ));
         }
     }
-    let mut buckets = buckets;
-    if let Some(first) = buckets.first_mut().and_then(|b| b.items.first_mut()) {
+    if let Some(first) = items.first_mut() {
         first.problems.extend(findings);
     }
 
@@ -389,7 +372,7 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
         id: space.to_string(),
         containers: Vec::new(),
         filed_under: Vec::new(),
-        chat_uuid: chat_id.uuid,
+        chat_uuid: chat_id.uuid.clone(),
         display,
         author: None,
         account: None,
@@ -400,7 +383,13 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
         title: name.map(str::to_string),
         org_uuid: None,
         org_name: None,
-        buckets,
+        buckets: vec![NormalizedDoc {
+            orphan_reactions: Vec::new(),
+            markdown_uuid: chat_id.uuid,
+            source_ref: None,
+            period_key: "all".to_string(),
+            items,
+        }],
     }
 }
 

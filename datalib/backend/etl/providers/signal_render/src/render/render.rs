@@ -9,7 +9,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{Buckets, ChatRenderer};
 use datalib_etl_chat_common::TextFormat;
@@ -37,7 +36,9 @@ use super::parse::{ParsedSignal, ATTACHMENTS_PROJECTION_SQL};
 /// v13: chats and messages are keyed by who they are with and who wrote
 ///      them, and an attachment reads its bytes through its stored edge.
 /// v14: a message someone else sent is to the account (`to:me`).
-pub const RENDER_VERSION: u32 = 14;
+/// v15: a chat is one document, under the chat's own uuid; a quote is a
+///      reply edge to the message it quotes.
+pub const RENDER_VERSION: u32 = 15;
 
 const SOURCE_LABEL: &str = "Signal";
 const PROVIDER: Provider = Provider::Signal;
@@ -52,13 +53,6 @@ pub struct RenderSummary {
     /// through `RenderCtx::declare_bucket`.
     pub buckets: Buckets,
     pub unrendered: Vec<Unrendered>,
-}
-
-/// The render params recorded alongside the cursor. `period` decides
-/// how messages bucket into documents, so changing it re-renders every
-/// document the previous run wrote.
-pub fn render_params(period: Period) -> serde_json::Value {
-    serde_json::json!({ "period": period.as_config_str() })
 }
 
 pub fn profile() -> RenderProfile {

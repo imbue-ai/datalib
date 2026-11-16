@@ -18,14 +18,12 @@ pub const KIND_ALBUM: &str = "album";
 pub const KIND_ALBUM_DESCRIPTION: &str = "album_description";
 pub const KIND_PHOTO: &str = "photo";
 pub const KIND_FEED: &str = "feed";
-pub const KIND_FEED_YEAR: &str = "feed_year";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_POST_VERSION: &str = "post_version";
 pub const KIND_COMMENT_VERSION: &str = "comment_version";
 pub const KIND_REACTION: &str = "reaction";
 pub const KIND_FRIEND: &str = "friend";
 pub const KIND_CONVERSATION: &str = "conversation";
-pub const KIND_CONVERSATION_YEAR: &str = "conversation_year";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_MESSAGE_REACTION: &str = "message_reaction";
 
@@ -70,15 +68,6 @@ pub fn feed(source_id: &str, name: &str) -> Identity {
     IDS.mint(source_id, KIND_FEED, name.to_string(), None)
 }
 
-pub fn feed_year(source_id: &str, name: &str, period_key: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_FEED_YEAR,
-        composite_key(&[name, period_key]),
-        None,
-    )
-}
-
 pub fn comment(source_id: &str, row_id: &str, date_ms: Option<i64>) -> Identity {
     IDS.mint(source_id, KIND_COMMENT, row_id.to_string(), date_ms)
 }
@@ -109,15 +98,6 @@ pub fn friend(source_id: &str, row_id: &str) -> Identity {
 /// A Messenger conversation, by the id its directory ends in.
 pub fn conversation(source_id: &str, thread_id: &str) -> Identity {
     MESSENGER_IDS.mint(source_id, KIND_CONVERSATION, thread_id.to_string(), None)
-}
-
-pub fn conversation_year(source_id: &str, thread_id: &str, period_key: &str) -> Identity {
-    MESSENGER_IDS.mint(
-        source_id,
-        KIND_CONVERSATION_YEAR,
-        composite_key(&[thread_id, period_key]),
-        None,
-    )
 }
 
 /// A message, by the row id the ingest keyed it on.
@@ -158,14 +138,12 @@ mod tests {
             album_description("src", "r2", MS),
             photo("src", "r2", "photos/a.jpg", MS),
             feed("src", "comments"),
-            feed_year("src", "comments", "2024"),
             comment("src", "r3", MS),
             reaction("src", &["r4", "r5"], MS),
             friend("src", "r6"),
             version("src", KIND_POST_VERSION, "e1", MS),
             version("src", KIND_COMMENT_VERSION, "e2", MS),
             conversation("src", "1000000001"),
-            conversation_year("src", "1000000001", "2369"),
             message("src", "1000000001:12600000360000:0", MS),
             message_reaction("src", "1000000001:12600000360000:0", "Worf", "👍", MS),
         ] {

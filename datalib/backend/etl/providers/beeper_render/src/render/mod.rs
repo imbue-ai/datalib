@@ -12,13 +12,6 @@ pub mod ids;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-// Period
-
-// The period-bucketing knob is shared with the other chat providers
-// (signal, whatsapp, googlechat, …) and lives in `datalib_etl`.
-// Re-export at the old path so existing call sites keep compiling.
-pub use datalib_etl::periodize::Period;
-
 // Public re-exports for the sync orchestrator
 
 pub use parse::ParsedBeeper;

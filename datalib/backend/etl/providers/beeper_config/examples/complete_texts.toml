@@ -23,8 +23,6 @@ command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
-period = "month"                     # span of each page: month (default), day, year,
-                                     # or all (one page per chat)
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 

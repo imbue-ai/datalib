@@ -49,9 +49,12 @@ impl SignalConfig {
 pub struct SignalRenderConfig {
     #[serde(default)]
     pub common: RenderCommon,
-    /// How much time each rendered document spans — `month` (default),
-    /// `day`, `year`, or `all`. Every chat source offers the same choice.
+    /// Retired: a chat is one document whatever this says. Still read so
+    /// a config that sets it loads; out of the schema so `datalib-step
+    /// help` does not offer it. It goes once `datalib-step` drops it as an
+    /// inert param before parsing.
     #[serde(default)]
+    #[schemars(skip)]
     pub period: Option<String>,
 }
 
