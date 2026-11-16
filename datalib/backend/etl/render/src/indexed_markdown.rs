@@ -1649,7 +1649,9 @@ mod tests {
     /// `grid_rows` for the document's old rows, so a full render was
     /// quadratic: a 20k-thread mailbox spent minutes there. Compared
     /// against a small store in the same process, so a slow machine
-    /// slows both sides alike.
+    /// slows both sides alike; each side's best of three, taken in turn,
+    /// so a burst of load on a shared CI runner during one measurement
+    /// is not read as a scan.
     #[test]
     fn replacing_a_document_does_not_slow_down_as_the_store_grows() {
         const REPLACED: usize = 700;
@@ -1658,8 +1660,11 @@ mod tests {
         let small = store_holding(small_dir.path(), REPLACED);
         let big_dir = tempfile::tempdir().unwrap();
         let big = store_holding(big_dir.path(), GROWTH * REPLACED);
-        let small_s = seconds_to_replace(small_dir.path(), &small, REPLACED);
-        let big_s = seconds_to_replace(big_dir.path(), &big, REPLACED);
+        let (mut small_s, mut big_s) = (f64::MAX, f64::MAX);
+        for _ in 0..3 {
+            small_s = small_s.min(seconds_to_replace(small_dir.path(), &small, REPLACED));
+            big_s = big_s.min(seconds_to_replace(big_dir.path(), &big, REPLACED));
+        }
         assert!(
             big_s < 5.0 * small_s,
             "{GROWTH}x the documents made replacing {REPLACED} take {:.1}x as long \
