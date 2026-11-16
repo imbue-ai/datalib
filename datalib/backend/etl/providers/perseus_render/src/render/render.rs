@@ -145,6 +145,8 @@ fn render_book(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -218,6 +220,8 @@ fn render_chapter(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -571,6 +575,7 @@ fn chapter_edges(
             if doc_level_seen.insert(other_id.to_string()) {
                 let label = Some(other_id);
                 edges.push(EdgeRow {
+                    kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
                     edge_uuid: edge_id(m_uuid, None, &other_md, None, label),
                     src_markdown_uuid: m_uuid.to_string(),
                     src_anchor_uuid: None,
@@ -594,6 +599,7 @@ fn chapter_edges(
                             ids::sentence(source_id, &book.n, &chapter.n, &sec.n, other_id, di)
                                 .uuid;
                         edges.push(EdgeRow {
+                            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
                             edge_uuid: edge_id(
                                 m_uuid,
                                 Some(&src_anchor),

@@ -109,6 +109,8 @@ impl SourceRender for LightroomRender {
                 sections: vec![built.section],
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: vec![built.photo],
                 problems: built.problems,
             })?;

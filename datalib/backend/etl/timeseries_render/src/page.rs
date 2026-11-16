@@ -276,6 +276,8 @@ pub fn write_page(
         sections: Vec::new(),
         edges: Vec::new(),
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })

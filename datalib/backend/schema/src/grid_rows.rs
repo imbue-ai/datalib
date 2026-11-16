@@ -178,6 +178,25 @@ pub struct GridRow {
     /// `uuid` for thread-level rows.
     #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
     pub conversation_uuid: String,
+    /// The container this row lives in, a `nodes.uuid`: the chat, thread,
+    /// page or session that holds it. Null where no container holds it.
+    /// Its siblings are the rows and nodes with the same parent.
+    #[col(sql = "VARCHAR(96)")]
+    pub parent_uuid: Option<String>,
+    /// How the row sorts among its parent's children: its
+    /// `created_at_utc` where it has a time, upstream's own order where
+    /// the source orders children without one. Never a position we count,
+    /// so a row that arrives late lands without moving its siblings.
+    #[col(sql = "VARCHAR(40)")]
+    pub sort_key: Option<String>,
+    /// The nearest container above it that is read together (a thread, a
+    /// chat, a page): what a search groups it under and the viewer opens.
+    #[col(sql = "VARCHAR(96)")]
+    pub read_uuid: Option<String>,
+    /// The nearest container above it that is a place (a channel, a
+    /// mailbox, a workspace): what a person browses or filters by.
+    #[col(sql = "VARCHAR(96)")]
+    pub place_uuid: Option<String>,
     /// Zero-based position within the conversation, in the order the QMD
     /// renders messages. Null for thread-level rows.
     #[col(sql = "INT")]

@@ -188,6 +188,8 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })

@@ -163,6 +163,8 @@ pub fn render_doc(
         sections,
         edges: Vec::new(),
         contacts: comments::authors(source_id, &threads, file.me.as_ref()),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })

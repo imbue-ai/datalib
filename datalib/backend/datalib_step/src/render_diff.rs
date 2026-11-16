@@ -319,6 +319,8 @@ pub fn render_diff_source(
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
+                nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: base.md.problems.clone(),
             };
@@ -613,6 +615,8 @@ mod tests {
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
                         edges: vec![],
                         contacts: Vec::new(),
+                        nodes: Vec::new(),
+                        filings: Vec::new(),
                         photos: Vec::new(),
                         problems: vec![],
                     });
@@ -695,6 +699,8 @@ mod tests {
             sections: vec![],
             edges: vec![],
             contacts: Vec::new(),
+            nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: vec![],
         };

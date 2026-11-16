@@ -70,6 +70,8 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .iter()
         .chain(MARKDOWNS_DDL.iter())
         .chain(EDGES_DDL.iter())
+        .chain(datalib_schema::nodes::DDL.iter())
+        .chain(datalib_schema::filings::DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
@@ -1217,6 +1219,14 @@ impl IndexedMarkdownStore {
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
                           FROM dolt_diff_source_contacts
                          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_nodes
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
+                        UNION
+                        SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
+                          FROM dolt_diff_filings
+                         WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     )
                     WHERE markdown_uuid IS NOT NULL
                 ",
@@ -1284,6 +1294,26 @@ impl IndexedMarkdownStore {
             )
             .await
             .context("read edges")?;
+            let mut nodes_by_doc = group_by_document::<datalib_schema::nodes::NodeRow>(
+                &self.pool,
+                "SELECT * FROM nodes \
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                  ORDER BY markdown_uuid, uuid",
+                "markdown_uuid",
+                &wanted,
+            )
+            .await
+            .context("read containers")?;
+            let mut filings_by_doc = group_by_document::<datalib_schema::filings::FilingRow>(
+                &self.pool,
+                "SELECT * FROM filings \
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                  ORDER BY markdown_uuid, node_uuid, under_uuid",
+                "markdown_uuid",
+                &wanted,
+            )
+            .await
+            .context("read filings")?;
             let mut contacts_by_doc =
                 group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
                     &self.pool,
@@ -1310,6 +1340,8 @@ impl IndexedMarkdownStore {
             for md in mds {
                 let rows = rows_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
                 let edges = edges_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
+                let nodes = nodes_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
+                let filings = filings_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
                 let contacts = contacts_by_doc
                     .remove(&md.markdown_uuid)
                     .unwrap_or_default()
@@ -1357,6 +1389,8 @@ impl IndexedMarkdownStore {
                     content_hash: md.content_hash.clone(),
                     edges,
                     contacts,
+                    nodes,
+                    filings,
                     photos,
                     problems: Vec::new(),
                 });
@@ -1624,6 +1658,8 @@ mod tests {
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems,
         }
@@ -1631,6 +1667,7 @@ mod tests {
 
     fn edge(edge_uuid: &str, src: &str, dst: &str) -> datalib_schema::edges::EdgeRow {
         datalib_schema::edges::EdgeRow {
+            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
             edge_uuid: edge_uuid.into(),
             src_markdown_uuid: src.into(),
             src_anchor_uuid: None,
@@ -1699,6 +1736,70 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows, 0);
+        st.close();
+    }
+
+    /// A container and a filing are the document's, like its contacts: read
+    /// back with it, and gone when a re-render no longer names them.
+    #[test]
+    fn containers_and_filings_travel_with_their_document() {
+        use datalib_schema::filings::FilingRow;
+        use datalib_schema::nodes::{Lineage, NodeRow};
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let channel = NodeRow::new("a", "channel", "src", "Slack channel")
+            .named(Some("#bridge".to_string()))
+            .upstream("channel", "C01", None)
+            .place();
+        let thread = NodeRow::new("a", "a", "src", "Slack thread")
+            .read_together()
+            .under(&Lineage::top().below(&channel));
+        let label = NodeRow::new("a", "label", "src", "Label").place();
+        let mut d = doc(td.path(), "a", "fp");
+        d.nodes = vec![channel.clone(), thread.clone(), label.clone()];
+        d.filings = vec![FilingRow::new("a", "a", "label")];
+        st.put_document(td.path(), &d).unwrap();
+        st.commit("with containers").unwrap();
+        st.close();
+
+        let rd = IndexedMarkdownStore::open_for_reading(td.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let pin = rd.pin().unwrap().clone();
+        let docs = rd.documents_matching(td.path(), None, &pin).unwrap();
+        assert_eq!(docs[0].nodes, vec![thread, channel, label]);
+        assert_eq!(docs[0].filings, vec![FilingRow::new("a", "a", "label")]);
+        rd.close();
+
+        let st = store(td.path());
+        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
+            .unwrap();
+        for table in ["nodes", "filings"] {
+            let n: i64 = blocking(
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                    .fetch_one(&st.pool),
+            )
+            .unwrap();
+            assert_eq!(n, 0, "{table}");
+        }
+        st.close();
+    }
+
+    /// A renderer that hands a container under another document's id has
+    /// a bug: the row would outlive the document that wrote it.
+    #[test]
+    fn a_container_carried_by_another_document_is_refused() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let mut d = doc(td.path(), "a", "fp");
+        d.nodes = vec![datalib_schema::nodes::NodeRow::new(
+            "b", "chat", "src", "Chat",
+        )];
+        let err = st.put_document(td.path(), &d).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("carries container chat"),
+            "{err:#}"
+        );
         st.close();
     }
 

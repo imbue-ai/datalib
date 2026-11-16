@@ -119,6 +119,8 @@ fn render_one(
         sections,
         edges: edges(event),
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -549,6 +551,7 @@ fn edges(event: &NormalizedEvent) -> Vec<EdgeRow> {
     let edge = |dst: &str, label: String| {
         let label: String = label.chars().take(EDGE_LABEL_CHARS).collect();
         EdgeRow {
+            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
             edge_uuid: datalib_id::edge_id(src, None, dst, None, Some(&label)),
             src_markdown_uuid: src.clone(),
             src_anchor_uuid: None,

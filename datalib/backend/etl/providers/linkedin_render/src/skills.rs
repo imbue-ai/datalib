@@ -205,6 +205,8 @@ pub fn build(
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),
+            nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems,
         },

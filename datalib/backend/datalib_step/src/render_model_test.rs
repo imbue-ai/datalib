@@ -406,6 +406,7 @@ fn to_rendered(
         .edges
         .iter()
         .map(|(edge_uuid, dst)| EdgeRow {
+            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
             edge_uuid: edge_uuid.clone(),
             src_markdown_uuid: id.to_string(),
             src_anchor_uuid: None,
@@ -427,6 +428,8 @@ fn to_rendered(
         sections: Vec::new(),
         edges,
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems: Vec::new(),
     }

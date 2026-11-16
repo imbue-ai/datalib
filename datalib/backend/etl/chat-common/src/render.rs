@@ -418,6 +418,8 @@ fn render_one(
         .iter()
         .map(datalib_etl_render::photo::with_photo_url)
         .collect(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })

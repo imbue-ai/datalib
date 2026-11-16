@@ -347,6 +347,8 @@ fn render_one(
         sections,
         edges: Vec::new(),
         contacts: Vec::new(),
+        nodes: Vec::new(),
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
