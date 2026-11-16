@@ -185,7 +185,10 @@ pub fn rows_for_document(
         conversation_name: Some(title.clone()),
         conversation_uuid: doc_uuid.clone(),
         parent_uuid: None,
-        sort_key: None,
+        sort_key: when
+            .and_then(datalib_time::split_record_stamp)
+            .map(|(utc, _)| utc)
+            .unwrap_or_default(),
         read_uuid: None,
         place_uuid: None,
         message_index: None,
@@ -244,7 +247,7 @@ pub fn rows_for_document(
             conversation_uuid: doc_uuid.clone(),
             // A page is read with its document, in the PDF's order.
             parent_uuid: Some(doc_uuid.clone()),
-            sort_key: Some(format!("{number:010}")),
+            sort_key: format!("{number:010}"),
             read_uuid: Some(doc_uuid.clone()),
             place_uuid: None,
             message_index: Some(i64::from(*number)),

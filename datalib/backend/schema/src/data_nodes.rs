@@ -26,9 +26,10 @@ pub struct DataNodeRow {
     /// The container this one lives in; null at the top of its source.
     #[col(sql = "VARCHAR(96)")]
     pub parent_uuid: Option<String>,
-    /// As `grid_rows.sort_key`: how it sorts among its siblings.
+    /// As `grid_rows.sort_key`: how it sorts among its siblings, `""`
+    /// for no order, never null.
     #[col(sql = "VARCHAR(40)")]
-    pub sort_key: Option<String>,
+    pub sort_key: String,
     /// Its children are read together: what a search groups by and the
     /// viewer opens.
     #[col(sql = "INTEGER")]
@@ -98,7 +99,7 @@ impl DataNodeRow {
             kind: kind.into(),
             name: None,
             parent_uuid: None,
-            sort_key: None,
+            sort_key: String::new(),
             read_together: false,
             is_place: false,
             read_uuid: None,
@@ -137,7 +138,7 @@ impl DataNodeRow {
     }
 
     pub fn sort_key(mut self, key: impl Into<Option<String>>) -> Self {
-        self.sort_key = key.into();
+        self.sort_key = key.into().unwrap_or_default();
         self
     }
 
