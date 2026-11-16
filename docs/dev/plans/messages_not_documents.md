@@ -267,6 +267,21 @@ re-embeds without changing anything a person sees.
 opens it at an item and asks for the items around it in order. A
 ten-year group chat opens as fast as a short one.
 
+**A list starts at an anchor and grows both ways.** Every list of a
+node's children, or of everything under it, is asked for at an
+**anchor**: an item (`at=<uuid>`), or a moment (`at=<stamp>`: the first
+item at or after it; "now" is the common one). The answer is a window
+around the anchor with a cursor at each end, and scrolling asks for the
+next page past either one: older above, newer below, as a chat's "jump
+to message" does. A cursor is the edge row's `(sort key, uuid)`, never
+a position counted from the start, so an item that arrives late, or
+during the scroll, lands in its place and moves nothing on screen. A
+moment means nothing among children the source orders without times (a
+page's blocks); those are anchored on an item. The UI keeps the window
+the way the grid already does, in the pure core of `pagedWindow.ts`,
+which holds the reader still when a page lands above them
+([`paged_grids.md`](paged_grids.md)); the two are one design.
+
 **A view per kind of node.** Opening a node shows it the way its kind
 is read: a message in its context, a thread's items a page at a time,
 a channel's threads to browse. A shared layer supplies the views for
@@ -365,9 +380,9 @@ against the eval before the next.
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
 2. **Children in order.** The index on `(parent, sort key, uuid)`, made
-   with the first query that uses it, and one route that lists a container's
-   children in order, a page at a time. The viewer can use it
-   beside the file.
+   with the first query that uses it, and one route that lists a
+   container's children around an anchor, a page each way at a time.
+   The viewer can use it beside the file.
 3. **Text in the render store.** Each item's rendered text is stored
    with its row. The search index reads items from the store instead of
    cutting files, and `keyword_index` folds into `grid_index`, which
@@ -387,8 +402,12 @@ against the eval before the next.
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
    together, and the eval picks the window.
-8. **Browsing the tree.** The ancestors table in `grid_index`,
-   `under:` and `at:` as search keys, and the tree card. `keyword:` and
+8. **Browsing the tree.** The ancestors table in `grid_index`, with
+   each row's sort key copied in so everything under a node is one
+   index range around an anchor; `under:` and `at:` as search keys; and
+   the tree card. Whether a large subtree pages off that index or by
+   the grid's list-then-slice (measured at 74k rows, not at today's
+   941k) is measured then. `keyword:` and
    collections inside sets become `under:` their node, with the old keys
    kept as aliases.
 9. **The rest of the table above:** the map, links, the problems banner
