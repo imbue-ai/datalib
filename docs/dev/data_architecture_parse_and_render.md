@@ -820,7 +820,7 @@ Two tables in the render store, both written by the driver
 (`datalib_step/src/render.rs`):
 
 - **`render_cursor`** — one row: the raw store's commit the last run
-  consumed, and the render params (a period, a label filter — whatever
+  consumed, and the render params (a label filter, a size cap — whatever
   each processor declares through `RenderProcessor::render_params`)
   the documents were rendered with. Beside the processors' own, the
   driver adds two of every source's: the render store's DDL hash and
@@ -933,7 +933,7 @@ in the same transaction as the storage report and the cursor
 
   | the processor said | the bucket's documents |
   |---|---|
-  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a periodized bucket that re-rendered to fewer documents drops the extra ones) |
+  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a bucket that re-rendered to fewer documents drops the extra ones) |
   | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: a row the bucket was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
   | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
   | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
@@ -953,8 +953,7 @@ in the same transaction as the storage report and the cursor
   rendered everything (version or params changed) **and** in which
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
-  a chat re-bucketed under a different period, a uuid minted by the old
-  recipe — is gone, except the documents of a bucket the table above
+  a uuid minted by the old recipe — is gone, except the documents of a bucket the table above
   keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
