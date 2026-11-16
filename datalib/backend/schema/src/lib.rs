@@ -27,8 +27,8 @@ pub mod filings {
     include!("filings.rs");
 }
 
-pub mod item_bodies {
-    include!("item_bodies.rs");
+pub mod sections {
+    include!("sections.rs");
 }
 
 pub mod search_terms {

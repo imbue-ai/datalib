@@ -2,9 +2,9 @@
 //! [`Section`] a renderer hands over so a document can be read piece by
 //! piece without parsing its markdown.
 
-use datalib_schema::item_bodies::ItemBodyRow;
 use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
+use datalib_schema::sections::{addressed_json, Addressee, SectionRow};
 
 /// One piece of a rendered document, in document order. `uuid` is the
 /// piece's `data-section-uuid` — a message, a contact — so a row of the
@@ -16,11 +16,27 @@ use datalib_schema::providers::Provider;
 pub struct Section {
     pub uuid: Option<String>,
     pub md: String,
-    /// What the item says, without the header and wrapper `md` draws
-    /// around it (`item_bodies.body`). `None` from a renderer that has not
-    /// split them off yet: the store then keeps `md` as the body, marked
-    /// framed.
-    pub body: Option<String>,
+    /// What the render store keeps of it (`sections`).
+    pub kept: Kept,
+}
+
+/// What of a section the render store keeps, for whatever draws it
+/// again: the viewer, an export, the search index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kept {
+    /// The piece whole, as drawn, marked framed: from a renderer that has
+    /// not split an item's body off its header, or a piece of no item's
+    /// that still says something (a PDF's text).
+    Whole,
+    /// An item's body, without the header and wrapper `md` draws around
+    /// it, and who the item was addressed to where it says so itself.
+    Body {
+        text: String,
+        addressed: Vec<Addressee>,
+    },
+    /// Nothing: layout alone (front matter, a `<details>` opener), drawn
+    /// again from the document's facts.
+    Frame,
 }
 
 impl Section {
@@ -28,14 +44,14 @@ impl Section {
         Self {
             uuid: Some(uuid.to_string()),
             md,
-            body: None,
+            kept: Kept::Whole,
         }
     }
 
     /// An item's section that also says which part of it is the body.
-    pub fn item(uuid: &str, md: String, body: String) -> Self {
+    pub fn item(uuid: &str, md: String, text: String, addressed: Vec<Addressee>) -> Self {
         Self {
-            body: Some(body),
+            kept: Kept::Body { text, addressed },
             ..Self::keyed(uuid, md)
         }
     }
@@ -44,22 +60,38 @@ impl Section {
         Self {
             uuid: None,
             md,
-            body: None,
+            kept: Kept::Whole,
+        }
+    }
+
+    /// A piece that is layout alone, which the store does not keep.
+    pub fn frame(md: String) -> Self {
+        Self {
+            kept: Kept::Frame,
+            ..Self::unkeyed(md)
         }
     }
 }
 
-/// The bodies of a document's items, one per keyed section, in order.
-pub fn bodies(markdown_uuid: &str, sections: &[Section]) -> Vec<ItemBodyRow> {
+/// The rows the render store keeps of a document's sections, each at its
+/// place among all of them.
+pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
     sections
         .iter()
-        .filter_map(|s| {
-            let uuid = s.uuid.as_ref()?;
-            Some(ItemBodyRow {
+        .enumerate()
+        .filter_map(|(seq, s)| {
+            let (text, framed, addressed) = match &s.kept {
+                Kept::Frame => return None,
+                Kept::Whole => (s.md.clone(), true, None),
+                Kept::Body { text, addressed } => (text.clone(), false, addressed_json(addressed)),
+            };
+            Some(SectionRow {
                 markdown_uuid: markdown_uuid.to_string(),
-                uuid: uuid.clone(),
-                body: s.body.clone().unwrap_or_else(|| s.md.clone()),
-                framed: s.body.is_none(),
+                seq: seq as i64,
+                uuid: s.uuid.clone(),
+                text,
+                framed,
+                addressed,
             })
         })
         .collect()
@@ -163,28 +195,41 @@ mod tests {
         assert_eq!(spans[1].bytes, "<div>é</div>\n".len(), "bytes, not chars");
     }
 
-    /// An item whose renderer has not split its body off keeps its whole
-    /// section as the body, marked framed, so nothing reading it draws a
-    /// second header around it.
+    /// A piece is kept by its place among all of them: an item's body
+    /// unframed with its addressees, a piece not split off whole and
+    /// framed, and layout not at all.
     #[test]
-    fn a_body_is_kept_per_item_and_marked_framed_when_not_split_off() {
+    fn the_store_keeps_bodies_and_whole_pieces_but_not_layout() {
+        use datalib_schema::sections::AddressRole;
+        let to = vec![Addressee {
+            role: AddressRole::To,
+            name: "Picard".into(),
+        }];
         let sections = vec![
-            Section::unkeyed("# Title\n".into()),
-            Section::item("a", "<div>Riker: hi</div>\n".into(), "hi".into()),
+            Section::frame("# Title\n".into()),
+            Section::item(
+                "a",
+                "<div>Riker: hi</div>\n".into(),
+                "hi".into(),
+                to.clone(),
+            ),
             Section::keyed("b", "<div>Data: yes</div>\n".into()),
+            Section::unkeyed("Page 2 text\n".into()),
         ];
-        let got: Vec<(String, String, bool)> = bodies("doc", &sections)
-            .into_iter()
-            .map(|b| {
-                assert_eq!(b.markdown_uuid, "doc");
-                (b.uuid, b.body, b.framed)
-            })
-            .collect();
+        let row = |seq: i64, uuid: Option<&str>, text: &str, framed: bool, addressed| SectionRow {
+            markdown_uuid: "doc".into(),
+            seq,
+            uuid: uuid.map(String::from),
+            text: text.into(),
+            framed,
+            addressed,
+        };
         assert_eq!(
-            got,
+            stored("doc", &sections),
             vec![
-                ("a".into(), "hi".into(), false),
-                ("b".into(), "<div>Data: yes</div>\n".into(), true),
+                row(1, Some("a"), "hi", false, addressed_json(&to)),
+                row(2, Some("b"), "<div>Data: yes</div>\n", true, None),
+                row(3, None, "Page 2 text\n", true, None),
             ]
         );
     }

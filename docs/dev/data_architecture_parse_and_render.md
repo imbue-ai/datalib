@@ -95,12 +95,15 @@ database per source, at
     own up to the top of the source, and what they are filed under
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.
-  - `item_bodies` — what each item says, apart from how it is drawn:
-    one row per keyed section, its body in our form with no header or
-    wrapper around it. A renderer hands it as the section's `body`
-    (chat-common does); a section without one is kept whole and marked
-    `framed`, so whatever reads it draws nothing around it. The grid
-    index does not copy it ([`messages_not_documents.md`](plans/messages_not_documents.md)
+  - `sections` — what each piece of the document says, in order, kept
+    apart from how it is drawn. An item a renderer has split (chat-common
+    does) keeps its body alone, with no header or wrapper, and who it was
+    addressed to by name; the store draws its header again from its row.
+    Any other piece is kept whole and marked `framed`, so whatever reads
+    it draws nothing around it; a piece that is layout alone (front
+    matter, a `<details>` opener) the renderer marks as frame, and it is
+    not kept. The grid index does not copy it
+    ([`messages_not_documents.md`](plans/messages_not_documents.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a

@@ -463,11 +463,13 @@ against the eval before the next.
    the aggregator's inputs, which already drops any source it does not
    name, and the config upgrade rewrites every existing root's
    `keyword_index` steps into that. In three parts:
-   - **3a. Bodies.** An `item_bodies` table in the render store, one
-     row per keyed section. chat-common hands each item's body; every
-     other renderer's section is kept whole and marked `framed`, and
-     each splits its own body off later. A re-render, and nothing a
-     person sees.
+   - **3a. Bodies.** A `sections` table in the render store: every
+     piece of a document in order, keyed or not. chat-common hands each
+     item's body and who it was addressed to, and marks its layout as
+     frame, which is not kept; every other renderer's pieces are kept
+     whole and marked `framed`, unkeyed ones too (a PDF's text is
+     unkeyed), and each splits its own bodies off later. A re-render,
+     and nothing a person sees.
    - **3b. Index text from the store.** The search index draws each
      item's index text from its body and its row, and stops reading
      files. A framed body is drawn as it is, so its chunks' text and

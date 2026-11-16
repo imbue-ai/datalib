@@ -9,6 +9,7 @@ use std::path::Path;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
 use datalib_schema::filings::FilingRow;
+use datalib_schema::sections::{AddressRole, Addressee};
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -524,11 +525,11 @@ fn render_markdown(
 
     if doc.items.is_empty() {
         s.push_str("_(no messages)_\n");
-        return vec![Section::unkeyed(s)];
+        return vec![Section::frame(s)];
     }
 
     let first_unread = doc.items.iter().position(|it| it.unread);
-    let mut sections = vec![Section::unkeyed(s)];
+    let mut sections = vec![Section::frame(s)];
     let mut open_branches: Vec<&str> = Vec::new();
     let mut i = 0;
     while i < doc.items.len() {
@@ -540,7 +541,7 @@ fn render_markdown(
             .count();
         while open_branches.len() > shared {
             open_branches.pop();
-            sections.push(Section::unkeyed("</details>\n\n".to_string()));
+            sections.push(Section::frame("</details>\n\n".to_string()));
         }
         while open_branches.len() < item.branch.len() {
             let depth = open_branches.len();
@@ -548,7 +549,7 @@ fn render_markdown(
                 .iter()
                 .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
                 .count();
-            sections.push(Section::unkeyed(branch_opener(inside)));
+            sections.push(Section::frame(branch_opener(inside)));
             open_branches.push(&item.branch[depth]);
         }
         let run_end = doc.items[i..]
@@ -569,10 +570,10 @@ fn render_markdown(
         }
     }
     for _ in open_branches {
-        sections.push(Section::unkeyed("</details>\n\n".to_string()));
+        sections.push(Section::frame("</details>\n\n".to_string()));
     }
     if let Some(orphans) = render_orphan_reactions(doc) {
-        sections.push(Section::unkeyed(orphans));
+        sections.push(Section::frame(orphans));
     }
     sections
 }
@@ -638,14 +639,14 @@ fn render_aside_run(
     first_unread: Option<usize>,
 ) {
     let plural = if items.len() == 1 { "" } else { "s" };
-    sections.push(Section::unkeyed(format!(
+    sections.push(Section::frame(format!(
         "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
         n = items.len(),
     )));
     for (i, item) in items.iter().enumerate() {
         sections.push(render_item(profile, item, first_unread == Some(i)));
     }
-    sections.push(Section::unkeyed("</details>\n\n".to_string()));
+    sections.push(Section::frame("</details>\n\n".to_string()));
 }
 
 fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {
@@ -678,7 +679,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 ts = timestamp_html(item.date_ms, item.date_offset_secs),
             ));
             s.push_str("</div>\n\n");
-            return Section::item(&item.message_uuid, s, summary);
+            return Section::item(&item.message_uuid, s, summary, Vec::new());
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -765,7 +766,30 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
     }
 
     s.push_str("\n</div>\n\n");
-    Section::item(&item.message_uuid, s, item_body)
+    Section::item(
+        &item.message_uuid,
+        s,
+        item_body,
+        addressed(&item.recipients),
+    )
+}
+
+/// Who an item says it was addressed to, by name, for the search's
+/// envelope line: those the recipients line draws.
+fn addressed(recipients: &[crate::types::Recipient]) -> Vec<Addressee> {
+    use crate::types::RecipientRole;
+    recipients
+        .iter()
+        .filter(|r| r.drawn && !r.display.is_empty())
+        .map(|r| Addressee {
+            role: match r.role {
+                RecipientRole::To => AddressRole::To,
+                RecipientRole::Cc => AddressRole::Cc,
+                RecipientRole::Bcc => AddressRole::Bcc,
+            },
+            name: r.display.clone(),
+        })
+        .collect()
 }
 
 fn replies_line(replies: Replies) -> Option<String> {
@@ -1502,7 +1526,7 @@ mod tests {
         rows
     }
     use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
-    use datalib_etl_render::section::msg_div_open;
+    use datalib_etl_render::section::{msg_div_open, Kept};
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -1796,18 +1820,43 @@ mod tests {
             source_url: None,
             ref_id: None,
         }];
+        item.recipients = vec![
+            crate::types::Recipient {
+                role: crate::types::RecipientRole::Cc,
+                display: "Deanna Troi".into(),
+                handle: None,
+                drawn: true,
+            },
+            crate::types::Recipient {
+                role: crate::types::RecipientRole::To,
+                display: "Undrawn".into(),
+                handle: None,
+                drawn: false,
+            },
+        ];
         let sections = render_markdown(&profile, &chat, &chat.buckets[0], "Test");
         let item = sections
             .iter()
             .find(|s| s.uuid.as_deref() == Some("33333333-3333-3333-3333-333333333333"))
             .unwrap();
-        let body = item
-            .body
-            .as_deref()
-            .expect("chat-common splits the body off");
+        let Kept::Body {
+            text: body,
+            addressed,
+        } = &item.kept
+        else {
+            panic!("chat-common splits the body off: {:?}", item.kept)
+        };
+        assert_eq!(
+            addressed,
+            &vec![Addressee {
+                role: AddressRole::Cc,
+                name: "Deanna Troi".into()
+            }],
+            "only the recipients the item draws"
+        );
         assert!(body.starts_with("Spot's portrait\n\n"), "{body}");
         assert!(body.contains("spot.png"), "{body}");
-        for drawn in ["Picard", "Starred", "Riker", "🫡", "<div", "<time"] {
+        for drawn in ["Picard", "Starred", "Riker", "🫡", "<div", "<time", "Troi"] {
             assert!(!body.contains(drawn), "{drawn} in {body}");
             assert!(item.md.contains(drawn), "{drawn} not drawn in {}", item.md);
         }
