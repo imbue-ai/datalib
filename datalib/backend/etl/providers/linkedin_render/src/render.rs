@@ -51,7 +51,8 @@ use datalib_schema::providers::Provider;
 ///     posts, so search reads it as `me`.
 /// v15: the tables no feed reads are counted on record.
 /// v16: the profile's skills render, one page with a row per skill.
-pub const RENDER_VERSION: u32 = 16;
+/// v17: the tables no feed reads are a note, not a warning.
+pub const RENDER_VERSION: u32 = 17;
 
 fn profile() -> RenderProfile {
     RenderProfile {

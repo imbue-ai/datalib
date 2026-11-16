@@ -73,7 +73,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     `<…>` and running its lines together.
 /// v23: a thread sits in its account and is filed under its emails'
 ///     labels; an email's `In-Reply-To` is a reply edge.
-pub const RENDER_VERSION: u32 = 23;
+/// v24: a sender's hover title names their address once, not twice.
+pub const RENDER_VERSION: u32 = 24;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the

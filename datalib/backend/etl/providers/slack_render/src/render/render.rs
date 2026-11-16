@@ -18,7 +18,6 @@ use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
-use datalib_time::NamedZone;
 
 use super::emoji;
 use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
@@ -74,7 +73,9 @@ use datalib_schema::providers::Provider;
 /// v20: a ``` block with code on its fence lines is closed, so it no
 ///     longer turns the messages after it into code.
 /// v21: a thread sits in its channel, in its workspace.
-pub const RENDER_VERSION: u32 = 21;
+/// v22: a message's time names no clock (`Z`): a profile's zone is where
+///     its author is now, not where they were when they wrote it.
+pub const RENDER_VERSION: u32 = 22;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -114,8 +115,6 @@ fn profile() -> RenderProfile {
 struct Lookups<'a> {
     shared: &'a Shared,
     user_labels: BTreeMap<String, String>,
-    /// Each user's profile zone, where Slack named one the tz database knows.
-    user_zones: BTreeMap<String, NamedZone>,
     channel_labels: BTreeMap<String, String>,
     account: Option<String>,
     org_name: Option<String>,
@@ -129,11 +128,6 @@ impl<'a> Lookups<'a> {
                 .users
                 .iter()
                 .map(|(id, u)| (id.clone(), u.label()))
-                .collect(),
-            user_zones: shared
-                .users
-                .iter()
-                .filter_map(|(id, u)| Some((id.clone(), NamedZone::get(u.tz.as_deref()?)?)))
                 .collect(),
             channel_labels: shared
                 .channels
@@ -349,13 +343,12 @@ fn build_chat(
         is_unread(&m.ts, from_me, marks, ids::ts_order)
     };
     // What the page shows under the root, a broadcast reply among them.
-    let zones = bucket.inputs.lookup("users", &lookups.user_zones);
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
     let mut items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
         .map(|m| {
-            let mut item = build_item(source_id, m, root, team_url, labels, zones, unread(m));
+            let mut item = build_item(source_id, m, root, team_url, labels, unread(m));
             item.replies = replies_of(m, held_replies, &mut item.problems);
             item
         })
@@ -507,7 +500,6 @@ fn build_item(
     root: &Message,
     team_url: Option<&str>,
     labels: Labels<'_>,
-    zones: Lookup<'_, BTreeMap<String, NamedZone>>,
     unread: bool,
 ) -> NormalizedChatItem {
     let author_display = m
@@ -538,11 +530,9 @@ fn build_item(
         author_kind: AuthorKind::Named,
         author_display,
         date_ms,
-        // The author's clock as their profile names it: a `ts` has none.
-        date_offset_secs: date_ms.and_then(|ms| {
-            let zone = zones.get(m.user_id.as_deref()?)?;
-            zone.offset_secs_at_millis(ms)
-        }),
+        // A `ts` names no clock, and a profile's `tz` is where its
+        // author is now, not where they were when they wrote this.
+        date_offset_secs: None,
         text: (!body.trim().is_empty()).then_some(body),
         kind,
         attachments,
@@ -793,7 +783,6 @@ mod reaction_tests {
         let lookups = Lookups {
             shared: &shared,
             user_labels: BTreeMap::new(),
-            user_zones: BTreeMap::new(),
             channel_labels: BTreeMap::new(),
             account: None,
             org_name: None,
@@ -817,11 +806,10 @@ mod reaction_tests {
         assert!(problems[2].is_empty());
     }
 
-    /// A `ts` names no clock, so every Slack message read as UTC under
-    /// "as written". Its author's profile zone is the clock it is shown
-    /// on, daylight saving included; an author with none says so.
+    /// A message was put on its author's profile clock, which is where
+    /// they are now: one from before a move read at the wrong hour.
     #[test]
-    fn a_message_is_on_its_authors_profile_clock() {
+    fn a_message_names_no_clock_whatever_its_authors_profile_says() {
         let user = |id: &str, tz: Option<&str>| User {
             user_id: id.into(),
             team_id: "T1".into(),
@@ -863,7 +851,7 @@ mod reaction_tests {
             .iter()
             .map(|i| i.date_offset_secs)
             .collect();
-        assert_eq!(offsets, [Some(3600), Some(7200), None, None]);
+        assert_eq!(offsets, [None, None, None, None]);
     }
 
     /// Only a root carries Slack's count, and one that is not a number

@@ -518,27 +518,23 @@ ${applets()}`;
     /// Rows top to bottom, each with the exact stamp it claims — read
     /// off `title`, so the check is against instants rather than the
     /// prose the cell renders — and its depth in the tree, off the
-    /// `slick-tree-level-N` class on the tree cell. The tree cell is in
-    /// the pinned half of each row and the stamp in the other, so the
-    /// halves are joined on their row index.
+    /// `slick-tree-level-N` class on the tree cell.
     type Seen = { id: string; level: number; stamp: string | null };
     const ordering = async (): Promise<Seen[]> =>
-      page.locator(".tg-grid .slick-row[data-key]").evaluateAll((halves, at) => {
-        const byRow = new Map<number, Seen>();
-        for (const half of halves) {
-          const n = Number(half.getAttribute("data-row"));
-          const seen = byRow.get(n) ?? {
-            id: half.getAttribute("data-key") ?? "",
-            level: 0,
-            stamp: null,
-          };
-          const tree = half.querySelector(".tg-tree");
-          if (tree) seen.level = Number(/slick-tree-level-(\d+)/.exec(tree.className)?.[1] ?? "0");
-          seen.stamp ??= half.querySelector(at)?.getAttribute("title") ?? null;
-          byRow.set(n, seen);
-        }
-        return [...byRow].sort(([a], [b]) => a - b).map(([, seen]) => seen);
-      }, LAST_UPDATE_AT);
+      page.locator(".tg-grid .slick-row[data-key]").evaluateAll(
+        (rows, at) =>
+          rows
+            .sort((a, b) => Number(a.getAttribute("data-row")) - Number(b.getAttribute("data-row")))
+            .map((row) => {
+              const tree = row.querySelector(".tg-tree");
+              return {
+                id: row.getAttribute("data-key") ?? "",
+                level: Number(/slick-tree-level-(\d+)/.exec(tree?.className ?? "")?.[1] ?? "0"),
+                stamp: row.querySelector(at)?.getAttribute("title") ?? null,
+              };
+            }),
+        LAST_UPDATE_AT,
+      );
 
     /// The sets a tree sort actually orders: the top-level rows, and
     /// each open group's children, keyed by the group. A sort is total
