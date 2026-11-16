@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # Text to vectors in process, with llama.cpp (//third-party/llama_cpp)
 # running a GGUF embedding model. The search index's replacement for
@@ -25,6 +25,21 @@ rust_library(
     deps = [
         ":embedder_shim",
         "@datalib_crates//:anyhow",
+    ],
+)
+
+# The TNG fixture's vectors (`//tests/fixtures:ingested_tng_vectors`). It
+# links the embedder alone, so nothing but the embedder, the model and
+# the prompts makes Bazel embed again.
+rust_binary(
+    name = "embed_prompts",
+    srcs = ["tools/embed_prompts.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
     ],
 )
 
