@@ -494,6 +494,7 @@ mod tests {
                     render_version: 1,
                     rows,
                     sections: Vec::new(),
+                    front: Default::default(),
                     edges: Vec::new(),
                     contacts: Vec::new(),
                     data_nodes: Vec::new(),

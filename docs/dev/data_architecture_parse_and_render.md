@@ -81,7 +81,12 @@ database per source, at
     (the primary key for the `.md`), its `renderer_version`, its
     `md_path` and the `bucket_key` it was rendered from. Nothing on it
     is stamped per run — a re-render of an unchanged document writes
-    an identical row.
+    an identical row. Its `front` is the document's front
+    matter as its renderer handed it: facts in order
+    (`etl/render/src/front_matter.rs`'s `Front`), which one function
+    draws as the YAML block the document opens with. Every renderer
+    hands its front matter this way and its document as sections, and
+    the fixture test refuses a provider that does not.
   - `grid_rows` — the document's projected rows. Each carries, in its
     `supplied_terms` column, what it answers to in search beyond its
     other columns: an email's To, Cc and Bcc by handle, the people a

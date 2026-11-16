@@ -7,6 +7,7 @@
 //! formatting live here once.
 
 pub mod page;
+pub mod pieces;
 pub mod series;
 pub mod text;
 pub mod time_series;

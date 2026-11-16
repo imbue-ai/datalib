@@ -316,6 +316,7 @@ pub fn render_diff_source(
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
+                front: base.md.front.clone(),
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
@@ -613,6 +614,7 @@ mod tests {
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        front: Default::default(),
                         edges: vec![],
                         contacts: Vec::new(),
                         data_nodes: Vec::new(),
@@ -697,6 +699,7 @@ mod tests {
             render_version: 1,
             rows: vec![],
             sections: vec![],
+            front: Default::default(),
             edges: vec![],
             contacts: Vec::new(),
             data_nodes: Vec::new(),

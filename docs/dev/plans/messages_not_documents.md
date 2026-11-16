@@ -468,8 +468,12 @@ against the eval before the next.
      item's body and who it was addressed to, and marks its layout as
      frame, which is not kept; every other renderer's pieces are kept
      whole and marked `framed`, unkeyed ones too (a PDF's text is
-     unkeyed), and each splits its own bodies off later. A re-render,
-     and nothing a person sees.
+     unkeyed), and each splits its own bodies off later. Every renderer
+     also hands its front matter as facts (`Front`), drawn by one
+     function and kept on `markdowns.front`, and its document as
+     sections, those that handed none (Notion, Perseus, Garmin, the
+     time-series pages, the storage report) included. A re-render, and
+     nothing a person sees.
    - **3b. Index text from the store.** The search index draws each
      item's index text from its body and its row, and stops reading
      files. A framed body is drawn as it is, so its chunks' text and

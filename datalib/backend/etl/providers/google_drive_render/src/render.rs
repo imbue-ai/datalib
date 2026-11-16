@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
@@ -100,7 +100,8 @@ pub fn render_doc(
     let threads = comments::threads(source_id, comment_rows, file.me.as_ref());
     let placed = comments::place(&threads, &body.blocks);
 
-    let mut sections = vec![Section::unkeyed(file.head())];
+    let front = file.front();
+    let mut sections = vec![Section::unkeyed(file.head(&front))];
     sections.extend(interleave(&body.blocks, &threads, &placed));
     let md_path = doc_md_path(
         &datalib_etl::layout::render_markdown_root(root, source_id),
@@ -172,6 +173,7 @@ pub fn render_doc(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        front,
         sections,
         edges: Vec::new(),
         contacts: comments::authors(source_id, &threads, file.me.as_ref()),
@@ -357,23 +359,20 @@ impl FileFacts {
         .under(in_file)
     }
 
-    fn head(&self) -> String {
-        let mut s = String::from("---\n");
-        s.push_str(&format!("title: {}\n", yaml_name(&self.title)));
-        s.push_str(&format!("provider: {}\n", Provider::GoogleDrive));
-        s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-        s.push_str(&format!("markdown_uuid: {}\n", self.id.uuid));
-        s.push_str(&format!("file_id: {}\n", yaml_scalar(&self.file_id)));
-        for (k, v) in [
-            ("created_at", &self.created),
-            ("modified_at", &self.modified),
-            ("source_url", &self.url),
-        ] {
-            if let Some(v) = v {
-                s.push_str(&format!("{k}: {}\n", yaml_scalar(v)));
-            }
-        }
-        s.push_str("---\n\n");
+    fn front(&self) -> Front {
+        Front::new()
+            .name("title", &self.title)
+            .plain("provider", Provider::GoogleDrive)
+            .text("source_label", SOURCE_LABEL)
+            .plain("markdown_uuid", &self.id.uuid)
+            .text("file_id", &self.file_id)
+            .text_if("created_at", self.created.as_deref())
+            .text_if("modified_at", self.modified.as_deref())
+            .text_if("source_url", self.url.as_deref())
+    }
+
+    fn head(&self, front: &Front) -> String {
+        let mut s = front.draw();
         s.push_str(
             &Title {
                 text: &self.title,

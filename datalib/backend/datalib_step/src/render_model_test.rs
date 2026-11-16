@@ -426,6 +426,7 @@ fn to_rendered(
         render_version: version,
         rows,
         sections: Vec::new(),
+        front: Default::default(),
         edges,
         contacts: Vec::new(),
         data_nodes: Vec::new(),

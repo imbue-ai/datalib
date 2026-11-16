@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
+use datalib_etl_render::section::{self, Section};
 use datalib_etl_render::title::Title;
+use datalib_etl_timeseries_render::pieces::Pieces;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -140,13 +142,14 @@ impl Out<'_> {
     fn emit(
         &mut self,
         m_uuid: &str,
-        body: String,
+        (front, sections): (Front, Vec<Section>),
         build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     ) -> Result<()> {
         let md_path = doc_md_path(&self.dir, m_uuid);
         let parent = md_path.parent().expect("a document's file has a folder");
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-        fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+        fs::write(&md_path, section::join(&sections))
+            .with_context(|| format!("write {}", md_path.display()))?;
         let md_rel = md_path
             .strip_prefix(self.root)
             .unwrap_or(&md_path)
@@ -167,7 +170,8 @@ impl Out<'_> {
             md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            sections,
+            front,
             edges: Vec::new(),
             contacts: Vec::new(),
             data_nodes,
@@ -201,18 +205,17 @@ fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow
     vec![node]
 }
 
-/// Front matter and the title: what every document opens with.
-fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> String {
+/// Front matter, and the text every document opens with: it drawn and
+/// the title.
+fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> (Front, String) {
+    let front = Front::new()
+        .plain("markdown_uuid", m_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", Provider::Garmin)
+        .name("title", title)
+        .text_if("created_at", created_at);
     let mut out = String::with_capacity(8 * 1024);
-    out.push_str("---\n");
-    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_id: {source_id}");
-    out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_name(title));
-    if let Some(ts) = created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
-    }
-    out.push_str("---\n\n");
+    out.push_str(&front.draw());
     out.push_str(
         &Title {
             suffix: None,
@@ -222,7 +225,11 @@ fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) ->
         }
         .render(),
     );
-    out
+    (front, out)
+}
+
+fn whole((front, body): (Front, String)) -> (Front, Vec<Section>) {
+    (front, vec![Section::unkeyed(body)])
 }
 
 fn section_open(out: &mut String, uuid: &str) {
@@ -278,8 +285,8 @@ pub fn render_all(
         bucket: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
-    let body = render_markdown(parsed, source_id, &m_uuid);
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    let doc = render_markdown(parsed, source_id, &m_uuid);
+    out.emit(&m_uuid, doc, |md_rel, problems| {
         build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
     })?;
     progress.inc(1);
@@ -355,7 +362,7 @@ fn render_family(
     let modified_at = day_iso(days, last);
 
     let charts = time_series::family_charts(source_id, family, days);
-    let mut body = head(&m_uuid, source_id, &title, created_at.as_deref());
+    let (front, mut body) = head(&m_uuid, source_id, &title, created_at.as_deref());
     let _ = writeln!(body, "**{}:** {latest}\n", stamp_text_html(last));
     for ids in &charts {
         let _ = writeln!(body, "{}\n", time_series_chart(ids));
@@ -371,7 +378,7 @@ fn render_family(
         "{title}\n{last}: {latest}\n{} days since {first}",
         with_data.len()
     );
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |md_rel, problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -406,12 +413,14 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
     let m_uuid = daily_log_uuid(source_id);
     let first = days.keys().next().cloned();
     let last = days.keys().next_back().cloned();
-    let mut body = head(
+    let (front, opening) = head(
         &m_uuid,
         source_id,
         &title,
         first.as_deref().and_then(|d| day_iso(days, d)).as_deref(),
     );
+    let mut body = Pieces::new();
+    body.push_str(&opening);
     if days.is_empty() {
         body.push_str("*(no per-day metrics mirrored yet)*\n\n");
     }
@@ -421,16 +430,20 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .into_iter()
             .filter_map(|f| daily::family_line(f, day).map(|l| (f, l)))
             .collect();
-        section_open(&mut body, &day_uuid(source_id, date));
-        let _ = writeln!(body, "### {}\n", stamp_text_html(date));
+        let uuid = day_uuid(source_id, date);
+        let mut piece = String::new();
+        section_open(&mut piece, &uuid);
+        let _ = writeln!(piece, "### {}\n", stamp_text_html(date));
         for (family, line) in &by_family {
-            let _ = writeln!(body, "- **{}:** {line}", family.title());
+            let _ = writeln!(piece, "- **{}:** {line}", family.title());
         }
-        body.push_str("\n</div>\n\n");
+        piece.push_str("\n</div>\n\n");
+        body.keyed(&uuid, piece);
         lines.push((date, by_family));
     }
     let count = lines.len();
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    let doc = (front, body.into_sections());
+    out.emit(&m_uuid, doc, |md_rel, problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -495,13 +508,13 @@ fn render_activity(
     let device = a
         .device_id()
         .and_then(|id| device_names.get(id.as_str()).map(|n| n.to_string()));
-    let mut body = head(&m_uuid, source_id, &name, created_at.as_deref());
+    let (front, mut body) = head(&m_uuid, source_id, &name, created_at.as_deref());
     if a.fit_blake3.is_some() {
         let ids = time_series::activity_chart(source_id, &a.id);
         let _ = writeln!(body, "{}\n", time_series_chart(&ids));
     }
     activities::body(&mut body, a, device.as_deref());
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |md_rel, problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -538,7 +551,9 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         .map(|a| (a.id.as_str(), a.name()))
         .collect();
     let activity_name = |id: &str| names.get(id).cloned();
-    let mut body = head(&m_uuid, source_id, &title, None);
+    let (front, opening) = head(&m_uuid, source_id, &title, None);
+    let mut body = Pieces::new();
+    body.push_str(&opening);
     let mut lines = Vec::new();
     for (kind, heading, row_kind) in records::KINDS {
         let items: Vec<_> = parsed.items.iter().filter(|i| i.kind == *kind).collect();
@@ -548,13 +563,16 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         let _ = writeln!(body, "## {heading}\n");
         for item in items {
             let (name, said) = item.line(activity_name);
-            section_open(&mut body, &item_uuid(source_id, &item.id));
-            let _ = write!(body, "**{}**", escape_md_inline(&name));
+            let uuid = item_uuid(source_id, &item.id);
+            let mut piece = String::new();
+            section_open(&mut piece, &uuid);
+            let _ = write!(piece, "**{}**", escape_md_inline(&name));
             if !said.is_empty() {
-                let _ = write!(body, " · {}", escape_md_inline(&said));
+                let _ = write!(piece, " · {}", escape_md_inline(&said));
             }
-            body.push('\n');
-            body.push_str("\n</div>\n\n");
+            piece.push('\n');
+            piece.push_str("\n</div>\n\n");
+            body.keyed(&uuid, piece);
             lines.push((item, *row_kind, name, said));
         }
     }
@@ -562,7 +580,8 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         body.push_str("*(no records, badges, gear, workouts or goals mirrored yet)*\n\n");
     }
     let count = lines.len();
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    let doc = (front, body.into_sections());
+    out.emit(&m_uuid, doc, |md_rel, problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -608,19 +627,21 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
     Ok(count)
 }
 
-fn render_markdown(parsed: &ParsedGarmin, source_id: &str, m_uuid: &str) -> String {
+fn render_markdown(parsed: &ParsedGarmin, source_id: &str, m_uuid: &str) -> (Front, Vec<Section>) {
     let title = page_title(parsed, source_id);
     let created_at = parsed
         .latest_weigh_in()
         .and_then(|w| iso(w.timestamp_gmt_ms));
-    let mut out = head(m_uuid, source_id, &title, created_at.as_deref());
+    let (front, opening) = head(m_uuid, source_id, &title, created_at.as_deref());
+    let mut out = Pieces::new();
+    out.push_str(&opening);
     render_weight_section(&mut out, parsed, source_id);
     render_device_section(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
-    out
+    (front, out.into_sections())
 }
 
-fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
+fn render_weight_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Weight\n\n");
     let Some(latest) = parsed.latest_weigh_in() else {
         out.push_str("*(no weigh-ins mirrored yet)*\n\n");
@@ -667,7 +688,7 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
     out.push('\n');
 }
 
-fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
+fn render_device_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices registered)*\n\n");
@@ -675,10 +696,11 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
     }
     for d in &parsed.devices {
         let uuid = device_uuid(source_id, &d.id);
-        section_open(out, &uuid);
-        let _ = writeln!(out, "### {}\n", escape_md_inline(&d.name));
+        let mut piece = String::new();
+        section_open(&mut piece, &uuid);
+        let _ = writeln!(piece, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
-            out,
+            piece,
             "*device {}{}*\n",
             escape_md_inline(&d.id),
             d.last_sync
@@ -686,13 +708,14 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
                 .map(|s| format!(" · last synced {}", escape_md_inline(s)))
                 .unwrap_or_default()
         );
-        out.push_str("</div>\n\n");
+        piece.push_str("</div>\n\n");
+        out.keyed(&uuid, piece);
     }
 }
 
 /// Counts only — nothing here should change when the store is merely
 /// re-committed, so the page stays byte-identical across no-op runs.
-fn render_store_section(out: &mut String, parsed: &ParsedGarmin) {
+fn render_store_section(out: &mut Pieces, parsed: &ParsedGarmin) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
     let _ = writeln!(out, "| Weigh-ins | {} |", parsed.weigh_ins.len());
@@ -835,9 +858,15 @@ mod tests {
             days: Default::default(),
             unparsed: Vec::new(),
         };
-        let mut out = String::new();
-        render_device_section(&mut out, &parsed, "garmin");
-        render_weight_section(&mut out, &parsed, "garmin");
+        let mut pieces = Pieces::new();
+        render_device_section(&mut pieces, &parsed, "garmin");
+        render_weight_section(&mut pieces, &parsed, "garmin");
+        let sections = pieces.into_sections();
+        assert_eq!(
+            sections[1].uuid.as_deref(),
+            Some(device_uuid("garmin", "<i>1</i>").as_str())
+        );
+        let out = section::join(&sections);
         assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),

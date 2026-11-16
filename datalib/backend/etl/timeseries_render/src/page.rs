@@ -10,10 +10,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
+use datalib_etl_render::section::{self, Section};
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -21,6 +22,7 @@ use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
 
+use crate::pieces::Pieces;
 use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
 use crate::text::{human_gap, iso, median_gap, stamp, thousands};
 use crate::time_series::time_series_chart;
@@ -213,14 +215,15 @@ pub fn render_all(
     }
 
     let m_uuid = profile.document_uuid(source_id);
-    let body = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
+    let (front, sections) = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
     let node = page_node(profile, source_id, &m_uuid);
 
     write_page(
         root,
         source_id,
         &m_uuid,
-        body,
+        front,
+        sections,
         profile.render_version,
         vec![node],
         |md_rel, problems| build_grid_rows(profile, page, source_id, &m_uuid, md_rel, problems),
@@ -244,7 +247,8 @@ pub fn write_page(
     root: &Path,
     source_id: &str,
     m_uuid: &str,
-    body: String,
+    front: Front,
+    sections: Vec<Section>,
     render_version: u32,
     data_nodes: Vec<DataNodeRow>,
     build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
@@ -256,7 +260,8 @@ pub fn write_page(
     );
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+    fs::write(&md_path, section::join(&sections))
+        .with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
         .strip_prefix(root)
@@ -278,7 +283,8 @@ pub fn write_page(
         md_path,
         render_version,
         rows,
-        sections: Vec::new(),
+        sections,
+        front,
         edges: Vec::new(),
         contacts: Vec::new(),
         data_nodes,
@@ -368,24 +374,20 @@ fn render_markdown(
     source_id: &str,
     m_uuid: &str,
     plots: &[(&Quantity, PlotFacts)],
-) -> String {
-    let mut out = String::with_capacity(8 * 1024);
+) -> (Front, Vec<Section>) {
+    let mut out = Pieces::new();
     let earliest = earliest_ts_ms(page.series);
     let latest = latest_ts_ms(page.series);
     let title = profile.page_title(source_id);
 
-    out.push_str("---\n");
-    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_id: {source_id}");
-    let _ = writeln!(out, "provider: {}", profile.tag);
-    let _ = writeln!(out, "title: {}", yaml_name(&title));
-    if let Some(ts) = earliest.and_then(iso) {
-        let _ = writeln!(out, "created_at: {}", yaml_scalar(&ts));
-    }
-    if let Some(ts) = latest.and_then(iso) {
-        let _ = writeln!(out, "modified_at: {}", yaml_scalar(&ts));
-    }
-    out.push_str("---\n\n");
+    let front = Front::new()
+        .plain("markdown_uuid", m_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.tag)
+        .name("title", &title)
+        .text_if("created_at", earliest.and_then(iso).as_deref())
+        .text_if("modified_at", latest.and_then(iso).as_deref());
+    out.push_str(&front.draw());
 
     out.push_str(
         &Title {
@@ -415,10 +417,10 @@ fn render_markdown(
     render_plot_sections(&mut out, profile, plots);
     render_device_sections(&mut out, profile, page, source_id);
     out.push_str(&page.store_section);
-    out
+    (front, out.into_sections())
 }
 
-fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quantity, PlotFacts)]) {
+fn render_plot_sections(out: &mut Pieces, profile: &PageProfile, plots: &[(&Quantity, PlotFacts)]) {
     if plots.is_empty() {
         let _ = write!(
             out,
@@ -450,7 +452,7 @@ fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quan
 }
 
 fn render_device_sections(
-    out: &mut String,
+    out: &mut Pieces,
     profile: &PageProfile,
     page: &Page<'_>,
     source_id: &str,
@@ -467,20 +469,8 @@ fn render_device_sections(
     let by_device = by_device(page.series);
     for dev in &page.devices {
         let uuid = profile.device_uuid(source_id, &dev.key);
-        let _ = writeln!(
-            out,
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
-            profile.tag
-        );
-        let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
-        let _ = writeln!(out, "*{}*\n", dev.facts);
-        match by_device.get(dev.key.as_str()) {
-            Some(list) if !list.is_empty() => render_metric_table(out, profile, list),
-            _ => {
-                let _ = write!(out, "*(no {})*\n\n", profile.noun);
-            }
-        }
-        out.push_str("</div>\n\n");
+        let series = by_device.get(dev.key.as_str()).map(Vec::as_slice);
+        out.keyed(&uuid, device_section(profile, &uuid, dev, series));
     }
 
     // Values can exist for a device the store no longer names. Say so
@@ -507,6 +497,30 @@ fn render_device_sections(
             profile.orphan_hint,
         );
     }
+}
+
+fn device_section(
+    profile: &PageProfile,
+    uuid: &str,
+    dev: &Device,
+    series: Option<&[&Series]>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
+        profile.tag
+    );
+    let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
+    let _ = writeln!(out, "*{}*\n", dev.facts);
+    match series {
+        Some(list) if !list.is_empty() => render_metric_table(&mut out, profile, list),
+        _ => {
+            let _ = write!(out, "*(no {})*\n\n", profile.noun);
+        }
+    }
+    out.push_str("</div>\n\n");
+    out
 }
 
 fn render_metric_table(out: &mut String, profile: &PageProfile, series: &[&Series]) {
@@ -703,8 +717,14 @@ mod tests {
             sample_count: 0,
             store_section: String::new(),
         };
-        let mut out = String::new();
-        render_device_sections(&mut out, &PROFILE, &page, "s");
+        let mut pieces = Pieces::new();
+        render_device_sections(&mut pieces, &PROFILE, &page, "s");
+        let sections = pieces.into_sections();
+        assert_eq!(
+            sections[1].uuid.as_deref(),
+            Some(PROFILE.device_uuid("s", "k1").as_str())
+        );
+        let out = section::join(&sections);
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
             "{out}"

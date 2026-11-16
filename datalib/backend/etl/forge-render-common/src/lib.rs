@@ -267,6 +267,7 @@ pub fn render_all(
             filings: Vec::new(),
             photos: Vec::new(),
             problems,
+            front: markdown::front(profile, cr),
         })?;
         summary.buckets.push(Bucket {
             key: cr.row_id.clone(),
