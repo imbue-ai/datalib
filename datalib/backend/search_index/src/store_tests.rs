@@ -15,6 +15,7 @@ fn doc(uuid: &str, hash: &str, title: &str, sections: &[(Option<&str>, &str)]) -
             .map(|(uuid, text)| IndexSection {
                 uuid: uuid.map(str::to_string),
                 text: text.to_string(),
+                lead: None,
             })
             .collect(),
     }

@@ -772,6 +772,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         item_body,
         addressed(&item.recipients),
     )
+    .labelled(item.labels.clone())
 }
 
 /// Who an item says it was addressed to, by name, for the search's
@@ -788,6 +789,7 @@ fn addressed(recipients: &[crate::types::Recipient]) -> Vec<Addressee> {
                 RecipientRole::Bcc => AddressRole::Bcc,
             },
             name: r.display.clone(),
+            handle: r.handle.as_ref().map(|h| h.as_str().to_string()),
         })
         .collect()
 }
@@ -1842,6 +1844,7 @@ mod tests {
         let Kept::Body {
             text: body,
             addressed,
+            labels,
         } = &item.kept
         else {
             panic!("chat-common splits the body off: {:?}", item.kept)
@@ -1850,9 +1853,15 @@ mod tests {
             addressed,
             &vec![Addressee {
                 role: AddressRole::Cc,
-                name: "Deanna Troi".into()
+                name: "Deanna Troi".into(),
+                handle: None,
             }],
             "only the recipients the item draws"
+        );
+        assert_eq!(
+            labels,
+            &vec!["Starred".to_string()],
+            "its labels, kept apart"
         );
         assert!(body.starts_with("Spot's portrait\n\n"), "{body}");
         assert!(body.contains("spot.png"), "{body}");

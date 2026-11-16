@@ -1,0 +1,232 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== notion 00000000-0000-83c9-9b62-3a0c19713d6c Bridge Operations Handbook
+--- -
+---
+title: "Bridge Operations Handbook"
+source_label: Notion
+---
+
+> The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.
+
+--- 0b75b878-be80-8789-947e-32dbd1d21be8
+<div id="m-0b75b878-be80-8789-947e-32dbd1d21be8" data-section-uuid="0b75b878-be80-8789-947e-32dbd1d21be8" class="msg msg--notion">
+
+[Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>") · <time class="msg-ts" datetime="2369-04-15T01:00:00Z" title="2369-04-15 01:00:00 UTC">Tue Apr 15th, 2369 at 01:00</time>
+
+Recommend we lower sensor gain to avoid tipping off the Romulans.
+
+</div>
+
+--- 0b75b87d-5260-8b4d-85ae-d86bbfcc6a45
+<div id="m-0b75b87d-5260-8b4d-85ae-d86bbfcc6a45" data-section-uuid="0b75b87d-5260-8b4d-85ae-d86bbfcc6a45" class="msg msg--notion">
+
+[Data](mailto:data@enterprise.starfleet.invalid "Data <data@enterprise.starfleet.invalid>") · <time class="msg-ts" datetime="2369-04-15T01:05:00Z" title="2369-04-15 01:05:00 UTC">Tue Apr 15th, 2369 at 01:05</time>
+
+Concur, Commander. Reducing gain by 30%.
+
+</div>
+
+=== notion 00000000-0000-86d5-851e-a6d36ec0864a Bridge Operations Handbook
+--- -
+---
+title: "Bridge Operations Handbook"
+source_label: Notion
+---
+
+--- 0b75b881-e640-8c48-8004-7b48d5b94f90
+<div id="m-0b75b881-e640-8c48-8004-7b48d5b94f90" data-section-uuid="0b75b881-e640-8c48-8004-7b48d5b94f90" class="msg msg--notion">
+
+[Beverly Crusher](mailto:beverly.crusher@enterprise.starfleet.invalid "Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid>") · <time class="msg-ts" datetime="2369-04-15T01:10:00Z" title="2369-04-15 01:10:00 UTC">Tue Apr 15th, 2369 at 01:10</time>
+
+Make it so.
+
+</div>
+
+=== notion 00000000-0000-8770-8cbd-edbb96f9dca9 notion storage
+--- -
+---
+title: notion storage
+source: notion
+measured_at: 2369-04-15T00:00:00+00:00
+---
+
+# [notion](datalib:group/notion "notion") — storage
+
+Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+
+| Kind | Step | What | Size | Count | Id |
+|---|---|---|---|---|---|
+| Source Size | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest` | <size> | 3 files | <span id="m-00000000-0000-8770-8cbd-edbb96f9dca9" data-section-uuid="00000000-0000-8770-8cbd-edbb96f9dca9">`00000000`</span> |
+| Store | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-834e-b659-e0fb4d00f27a" data-section-uuid="00000000-0000-834e-b659-e0fb4d00f27a">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/blobs.sqlite#cas_objects` |  | 0 rows | <span id="m-00000000-0000-8bde-8fbc-c9c52a38c0c7" data-section-uuid="00000000-0000-8bde-8fbc-c9c52a38c0c7">`00000000`</span> |
+| Store | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8be4-8d61-97c552d35aa9" data-section-uuid="00000000-0000-8be4-8d61-97c552d35aa9">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#comment_anchors` |  | 1 row | <span id="m-00000000-0000-8c34-af63-dadf34dc038b" data-section-uuid="00000000-0000-8c34-af63-dadf34dc038b">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#comments` |  | 3 rows | <span id="m-00000000-0000-899b-8e25-435a5f6dbb3a" data-section-uuid="00000000-0000-899b-8e25-435a5f6dbb3a">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#coverage` |  | 1 row | <span id="m-00000000-0000-8d48-8806-c798cba6d538" data-section-uuid="00000000-0000-8d48-8806-c798cba6d538">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#listed_pages` |  | 3 rows | <span id="m-00000000-0000-8c10-852c-10e9cd9ba356" data-section-uuid="00000000-0000-8c10-852c-10e9cd9ba356">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#notion_attachments` |  | 0 rows | <span id="m-00000000-0000-8f8a-bfb7-9d71255a1288" data-section-uuid="00000000-0000-8f8a-bfb7-9d71255a1288">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#page_comments` |  | 3 rows | <span id="m-00000000-0000-88f9-9448-a675cceea1a9" data-section-uuid="00000000-0000-88f9-9448-a675cceea1a9">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#page_markdown` |  | 3 rows | <span id="m-00000000-0000-82c1-8ae3-119b096c658a" data-section-uuid="00000000-0000-82c1-8ae3-119b096c658a">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#pages` |  | 3 rows | <span id="m-00000000-0000-8094-add6-53347d3e6249" data-section-uuid="00000000-0000-8094-add6-53347d3e6249">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#tree` |  | 3 rows | <span id="m-00000000-0000-85b5-b80c-97dcf3610f81" data-section-uuid="00000000-0000-85b5-b80c-97dcf3610f81">`00000000`</span> |
+| Table | [ingest](datalib:step/notion/ingest "notion/ingest") | `notion/ingest/entities.doltlite_db#users` |  | 4 rows | <span id="m-00000000-0000-8e24-be4b-e403704bd450" data-section-uuid="00000000-0000-8e24-be4b-e403704bd450">`00000000`</span> |
+
+=== notion 0b75b842-ba60-80f0-ab79-7448df7f2124 Incident Log: Stardate 47988.1
+--- -
+---
+title: "Incident Log: Stardate 47988.1"
+provider: notion
+markdown_uuid: 0b75b842-ba60-80f0-ab79-7448df7f2124
+page_id: "b1d6e000-1701-4d00-8000-000000000003"
+created_at: "2369-04-15T00:01:00.000Z"
+last_edited_at: "2369-04-15T00:02:00.000Z"
+source_url: "https://www.notion.so/b1d6e00017014d008000000000000003"
+source_label: Notion
+---
+
+<h1 class="page-title" data-page-title-uuid="0b75b842-ba60-80f0-ab79-7448df7f2124">Incident Log: Stardate 47988.1 <a class="source-link" href="https://www.notion.so/b1d6e00017014d008000000000000003" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+[Bridge Operations Handbook](/chat/0b75b842-ba60-8131-881b-f4b981d5c44a)
+
+## Audit
+
+Reviewing tickets logged against the warp coil since <time datetime="2369-04-08">Tue Apr 8th, 2369</time>. [Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>") owns the audit; Data cross-checks the plasma readings.
+
+- Plasma flow irregularity, see https://incident-tracker.starfleet.invalid/issue/NCC-1701-D-17 — closed.
+  - Root cause: a misaligned injector on the third nacelle coil.
+- Holodeck safety override, see incident-tracker.starfleet.invalid/issue/NCC-1701-D-23 — in progress.
+  - Barclay's program bypassed the safeties twice; both times nobody was hurt.
+
+## Planning
+
+1. Schedule diagnostic with [Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>") by 0900 hours.
+2. Brief [Jean-Luc Picard](mailto:jean-luc.picard@enterprise.starfleet.invalid "Jean-Luc Picard <jean-luc.picard@enterprise.starfleet.invalid>") before alpha shift.
+   1. Bring the injector trace.
+   2. Bring the holodeck override log.
+
+## Reflection
+
+> There are four lights.
+
+Reminder of yesterday's tactical drill — see [Bridge Operations Handbook](/chat/0b75b842-ba60-8131-881b-f4b981d5c44a) for standing orders.
+
+---
+
+End of log. Signed: **William T. Riker, First Officer.**
+=== notion 0b75b842-ba60-8131-881b-f4b981d5c44a Bridge Operations Handbook
+--- -
+---
+title: "Bridge Operations Handbook"
+provider: notion
+markdown_uuid: 0b75b842-ba60-8131-881b-f4b981d5c44a
+page_id: "b1d6e000-1701-4d00-8000-000000000001"
+created_at: "2369-04-15T00:01:00.000Z"
+last_edited_at: "2369-04-15T00:02:00.000Z"
+source_url: "https://www.notion.so/b1d6e00017014d008000000000000001"
+source_label: Notion
+---
+
+<h1 class="page-title" data-page-title-uuid="0b75b842-ba60-8131-881b-f4b981d5c44a">Bridge Operations Handbook <a class="source-link" href="https://www.notion.so/b1d6e00017014d008000000000000001" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+# Mission Overview
+
+The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.
+
+> 🖖 Captain on the bridge: [Jean-Luc Picard](mailto:jean-luc.picard@enterprise.starfleet.invalid "Jean-Luc Picard <jean-luc.picard@enterprise.starfleet.invalid>") presides over all standing orders below.
+>
+> These orders hold until the ship leaves the Neutral Zone or the captain rescinds them in writing.
+
+## Crew Roster
+
+- Duty roster lives at [Shift Roster](/chat/0b75b842-ba60-88dd-b090-baf44d88db59) — refer to it before bridge handoff.
+- Senior staff:
+  - **Command:** Jean-Luc Picard, William T. Riker
+  - **Operations:** [Data](mailto:data@enterprise.starfleet.invalid "Data <data@enterprise.starfleet.invalid>"), [Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>")
+  - **Medical:** [Beverly Crusher](mailto:beverly.crusher@enterprise.starfleet.invalid "Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid>")
+1. Confirm shift assignments at start of duty.
+2. File anomalies in the [Incident Log: Stardate 47988.1](/chat/0b75b842-ba60-80f0-ab79-7448df7f2124).
+   1. Note the stardate and the station that saw it.
+   2. Attach a sensor trace when there is one.
+
+| Station | Relieved by |
+| --- | --- |
+| Conn | Ensign Ro Laren |
+| Ops | Lieutenant Commander Data |
+
+---
+
+## Standing Orders
+
+- [x] Maintain Yellow Alert posture in the Neutral Zone
+- [ ] Run weekly warp-core diagnostic with [Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>")
+- [ ] Medical readiness drill on <time datetime="2369-04-20">Sun Apr 20th, 2369</time>
+
+<details>
+
+<summary><strong>Engagement protocols</strong></summary>
+
+Hail before firing. Shields raised only after a second sensor confirmation.
+
+- Tactical leads: Worf
+- Weapons lock needs the captain's or first officer's word.
+
+</details>
+
+> Make it so.
+
+```python
+def hail(frequency):
+    return f"Open channel {frequency}."
+```
+
+## Reference Material
+
+[https://memory-alpha.starfleet.invalid/wiki/Romulan_Neutral_Zone](https://memory-alpha.starfleet.invalid/wiki/Romulan_Neutral_Zone)
+
+[Treaty of Algeron](<https://memory-alpha.starfleet.invalid/wiki/Treaty_of_Algeron>)
+
+📄 [Shift Roster](/chat/0b75b842-ba60-88dd-b090-baf44d88db59)
+
+📄 [Incident Log: Stardate 47988.1](/chat/0b75b842-ba60-80f0-ab79-7448df7f2124)
+=== notion 0b75b842-ba60-88dd-b090-baf44d88db59 Shift Roster
+--- -
+---
+title: "Shift Roster"
+provider: notion
+markdown_uuid: 0b75b842-ba60-88dd-b090-baf44d88db59
+page_id: "b1d6e000-1701-4d00-8000-000000000002"
+created_at: "2369-04-15T00:01:00.000Z"
+last_edited_at: "2369-04-15T00:02:00.000Z"
+source_url: "https://www.notion.so/b1d6e00017014d008000000000000002"
+source_label: Notion
+---
+
+<h1 class="page-title" data-page-title-uuid="0b75b842-ba60-88dd-b090-baf44d88db59">Shift Roster <a class="source-link" href="https://www.notion.so/b1d6e00017014d008000000000000002" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+[Bridge Operations Handbook](/chat/0b75b842-ba60-8131-881b-f4b981d5c44a)
+
+Alpha shift staffing for <time datetime="2369-04-15">Tue Apr 15th, 2369</time>, posted by [Jean-Luc Picard](mailto:jean-luc.picard@enterprise.starfleet.invalid "Jean-Luc Picard <jean-luc.picard@enterprise.starfleet.invalid>").
+
+### Alpha shift
+
+- **Bridge:** Jean-Luc Picard, William T. Riker
+  - Riker takes the conn while the captain meets the Cardassian envoy.
+- **Engineering:** [Geordi La Forge](mailto:geordi.laforge@enterprise.starfleet.invalid "Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid>")
+  - Two junior engineers on the plasma conduits until the coil audit closes.
+- **Tactical:** Worf
+- **Sickbay:** [Beverly Crusher](mailto:beverly.crusher@enterprise.starfleet.invalid "Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid>"), with Nurse Ogawa on call.
+
+### Beta shift
+
+- **Bridge:** [Data](mailto:data@enterprise.starfleet.invalid "Data <data@enterprise.starfleet.invalid>") in command, Ensign Ro at conn.
+- **Engineering:** Lieutenant Barclay, on light duty.
+
+### Swaps
+
+Cross-reference with [Bridge Operations Handbook](/chat/0b75b842-ba60-8131-881b-f4b981d5c44a) before swapping stations. A swap the duty officer has not countersigned does not stand.
+
+- [ ] Barclay to beta shift once Counselor Troi signs off
+- [x] Ro Laren to conn from <time datetime="2369-04-16">Wed Apr 16th, 2369</time> → <time datetime="2369-04-18">Fri Apr 18th, 2369</time>

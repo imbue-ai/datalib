@@ -4,7 +4,7 @@
 
 use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
-use datalib_schema::sections::{addressed_json, Addressee, SectionRow};
+use datalib_schema::sections::{addressed_json, labels_json, Addressee, SectionRow};
 
 /// One piece of a rendered document, in document order. `uuid` is the
 /// piece's `data-section-uuid` — a message, a contact — so a row of the
@@ -33,6 +33,7 @@ pub enum Kept {
     Body {
         text: String,
         addressed: Vec<Addressee>,
+        labels: Vec<String>,
     },
     /// Nothing: layout alone (front matter, a `<details>` opener), drawn
     /// again from the document's facts.
@@ -51,9 +52,22 @@ impl Section {
     /// An item's section that also says which part of it is the body.
     pub fn item(uuid: &str, md: String, text: String, addressed: Vec<Addressee>) -> Self {
         Self {
-            kept: Kept::Body { text, addressed },
+            kept: Kept::Body {
+                text,
+                addressed,
+                labels: Vec::new(),
+            },
             ..Self::keyed(uuid, md)
         }
+    }
+
+    /// The item's labels, where it is filed upstream; nothing for a piece
+    /// that is no item's body.
+    pub fn labelled(mut self, with: Vec<String>) -> Self {
+        if let Kept::Body { labels, .. } = &mut self.kept {
+            *labels = with;
+        }
+        self
     }
 
     pub fn unkeyed(md: String) -> Self {
@@ -80,10 +94,19 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
         .iter()
         .enumerate()
         .filter_map(|(seq, s)| {
-            let (text, framed, addressed) = match &s.kept {
+            let (text, framed, addressed, labels) = match &s.kept {
                 Kept::Frame => return None,
-                Kept::Whole => (s.md.clone(), true, None),
-                Kept::Body { text, addressed } => (text.clone(), false, addressed_json(addressed)),
+                Kept::Whole => (s.md.clone(), true, None, None),
+                Kept::Body {
+                    text,
+                    addressed,
+                    labels,
+                } => (
+                    text.clone(),
+                    false,
+                    addressed_json(addressed),
+                    labels_json(labels),
+                ),
             };
             Some(SectionRow {
                 markdown_uuid: markdown_uuid.to_string(),
@@ -92,6 +115,7 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
                 text,
                 framed,
                 addressed,
+                labels,
             })
         })
         .collect()
@@ -251,6 +275,7 @@ mod tests {
         let to = vec![Addressee {
             role: AddressRole::To,
             name: "Picard".into(),
+            handle: None,
         }];
         let sections = vec![
             Section::frame("# Title\n".into()),
@@ -259,24 +284,35 @@ mod tests {
                 "<div>Riker: hi</div>\n".into(),
                 "hi".into(),
                 to.clone(),
-            ),
-            Section::keyed("b", "<div>Data: yes</div>\n".into()),
+            )
+            .labelled(vec!["Bridge".into()]),
+            Section::keyed("b", "<div>Data: yes</div>\n".into()).labelled(vec!["ignored".into()]),
             Section::unkeyed("Page 2 text\n".into()),
         ];
-        let row = |seq: i64, uuid: Option<&str>, text: &str, framed: bool, addressed| SectionRow {
-            markdown_uuid: "doc".into(),
-            seq,
-            uuid: uuid.map(String::from),
-            text: text.into(),
-            framed,
-            addressed,
+        let row = |seq: i64, uuid: Option<&str>, text: &str, framed: bool, addressed, labels| {
+            SectionRow {
+                markdown_uuid: "doc".into(),
+                seq,
+                uuid: uuid.map(String::from),
+                text: text.into(),
+                framed,
+                addressed,
+                labels,
+            }
         };
         assert_eq!(
             stored("doc", &sections),
             vec![
-                row(1, Some("a"), "hi", false, addressed_json(&to)),
-                row(2, Some("b"), "<div>Data: yes</div>\n", true, None),
-                row(3, None, "Page 2 text\n", true, None),
+                row(
+                    1,
+                    Some("a"),
+                    "hi",
+                    false,
+                    addressed_json(&to),
+                    labels_json(&["Bridge".into()])
+                ),
+                row(2, Some("b"), "<div>Data: yes</div>\n", true, None, None),
+                row(3, None, "Page 2 text\n", true, None, None),
             ]
         );
     }

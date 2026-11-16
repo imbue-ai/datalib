@@ -7,6 +7,7 @@ mod clear_before_ingest;
 mod compact;
 mod embedding_map;
 mod final_message;
+mod index_text;
 mod interrupt;
 mod item_table;
 mod no_op_ingest;

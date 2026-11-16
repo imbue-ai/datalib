@@ -56,6 +56,12 @@ goldens come from the network, so the two are separate runs:
 `<p>_tests.update` carries `test_args = ["--skip", "live::"]` and
 `<p>_live.update` carries `test_args = ["live::"]`.
 
+One golden watches what search sees: `datalib_step`'s
+`index_text.update` rewrites `tests/step_tests/snapshots/*index_text*`,
+the text the index draws of every fixture document, one file per source
+(`datalib-step index-text`). A diff there is a change to what is indexed
+and embedded; read it as one, since it re-embeds what it touches.
+
 When adding an insta-using test, declare a sibling `.update`:
 
 ```python

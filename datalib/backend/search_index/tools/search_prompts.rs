@@ -1,8 +1,9 @@
 //! The fixture's chunk prompts, one per line as `<hash>\t<prompt as JSON>`,
 //! sorted: what `:ingested_tng_vectors` embeds. Read from a root whose
-//! `keyword_index` steps have run, as the `embed` step reads them, and
-//! each checked against its hash, so a prompt built differently from the
-//! step's fails here rather than caching a vector under the wrong text.
+//! `keyword_index` steps have run, drawn by the store as the `embed` step
+//! draws them, and each one the index names found among them, so a prompt
+//! drawn differently from the step's fails here rather than caching a
+//! vector under the wrong text.
 //!
 //! Usage: search_prompts <root> <out>
 
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_search_index::{prompt, Index};
+use datalib_search_index::Index;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -28,25 +29,25 @@ async fn main() -> Result<()> {
         if spans.is_empty() {
             continue;
         }
-        let rows = {
+        let docs = {
             let (root, source) = (root.clone(), source.clone());
-            tokio::task::spawn_blocking(move || rows(&root, &source)).await??
+            let uuids: Vec<String> = spans.iter().map(|s| s.markdown_uuid.clone()).collect();
+            tokio::task::spawn_blocking(move || docs(&root, &source, uuids)).await??
         };
-        for span in spans {
-            let (title, text) = rows
-                .get(&span.markdown_uuid)
-                .with_context(|| format!("{source}: no document {}", span.markdown_uuid))?;
-            let piece = text
-                .get(span.start..span.end)
-                .with_context(|| format!("{}: a chunk past its text", span.markdown_uuid))?;
-            let p = prompt::document(piece, Some(title));
-            if blake3::hash(p.as_bytes()).to_hex().as_str() != span.hash {
-                bail!(
-                    "{}: a chunk whose prompt is not its hash",
-                    span.markdown_uuid
-                );
+        let mut drawn: BTreeMap<String, String> = BTreeMap::new();
+        for doc in &docs {
+            for p in doc.prompted() {
+                drawn.insert(p.hash, p.prompt);
             }
-            prompts.insert(span.hash, p);
+        }
+        for span in spans {
+            let p = drawn.get(&span.hash).with_context(|| {
+                format!(
+                    "{}: a chunk its document no longer draws",
+                    span.markdown_uuid
+                )
+            })?;
+            prompts.insert(span.hash, p.clone());
         }
     }
     index.close().await;
@@ -71,21 +72,19 @@ fn sources(root: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Each document's title and text, by id.
-fn rows(root: &Path, source: &str) -> Result<BTreeMap<String, (String, String)>> {
+/// These documents as the embed step draws them.
+fn docs(
+    root: &Path,
+    source: &str,
+    mut uuids: Vec<String>,
+) -> Result<Vec<datalib_search_index::IndexDoc>> {
     let render_root = datalib_etl::layout::render_markdown_root(root, source);
     let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
-        return Ok(BTreeMap::new());
+        return Ok(Vec::new());
     };
-    let rows = store.markdown_rows();
+    uuids.sort();
+    uuids.dedup();
+    let out = store.index_docs(source, &uuids);
     store.close();
-    let mut out = BTreeMap::new();
-    for row in rows? {
-        let Some(md) = row.md_path.as_deref() else {
-            continue;
-        };
-        let text = std::fs::read_to_string(root.join(md)).with_context(|| format!("read {md}"))?;
-        out.insert(row.markdown_uuid, (row.title.unwrap_or_default(), text));
-    }
-    Ok(out)
+    out
 }

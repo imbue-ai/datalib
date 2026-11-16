@@ -32,6 +32,10 @@ pub struct SectionRow {
     /// email's To and Cc do: a JSON list of [`Addressee`]. Null for none.
     #[col(sql = "TEXT")]
     pub addressed: Option<String>,
+    /// Where the item is filed upstream, as it names them: an email's
+    /// labels and mailboxes. A JSON list of strings; null for none.
+    #[col(sql = "TEXT")]
+    pub labels: Option<String>,
 }
 
 /// One person an item was addressed to, as the item names them.
@@ -39,6 +43,10 @@ pub struct SectionRow {
 pub struct Addressee {
     pub role: AddressRole,
     pub name: String,
+    /// The handle the item names them by (`email:…`, `tel:…`), where it
+    /// names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
 }
 
 #[derive(
@@ -76,6 +84,16 @@ pub fn addressed_json(to: &[Addressee]) -> Option<String> {
     (!to.is_empty()).then(|| serde_json::to_string(to).expect("an addressee always serializes"))
 }
 
+/// `labels` as stored: `None` for none.
+pub fn labels_json(labels: &[String]) -> Option<String> {
+    (!labels.is_empty()).then(|| serde_json::to_string(labels).expect("strings serialize"))
+}
+
+/// `None` for a column this build cannot read.
+pub fn parse_labels(json: &str) -> Option<Vec<String>> {
+    serde_json::from_str(json).ok()
+}
+
 /// `None` for a column this build cannot read, which the caller treats as
 /// nobody named.
 pub fn parse_addressed(json: &str) -> Option<Vec<Addressee>> {
@@ -99,13 +117,27 @@ mod tests {
 
     #[test]
     fn addressees_round_trip_and_nobody_is_null() {
-        let to = vec![Addressee {
-            role: AddressRole::Cc,
-            name: "Deanna Troi".into(),
-        }];
+        let to = vec![
+            Addressee {
+                role: AddressRole::Cc,
+                name: "Deanna Troi".into(),
+                handle: None,
+            },
+            Addressee {
+                role: AddressRole::To,
+                name: "Data".into(),
+                handle: Some("email:data@enterprise.starfleet".into()),
+            },
+        ];
         let json = addressed_json(&to).unwrap();
-        assert_eq!(json, r#"[{"role":"cc","name":"Deanna Troi"}]"#);
+        assert_eq!(
+            json,
+            r#"[{"role":"cc","name":"Deanna Troi"},{"role":"to","name":"Data","handle":"email:data@enterprise.starfleet"}]"#
+        );
         assert_eq!(parse_addressed(&json), Some(to));
         assert_eq!(addressed_json(&[]), None);
+        let labels = vec!["Patrol routes".to_string()];
+        assert_eq!(parse_labels(&labels_json(&labels).unwrap()), Some(labels));
+        assert_eq!(labels_json(&[]), None);
     }
 }

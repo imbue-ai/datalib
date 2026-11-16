@@ -2501,6 +2501,7 @@ mod tests {
                     .map(|s| IndexSection {
                         uuid: s.uuid.clone(),
                         text: s.md.clone(),
+                        lead: None,
                     })
                     .collect(),
             }])

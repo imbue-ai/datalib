@@ -19,6 +19,7 @@ mod grid_index;
 mod help;
 mod hints;
 mod index_steps;
+mod index_text;
 mod ingest;
 mod introspect;
 mod methods;
@@ -305,6 +306,28 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// Utility (not a pipeline step): print what the search index draws
+    /// of each document, by the call the keyword and embed passes make:
+    /// for each, `=== <source> <id> <title>`, then each piece as `---
+    /// <item>` and its text. Reads the render stores and writes nothing.
+    IndexText {
+        /// The data root.
+        data_root: PathBuf,
+        /// Only this source (its group id).
+        #[arg(long)]
+        source: Option<String>,
+        /// Only this document (its id), with --source.
+        #[arg(long, requires = "source")]
+        document: Option<String>,
+        /// Read the source's render store as it was at this commit, to see
+        /// what a sync changed: draw it at two commits and diff them.
+        #[arg(long, requires = "source")]
+        at: Option<String>,
+        /// Print the chunks as they are embedded, each `--- chunk <n>
+        /// <hash>` and its prompt, instead of the pieces.
+        #[arg(long)]
+        chunks: bool,
+    },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
     /// `{"fixture_path": …}`), for later replay via `--playback-root`.
@@ -366,6 +389,21 @@ async fn main() {
     let cli = Cli::parse();
     match &cli.cmd {
         Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
+        Some(Cmd::IndexText {
+            data_root,
+            source,
+            document,
+            at,
+            chunks,
+        }) => std::process::exit(index_text::run_cli(
+            data_root,
+            &index_text::Ask {
+                source: source.as_deref(),
+                document: document.as_deref(),
+                at: at.as_deref(),
+                chunks: *chunks,
+            },
+        )),
         Some(Cmd::Examples {
             source_type,
             append: Some(config),
@@ -634,6 +672,7 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
+        Some(Cmd::IndexText { .. }) => unreachable!("index-text is answered in main"),
         Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
         Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
