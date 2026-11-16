@@ -299,7 +299,7 @@ onBeforeUnmount(() => {
 });
 
 watch(layout, (l) => {
-  if (bundle) bundle.columnDefinitions = l.columns;
+  if (bundle) bundle.columns = l.columns;
 });
 watch(shown, (rows) => {
   if (!bundle) return;

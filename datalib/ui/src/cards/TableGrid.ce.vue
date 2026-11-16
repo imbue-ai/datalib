@@ -32,7 +32,6 @@ import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
-import { hoverWholeRow } from "@/grid/rowHover";
 import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
@@ -250,12 +249,11 @@ function buildColumns(): Column<T>[] {
     onMembership: props.membership,
     overrides: props.columnOverrides,
     chips: props.chips,
-  }).map((c, i) =>
-    // A pinned column hidden would unpin the one after it.
-    i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
-  );
+  }).map((c, i) => (i < props.pinnedColumns ? pinned(c) : c));
+  const grip = props.movable ? [gripColumn()] : [];
   return [
-    ...(props.movable ? [gripColumn()] : []),
+    // The grip, when there is one, is pinned with them.
+    ...(props.pinnedColumns > 0 ? grip.map(pinned) : grip),
     ...typed,
     {
       id: ORDER,
@@ -268,6 +266,12 @@ function buildColumns(): Column<T>[] {
       excludeFromColumnPicker: true,
     },
   ];
+}
+
+/// Held at the left edge while the rest scrolls, and always shown: the
+/// columns a person finds a row by.
+function pinned(c: Column<T>): Column<T> {
+  return { ...c, pinned: "left", excludeFromColumnPicker: true, reorderable: false };
 }
 
 /// The handle a movable row is dragged by. The drag is ours
@@ -445,12 +449,9 @@ function options(): GridOption {
     // declare some hidden until asked for.
     enableColumnPicker: true,
     columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
-    // The grip, when there is one, is pinned with them.
-    frozenColumn: props.pinnedColumns > 0 ? props.pinnedColumns - (props.movable ? 0 : 1) : -1,
-    // A box narrower than the pinned columns scrolls them with the rest;
-    // the grid's own answer to that is an alert().
-    invalidColumnFreezeWidthCallback: () =>
-      console.warn("TableGrid: too narrow to pin columns; they scroll with the rest"),
+    // The grid's own answer to a box narrower than the pinned columns
+    // is an alert().
+    errorCallback: (msg) => console.warn(`TableGrid: ${msg}`),
     // Folding a tree row goes through the grid's filters, so filtering
     // is on; nothing here is filterable, and the filter row stays hidden.
     enableFiltering: true,
@@ -480,7 +481,6 @@ function options(): GridOption {
       // The menu stays put while the grid scrolls: the scroll that
       // brought a row into view can report after the click on it.
       hideMenuOnScroll: false,
-      hideCopyCellValueCommand: true,
       hideCommands: ["copy", "clear-grouping", "collapse-all-groups", "expand-all-groups"],
       ...menuSlots(24, entriesFor),
     },
@@ -630,7 +630,6 @@ function createGrid() {
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
-  hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
   b.slickGrid.onDblClick.subscribe(onDblClick);
@@ -691,8 +690,7 @@ watch(
     const next = JSON.stringify(columns);
     if (next === declared) return;
     declared = next;
-    if (bundle)
-      bundle.columnDefinitions = carryLayout(buildColumns(), bundle.slickGrid.getColumns());
+    if (bundle) bundle.columns = carryLayout(buildColumns(), bundle.slickGrid.getColumns());
     else createGrid();
   },
 );

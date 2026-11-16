@@ -421,9 +421,8 @@ test("a cell's right-click copies the cell as it reads", async ({ page }) => {
 
 // Grouping goes through the panel's `__fwRunLogApi.groupBy`, which
 // calls the plugin's own `setDroppedGroups` — the same thing its drop
-// handler calls, and how the Explore grid's spec groups too. The drag
-// itself is SortableJS's native drag-and-drop, and a drag dispatched by
-// hand died inside it on CI's loaded runners at more than one point
+// handler calls, and how the Explore grid's spec groups too. A drag
+// dispatched by hand died on CI's loaded runners at more than one point
 // (the header never entering the bar; the drop never ending the drag),
 // through three rewrites. What is ours — the columns declared
 // groupable, the placeholder, the group row's text, the toggle — is

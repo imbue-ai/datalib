@@ -222,7 +222,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="fetch-only/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]'),
   ).toHaveCount(0);
 
   // A step under a group edits its source: the step row's button opens
@@ -296,7 +296,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="no-render/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
   ).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
@@ -547,12 +547,10 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   );
 
   // The group went with its last step, so its row is gone too.
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/ingest"]'),
-  ).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/render_markdown"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/ingest"]')).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(
+    0,
+  );
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -581,9 +579,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
   );
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key^="whole-group/"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);

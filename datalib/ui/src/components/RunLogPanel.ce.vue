@@ -1079,7 +1079,7 @@ function gridOptions(): GridOption {
       hideMenuOnScroll: false,
       // Ours copies the cell as a copied line has it; the grid's copies
       // the raw field, the whole of `fields` for Source.
-      hideCopyCellValueCommand: true,
+      hideCommands: ["copy"],
       ...menuSlots(28, menuEntries),
     },
   };
@@ -1130,7 +1130,7 @@ function createGrid(first: RunLogLine[]) {
   selectAllRowsOnKey(b.slickGrid, lineAt);
   copySelectedRowsOnKey(b.slickGrid, lineAt, copyCell);
   // What the bar's drop does, without the mouse, for the e2e tests:
-  // a drag dispatched by hand dies inside SortableJS under load, and
+  // a drag dispatched by hand is at the mercy of timing under load, and
   // the grid card exposes the same thing as `__fwGridApi.groupBy`.
   (window as unknown as { __fwRunLogApi?: unknown }).__fwRunLogApi = {
     groupBy: (ids: string[]) => groupingPlugin?.setDroppedGroups(ids),

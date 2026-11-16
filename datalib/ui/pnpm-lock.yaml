@@ -21,14 +21,14 @@ importers:
         specifier: 6.43.15
         version: 6.43.15
       '@slickgrid-universal/common':
-        specifier: 10.11.3
-        version: 10.11.3
+        specifier: 11.0.0
+        version: 11.0.0
       '@slickgrid-universal/event-pub-sub':
-        specifier: 10.10.0
-        version: 10.10.0
+        specifier: 11.0.0
+        version: 11.0.0
       '@slickgrid-universal/vanilla-bundle':
-        specifier: 10.11.3
-        version: 10.11.3
+        specifier: 11.0.0
+        version: 11.0.0
       '@tauri-apps/api':
         specifier: ^2.12.4
         version: 2.12.4
@@ -616,30 +616,30 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@slickgrid-universal/binding@10.11.2':
-    resolution: {integrity: sha512-wxckeGHWyh0PG7qadv/EK1u9t+kmLsHnie1FDRltpmI44H7Ylc2kuw4uddOsIItJwUvlTsDfAlbLRqnsdAbnPA==}
+  '@slickgrid-universal/binding@11.0.0':
+    resolution: {integrity: sha512-GePdzu3ptNivw9QzNhySItkaPvL3P0BVF8xcl0jCNPJfojb1KJ1qS//wBx2tNY3jleff5aonmFc9tmQTZdR9cA==}
 
-  '@slickgrid-universal/common@10.11.3':
-    resolution: {integrity: sha512-vURyq55n8+/B4HKipq84FqW9DlkCTQ28JH7SX+KulMeLYxmzSTwwSYLMqB/UUBecaw5VBGDmDM2MUVOfhYw7qQ==}
+  '@slickgrid-universal/common@11.0.0':
+    resolution: {integrity: sha512-Ph3J/l1B1WSlQ9//JydN3eI67Q1IlKje1/WDfPgyFVoTAmxn6HfKZwd92x1RAAx43UMuYkSD1jB2WLJDDp8EqQ==}
     engines: {node: ^20.0.0 || >=22.0.0}
 
-  '@slickgrid-universal/custom-footer-component@10.11.3':
-    resolution: {integrity: sha512-u4B344fYfhhsRYpwRiA4fKp9qj2tB7wQaHqlb7mS3f78DhJcsvTfi7ndBnChAshNkIkVlalf7gMQcqdN8zZWjw==}
+  '@slickgrid-universal/custom-footer-component@11.0.0':
+    resolution: {integrity: sha512-YIzuFc7gP0H+WA6h9q398qVPX7jKuCChTck02UB20RgdmbYQELmiwyeN3z6Jgn09D1rTjcpAdUf6Bbygx1buqQ==}
 
-  '@slickgrid-universal/empty-warning-component@10.11.3':
-    resolution: {integrity: sha512-mtWUL6GuzT6O9eueb3HXgeY9LUIyPPfsoI2po2g81wegBQz4D9QNPJe5koeA6QPZG2xYhGxQGvcA61pnP8TtMw==}
+  '@slickgrid-universal/empty-warning-component@11.0.0':
+    resolution: {integrity: sha512-3AdBSww54zkRqRGHEsq4kXFAQt85fvMQ5TzU/fxZKdbIITTvOH1rf+2O7KzoUvg2HAgvsrDBi+4Kuz9WlQiguQ==}
 
-  '@slickgrid-universal/event-pub-sub@10.10.0':
-    resolution: {integrity: sha512-FKCTlV272lUNolIYeYYPggE3ducmmUeD+pxvHd+pCb1885080drQIr+k5wd+Q1eZj2P7BrlPKFEVF79ZL0QUmA==}
+  '@slickgrid-universal/event-pub-sub@11.0.0':
+    resolution: {integrity: sha512-mThHVdU/vHmlB6uGjCAlg2kRAqI5lwO9+wMpFg9Dz5ku4lZYk5CFm7Lq9+Q6aFfOfeWx+bWy5Ho3qmRIpPTucQ==}
 
-  '@slickgrid-universal/pagination-component@10.11.3':
-    resolution: {integrity: sha512-3QTbRokIFZgpRONXP9MJfE4YKVsnXS4MVq6Avz1yKCey5XuFepq17MUcs+cUaQip3GHMeWQIorT2gtGrxzHSDw==}
+  '@slickgrid-universal/pagination-component@11.0.0':
+    resolution: {integrity: sha512-yWt/GxZJpQB+1pfEE0n7qoMwi+L3rsYwHK0SdX6XDRKA7EV76j51RDiC+OZYax8T7uftdDsEbCRs+XGFCqOtaQ==}
 
-  '@slickgrid-universal/utils@10.10.0':
-    resolution: {integrity: sha512-Qwiv7Dl2O7qsV59WdSJjKpOzNZQpYwKJupJfdd/ru0gkEG3aD2Q0njA2hw0m+nhuQcLME+vbrMuMMnMsuQEwfw==}
+  '@slickgrid-universal/utils@11.0.0':
+    resolution: {integrity: sha512-ozi8vY/fQ2KkAnDy32gM98AhxSx4cWllmInWFN1DeXlzh1UX7yFHzrHbKrYSnJBuknQNMGFBO51cj9RzPxWPZQ==}
 
-  '@slickgrid-universal/vanilla-bundle@10.11.3':
-    resolution: {integrity: sha512-YhIfW+liuSOyoFN7J81FujuDnuRl0pzUtJQcOtmLgUfBSnwGIWOOdh3LGTHOaDeizRo2fiztqdyA4HpEHCP88g==}
+  '@slickgrid-universal/vanilla-bundle@11.0.0':
+    resolution: {integrity: sha512-EWoQme/oxCd+fmsgdofsUqOT5hzFmn9BKg5j8i7PE5e2DAUqnMVHrSz9IIICQwzp4zp0EAJvTjahjQIx++CWLA==}
 
   '@tauri-apps/api@2.12.4':
     resolution: {integrity: sha512-pVmfis+4zT8H0Qhp3xPZx9Ju7kpzvA6rr/PSJPyuwfvucTQ8sVt61NYU9KMkK703UFlYadFmjKA4HhybOtN0gg==}
@@ -664,9 +664,6 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
-
-  '@types/sortablejs@1.15.9':
-    resolution: {integrity: sha512-7HP+rZGE2p886PKV9c9OJzLBI6BBJu1O7lJGYnPyG3fS4/duUCcngkNCjsLwIMV+WMqANe3tt4irrXHSIe68OQ==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
@@ -1215,9 +1212,6 @@ packages:
     resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
     engines: {node: '>=10'}
     hasBin: true
-
-  sortablejs@1.15.7:
-    resolution: {integrity: sha512-Kk8wLQPlS+yi1ZEf48a4+fzHa4yxjC30M/Sr2AnQu+f/MPwvvX9XjZ6OWejiz8crBsLwSq8GHqaxaET7u6ux0A==}
 
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
@@ -1833,53 +1827,51 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.4':
     optional: true
 
-  '@slickgrid-universal/binding@10.11.2': {}
+  '@slickgrid-universal/binding@11.0.0': {}
 
-  '@slickgrid-universal/common@10.11.3':
+  '@slickgrid-universal/common@11.0.0':
     dependencies:
       '@excel-builder-vanilla/types': 5.3.1
       '@formkit/tempo': 1.1.0
-      '@slickgrid-universal/binding': 10.11.2
-      '@slickgrid-universal/event-pub-sub': 10.10.0
-      '@slickgrid-universal/utils': 10.10.0
-      '@types/sortablejs': 1.15.9
+      '@slickgrid-universal/binding': 11.0.0
+      '@slickgrid-universal/event-pub-sub': 11.0.0
+      '@slickgrid-universal/utils': 11.0.0
       '@types/trusted-types': 2.0.7
       autocompleter: 10.0.0
       dequal: 2.0.3
       multiple-select-vanilla: 5.2.6
-      sortablejs: 1.15.7
       vanilla-calendar-pro: 3.4.0
 
-  '@slickgrid-universal/custom-footer-component@10.11.3':
+  '@slickgrid-universal/custom-footer-component@11.0.0':
     dependencies:
       '@formkit/tempo': 1.1.0
-      '@slickgrid-universal/binding': 10.11.2
-      '@slickgrid-universal/common': 10.11.3
+      '@slickgrid-universal/binding': 11.0.0
+      '@slickgrid-universal/common': 11.0.0
 
-  '@slickgrid-universal/empty-warning-component@10.11.3':
+  '@slickgrid-universal/empty-warning-component@11.0.0':
     dependencies:
-      '@slickgrid-universal/common': 10.11.3
+      '@slickgrid-universal/common': 11.0.0
 
-  '@slickgrid-universal/event-pub-sub@10.10.0':
+  '@slickgrid-universal/event-pub-sub@11.0.0':
     dependencies:
-      '@slickgrid-universal/utils': 10.10.0
+      '@slickgrid-universal/utils': 11.0.0
 
-  '@slickgrid-universal/pagination-component@10.11.3':
+  '@slickgrid-universal/pagination-component@11.0.0':
     dependencies:
-      '@slickgrid-universal/binding': 10.11.2
-      '@slickgrid-universal/common': 10.11.3
+      '@slickgrid-universal/binding': 11.0.0
+      '@slickgrid-universal/common': 11.0.0
 
-  '@slickgrid-universal/utils@10.10.0': {}
+  '@slickgrid-universal/utils@11.0.0': {}
 
-  '@slickgrid-universal/vanilla-bundle@10.11.3':
+  '@slickgrid-universal/vanilla-bundle@11.0.0':
     dependencies:
-      '@slickgrid-universal/binding': 10.11.2
-      '@slickgrid-universal/common': 10.11.3
-      '@slickgrid-universal/custom-footer-component': 10.11.3
-      '@slickgrid-universal/empty-warning-component': 10.11.3
-      '@slickgrid-universal/event-pub-sub': 10.10.0
-      '@slickgrid-universal/pagination-component': 10.11.3
-      '@slickgrid-universal/utils': 10.10.0
+      '@slickgrid-universal/binding': 11.0.0
+      '@slickgrid-universal/common': 11.0.0
+      '@slickgrid-universal/custom-footer-component': 11.0.0
+      '@slickgrid-universal/empty-warning-component': 11.0.0
+      '@slickgrid-universal/event-pub-sub': 11.0.0
+      '@slickgrid-universal/pagination-component': 11.0.0
+      '@slickgrid-universal/utils': 11.0.0
       dequal: 2.0.3
 
   '@tauri-apps/api@2.12.4': {}
@@ -1908,8 +1900,6 @@ snapshots:
     optional: true
 
   '@types/estree@1.0.9': {}
-
-  '@types/sortablejs@1.15.9': {}
 
   '@types/trusted-types@2.0.7': {}
 
@@ -2504,8 +2494,6 @@ snapshots:
   scule@1.3.0: {}
 
   semver@7.7.4: {}
-
-  sortablejs@1.15.7: {}
 
   source-map-js@1.2.2: {}
 

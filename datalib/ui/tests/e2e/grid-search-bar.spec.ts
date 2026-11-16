@@ -75,6 +75,18 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
 });
 
+/// The drop itself: a header dragged with the mouse onto the row above
+/// the results, which stands in for the toolbar's search box. The grid
+/// drags headers with the browser's own drag-and-drop, and the row takes
+/// a drag only while one of this grid's headers is on the move.
+test("a header dragged onto the search row becomes a term", async ({ page }) => {
+  await openGrid(page);
+  await searchHeader(page, "author_ref").dragTo(page.locator(".view-row"));
+  await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
+  // The column is still in the grid, where it was.
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
+});
+
 /// Every column but Score and Contents has a search key, so a cell's
 /// right-click can keep only its value: here Touched, a stamp.
 test("a cell's right-click keeps only its value, in any column", async ({ page }) => {

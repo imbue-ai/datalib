@@ -292,11 +292,8 @@ export async function searchAndSettle(
 
 /// The rows of any `TableGrid` on the page — the Manage tree, the
 /// commit history — scoped by a caller that has more than one open.
-/// A grid with pinned columns draws each row in two halves; this is the
-/// half that scrolls, which holds every cell but the pinned Name
-/// (`nameCell`), so a row is still one element.
-export const TABLE_ROWS = ".tg-grid .slick-row:not([data-pinned])";
-/// A row's Name cell, in whichever half of the row the grid draws it.
+export const TABLE_ROWS = ".tg-grid .slick-row";
+/// A row's Name cell.
 export const nameCell = (page: Page, key: string) =>
   page.locator(`.tg-grid .slick-row[data-key="${key}"] [col-id="name"]`);
 /// The right-click menu the grid appends to <body>, and its entries.
