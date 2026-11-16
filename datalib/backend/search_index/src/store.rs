@@ -18,11 +18,16 @@ use sqlx::SqliteConnection;
 use crate::IndexDoc;
 
 const DDL: [&str; 7] = [
+    // `conversation`: its pieces are messages, each its own utterance, so a
+    // word search needs one to hold every word; otherwise it is a page,
+    // whose pieces are parts of one thing and may hold the words between
+    // them.
     "CREATE TABLE IF NOT EXISTS search_documents (
         doc_id INTEGER PRIMARY KEY,
         source_id TEXT NOT NULL,
         markdown_uuid TEXT NOT NULL UNIQUE,
-        content_hash TEXT NOT NULL
+        content_hash TEXT NOT NULL,
+        conversation INTEGER NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS search_documents_by_source ON search_documents (source_id)",
     "CREATE TABLE IF NOT EXISTS search_sections (
@@ -74,8 +79,8 @@ pub const PUT_BYTES: usize = 1 << 20;
 /// the file the grid index's step is waiting on.
 const REMOVE_BATCH: usize = 500;
 
-#[cfg(test)]
-fn schema_hash() -> String {
+/// The shape of the index's tables, as its `_datalib_meta` part records it.
+pub(crate) fn shape() -> String {
     datalib_store_meta::schema_hash(DDL)
 }
 
@@ -277,26 +282,27 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
         Some((doc_id, _, _)) => {
             clear(conn, &[doc_id]).await?;
             sqlx::query(
-                "UPDATE search_documents SET source_id = ?, content_hash = ? WHERE doc_id = ?",
+                "UPDATE search_documents SET source_id = ?, content_hash = ?, conversation = ? \
+                 WHERE doc_id = ?",
             )
             .bind(&doc.source_id)
             .bind(&doc.content_hash)
+            .bind(doc.is_conversation())
             .bind(doc_id)
             .execute(&mut *conn)
             .await?;
             doc_id
         }
-        None => {
-            sqlx::query_scalar(
-                "INSERT INTO search_documents (source_id, markdown_uuid, content_hash) \
-                 VALUES (?, ?, ?) RETURNING doc_id",
-            )
-            .bind(&doc.source_id)
-            .bind(&doc.markdown_uuid)
-            .bind(&doc.content_hash)
-            .fetch_one(&mut *conn)
-            .await?
-        }
+        None => sqlx::query_scalar(
+            "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation) \
+                 VALUES (?, ?, ?, ?) RETURNING doc_id",
+        )
+        .bind(&doc.source_id)
+        .bind(&doc.markdown_uuid)
+        .bind(&doc.content_hash)
+        .bind(doc.is_conversation())
+        .fetch_one(&mut *conn)
+        .await?,
     };
 
     let sections = doc.sections_or_one();
