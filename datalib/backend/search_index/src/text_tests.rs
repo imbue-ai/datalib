@@ -61,7 +61,32 @@ fn golden() -> Vec<Piece> {
         },
         item("Geordi La Forge", "2026-03-05T08:00:00-05:00", "   "),
         item("Wesley Crusher", "stardate 47457.1", "Sir?"),
+        sender_named_with_address(),
     ]
+}
+
+/// An email's sender as the email render names them: as `From:` reads,
+/// address and all.
+fn sender_named_with_address() -> Piece {
+    let mut p = item(
+        "Beverly Crusher <Crusher@Enterprise.starfleet>",
+        "2026-03-06T07:30:00-08:00",
+        "Sickbay is ready.",
+    );
+    p.author_handle = Some("email:crusher@enterprise.starfleet".into());
+    p
+}
+
+/// A sender whose name already carries their address was drawn with it
+/// twice, `Beverly Crusher <crusher@…> <crusher@…>`, in every chunk of
+/// their mail.
+#[test]
+fn a_name_that_carries_its_address_names_it_once() {
+    let drawn = draw(&[sender_named_with_address()]);
+    assert_eq!(
+        drawn[0].lead.as_deref(),
+        Some("Beverly Crusher <Crusher@Enterprise.starfleet> — Fri 6 Mar 2026 07:30")
+    );
 }
 
 fn drawn_golden() -> String {
@@ -82,6 +107,10 @@ const DRAWN: &[(u32, &str)] = &[
     (
         2,
         "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
+    ),
+    (
+        3,
+        "4f89acbbbfb514fefb9b523fbe5eb6e55db339e747b6560d6ee0151aa62f1d31",
     ),
 ];
 
