@@ -191,6 +191,21 @@ rust_test(
     ],
 )
 
+# Rewrites the fixture's index-text goldens (tests/step_tests/snapshots/).
+insta_update(
+    name = "index_text.update",
+    extra_data = [
+        ":datalib_step",
+        "//tests/fixtures:ingested/qmd.tar",
+    ],
+    extra_env = {
+        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+        "INGESTED_QMD_TAR": "$(rootpath //tests/fixtures:ingested/qmd.tar)",
+    },
+    test = ":step_tests",
+    test_args = ["every_sources_index_text_is_this"],
+)
+
 # Rewrites raw_shapes/current.json: the raw-store shape every source type
 # has in this tree, which `migrate.rs` checks and a release copies forward.
 insta_update(
@@ -222,12 +237,13 @@ rust_test(
     name = "step_tests",
     srcs = glob(["tests/step_tests/*.rs"]),
     crate_root = "tests/step_tests/main.rs",
-    data = [
+    data = glob(["tests/step_tests/snapshots/*.snap"], allow_empty = True) + [
         ":datalib_step",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/inference_cache.sqlite",
+        "//tests/fixtures:ingested/qmd.tar",
         "//tests/fixtures:ingested/search_index.sqlite",
         "//third-party/doltlite:doltlite",
     ],
@@ -237,6 +253,8 @@ rust_test(
         "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "INGESTED_QMD_TAR": "$(rootpath //tests/fixtures:ingested/qmd.tar)",
+        "INSTA_WORKSPACE_ROOT": ".",
         "SEARCH_INDEX_CACHE": "$(rootpath //tests/fixtures:ingested/inference_cache.sqlite)",
         "SEARCH_INDEX_GRID": "$(rootpath //tests/fixtures:ingested/search_index.sqlite)",
         "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
@@ -247,6 +265,7 @@ rust_test(
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:flate2",
+        "@datalib_crates//:insta",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",

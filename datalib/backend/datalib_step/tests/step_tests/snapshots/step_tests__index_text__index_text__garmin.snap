@@ -1,0 +1,342 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== garmin 00000000-0000-80b6-a0f6-2a808ceb34db Daily log — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-80b6-a0f6-2a808ceb34db
+source_id: garmin
+provider: garmin
+title: "Daily log — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-80b6-a0f6-2a808ceb34db">Daily log — Jean-Luc Picard</h1>
+
+--- 00000000-0000-89c1-a2d8-721a560e2b1e
+<div id="m-00000000-0000-89c1-a2d8-721a560e2b1e" data-section-uuid="00000000-0000-89c1-a2d8-721a560e2b1e" class="msg msg--garmin">
+
+### <time datetime="2369-04-14">Mon Apr 14th, 2369</time>
+
+- **Sleep:** Sleep score 84 · Asleep 7 h 20 min · Deep 1 h 30 min · Light 4 h 10 min · REM 1 h 30 min · Awake 10 min
+- **Heart rate and HRV:** Resting HR 48 bpm · Min HR 44 bpm · Max HR 171 bpm · HRV last night 61 ms · HRV 7-day avg 58 ms · HRV status balanced
+- **Stress and Body Battery:** Avg stress 29 · Body Battery high 94 · Body Battery low 18
+- **Steps and activity:** Steps 14,872 · Floors 22 · Total calories 2,980 kcal
+
+</div>
+
+--- 00000000-0000-8272-b240-6bc269fe64ce
+<div id="m-00000000-0000-8272-b240-6bc269fe64ce" data-section-uuid="00000000-0000-8272-b240-6bc269fe64ce" class="msg msg--garmin">
+
+### <time datetime="2369-04-13">Sun Apr 13th, 2369</time>
+
+- **Heart rate and HRV:** Resting HR 49 bpm · Min HR 45 bpm · Max HR 162 bpm
+- **Stress and Body Battery:** Avg stress 24 · Body Battery high 96 · Body Battery low 31
+- **Steps and activity:** Steps 9,120 · Floors 14 · Total calories 2,410 kcal
+
+</div>
+
+=== garmin 00000000-0000-81f8-a7be-7bc669836792 Records and badges — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-81f8-a7be-7bc669836792
+source_id: garmin
+provider: garmin
+title: "Records and badges — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-81f8-a7be-7bc669836792">Records and badges — Jean-Luc Picard</h1>
+
+## Personal records
+
+--- 00000000-0000-8252-8e49-2a5eea9170ce
+<div id="m-00000000-0000-8252-8e49-2a5eea9170ce" data-section-uuid="00000000-0000-8252-8e49-2a5eea9170ce" class="msg msg--garmin">
+
+**Fastest 5 km** · 21:30 · Running · in Holodeck run: Dixon Hill
+
+</div>
+
+--- -
+## Badges
+
+--- 00000000-0000-8787-a9bf-fa3ecd707a65
+<div id="m-00000000-0000-8787-a9bf-fa3ecd707a65" data-section-uuid="00000000-0000-8787-a9bf-fa3ecd707a65" class="msg msg--garmin">
+
+**First Marathon** · earned 2368-11-02
+
+</div>
+
+--- -
+## Gear
+
+--- 00000000-0000-8b30-a5d1-49daa3109a69
+<div id="m-00000000-0000-8b30-a5d1-49daa3109a69" data-section-uuid="00000000-0000-8b30-a5d1-49daa3109a69" class="msg msg--garmin">
+
+**Starfleet issue trainers** · Shoes · retire at 800 km
+
+</div>
+
+--- -
+## Workouts
+
+--- 00000000-0000-8459-bfbf-509cece0e740
+<div id="m-00000000-0000-8459-bfbf-509cece0e740" data-section-uuid="00000000-0000-8459-bfbf-509cece0e740" class="msg msg--garmin">
+
+**Tempo intervals** · Running · about 45:00
+
+</div>
+
+=== garmin 00000000-0000-8268-9462-873bc68da239 Steps and activity — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-8268-9462-873bc68da239
+source_id: garmin
+provider: garmin
+title: "Steps and activity — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8268-9462-873bc68da239">Steps and activity — Jean-Luc Picard</h1>
+
+**<time datetime="2369-04-14">Mon Apr 14th, 2369</time>:** Steps 14,872 · Floors 22 · Total calories 2,980 kcal
+
+<div class="time-series-chart" data-time-series="00000000-0000-87d5-9f21-29e4c04f3603"></div>
+
+<div class="time-series-chart" data-time-series="00000000-0000-84a3-81ca-d1d0ecfce2f5"></div>
+
+<div class="time-series-chart" data-time-series="00000000-0000-8871-ba5d-c86e8a90fb34"></div>
+
+### Latest 2 days
+
+| Day | Steps | Floors | Total calories (kcal) |
+| --- | ---: | ---: | ---: |
+| <time datetime="2369-04-14">Mon Apr 14th, 2369</time> | 14,872 | 22 | 2,980 |
+| <time datetime="2369-04-13">Sun Apr 13th, 2369</time> | 9,120 | 14 | 2,410 |
+
+=== garmin 00000000-0000-8622-be12-22e5f6631ff8 Heart rate and HRV — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-8622-be12-22e5f6631ff8
+source_id: garmin
+provider: garmin
+title: "Heart rate and HRV — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8622-be12-22e5f6631ff8">Heart rate and HRV — Jean-Luc Picard</h1>
+
+**<time datetime="2369-04-14">Mon Apr 14th, 2369</time>:** Resting HR 48 bpm · Min HR 44 bpm · Max HR 171 bpm · HRV last night 61 ms · HRV 7-day avg 58 ms · HRV status balanced
+
+<div class="time-series-chart" data-time-series="00000000-0000-8f6a-b002-2a252740fb8b 00000000-0000-895a-ada2-13c601adbefe 00000000-0000-89fb-9167-4d1feb4a6cf8"></div>
+
+<div class="time-series-chart" data-time-series="00000000-0000-8029-823f-72961ee8a206 00000000-0000-86c7-b3b0-6e76c83cad3b"></div>
+
+### Latest 2 days
+
+| Day | Resting HR (bpm) | Min HR (bpm) | Max HR (bpm) | HRV last night (ms) | HRV 7-day avg (ms) | HRV status |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| <time datetime="2369-04-14">Mon Apr 14th, 2369</time> | 48 | 44 | 171 | 61 | 58 | balanced |
+| <time datetime="2369-04-13">Sun Apr 13th, 2369</time> | 49 | 45 | 162 |  |  |  |
+
+=== garmin 00000000-0000-8baa-bdd0-2e59fe76cde5 Stress and Body Battery — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-8baa-bdd0-2e59fe76cde5
+source_id: garmin
+provider: garmin
+title: "Stress and Body Battery — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8baa-bdd0-2e59fe76cde5">Stress and Body Battery — Jean-Luc Picard</h1>
+
+**<time datetime="2369-04-14">Mon Apr 14th, 2369</time>:** Avg stress 29 · Body Battery high 94 · Body Battery low 18
+
+<div class="time-series-chart" data-time-series="00000000-0000-82cc-b2e5-835c6d7bb134 00000000-0000-87b3-82dc-52c695c61010 00000000-0000-8232-a935-6eb82e10a28d"></div>
+
+### Latest 2 days
+
+| Day | Avg stress | Body Battery high | Body Battery low |
+| --- | ---: | ---: | ---: |
+| <time datetime="2369-04-14">Mon Apr 14th, 2369</time> | 29 | 94 | 18 |
+| <time datetime="2369-04-13">Sun Apr 13th, 2369</time> | 24 | 96 | 31 |
+
+=== garmin 00000000-0000-8d0c-bb0a-d0b7f450753a Garmin — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-8d0c-bb0a-d0b7f450753a
+source_id: garmin
+provider: garmin
+title: "Garmin — Jean-Luc Picard"
+created_at: "2369-04-14T06:45:00+00:00"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8d0c-bb0a-d0b7f450753a">Garmin — Jean-Luc Picard</h1>
+
+## Weight
+
+**77.6 kg** on <time datetime="2369-04-14T06:45:00+00:00" title="2369-04-14 06:45:00 UTC">Mon Apr 14th, 2369 at 06:45</time> · 4 weigh-ins since <time datetime="2369-04-02T06:45:00+00:00" title="2369-04-02 06:45:00 UTC">Wed Apr 2nd, 2369 at 06:45</time> · 14.6 % body fat.
+
+<div class="time-series-chart" data-time-series="00000000-0000-8b80-97c8-dd453a6dd73f 00000000-0000-8521-b570-e640c955b449"></div>
+
+### Latest 4 weigh-ins
+
+| When | kg | BMI | Body fat | Source |
+| --- | ---: | ---: | ---: | --- |
+| <time datetime="2369-04-14T06:45:00+00:00" title="2369-04-14 06:45:00 UTC">Mon Apr 14th, 2369 at 06:45</time> | 77.6 | 24.5 | 14.6 % | MANUAL |
+| <time datetime="2369-04-09T06:45:00+00:00" title="2369-04-09 06:45:00 UTC">Wed Apr 9th, 2369 at 06:45</time> | 77.9 | 24.6 | 14.8 % | INDEX_SCALE |
+| <time datetime="2369-04-05T06:45:00+00:00" title="2369-04-05 06:45:00 UTC">Sat Apr 5th, 2369 at 06:45</time> | 78.1 | 24.6 | 15.0 % | INDEX_SCALE |
+| <time datetime="2369-04-02T06:45:00+00:00" title="2369-04-02 06:45:00 UTC">Wed Apr 2nd, 2369 at 06:45</time> | 78.4 | 24.7 | 15.2 % | INDEX_SCALE |
+
+## Devices
+
+--- 00000000-0000-8909-ae68-923b6b55ace2
+<div id="m-00000000-0000-8909-ae68-923b6b55ace2" data-section-uuid="00000000-0000-8909-ae68-923b6b55ace2" class="msg msg--garmin">
+
+### Forerunner 265
+
+*device 3654926501 · last synced 2369-04-15T05:12:44.0*
+
+</div>
+
+--- -
+## Store
+
+| | |
+| --- | --- |
+| Weigh-ins | 4 |
+| Activities | 2 |
+| Activity FIT files | 2 |
+| Account listings (records, gear, badges, workouts, goals) | 4 |
+
+### Per-day metrics
+
+| Metric | Days walked | Days with data |
+| --- | ---: | ---: |
+| `body_battery` | 15 | 0 |
+| `body_battery_events` | 15 | 0 |
+| `daily_events` | 15 | 0 |
+| `daily_summary` | 15 | 2 |
+| `endurance_score` | 15 | 0 |
+| `fitness_age` | 15 | 0 |
+| `floors` | 15 | 0 |
+| `heart_rate` | 15 | 1 |
+| `hill_score` | 15 | 0 |
+| `hrv` | 15 | 1 |
+| `hydration` | 15 | 0 |
+| `intensity_minutes` | 15 | 0 |
+| `max_metrics` | 15 | 0 |
+| `respiration` | 15 | 0 |
+| `sleep` | 15 | 1 |
+| `spo2` | 15 | 0 |
+| `steps_chart` | 15 | 0 |
+| `stress` | 15 | 0 |
+| `training_readiness` | 15 | 0 |
+| `training_status` | 15 | 0 |
+
+=== garmin 00000000-0000-8d3d-b49f-91db8d6251f4 garmin storage
+--- -
+---
+title: garmin storage
+source: garmin
+measured_at: 2369-04-15T00:00:00+00:00
+---
+
+# [garmin](datalib:group/garmin "garmin") — storage
+
+Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+
+| Kind | Step | What | Size | Count | Id |
+|---|---|---|---|---|---|
+| Source Size | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest` | <size> | 3 files | <span id="m-00000000-0000-8d3d-b49f-91db8d6251f4" data-section-uuid="00000000-0000-8d3d-b49f-91db8d6251f4">`00000000`</span> |
+| Store | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8697-a5fe-0c732cc4b82e" data-section-uuid="00000000-0000-8697-a5fe-0c732cc4b82e">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/blobs.sqlite#cas_objects` |  | 2 rows | <span id="m-00000000-0000-859e-8398-92c7dc18e553" data-section-uuid="00000000-0000-859e-8398-92c7dc18e553">`00000000`</span> |
+| Store | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8788-9340-8adc4d8b5b8f" data-section-uuid="00000000-0000-8788-9340-8adc4d8b5b8f">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#coverage` |  | 1 row | <span id="m-00000000-0000-8353-bff2-e55b96fd60ee" data-section-uuid="00000000-0000-8353-bff2-e55b96fd60ee">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_account` |  | 2 rows | <span id="m-00000000-0000-8521-8b08-d6e023aecf55" data-section-uuid="00000000-0000-8521-8b08-d6e023aecf55">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_activities` |  | 2 rows | <span id="m-00000000-0000-8799-a410-f6f0995f583c" data-section-uuid="00000000-0000-8799-a410-f6f0995f583c">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_activity_details` |  | 2 rows | <span id="m-00000000-0000-85e5-a351-bff32afd8afb" data-section-uuid="00000000-0000-85e5-a351-bff32afd8afb">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_activity_files` |  | 2 rows | <span id="m-00000000-0000-8452-8ca7-83e5c02556a8" data-section-uuid="00000000-0000-8452-8ca7-83e5c02556a8">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_daily` |  | 300 rows | <span id="m-00000000-0000-8ec5-ba58-7d71508a97bc" data-section-uuid="00000000-0000-8ec5-ba58-7d71508a97bc">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_devices` |  | 1 row | <span id="m-00000000-0000-8bcb-b878-879371742cc9" data-section-uuid="00000000-0000-8bcb-b878-879371742cc9">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_items` |  | 4 rows | <span id="m-00000000-0000-8c90-9980-e0cd04a8618c" data-section-uuid="00000000-0000-8c90-9980-e0cd04a8618c">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_weigh_ins` |  | 4 rows | <span id="m-00000000-0000-80b4-bd14-63b4444a5153" data-section-uuid="00000000-0000-80b4-bd14-63b4444a5153">`00000000`</span> |
+| Table | [ingest](datalib:step/garmin/ingest "garmin/ingest") | `garmin/ingest/entities.doltlite_db#garmin_wellness_files` |  | 0 rows | <span id="m-00000000-0000-87be-8652-6f23dd432ddf" data-section-uuid="00000000-0000-87be-8652-6f23dd432ddf">`00000000`</span> |
+
+=== garmin 00000000-0000-8f72-b9b8-d48cd967b0a8 Sleep — Jean-Luc Picard
+--- -
+---
+markdown_uuid: 00000000-0000-8f72-b9b8-d48cd967b0a8
+source_id: garmin
+provider: garmin
+title: "Sleep — Jean-Luc Picard"
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8f72-b9b8-d48cd967b0a8">Sleep — Jean-Luc Picard</h1>
+
+**<time datetime="2369-04-14">Mon Apr 14th, 2369</time>:** Sleep score 84 · Asleep 7 h 20 min · Deep 1 h 30 min · Light 4 h 10 min · REM 1 h 30 min · Awake 10 min
+
+<div class="time-series-chart" data-time-series="00000000-0000-84ca-8547-9461f1f0cf71"></div>
+
+<div class="time-series-chart" data-time-series="00000000-0000-8945-84b0-4b6499195a14 00000000-0000-80a4-be3b-7798cfaddcd4 00000000-0000-86b7-b43c-a988ee6b970c 00000000-0000-8a01-8988-59ab39606e53 00000000-0000-89f9-878b-a8819c03aa7e"></div>
+
+### Latest 1 days
+
+| Day | Sleep score | Asleep (h:mm) | Deep (h:mm) | Light (h:mm) | REM (h:mm) | Awake (h:mm) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| <time datetime="2369-04-14">Mon Apr 14th, 2369</time> | 84 | 7:20 | 1:30 | 4:10 | 1:30 | 0:10 |
+
+=== garmin 0b75af5a-2640-8ac4-895d-bc5b29c8a0e7 Holodeck run: Dixon Hill
+--- -
+---
+markdown_uuid: 0b75af5a-2640-8ac4-895d-bc5b29c8a0e7
+source_id: garmin
+provider: garmin
+title: "Holodeck run: Dixon Hill"
+created_at: "2369-04-13T06:30:00+00:00"
+---
+
+<h1 class="page-title" data-page-title-uuid="0b75af5a-2640-8ac4-895d-bc5b29c8a0e7">Holodeck run: Dixon Hill</h1>
+
+<div class="time-series-chart" data-time-series="00000000-0000-8181-999c-2bc19217cca2 00000000-0000-81bb-aaed-6e878d04445a 00000000-0000-8ead-84e3-cd1f46b4298e"></div>
+
+| | |
+| --- | --- |
+| Type | Running |
+| Start | <time datetime="2369-04-13T06:30:00+00:00" title="2369-04-13 06:30:00 UTC">Sun Apr 13th, 2369 at 06:30</time> |
+| Distance | 8.05 km |
+| Duration | 40:12 |
+| Pace | 5:00 /km |
+| Avg HR | 148 bpm |
+| Max HR | 171 bpm |
+| Calories | 612 kcal |
+| Aerobic training effect | 3.4 |
+| Device | Forerunner 265 |
+| Original FIT file | kept |
+| Garmin activity id | 17010413001 |
+
+=== garmin 0b75b6c5-de60-825f-9377-d4c871ea50f0 Cycling: Deck 12 to Engineering
+--- -
+---
+markdown_uuid: 0b75b6c5-de60-825f-9377-d4c871ea50f0
+source_id: garmin
+provider: garmin
+title: "Cycling: Deck 12 to Engineering"
+created_at: "2369-04-14T17:05:00+00:00"
+---
+
+<h1 class="page-title" data-page-title-uuid="0b75b6c5-de60-825f-9377-d4c871ea50f0">Cycling: Deck 12 to Engineering</h1>
+
+<div class="time-series-chart" data-time-series="00000000-0000-862b-89ac-645233319db6 00000000-0000-87c7-97d8-6b412dbdc952 00000000-0000-86eb-a542-19851946bd33"></div>
+
+| | |
+| --- | --- |
+| Type | Cycling |
+| Start | <time datetime="2369-04-14T17:05:00+00:00" title="2369-04-14 17:05:00 UTC">Mon Apr 14th, 2369 at 17:05</time> |
+| Distance | 24.14 km |
+| Duration | 1:00:00 |
+| Pace | 24.1 km/h |
+| Avg HR | 131 bpm |
+| Max HR | 158 bpm |
+| Calories | 780 kcal |
+| Aerobic training effect | 2.9 |
+| Device | Forerunner 265 |
+| Original FIT file | kept |
+| Garmin activity id | 17010414002 |

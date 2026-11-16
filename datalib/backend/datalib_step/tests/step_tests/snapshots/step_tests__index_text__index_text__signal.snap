@@ -1,0 +1,98 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== signal 00000000-0000-8039-8a5b-241873b9eef9 Will Riker
+--- 0b50e80c-2800-8f70-85bd-9969e3108a8d
+Me — Sat 11 Apr 2364 00:00
+
+Status report.
+
+--- 0b50e80d-1260-8ea5-8bd6-1cd8b82017b0
+Will Riker <+17015550101> — Sat 11 Apr 2364 00:01
+
+All decks at green status, Captain.
+
+--- 0b50e814-6560-8ce9-95d3-09adf89d904d
+Me — Sat 11 Apr 2364 00:09
+
+Make it so.
+
+delta-shield.png
+
+=== signal 00000000-0000-8364-9834-5ee3a255888f signal storage
+--- -
+---
+title: signal storage
+source: signal
+measured_at: 2369-04-15T00:00:00+00:00
+---
+
+# [signal](datalib:group/signal "signal") — storage
+
+Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+
+| Kind | Step | What | Size | Count | Id |
+|---|---|---|---|---|---|
+| Source Size | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest` | <size> | 3 files | <span id="m-00000000-0000-8364-9834-5ee3a255888f" data-section-uuid="00000000-0000-8364-9834-5ee3a255888f">`00000000`</span> |
+| Store | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8c47-9b4e-24b8197929c7" data-section-uuid="00000000-0000-8c47-9b4e-24b8197929c7">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/blobs.sqlite#cas_objects` |  | 1 row | <span id="m-00000000-0000-8aa9-9068-5875590d7614" data-section-uuid="00000000-0000-8aa9-9068-5875590d7614">`00000000`</span> |
+| Store | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-82c6-8563-07ed5be3d79a" data-section-uuid="00000000-0000-82c6-8563-07ed5be3d79a">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#account` |  | 0 rows | <span id="m-00000000-0000-8a18-9a9f-6f4772fac079" data-section-uuid="00000000-0000-8a18-9a9f-6f4772fac079">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chat_item_attachments` |  | 1 row | <span id="m-00000000-0000-8a0b-9756-86a62a38b50c" data-section-uuid="00000000-0000-8a0b-9756-86a62a38b50c">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chat_items` |  | 13 rows | <span id="m-00000000-0000-878b-a402-92723d558a31" data-section-uuid="00000000-0000-878b-a402-92723d558a31">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chats` |  | 2 rows | <span id="m-00000000-0000-8694-b1fc-af0d937793ed" data-section-uuid="00000000-0000-8694-b1fc-af0d937793ed">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#ingested_backups` |  | 2 rows | <span id="m-00000000-0000-8630-aec6-7850098ad7d3" data-section-uuid="00000000-0000-8630-aec6-7850098ad7d3">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#read_marks` |  | 10 rows | <span id="m-00000000-0000-868b-920f-4183a5065ff3" data-section-uuid="00000000-0000-868b-920f-4183a5065ff3">`00000000`</span> |
+| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#recipients` |  | 11 rows | <span id="m-00000000-0000-893c-b4fe-cd5e638fdcbf" data-section-uuid="00000000-0000-893c-b4fe-cd5e638fdcbf">`00000000`</span> |
+
+=== signal 00000000-0000-8dcb-b58e-bf4dc9fb57a8 Bridge Crew
+--- 0b50e80d-fcc0-8650-ac5f-b407eafe4e47
+Data Soong <+17015550102> — Sat 11 Apr 2364 00:02
+
+Sensors detect an unidentified vessel.
+
+--- 0b50e80e-e720-8880-956a-7f3fa45b138d
+Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:03
+
+Warp engines online. Ready for your order.
+
+--- 0b50e80f-d180-8e55-b1a3-0e53efb38bba
+Worf Rozhenko <+17015550104> — Sat 11 Apr 2364 00:04
+
+Shields at maximum, Captain.
+
+--- 0b50e810-bbe0-82c5-b5c6-75cdb9268729
+Deanna Troi <+17015550105> — Sat 11 Apr 2364 00:05
+
+I'm sensing a deep curiosity from them.
+
+--- 0b50e811-a640-812c-8e31-ca77b9eafd7e
+Beverly Crusher <+17015550106> — Sat 11 Apr 2364 00:06
+
+Sickbay reports no casualties.
+
+--- 0b50e812-90a0-86e0-a0f9-9be12ee79f0e
+Me — Sat 11 Apr 2364 00:07
+
+Mr. Data, open hailing frequencies.
+
+--- 0b50e813-7b00-827a-9190-3f7719040603
+Data Soong <+17015550102> — Sat 11 Apr 2364 00:08
+
+Hailing frequencies open, sir.
+
+--- 0b50e815-4fc0-8863-b2b2-e0ca7f36eb77
+Q — Sat 11 Apr 2364 00:10
+
+Mon capitaine, you are so predictable.
+
+--- 0b50e816-3a20-8818-ae4c-7286a584c36d
+Guinan — Sat 11 Apr 2364 00:11
+
+@Will Riker, Ten Forward is open, if you need it.
+
+--- 0b50ed26-4f00-88fd-9c49-7189285819ff
+Will Riker <+17015550101> — Sat 11 Apr 2364 23:46
+
+Captain, the new console is online.

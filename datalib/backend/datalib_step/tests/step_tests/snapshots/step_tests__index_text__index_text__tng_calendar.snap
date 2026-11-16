@@ -1,0 +1,368 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_calendar 00000000-0000-80a6-93ad-832002566f74 Warp core maintenance
+--- -
+---
+markdown_uuid: 00000000-0000-80a6-93ad-832002566f74
+source_id: tng_calendar
+provider: calendar
+kind: Recurring Event
+calendar: "Engineering"
+title: "Warp core maintenance"
+external_id: "Engineering#0a1b2c3d4e5f6071829304a5b6c7d8e9@google.com"
+start: 2026-01-06T08:00:00+01:00
+created: "2025-12-20T10:15:00+00:00"
+modified_at: "2025-12-20T10:15:00+00:00"
+---
+
+--- 00000000-0000-80a6-93ad-832002566f74
+<h1 class="page-title" data-page-title-uuid="00000000-0000-80a6-93ad-832002566f74">Warp core maintenance</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-01-06T08:00:00+01:00" title="2026-01-06 08:00:00 +01:00">Tue Jan 6th, 2026 at 08:00</time> – <time datetime="2026-01-06T12:00:00+01:00" title="2026-01-06 12:00:00 +01:00">Tue Jan 6th, 2026 at 12:00</time></span> |
+| Repeats | Monthly on the first Tuesday, 12 times |
+| Where | Main Engineering |
+| Calendar | Engineering |
+| Organizer | [Geordi La Forge](mailto:laforge@enterprise.test "Geordi La Forge <laforge@enterprise.test>") |
+| Added | <time datetime="2025-12-20T10:15:00+00:00" title="2025-12-20 10:15:00 UTC">Sat Dec 20th, 2025 at 10:15</time> |
+| Last changed | <time datetime="2025-12-20T10:15:00+00:00" title="2025-12-20 10:15:00 UTC">Sat Dec 20th, 2025 at 10:15</time> |
+
+## Attendees
+
+| Who | Response |
+| --- | --- |
+| [Geordi La Forge](mailto:laforge@enterprise.test "Geordi La Forge <laforge@enterprise.test>") | Accepted |
+| [Wesley Crusher](mailto:crusher.w@enterprise.test "Wesley Crusher <crusher.w@enterprise.test>") | Accepted |
+| [Main Engineering](mailto:engineering-room@enterprise.test "Main Engineering <engineering-room@enterprise.test>") (room) | Accepted |
+
+## Description
+
+Take the core offline, recalibrate the dilithium matrix.<br>
+Join from the pod: https://meet.enterprise.test/warp-core
+
+## Occurrences
+
+Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
+
+## Links
+
+- [Core checklist.pdf](https://files.enterprise.test/engineering/core-checklist.pdf)
+
+=== tng_calendar 00000000-0000-81a3-9b5c-946dc4b441a8 Starfleet Academy guest lecture: first contact protocols
+--- -
+---
+markdown_uuid: 00000000-0000-81a3-9b5c-946dc4b441a8
+source_id: tng_calendar
+provider: calendar
+kind: Changed Occurrence
+calendar: "Bridge"
+title: "Starfleet Academy guest lecture: first contact protocols"
+external_id: "Bridge#tng-academy-lecture-series@starfleet.test#20261005T210000Z"
+start: 2026-10-05T14:00:00-07:00
+modified_at: "2026-09-15T10:00:00+00:00"
+---
+
+--- 00000000-0000-81a3-9b5c-946dc4b441a8
+<h1 class="page-title" data-page-title-uuid="00000000-0000-81a3-9b5c-946dc4b441a8">Starfleet Academy guest lecture: first contact protocols</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-10-05T14:00:00-07:00" title="2026-10-05 14:00:00 -07:00">Mon Oct 5th, 2026 at 14:00</time> – <time datetime="2026-10-05T15:30:00-07:00" title="2026-10-05 15:30:00 -07:00">Mon Oct 5th, 2026 at 15:30</time></span> |
+| Occurrence of | a series that is not on this calendar, originally <time datetime="2026-10-05T14:00:00-07:00" title="2026-10-05 14:00:00 -07:00">Mon Oct 5th, 2026 at 14:00</time> |
+| Where | Starfleet Academy, San Francisco |
+| Calendar | Bridge |
+| Organizer | [Admiral Brand](mailto:brand@starfleet.test "Admiral Brand <brand@starfleet.test>") |
+| Last changed | <time datetime="2026-09-15T10:00:00+00:00" title="2026-09-15 10:00:00 UTC">Tue Sep 15th, 2026 at 10:00</time> |
+
+## Attendees
+
+| Who | Response |
+| --- | --- |
+| [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") | Accepted |
+
+=== tng_calendar 00000000-0000-8470-8240-1b4ee2c9889a Shore leave on Risa
+--- -
+---
+markdown_uuid: 00000000-0000-8470-8240-1b4ee2c9889a
+source_id: tng_calendar
+provider: calendar
+kind: Event
+calendar: "Bridge"
+title: "Shore leave on Risa"
+external_id: "Bridge#tng-risa-shore-leave@enterprise.test"
+start: 2026-07-13T00:00:00+00:00
+created: "2026-06-01T12:00:00+00:00"
+modified_at: "2026-06-01T12:00:00+00:00"
+---
+
+--- 00000000-0000-8470-8240-1b4ee2c9889a
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8470-8240-1b4ee2c9889a">Shore leave on Risa</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-07-13">Mon Jul 13th, 2026</time> – <time datetime="2026-07-17">Fri Jul 17th, 2026</time></span> (all day) |
+| Calendar | Bridge |
+| Shows as | Free |
+| Added | <time datetime="2026-06-01T12:00:00+00:00" title="2026-06-01 12:00:00 UTC">Mon Jun 1st, 2026 at 12:00</time> |
+| Last changed | <time datetime="2026-06-01T12:00:00+00:00" title="2026-06-01 12:00:00 UTC">Mon Jun 1st, 2026 at 12:00</time> |
+
+## Description
+
+Horga'hn optional.
+
+=== tng_calendar 00000000-0000-8488-9b56-8b957035e673 Senior staff briefing
+--- -
+---
+markdown_uuid: 00000000-0000-8488-9b56-8b957035e673
+source_id: tng_calendar
+provider: calendar
+kind: Recurring Event
+calendar: "Bridge"
+title: "Senior staff briefing"
+external_id: "Bridge#tng-senior-staff-briefing@enterprise.test"
+start: 2026-01-05T09:00:00-08:00
+created: "2026-01-05T18:00:00+00:00"
+modified_at: "2026-09-02T16:00:00+00:00"
+---
+
+--- 00000000-0000-8488-9b56-8b957035e673
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8488-9b56-8b957035e673">Senior staff briefing</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-01-05T09:00:00-08:00" title="2026-01-05 09:00:00 -08:00">Mon Jan 5th, 2026 at 09:00</time> – <time datetime="2026-01-05T10:00:00-08:00" title="2026-01-05 10:00:00 -08:00">Mon Jan 5th, 2026 at 10:00</time></span> |
+| Repeats | Weekly on Monday and Thursday, until Thu 31 Dec 2026 |
+| Where | Observation lounge, Deck 1 |
+| Calendar | Bridge |
+| Organizer | [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") |
+| Added | <time datetime="2026-01-05T18:00:00+00:00" title="2026-01-05 18:00:00 UTC">Mon Jan 5th, 2026 at 18:00</time> |
+| Last changed | <time datetime="2026-09-02T16:00:00+00:00" title="2026-09-02 16:00:00 UTC">Wed Sep 2nd, 2026 at 16:00</time> |
+
+## Attendees
+
+| Who | Response |
+| --- | --- |
+| [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") | Accepted |
+| [William Riker](mailto:riker@enterprise.test "William Riker <riker@enterprise.test>") | Accepted |
+| [Data](mailto:data@enterprise.test "Data <data@enterprise.test>") | Accepted |
+| [Deanna Troi](mailto:troi@enterprise.test "Deanna Troi <troi@enterprise.test>") | Maybe |
+| [Geordi La Forge](mailto:laforge@enterprise.test "Geordi La Forge <laforge@enterprise.test>") | No reply |
+
+## Description
+
+Ship's status, then department heads in turn.<br>
+Bring your PADDs.
+
+## Occurrences
+
+Rule: `RRULE:FREQ=WEEKLY;BYDAY=MO,TH;UNTIL=20261231T170000Z`
+
+Changed:
+
+- <time datetime="2026-03-12T09:00:00-07:00" title="2026-03-12 09:00:00 -07:00">Thu Mar 12th, 2026 at 09:00</time> → <time datetime="2026-03-12T11:00:00-07:00" title="2026-03-12 11:00:00 -07:00">Thu Mar 12th, 2026 at 11:00</time> — Senior staff briefing — Borg incursion
+
+Cancelled:
+
+- <time datetime="2026-02-09T09:00:00-08:00" title="2026-02-09 09:00:00 -08:00">Mon Feb 9th, 2026 at 09:00</time>
+- <time datetime="2026-04-02T09:00:00-07:00" title="2026-04-02 09:00:00 -07:00">Thu Apr 2nd, 2026 at 09:00</time>
+
+=== tng_calendar 00000000-0000-872d-a4f4-3355175938a9 Officers' poker night
+--- -
+---
+markdown_uuid: 00000000-0000-872d-a4f4-3355175938a9
+source_id: tng_calendar
+provider: calendar
+kind: Recurring Event
+calendar: "Bridge"
+title: "Officers' poker night"
+external_id: "Bridge#tng-poker-night@enterprise.test"
+start: 2026-01-15T20:00:00-08:00
+created: "2026-01-10T03:00:00+00:00"
+modified_at: "2026-01-10T03:00:00+00:00"
+---
+
+--- 00000000-0000-872d-a4f4-3355175938a9
+<h1 class="page-title" data-page-title-uuid="00000000-0000-872d-a4f4-3355175938a9">Officers' poker night</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-01-15T20:00:00-08:00" title="2026-01-15 20:00:00 -08:00">Thu Jan 15th, 2026 at 20:00</time> – <time datetime="2026-01-15T23:00:00-08:00" title="2026-01-15 23:00:00 -08:00">Thu Jan 15th, 2026 at 23:00</time></span> |
+| Repeats | Every 2 weeks on Thursday |
+| Where | Commander Riker's quarters |
+| Calendar | Bridge |
+| Added | <time datetime="2026-01-10T03:00:00+00:00" title="2026-01-10 03:00:00 UTC">Sat Jan 10th, 2026 at 03:00</time> |
+| Last changed | <time datetime="2026-01-10T03:00:00+00:00" title="2026-01-10 03:00:00 UTC">Sat Jan 10th, 2026 at 03:00</time> |
+
+## Occurrences
+
+Rule: `RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TH`
+
+=== tng_calendar 00000000-0000-87f7-ac79-138f8424fdb5 Senior staff briefing — Borg incursion
+--- -
+---
+markdown_uuid: 00000000-0000-87f7-ac79-138f8424fdb5
+source_id: tng_calendar
+provider: calendar
+kind: Changed Occurrence
+calendar: "Bridge"
+title: "Senior staff briefing — Borg incursion"
+external_id: "Bridge#tng-senior-staff-briefing@enterprise.test#20260312T160000Z"
+start: 2026-03-12T11:00:00-07:00
+created: "2026-01-05T18:00:00+00:00"
+modified_at: "2026-03-10T12:00:00+00:00"
+---
+
+--- 00000000-0000-87f7-ac79-138f8424fdb5
+<h1 class="page-title" data-page-title-uuid="00000000-0000-87f7-ac79-138f8424fdb5">Senior staff briefing — Borg incursion</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-03-12T11:00:00-07:00" title="2026-03-12 11:00:00 -07:00">Thu Mar 12th, 2026 at 11:00</time> – <time datetime="2026-03-12T12:30:00-07:00" title="2026-03-12 12:30:00 -07:00">Thu Mar 12th, 2026 at 12:30</time></span> |
+| Occurrence of | Senior staff briefing, originally <time datetime="2026-03-12T09:00:00-07:00" title="2026-03-12 09:00:00 -07:00">Thu Mar 12th, 2026 at 09:00</time> |
+| Where | Main Engineering |
+| Calendar | Bridge |
+| Organizer | [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") |
+| Added | <time datetime="2026-01-05T18:00:00+00:00" title="2026-01-05 18:00:00 UTC">Mon Jan 5th, 2026 at 18:00</time> |
+| Last changed | <time datetime="2026-03-10T12:00:00+00:00" title="2026-03-10 12:00:00 UTC">Tue Mar 10th, 2026 at 12:00</time> |
+
+## Attendees
+
+| Who | Response |
+| --- | --- |
+| [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") | Accepted |
+| [William Riker](mailto:riker@enterprise.test "William Riker <riker@enterprise.test>") | Accepted |
+| [Geordi La Forge](mailto:laforge@enterprise.test "Geordi La Forge <laforge@enterprise.test>") | Accepted |
+| [Worf](mailto:worf@enterprise.test "Worf <worf@enterprise.test>") | Accepted |
+
+## Description
+
+Moved to Main Engineering so Commander La Forge can show the new shield modulations.
+
+=== tng_calendar 00000000-0000-8899-a213-737545dc9ea2 Dilithium shipment arrives
+--- -
+---
+markdown_uuid: 00000000-0000-8899-a213-737545dc9ea2
+source_id: tng_calendar
+provider: calendar
+kind: Event
+calendar: "Engineering"
+title: "Dilithium shipment arrives"
+external_id: "Engineering#9f8e7d6c5b4a39281706f5e4d3c2b1a0@google.com"
+start: 2026-09-22T14:30:00+00:00
+created: "2026-09-15T08:00:00+00:00"
+modified_at: "2026-09-16T09:00:00+00:00"
+---
+
+--- 00000000-0000-8899-a213-737545dc9ea2
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8899-a213-737545dc9ea2">Dilithium shipment arrives</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-09-22T14:30:00+00:00" title="2026-09-22 14:30:00 UTC">Tue Sep 22nd, 2026 at 14:30</time> – <time datetime="2026-09-22T15:30:00+00:00" title="2026-09-22 15:30:00 UTC">Tue Sep 22nd, 2026 at 15:30</time></span> |
+| Where | Cargo bay 2 |
+| Calendar | Engineering |
+| Status | Tentative |
+| Added | <time datetime="2026-09-15T08:00:00+00:00" title="2026-09-15 08:00:00 UTC">Tue Sep 15th, 2026 at 08:00</time> |
+| Last changed | <time datetime="2026-09-16T09:00:00+00:00" title="2026-09-16 09:00:00 UTC">Wed Sep 16th, 2026 at 09:00</time> |
+
+=== tng_calendar 00000000-0000-891b-9146-098a54f0815e Reception for the Klingon delegation
+--- -
+---
+markdown_uuid: 00000000-0000-891b-9146-098a54f0815e
+source_id: tng_calendar
+provider: calendar
+kind: Event
+calendar: "Bridge"
+title: "Reception for the Klingon delegation"
+external_id: "Bridge#tng-klingon-reception@enterprise.test"
+start: 2026-09-18T19:00:00-07:00
+created: "2026-08-20T15:00:00+00:00"
+modified_at: "2026-08-20T15:00:00+00:00"
+---
+
+--- 00000000-0000-891b-9146-098a54f0815e
+<h1 class="page-title" data-page-title-uuid="00000000-0000-891b-9146-098a54f0815e">Reception for the Klingon delegation</h1>
+
+| | |
+| --- | --- |
+| When | <span class="time-range"><time datetime="2026-09-18T19:00:00-07:00" title="2026-09-18 19:00:00 -07:00">Fri Sep 18th, 2026 at 19:00</time> – <time datetime="2026-09-18T22:00:00-07:00" title="2026-09-18 22:00:00 -07:00">Fri Sep 18th, 2026 at 22:00</time></span> |
+| Where | Ten Forward |
+| Calendar | Bridge |
+| Organizer | [Deanna Troi](mailto:troi@enterprise.test "Deanna Troi <troi@enterprise.test>") |
+| Added | <time datetime="2026-08-20T15:00:00+00:00" title="2026-08-20 15:00:00 UTC">Thu Aug 20th, 2026 at 15:00</time> |
+| Last changed | <time datetime="2026-08-20T15:00:00+00:00" title="2026-08-20 15:00:00 UTC">Thu Aug 20th, 2026 at 15:00</time> |
+
+## Attendees
+
+| Who | Response |
+| --- | --- |
+| [Deanna Troi](mailto:troi@enterprise.test "Deanna Troi <troi@enterprise.test>") | Accepted |
+| [Worf](mailto:worf@enterprise.test "Worf <worf@enterprise.test>") | Accepted |
+| [Jean-Luc Picard](mailto:picard@enterprise.test "Jean-Luc Picard <picard@enterprise.test>") | Maybe |
+| [Guinan](mailto:guinan@enterprise.test "Guinan <guinan@enterprise.test>") (optional) | Declined |
+
+## Description
+
+Ambassador K'Ehleyr arrives at 1900. Formal uniforms.<br>
+<br>
+Worf has asked that no one serve gagh.
+
+=== tng_calendar 00000000-0000-891c-9fb1-f32c436d1ae4 tng_calendar storage
+--- -
+---
+title: tng_calendar storage
+source: tng_calendar
+measured_at: 2369-04-15T00:00:00+00:00
+---
+
+# [tng_calendar](datalib:group/tng_calendar "tng_calendar") — storage
+
+Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+
+| Kind | Step | What | Size | Count | Id |
+|---|---|---|---|---|---|
+| Source Size | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest` | <size> | 2 files | <span id="m-00000000-0000-891c-9fb1-f32c436d1ae4" data-section-uuid="00000000-0000-891c-9fb1-f32c436d1ae4">`00000000`</span> |
+| Store | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8703-8227-9a5bceb75a1e" data-section-uuid="00000000-0000-8703-8227-9a5bceb75a1e">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#accounts` |  | 1 row | <span id="m-00000000-0000-8fe6-99dc-5b36624ef239" data-section-uuid="00000000-0000-8fe6-99dc-5b36624ef239">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#calendars` |  | 2 rows | <span id="m-00000000-0000-8fbb-8581-01dff57d5dce" data-section-uuid="00000000-0000-8fbb-8581-01dff57d5dce">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#calendly_events` |  | 0 rows | <span id="m-00000000-0000-8b93-9dcb-0a0631c84f0d" data-section-uuid="00000000-0000-8b93-9dcb-0a0631c84f0d">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#calendly_invitees` |  | 0 rows | <span id="m-00000000-0000-85fa-afa0-4d22c75bf7fe" data-section-uuid="00000000-0000-85fa-afa0-4d22c75bf7fe">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | <span id="m-00000000-0000-87b8-b526-fb16985c561c" data-section-uuid="00000000-0000-87b8-b526-fb16985c561c">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | <span id="m-00000000-0000-8565-aae3-1bb608d5edec" data-section-uuid="00000000-0000-8565-aae3-1bb608d5edec">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#google_events` |  | 0 rows | <span id="m-00000000-0000-8497-a035-25ce039f4f68" data-section-uuid="00000000-0000-8497-a035-25ce039f4f68">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#ics_objects` |  | 8 rows | <span id="m-00000000-0000-8225-acb0-3241073851a9" data-section-uuid="00000000-0000-8225-acb0-3241073851a9">`00000000`</span> |
+| Table | [ingest](datalib:step/tng_calendar/ingest "tng_calendar/ingest") | `tng_calendar/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | <span id="m-00000000-0000-8f43-a508-ef94b8264646" data-section-uuid="00000000-0000-8f43-a508-ef94b8264646">`00000000`</span> |
+
+=== tng_calendar 00000000-0000-8eca-8033-c38531904ecf Data's activation day
+--- -
+---
+markdown_uuid: 00000000-0000-8eca-8033-c38531904ecf
+source_id: tng_calendar
+provider: calendar
+kind: Recurring Event
+calendar: "Engineering"
+title: "Data's activation day"
+external_id: "Engineering#5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e@google.com"
+start: 2026-02-02T00:00:00+00:00
+created: "2025-12-01T00:00:00+00:00"
+modified_at: "2026-01-01T00:00:00+00:00"
+---
+
+--- 00000000-0000-8eca-8033-c38531904ecf
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8eca-8033-c38531904ecf">Data's activation day</h1>
+
+| | |
+| --- | --- |
+| When | <time datetime="2026-02-02">Mon Feb 2nd, 2026</time> (all day) |
+| Repeats | Yearly |
+| Calendar | Engineering |
+| Shows as | Free |
+| Added | <time datetime="2025-12-01T00:00:00+00:00" title="2025-12-01 00:00:00 UTC">Mon Dec 1st, 2025 at 00:00</time> |
+| Last changed | <time datetime="2026-01-01T00:00:00+00:00" title="2026-01-01 00:00:00 UTC">Thu Jan 1st, 2026 at 00:00</time> |
+
+## Occurrences
+
+Rule: `RRULE:FREQ=YEARLY`

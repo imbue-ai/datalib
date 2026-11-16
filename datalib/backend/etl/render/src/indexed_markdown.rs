@@ -51,6 +51,61 @@ const REMOVED_SECTIONS: &str =
     "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
 
+/// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct KeptSection {
+    pub markdown_uuid: String,
+    pub seq: i64,
+    pub uuid: Option<String>,
+    pub text: String,
+    pub framed: bool,
+    pub addressed: Option<String>,
+    pub labels: Option<String>,
+    pub author: Option<String>,
+    pub author_handle: Option<String>,
+    pub created_at: Option<String>,
+}
+
+impl KeptSection {
+    fn piece(self) -> datalib_search_index::text::Piece {
+        let addressed = self
+            .addressed
+            .as_deref()
+            .and_then(datalib_schema::sections::parse_addressed)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| datalib_search_index::text::Addressed {
+                role: a.role.as_str().to_string(),
+                name: a.name,
+                handle: a.handle,
+            })
+            .collect();
+        datalib_search_index::text::Piece {
+            uuid: self.uuid,
+            text: self.text,
+            framed: self.framed,
+            author: self.author,
+            author_handle: self.author_handle,
+            created_at: self.created_at,
+            addressed,
+            labels: self
+                .labels
+                .as_deref()
+                .and_then(datalib_schema::sections::parse_labels)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// What the search index files a document under: its render's hash and
+/// the drawing's version, so a change to either draws it again. `None` for
+/// a document its renderer handed without sections, which has no text kept.
+pub fn index_key(row: &datalib_schema::markdowns::MarkdownRow) -> Option<String> {
+    row.content_hash
+        .as_ref()
+        .map(|h| format!("{h}.t{}", datalib_search_index::text::INDEX_TEXT_VERSION))
+}
+
 /// Replace what the store keeps of `md`'s sections. The grid index keeps
 /// none, so this is the render store's own write beside
 /// `grid_index::apply_one`. A document read back from the store has no
@@ -71,8 +126,8 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
-            "INSERT INTO sections (markdown_uuid, seq, uuid, text, framed, addressed) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sections (markdown_uuid, seq, uuid, text, framed, addressed, labels) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.markdown_uuid)
         .bind(row.seq)
@@ -80,6 +135,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         .bind(&row.text)
         .bind(row.framed)
         .bind(&row.addressed)
+        .bind(&row.labels)
         .execute(&mut **conn)
         .await
         .with_context(|| format!("document {}: store section {}", md.markdown_uuid, row.seq))?;
@@ -895,6 +951,79 @@ impl IndexedMarkdownStore {
                 .await
                 .context("read markdowns")
         })
+    }
+
+    /// The `markdowns` rows of these documents, ordered by id.
+    pub fn markdown_rows_in(
+        &self,
+        markdown_uuids: &[String],
+    ) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT * FROM markdowns \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 ORDER BY markdown_uuid",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read markdowns")
+        })
+    }
+
+    /// What the store keeps of these documents' sections, in order, each
+    /// with the author and time of the row it is: what the search index
+    /// draws a document's text from.
+    pub fn kept_sections(&self, markdown_uuids: &[String]) -> Result<Vec<KeptSection>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT s.markdown_uuid, s.seq, s.uuid, s.text, s.framed, s.addressed, \
+                        s.labels, g.author, g.author_handle, g.created_at \
+                 FROM sections s LEFT JOIN grid_rows g ON g.uuid = s.uuid \
+                 WHERE s.markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 ORDER BY s.markdown_uuid, s.seq",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read kept sections")
+        })
+    }
+
+    /// These documents as the search index takes them, drawn from what
+    /// the store keeps of them (`datalib_search_index::text`), all read at
+    /// the one commit this reader is at, so a document's key always names
+    /// the sections it was drawn from. A document with no [`index_key`] is
+    /// left out.
+    pub fn index_docs(
+        &self,
+        source_id: &str,
+        markdown_uuids: &[String],
+    ) -> Result<Vec<datalib_search_index::IndexDoc>> {
+        let rows = self.markdown_rows_in(markdown_uuids)?;
+        let mut kept: HashMap<String, Vec<KeptSection>> = HashMap::new();
+        for k in self.kept_sections(markdown_uuids)? {
+            kept.entry(k.markdown_uuid.clone()).or_default().push(k);
+        }
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let content_hash = index_key(&row)?;
+                let pieces: Vec<_> = kept
+                    .remove(&row.markdown_uuid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(KeptSection::piece)
+                    .collect();
+                Some(datalib_search_index::IndexDoc {
+                    source_id: source_id.to_string(),
+                    markdown_uuid: row.markdown_uuid,
+                    content_hash,
+                    title: row.title.unwrap_or_default(),
+                    sections: datalib_search_index::text::draw(&pieces),
+                })
+            })
+            .collect())
     }
 
     /// Every document this store holds. The other half of a sweep: a
@@ -1928,6 +2057,54 @@ mod tests {
         st.remove_documents(td.path(), &["a".to_string()]).unwrap();
         assert_eq!(kept(&st), vec![b]);
         st.close();
+    }
+
+    /// The search index reads a document's kept sections with the author
+    /// and time of the row each is, in order, and only the documents it
+    /// asks for, at the commit the reader opened.
+    #[test]
+    fn a_reader_gets_kept_sections_with_their_rows_facts() {
+        use crate::section::Section;
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        for id in ["a", "b"] {
+            let d = RenderedMarkdown {
+                sections: vec![
+                    Section::unkeyed("Page text\n".into()),
+                    Section::item(id, format!("<div>{id}</div>\n"), "hi".into(), Vec::new()),
+                ],
+                ..doc(td.path(), id, "fp")
+            };
+            st.put_document(td.path(), &d).unwrap();
+        }
+        st.commit("two documents").unwrap();
+        st.close();
+
+        let rd = IndexedMarkdownStore::open_for_reading(td.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let got = rd.kept_sections(&["a".to_string()]).unwrap();
+        let shape: Vec<_> = got
+            .iter()
+            .map(|k| {
+                (
+                    k.seq,
+                    k.uuid.as_deref(),
+                    k.framed,
+                    k.author.as_deref(),
+                    k.created_at.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                (0, None, true, None, None),
+                (1, Some("a"), false, None, Some("2026-01-01T00:00:00+00:00")),
+            ]
+        );
+        assert_eq!(rd.markdown_rows_in(&["b".to_string()]).unwrap().len(), 1);
+        rd.close();
     }
 
     /// A renderer that hands a container under another document's id has

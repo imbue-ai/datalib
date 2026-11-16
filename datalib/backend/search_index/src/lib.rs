@@ -15,6 +15,7 @@ pub mod owed;
 pub mod prompt;
 pub mod read;
 mod store;
+pub mod text;
 
 pub use cache::InferenceCache;
 pub use holdings::{holdings, Holding};
@@ -54,9 +55,20 @@ pub struct IndexSection {
     /// message, or a document that has no messages.
     pub uuid: Option<String>,
     pub text: String,
+    /// The item's envelope line, which a chunk that starts inside this
+    /// section repeats so it still says who and when; `None` for a piece
+    /// drawn as it is.
+    pub lead: Option<String>,
 }
 
 impl IndexDoc {
+    /// Its chunks with their hashes and prompts
+    /// ([`chunk::prompted`]): what the keyword pass files and the embed
+    /// pass embeds.
+    pub fn prompted(&self) -> Vec<chunk::Prompted> {
+        chunk::prompted(&self.title, &self.sections_or_one())
+    }
+
     /// The sections, or one empty one, so the title is indexed for a
     /// document that has no text.
     fn sections_or_one(&self) -> Cow<'_, [IndexSection]> {
@@ -64,6 +76,7 @@ impl IndexDoc {
             Cow::Owned(vec![IndexSection {
                 uuid: None,
                 text: String::new(),
+                lead: None,
             }])
         } else {
             Cow::Borrowed(&self.sections)

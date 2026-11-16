@@ -1,0 +1,72 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== slack-diff 00000000-0000-8209-b9a9-5e8e8a2f0239 #bridge
+--- 0b7698f2-dea0-80a4-9df7-8e06bc0e78b6
+<div class="diff-modified">
+
+<div id="m-0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" data-section-uuid="0b7698f2-dea0-80a4-9df7-8e06bc0e78b6" class="msg msg--slack">
+
+## [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)") <time class="msg-ts" datetime="2369-05-28T15:08:20Z" title="2369-05-28 15:08:20 UTC">Wed May 28th, 2369 at 15:08</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000100000100" target="_blank" rel="noopener noreferrer">↗</a>
+
+Mr. Data, status report.
+
+<span class="msg-replies"><del>2</del><ins>3</ins> replies</span>
+
+</div>
+
+</div>
+
+--- 0b7698f4-6540-876f-bf97-b10f5b2e219b
+Lt. Cmdr. Data — Wed 28 May 2369 15:10
+
+All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
+
+--- 0b7698f5-ebe0-8854-9dea-f0305886ccd8
+William T. Riker — Wed 28 May 2369 15:11
+
+Set a course, Mr. Data. Warp factor five.
+
+--- 0b769902-20e0-8688-8f6a-e4f4ec4bf796
+<div class="diff-added">
+
+<div id="m-0b769902-20e0-8688-8f6a-e4f4ec4bf796" data-section-uuid="0b769902-20e0-8688-8f6a-e4f4ec4bf796" class="msg msg--slack">
+
+## [Worf](slack://user?team=T_NCC1701D&id=U_WORF "Worf (slack:T_NCC1701D/U_WORF)") <time class="msg-ts" datetime="2369-05-28T15:25:00Z" title="2369-05-28 15:25:00 UTC">Wed May 28th, 2369 at 15:25</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604001100001100?thread_ts=12604000100.000100&amp;cid=C_BRIDGE" target="_blank" rel="noopener noreferrer">↗</a>
+
+Long-range sensors confirm it, Captain: a Warbird, decloaking.
+
+</div>
+
+</div>
+
+=== slack-diff 00000000-0000-8827-877d-5fdc4dc4394b #bridge
+--- 0b7698f7-7280-8270-9f6a-d2006be91a93
+<div class="diff-modified">
+
+<div id="m-0b7698f7-7280-8270-9f6a-d2006be91a93" data-section-uuid="0b7698f7-7280-8270-9f6a-d2006be91a93" class="msg msg--slack">
+
+## [Worf](slack://user?team=T_NCC1701D&id=U_WORF "Worf (slack:T_NCC1701D/U_WORF)") <time class="msg-ts" datetime="2369-05-28T15:13:20Z" title="2369-05-28 15:13:20 UTC">Wed May 28th, 2369 at 15:13</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000400000400" target="_blank" rel="noopener noreferrer">↗</a>
+
+I recommend raising <del>shields,</del><ins>shields **now**,</ins> Captain.
+
+- <span id="m-0b7698f7-7280-8aef-a980-fc3c5f4bf06a" data-section-uuid="0b7698f7-7280-8aef-a980-fc3c5f4bf06a"><ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</ins></span>
+
+</div>
+
+</div>
+
+=== slack-diff 00000000-0000-8c02-a5c8-c13c049e1e6d #bridge
+--- 0b769903-a780-8ace-afc7-445f6377a51b
+<div class="diff-added">
+
+<div id="m-0b769903-a780-8ace-afc7-445f6377a51b" data-section-uuid="0b769903-a780-8ace-afc7-445f6377a51b" class="msg msg--slack unread first-unread">
+
+## [William T. Riker](slack://user?team=T_NCC1701D&id=U_RIKER "William T. Riker (slack:T_NCC1701D/U_RIKER)") <time class="msg-ts" datetime="2369-05-28T15:26:40Z" title="2369-05-28 15:26:40 UTC">Wed May 28th, 2369 at 15:26</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604001200001200" target="_blank" rel="noopener noreferrer">↗</a>
+
+Shields up. Red alert.
+
+</div>
+
+</div>

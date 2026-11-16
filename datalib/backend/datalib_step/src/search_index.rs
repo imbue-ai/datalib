@@ -8,10 +8,12 @@ use anyhow::{Context, Result};
 use datalib_embedder::{Device, Embedder};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+use datalib_etl_render::indexed_markdown::{index_key, IndexedMarkdownStore};
 use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
-use datalib_search_index::{prompt, ChunkSpan, Index, IndexDoc, IndexSection, InferenceCache};
+#[cfg(test)]
+use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
+use datalib_search_index::{ChunkSpan, Index, IndexDoc, InferenceCache};
 
 /// Documents read and indexed together, one transaction each.
 const DOCUMENT_BATCH: usize = 200;
@@ -33,54 +35,11 @@ pub(crate) struct Done {
 }
 
 /// A document the search covers: one with a file, outside `unindexed/`.
-fn searchable(row: &MarkdownRow) -> bool {
+pub(crate) fn searchable(row: &MarkdownRow) -> bool {
     row.md_path.as_deref().is_some_and(|p| {
         !Path::new(p)
             .components()
             .any(|c| c.as_os_str() == layout::UNINDEXED_DIR)
-    })
-}
-
-/// A rendered document as the index takes it, from its `markdowns` row and
-/// its file's text. `None` when the two disagree: the text is not what the
-/// row's hash names, or its sections do not spell the text.
-pub(crate) fn index_doc(source_id: &str, row: &MarkdownRow, text: &str) -> Option<IndexDoc> {
-    let hash = blake3::hash(text.as_bytes()).to_hex().to_string();
-    if row.content_hash.as_ref().is_some_and(|h| *h != hash) {
-        return None;
-    }
-    let layout = row
-        .section_layout
-        .as_deref()
-        .and_then(datalib_schema::markdowns::parse_layout);
-    let sections = match layout {
-        Some(spans) => {
-            let mut at = 0;
-            let mut out = Vec::with_capacity(spans.len());
-            for span in spans {
-                let end = at + span.bytes;
-                out.push(IndexSection {
-                    uuid: span.uuid,
-                    text: text.get(at..end)?.to_string(),
-                });
-                at = end;
-            }
-            if at != text.len() {
-                return None;
-            }
-            out
-        }
-        None => vec![IndexSection {
-            uuid: None,
-            text: text.to_string(),
-        }],
-    };
-    Some(IndexDoc {
-        source_id: source_id.to_string(),
-        markdown_uuid: row.markdown_uuid.clone(),
-        content_hash: hash,
-        title: row.title.clone().unwrap_or_default(),
-        sections,
     })
 }
 
@@ -119,8 +78,21 @@ async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, Ma
     .context("render store read panicked")?
 }
 
-fn read_text(root: &Path, row: &MarkdownRow) -> Option<String> {
-    std::fs::read_to_string(root.join(row.md_path.as_deref()?)).ok()
+/// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
+/// its head.
+async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<IndexDoc>> {
+    let render_root = datalib_etl::layout::render_markdown_root(root, group);
+    let group = group.to_string();
+    tokio::task::spawn_blocking(move || {
+        let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
+            return Ok(Vec::new());
+        };
+        let out = store.index_docs(&group, &uuids);
+        store.close();
+        out
+    })
+    .await
+    .context("render store read panicked")?
 }
 
 /// `<group>/keyword_index`'s half: this source's documents in the search
@@ -151,18 +123,14 @@ async fn update_keywords_in(
 ) -> Result<Done> {
     let mut done = Done::default();
     let indexed = index.indexed(group).await?;
-    // A row from a renderer that declares no sections has no hash; its
-    // file's own hash stands in, which is the one render would have stored.
     let mut current: BTreeMap<String, String> = BTreeMap::new();
     for (uuid, row) in rows {
-        let hash = match &row.content_hash {
-            Some(h) => h.clone(),
-            None => match read_text(root, row) {
-                Some(text) => blake3::hash(text.as_bytes()).to_hex().to_string(),
-                None => continue,
-            },
-        };
-        current.insert(uuid.clone(), hash);
+        match index_key(row) {
+            Some(key) => {
+                current.insert(uuid.clone(), key);
+            }
+            None => done.unsettled += 1,
+        }
     }
     let owed = datalib_search_index::owed(&current, &indexed);
     progress.set_message("search index: keywords");
@@ -171,14 +139,8 @@ async fn update_keywords_in(
         if stop.requested() {
             break;
         }
-        let mut docs = Vec::with_capacity(batch.len());
-        for uuid in batch {
-            let row = &rows[uuid];
-            match read_text(root, row).and_then(|t| index_doc(group, row, &t)) {
-                Some(doc) => docs.push(doc),
-                None => done.unsettled += 1,
-            }
-        }
+        let docs = draw_batch(root, group, batch.to_vec()).await?;
+        done.unsettled += batch.len() - docs.len();
         index.put(&docs).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
@@ -223,14 +185,14 @@ async fn embed_into(
     if missing.is_empty() {
         return Ok(done);
     }
-    let Some(rows) = rendered(root, group).await? else {
-        return Ok(done);
-    };
-    let mut by_doc: BTreeMap<&str, Vec<&ChunkSpan>> = BTreeMap::new();
+    let mut by_doc: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
     let mut queued = HashSet::new();
     for span in &spans {
         if missing.contains(&span.hash) && queued.insert(span.hash.as_str()) {
-            by_doc.entry(&span.markdown_uuid).or_default().push(span);
+            by_doc
+                .entry(&span.markdown_uuid)
+                .or_default()
+                .insert(&span.hash);
         }
     }
     progress.set_message("search index: embedding");
@@ -251,39 +213,37 @@ async fn embed_into(
     }
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut result = Ok(());
-    for (uuid, chunks) in by_doc {
-        let prompts = match rows
-            .get(uuid)
-            .and_then(|row| Some((row, read_text(root, row)?)))
-        {
-            Some((row, text)) => prompts_for(row, &text, &chunks),
-            None => None,
-        };
-        let Some(prompts) = prompts else {
-            done.unsettled += 1;
-            continue;
-        };
-        pending.extend(prompts);
-        while pending.len() >= CHUNK_BATCH || (!pending.is_empty() && stop.requested()) {
-            let batch: Vec<_> = pending.drain(..pending.len().min(CHUNK_BATCH)).collect();
-            match embed_batch(&mut embedder, batch).await {
-                Ok((vectors, cut)) => {
-                    cache.put(&model, &vectors).await?;
-                    done.embedded += vectors.len();
-                    done.truncated += cut;
-                    progress.inc(vectors.len() as u64);
+    let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
+    'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
+        for doc in draw_batch(root, group, uuids.to_vec()).await? {
+            let wanted = &by_doc[doc.markdown_uuid.as_str()];
+            let prompts = prompts_for(&doc, wanted);
+            let Some(prompts) = prompts else {
+                done.unsettled += 1;
+                continue;
+            };
+            pending.extend(prompts);
+            while pending.len() >= CHUNK_BATCH || (!pending.is_empty() && stop.requested()) {
+                let batch: Vec<_> = pending.drain(..pending.len().min(CHUNK_BATCH)).collect();
+                match embed_batch(&mut embedder, batch).await {
+                    Ok((vectors, cut)) => {
+                        cache.put(&model, &vectors).await?;
+                        done.embedded += vectors.len();
+                        done.truncated += cut;
+                        progress.inc(vectors.len() as u64);
+                    }
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
                 }
-                Err(e) => {
-                    result = Err(e);
+                if stop.requested() {
                     break;
                 }
             }
-            if stop.requested() {
-                break;
+            if result.is_err() || stop.requested() {
+                break 'docs;
             }
-        }
-        if result.is_err() || stop.requested() {
-            break;
         }
     }
     if result.is_ok() && !pending.is_empty() && !stop.requested() {
@@ -303,23 +263,17 @@ async fn embed_into(
     result.map(|()| done)
 }
 
-/// `(hash, prompt)` for each chunk of one document, or `None` when the file
-/// no longer holds the text the index hashed: the document changed after
-/// the keyword pass, and the next one re-chunks it.
-fn prompts_for(
-    row: &MarkdownRow,
-    text: &str,
-    chunks: &[&ChunkSpan],
-) -> Option<Vec<(String, String)>> {
-    let title = row.title.as_deref().unwrap_or_default();
-    chunks
-        .iter()
-        .map(|c| {
-            let piece = text.get(c.start..c.end)?;
-            (datalib_search_index::chunk::chunk_hash(title, piece) == c.hash)
-                .then(|| (c.hash.clone(), prompt::document(piece, Some(title))))
-        })
-        .collect()
+/// `(hash, prompt)` for each chunk of `doc` the cache lacks, or `None`
+/// when the document no longer draws one of them: it changed after the
+/// keyword pass, and the next one re-chunks it.
+fn prompts_for(doc: &IndexDoc, wanted: &HashSet<&str>) -> Option<Vec<(String, String)>> {
+    let prompts: BTreeMap<String, String> = doc
+        .prompted()
+        .into_iter()
+        .filter(|p| wanted.contains(p.hash.as_str()))
+        .map(|p| (p.hash, p.prompt))
+        .collect();
+    (prompts.len() == wanted.len()).then(|| prompts.into_iter().collect())
 }
 
 /// Each prompt's vector, and how many had to be cut to fit the context.
@@ -532,7 +486,10 @@ mod tests {
         );
         let held = indexed(root).await;
         let file = std::fs::read(&tea.md_path).unwrap();
-        assert_eq!(held["d-tea"], blake3::hash(&file).to_hex().to_string());
+        assert_eq!(
+            held["d-tea"],
+            format!("{}.t{INDEX_TEXT_VERSION}", blake3::hash(&file).to_hex())
+        );
         assert!(!held.contains_key("d-quiet"));
 
         assert_eq!(update(root).await, Done::default(), "nothing changed");
@@ -613,99 +570,70 @@ mod tests {
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
     }
 
-    /// A file that no longer holds what the store says it does is left for
-    /// the next pass, and counted, rather than indexed half right.
+    /// The index draws a document's text from the render store, not its
+    /// file: an item is its envelope and its body, with none of the markup
+    /// the file draws around it, and a piece kept whole is drawn as it is.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_file_that_disagrees_with_its_store_is_left_and_counted() {
+    async fn the_index_draws_from_the_store_not_the_file() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        let tea = rendered_doc(
-            root,
-            "d-tea",
-            thread("Tea"),
-            doc_md_path(&render_root(root), "d-tea"),
-        );
-        commit(root, std::slice::from_ref(&tea), &[]);
-        std::fs::write(&tea.md_path, "rewritten behind the store's back").unwrap();
+        let rr = render_root(root);
+        let mut tea = rendered_doc(root, "d-tea", Vec::new(), doc_md_path(&rr, "d-tea"));
+        tea.sections = vec![
+            Section::frame("---\n---\n\n# Ten Forward\n\n".into()),
+            Section::item(
+                "m1",
+                "<div data-section-uuid=\"m1\">\n\n## Riker\n\nTea, Earl Grey\n\n</div>\n".into(),
+                "Tea, Earl Grey".into(),
+                Vec::new(),
+            ),
+            Section::unkeyed("Page 2: the replicator manual\n".into()),
+        ];
+        std::fs::write(&tea.md_path, join(&tea.sections)).unwrap();
+        tea.rows[0].author = Some("Will Riker".into());
+        tea.rows[0].uuid = "m1".into();
+        tea.rows[0].created_at = Some("2026-03-03T14:05:00-08:00".into());
+        commit(root, &[tea], &[]);
+        std::fs::write(
+            doc_md_path(&rr, "d-tea"),
+            "the file is no longer read".repeat(10),
+        )
+        .unwrap();
+
+        let docs = draw_batch(root, GROUP, vec!["d-tea".into()]).await.unwrap();
+        let texts: Vec<&str> = docs[0].sections.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(
-            update(root).await,
-            Done {
-                unsettled: 1,
-                ..Done::default()
-            }
+            texts,
+            [
+                "Will Riker — Tue 3 Mar 2026 14:05\n\nTea, Earl Grey\n\n",
+                "Page 2: the replicator manual\n",
+            ]
         );
-        assert!(indexed(root).await.is_empty());
+        assert_eq!(update(root).await.put, 1);
     }
 
-    fn row(title: &str, layout: Option<&str>, hash: Option<String>) -> MarkdownRow {
-        MarkdownRow {
-            markdown_uuid: "d".into(),
+    /// A chunk is embedded only while the document still draws it; else
+    /// the document waits for the next keyword pass.
+    #[test]
+    fn a_chunk_the_document_no_longer_draws_is_not_embedded() {
+        let doc = IndexDoc {
             source_id: GROUP.into(),
-            provider: "test".into(),
-            kind: "Test".into(),
-            title: Some(title.into()),
-            created_at: None,
-            modified_at: None,
-            item_count: Some(1),
-            md_path: Some("x.md".into()),
-            upstream_cursor: None,
-            renderer_version: None,
-            bucket_key: None,
-            section_layout: layout.map(str::to_string),
-            content_hash: hash,
-            front: None,
-        }
-    }
-
-    #[test]
-    fn a_document_is_cut_into_its_sections_by_its_layout() {
-        let text = "head\nbody one\n";
-        let layout = r#"[{"uuid":null,"bytes":5},{"uuid":"m1","bytes":9}]"#;
-        let doc = index_doc(GROUP, &row("T", Some(layout), None), text).unwrap();
-        let got: Vec<(Option<&str>, &str)> = doc
-            .sections
-            .iter()
-            .map(|s| (s.uuid.as_deref(), s.text.as_str()))
-            .collect();
-        assert_eq!(got, [(None, "head\n"), (Some("m1"), "body one\n")]);
-        assert_eq!(doc.title, "T");
-        assert_eq!(
-            doc.content_hash,
-            blake3::hash(text.as_bytes()).to_hex().to_string()
-        );
-    }
-
-    #[test]
-    fn a_layout_or_hash_that_does_not_fit_the_text_is_refused() {
-        let short = r#"[{"uuid":null,"bytes":3}]"#;
-        assert!(index_doc(GROUP, &row("T", Some(short), None), "four").is_none());
-        let wrong = Some("0".repeat(64));
-        assert!(index_doc(GROUP, &row("T", None, wrong), "four").is_none());
-        let doc = index_doc(GROUP, &row("T", None, None), "four").unwrap();
-        assert_eq!(doc.sections.len(), 1);
-    }
-
-    /// A chunk is embedded only when the file still holds the text the
-    /// index hashed; else the document waits for the next keyword pass.
-    #[test]
-    fn a_chunk_whose_text_moved_is_not_embedded() {
-        let text = "hello world";
-        let span = |hash: String| ChunkSpan {
             markdown_uuid: "d".into(),
-            start: 0,
-            end: 5,
-            hash,
+            content_hash: "h".into(),
+            title: "T".into(),
+            sections: text::draw(&[Piece {
+                text: "hello".into(),
+                framed: true,
+                ..Piece::default()
+            }]),
         };
-        let r = row("T", None, None);
-        let good = span(datalib_search_index::chunk::chunk_hash("T", "hello"));
+        let drawn = doc.prompted();
+        let good: HashSet<&str> = [drawn[0].hash.as_str()].into();
         assert_eq!(
-            prompts_for(&r, text, &[&good]),
-            Some(vec![(
-                good.hash.clone(),
-                prompt::document("hello", Some("T"))
-            )])
+            prompts_for(&doc, &good),
+            Some(vec![(drawn[0].hash.clone(), drawn[0].prompt.clone())])
         );
-        let stale = span(datalib_search_index::chunk::chunk_hash("T", "howdy"));
-        assert_eq!(prompts_for(&r, text, &[&stale]), None);
+        let stale: HashSet<&str> = ["not-a-chunk-of-it"].into();
+        assert_eq!(prompts_for(&doc, &stale), None);
     }
 }

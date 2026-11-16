@@ -346,7 +346,8 @@ None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only them
 is still taken on mid-sync, like any other. The built-in steps that read
 files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
-`keyword_index` and `embed`, which read their render tree's `.md` files;
+`keyword_index` and `embed`, which read their render store at its head
+rather than at the commit their input names;
 `embedding_map`, which reads the search index and its inference cache;
 and perseus's render,
 which reads its TEI files); any step may say `reads` itself.
