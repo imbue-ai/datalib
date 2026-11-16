@@ -26,8 +26,8 @@ use datalib_etl_claude_code::ingest::parse::{human_text, transcript_id};
 use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
-    clamp, details, fenced, item, json_block, project_of, render_paged, str_of, PagedOutcome,
-    ReadClock, SessionRender,
+    clamp, details, fenced, item, json_block, parent_session_node, project_node, project_of,
+    render_paged, str_of, PagedOutcome, ReadClock, SessionRender,
 };
 
 use crate::ids;
@@ -44,7 +44,9 @@ use crate::ids;
 /// v8: an HTML tag in a prompt, a reply or a harness message shows as typed.
 /// v9: a prompt, a reply or a harness message is markdown as written
 ///     again, HTML included.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a session sits in its project, and a subagent's transcript in its
+///     session.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Who the harness's own rows are by: what it writes in the person's place,
 /// a tool's result, its system notes. A tool's name is not a person, and
@@ -65,6 +67,8 @@ fn profile() -> RenderProfile {
         text_format: TextFormat::Markdown,
     }
 }
+
+const PROJECT_KIND: &str = "Claude Code Project";
 
 /// Renders the transcripts this run has to, a page at a time;
 /// `on_buckets` hears each page's buckets before the next is read.
@@ -269,10 +273,20 @@ fn build_chat(
     };
     let id = ids::transcript(source_id, session_id, agent_id);
     debug_assert_eq!(id.uuid, chat_uuid_of(source_id, tid));
+    let project = str_of(meta, "cwd")
+        .map(|cwd| project_node(source_id, PROJECT_KIND, ids::project(source_id, cwd)));
+    let session = agent_id.map(|_| {
+        parent_session_node(
+            source_id,
+            &profile().chat_kind,
+            ids::transcript(source_id, session_id, None),
+            parent_title,
+        )
+    });
     NormalizedChat {
         named_after: Vec::new(),
         id: tid.to_string(),
-        containers: Vec::new(),
+        containers: project.into_iter().chain(session).collect(),
         filed_under: Vec::new(),
         chat_uuid: id.uuid.clone(),
         display,
@@ -929,5 +943,124 @@ mod tests {
         for c in &chats {
             assert_eq!(c.chat_uuid, chat_uuid_of("cc", &c.id), "{}", c.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use datalib_etl_agent_sessions_render::titles;
+    use serde_json::json;
+
+    const SRC: &str = "cc";
+
+    /// What chat-common makes of `chats`: each document's nodes and rows.
+    fn rendered(chats: &[NormalizedChat]) -> Vec<RenderedMarkdown> {
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        datalib_etl_chat_common::render::render_all(
+            &profile(),
+            chats,
+            out.path(),
+            SRC,
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        docs
+    }
+
+    /// Each node's (uuid, parent, read together, place).
+    fn tree(doc: &RenderedMarkdown) -> Vec<(String, Option<String>, bool, bool)> {
+        doc.nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.clone(),
+                    n.parent_uuid.clone(),
+                    n.read_together,
+                    n.is_place,
+                )
+            })
+            .collect()
+    }
+
+    /// The project, a place keyed on the working directory; the session,
+    /// read together inside it; a sub-agent's transcript, read on its own
+    /// inside the session, its messages in it. The session's document and
+    /// the sub-agent's agree on the session.
+    fn assert_project_session_subagent(
+        docs: &[RenderedMarkdown],
+        project: &str,
+        session: &str,
+        subagent: &str,
+    ) {
+        let doc = |uuid: &str| docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
+        let s = |x: &str| x.to_string();
+        let project_node = (s(project), None, false, true);
+        let session_node = (s(session), Some(s(project)), true, false);
+        assert_eq!(
+            tree(doc(session)),
+            [project_node.clone(), session_node.clone()]
+        );
+        assert_eq!(
+            tree(doc(subagent)),
+            [
+                project_node,
+                session_node,
+                (s(subagent), Some(s(session)), true, false)
+            ]
+        );
+        let sub = doc(subagent);
+        let project_row = &sub.nodes[0];
+        assert_eq!(project_row.name.as_deref(), Some("enterprise"));
+        assert_eq!(
+            project_row.upstream_id.as_deref(),
+            Some("/Users/picard/src/enterprise")
+        );
+        let messages: Vec<_> = sub.rows.iter().filter(|r| r.uuid != subagent).collect();
+        assert!(!messages.is_empty());
+        for row in messages {
+            assert_eq!(row.parent_uuid.as_deref(), Some(subagent));
+            assert_eq!(row.read_uuid.as_deref(), Some(subagent));
+            assert_eq!(row.place_uuid.as_deref(), Some(project));
+        }
+    }
+
+    #[test]
+    fn a_subagent_sits_in_its_session_in_its_project() {
+        let meta = |tid: &str, agent: Option<&str>| {
+            (
+                tid.to_string(),
+                json!({
+                    "session_id": "s1", "agent_id": agent, "title": "Deflector",
+                    "cwd": "/Users/picard/src/enterprise",
+                    "started_at": "2364-04-11T10:00:00.000Z",
+                }),
+            )
+        };
+        let rec = |uuid: &str, agent: Option<&str>| {
+            (
+                uuid.to_string(),
+                json!({
+                    "uuid": uuid, "sessionId": "s1", "agentId": agent,
+                    "timestamp": "2364-04-11T10:00:05.000Z", "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Done."}]},
+                }),
+            )
+        };
+        let transcripts = vec![meta("s1", None), meta("s1#a1", Some("a1"))];
+        let records = vec![rec("r1", None), rec("r2", Some("a1"))];
+        let chats = build_chats(SRC, &transcripts, &records, &titles(&transcripts), 1024);
+        assert_project_session_subagent(
+            &rendered(&chats),
+            &ids::project(SRC, "/Users/picard/src/enterprise").uuid,
+            &ids::transcript(SRC, "s1", None).uuid,
+            &ids::transcript(SRC, "s1", Some("a1")).uuid,
+        );
     }
 }

@@ -28,6 +28,7 @@ use super::parse::{
     shred, OAAttachmentRef, OAContentPartRow, OAMessageRow, ParsedChatGPTApi, ShreddedConversation,
     ATTACHMENTS_PROJECTION_SQL,
 };
+use datalib_schema::nodes::NodeRow;
 use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 use serde_json::Value;
@@ -59,7 +60,8 @@ use serde_json::Value;
 /// v15: the account's address is tied to "Me", so search reads it as `me`.
 /// v16: an HTML tag in a message shows as typed.
 /// v17: a message is markdown as written again, HTML included.
-pub const RENDER_VERSION: u32 = 17;
+/// v18: a conversation sits in the project or custom GPT it was held in.
+pub const RENDER_VERSION: u32 = 18;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -264,7 +266,11 @@ fn build_chat(
             .collect(),
         inputs: Vec::new(),
         id: chat_uuid.clone(),
-        containers: Vec::new(),
+        containers: conv
+            .gizmo_id
+            .iter()
+            .map(|g| gizmo_node(source_id, g, conv.account_id.clone()))
+            .collect(),
         filed_under: Vec::new(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
@@ -287,6 +293,21 @@ fn build_chat(
             items,
         }],
     }
+}
+
+/// The project or custom GPT a conversation was held in, a place. The
+/// store keeps only its id, so it has no name. A project's id starts
+/// `g-p-`, as its chatgpt.com address shows (`/g/g-p-…/project`).
+fn gizmo_node(source_id: &str, gizmo_id: &str, account: Option<String>) -> NodeRow {
+    let id = ids::gizmo(source_id, gizmo_id);
+    let kind = if gizmo_id.starts_with("g-p-") {
+        "ChatGPT Project"
+    } else {
+        "Custom GPT"
+    };
+    NodeRow::new("", id.uuid, source_id, kind)
+        .upstream(id.entity_kind, id.natural_key, account)
+        .place()
 }
 
 /// Every message in reading order with the branches it sits in: the
@@ -567,5 +588,117 @@ mod tests {
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].reason, Reason::UncoveredType);
         assert_eq!(problems[0].sample, "holo_program");
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use crate::render::parse::{ChatGPTConversation, OAConversationRow};
+    use datalib_etl_render::inputs::Inputs;
+
+    fn conversation(id: &str, gizmo: Option<&str>) -> ChatGPTConversation {
+        ChatGPTConversation {
+            conv: OAConversationRow {
+                account_id: Some("user-1".into()),
+                conversation_id: id.into(),
+                title: Some("Dilithium".into()),
+                create_time: None,
+                update_time: None,
+                current_node: None,
+                default_model_slug: None,
+                gizmo_id: gizmo.map(str::to_string),
+                gizmo_type: None,
+                is_archived: None,
+                is_starred: None,
+                raw_json: serde_json::json!({}),
+            },
+            upstream_payload: serde_json::json!({"mapping": {}}),
+            inputs: Inputs::default(),
+        }
+    }
+
+    /// A conversation held in a project or a custom GPT sits in it, a
+    /// place keyed on its gizmo id; one held in neither is its own place.
+    #[test]
+    fn a_conversation_sits_in_its_project_or_gpt() {
+        let parsed = ParsedChatGPTApi {
+            conversations: vec![
+                conversation("c1", Some("g-p-0001")),
+                conversation("c2", Some("g-0002")),
+                conversation("c3", None),
+            ],
+            ..Default::default()
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &parsed,
+            out.path(),
+            "gpt",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+            u64::MAX,
+        )
+        .unwrap();
+        let tree = |c: &str| {
+            let doc = docs
+                .iter()
+                .find(|d| d.markdown_uuid == ids::conversation("gpt", c).uuid)
+                .unwrap();
+            doc.nodes
+                .iter()
+                .map(|n| {
+                    (
+                        n.kind.clone(),
+                        n.parent_uuid.clone(),
+                        n.is_place,
+                        n.read_together,
+                        n.upstream_id.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let chat = |parent: Option<String>, c: &str| {
+            (
+                "Chat".to_string(),
+                parent.clone(),
+                parent.is_none(),
+                true,
+                Some(c.to_string()),
+            )
+        };
+        let project = ids::gizmo("gpt", "g-p-0001").uuid;
+        assert_eq!(
+            tree("c1"),
+            [
+                (
+                    "ChatGPT Project".to_string(),
+                    None,
+                    true,
+                    false,
+                    Some("g-p-0001".to_string())
+                ),
+                chat(Some(project), "c1"),
+            ]
+        );
+        let gpt = ids::gizmo("gpt", "g-0002").uuid;
+        assert_eq!(
+            tree("c2"),
+            [
+                (
+                    "Custom GPT".to_string(),
+                    None,
+                    true,
+                    false,
+                    Some("g-0002".to_string())
+                ),
+                chat(Some(gpt), "c2"),
+            ]
+        );
+        assert_eq!(tree("c3"), [chat(None, "c3")]);
     }
 }
