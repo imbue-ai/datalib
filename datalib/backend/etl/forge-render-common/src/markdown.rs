@@ -12,7 +12,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
-use datalib_etl_render::message::{chip_link, source_link, stamp_text_html};
+use datalib_etl_render::message::{chip_link, message_stamp_text_html, source_link};
 use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
@@ -179,7 +179,7 @@ fn header(c: &Comment) -> String {
         Some(_) => person(c.author.as_deref(), c.author_handle.as_ref()),
         None => format!("**{}**", person(c.author.as_deref(), None)),
     };
-    let when = stamp_text_html(&c.created_at);
+    let when = message_stamp_text_html(&c.created_at);
     let link = c
         .url
         .as_deref()

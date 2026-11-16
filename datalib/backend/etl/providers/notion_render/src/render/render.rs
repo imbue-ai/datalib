@@ -19,7 +19,7 @@ use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
 use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
-use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_etl_render::message::{chip_link, message_stamp_text_html};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::grid_rows::GridRow;
@@ -49,7 +49,8 @@ use datalib_etl_render::pages::batches;
 ///      under the shared title line, with its ids in the front matter.
 /// v13: a source has a table of contents, the path above a page links it
 ///      where the path used to link Notion, and a trashed page says so.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
+pub const RENDER_VERSION: u32 = 14;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -355,7 +356,7 @@ fn thread_markdown(
             Some(h) => chip_link(author, &h),
             None => format!("**{}**", escape_name_inline(author)),
         };
-        out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
+        out.push_str(&format!("{who} · {}\n\n", message_stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n</div>\n\n");
     }
