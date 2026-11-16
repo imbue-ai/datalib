@@ -26,8 +26,7 @@
 # as one table whose name is read under the group's type (`api` is
 # the product's own API; `export`, `backup` and the like read files
 # and carry their own `path`), and the render step only render knobs
-# (none for most providers; e.g. beeper's `period`, perseus's
-# `alignment_pairs`).
+# (none for most providers; e.g. perseus's `alignment_pairs`).
 #
 # TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits

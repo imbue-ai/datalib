@@ -35,6 +35,7 @@ use super::parse::{
     ShreddedConversation, ATTACHMENTS_PROJECTION_SQL,
 };
 use datalib_id::Identity;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::providers::Provider;
 
 /// Bump when the item-shape / column mapping changes meaningfully.
@@ -66,7 +67,8 @@ use datalib_schema::providers::Provider;
 ///     as typed.
 /// v14: a message, a project's text or a document is markdown as
 ///     written again, HTML included.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: a conversation in a project sits in the project.
+pub const RENDER_VERSION: u32 = 15;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -362,6 +364,7 @@ fn build_chat(
             let block_author = block_model.unwrap_or_else(|| btype.to_string());
             let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
             items.push(NormalizedChatItem {
+                reply_to: None,
                 message_uuid: block_id.uuid.clone(),
                 author_handle: block_handle,
                 author_kind: AuthorKind::Named,
@@ -401,6 +404,7 @@ fn build_chat(
             ItemKind::Attachment
         };
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: msg_id.uuid.clone(),
             author_handle: author_handle.clone(),
             author_kind,
@@ -444,9 +448,16 @@ fn build_chat(
     // declared as they are.
     inputs.read("users", &conv.account_uuid);
     let project_names = inputs.lookup("projects", project_names);
+    let containers = conv
+        .project_uuid
+        .iter()
+        .map(|uuid| project_node(source_id, uuid, project_names.get(uuid).cloned()))
+        .collect();
     NormalizedChat {
         named_after: Vec::new(),
         id: chat_uuid.clone(),
+        containers,
+        filed_under: Vec::new(),
         chat_uuid: chat_uuid.clone(),
         display: title.clone(),
         title: Some(title),
@@ -468,7 +479,6 @@ fn build_chat(
         org_name: conv.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: chat_uuid,
             source_ref: None,
             items,
@@ -481,6 +491,18 @@ fn build_chat(
         .collect(),
         inputs: inputs.declared(),
     }
+}
+
+/// The project a conversation is in: the same node as the project's own
+/// page, which chat-common makes read together and a place, so every
+/// document that names it says the same of it.
+fn project_node(source_id: &str, project_uuid: &str, name: Option<String>) -> DataNodeRow {
+    let id = ids::project(source_id, project_uuid);
+    DataNodeRow::new("", id.uuid, source_id, project_profile().chat_kind)
+        .named(name)
+        .upstream(id.entity_kind, id.natural_key, None)
+        .read_together()
+        .place()
 }
 
 fn build_project_page(
@@ -552,6 +574,7 @@ fn build_project_page(
             .and_then(filter_nonempty);
         let doc_id = ids::project_document(source_id, &doc.doc_uuid, ms);
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: doc_id.uuid.clone(),
             author_handle: None,
             author_kind: AuthorKind::Unknown,
@@ -587,6 +610,8 @@ fn build_project_page(
     NormalizedChat {
         named_after: Vec::new(),
         id: page_uuid.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: page_uuid.clone(),
         display: name.clone(),
         // Distinguishes a project page from a chat page at a glance;
@@ -610,7 +635,6 @@ fn build_project_page(
         org_name: project.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: page_uuid,
             source_ref: None,
             items,
@@ -647,6 +671,7 @@ fn clamp_doc_text(content: &str, max_bytes: Option<usize>) -> String {
 
 fn project_item(id: Identity, heading: &str, kind_label: &str, text: String) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Unknown,
@@ -711,14 +736,14 @@ fn in_reading_order<'a>(
                 b.message_uuid.as_str(),
             ))
     });
-    let nodes: Vec<TreeNode<'_>> = by_time
+    let data_nodes: Vec<TreeNode<'_>> = by_time
         .iter()
         .map(|m| TreeNode {
             id: &m.message_uuid,
             parent: m.parent_message_uuid.as_deref(),
         })
         .collect();
-    let Some(order) = leaf.and_then(|leaf| reading_order(&nodes, leaf)) else {
+    let Some(order) = leaf.and_then(|leaf| reading_order(&data_nodes, leaf)) else {
         return by_time.into_iter().map(|m| (m, Vec::new())).collect();
     };
     let by_uuid: HashMap<&str, &MessageRow> = by_time
@@ -1419,5 +1444,109 @@ mod readable_tool_tests {
             "- [Warp &lt;core&gt;](https://ma.test/warp) — Memory Alpha\n\
              - [Dilithium](https://ma.test/d)\n\n```\ndone\n```\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use crate::render::parse::{ClaudeConversation, ConversationRow, ProjectRow};
+    use serde_json::json;
+
+    fn conversation(uuid: &str, project: Option<&str>) -> ClaudeConversation {
+        ClaudeConversation {
+            conv: ConversationRow {
+                account_uuid: "acct".into(),
+                conversation_uuid: uuid.into(),
+                project_uuid: project.map(str::to_string),
+                org_uuid: None,
+                org_name: None,
+                name: Some("Warp field theory".into()),
+                summary: None,
+                created_at: None,
+                updated_at: None,
+                raw_json: json!({}),
+            },
+            upstream_payload: json!({"uuid": uuid, "chat_messages": []}),
+            inputs: Inputs::default(),
+        }
+    }
+
+    /// A conversation in a project sits in the project, which is the same
+    /// node as the project's own page: a place, read together. A
+    /// conversation in no project has nothing above it and is its own
+    /// place.
+    #[test]
+    fn a_conversation_in_a_project_sits_in_it() {
+        let parsed = ParsedExport {
+            projects: vec![ProjectRow {
+                creator_uuid: "acct".into(),
+                creator_name: None,
+                project_uuid: "p1".into(),
+                org_uuid: None,
+                org_name: None,
+                name: Some("Holodeck".into()),
+                description: Some("Programs.".into()),
+                prompt_template: None,
+                is_starter: None,
+                created_at: None,
+                updated_at: None,
+                raw_json: json!({}),
+                docs: Vec::new(),
+                inputs: Inputs::default(),
+            }],
+            project_name_by_uuid: [("p1".to_string(), "Holodeck".to_string())].into(),
+            conversations: vec![conversation("c1", Some("p1")), conversation("c2", None)],
+            ..Default::default()
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &parsed,
+            out.path(),
+            "cl",
+            RenderOptions::default(),
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+            u64::MAX,
+        )
+        .unwrap();
+        let project = ids::project("cl", "p1").uuid;
+        let doc = |uuid: &str| docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
+        let roles = |n: &DataNodeRow| (n.parent_uuid.clone(), n.read_together, n.is_place);
+
+        let page = doc(&project);
+        let [page_node] = page.data_nodes.as_slice() else {
+            panic!("{:?}", page.data_nodes)
+        };
+        assert_eq!(roles(page_node), (None, true, true));
+
+        let in_project = doc(&ids::conversation("cl", "c1").uuid);
+        let [above, chat] = in_project.data_nodes.as_slice() else {
+            panic!("{:?}", in_project.data_nodes)
+        };
+        assert_eq!(above.uuid, project);
+        assert_eq!(roles(above), roles(page_node));
+        assert_eq!(
+            (above.kind.as_str(), above.name.as_deref()),
+            (page_node.kind.as_str(), Some("Holodeck"))
+        );
+        assert_eq!(
+            (
+                above.upstream_entity_kind.as_deref(),
+                above.upstream_id.as_deref()
+            ),
+            (page_node.upstream_entity_kind.as_deref(), Some("p1"))
+        );
+        assert_eq!(roles(chat), (Some(project.clone()), true, false));
+
+        let alone = doc(&ids::conversation("cl", "c2").uuid);
+        let [chat] = alone.data_nodes.as_slice() else {
+            panic!("{:?}", alone.data_nodes)
+        };
+        assert_eq!(roles(chat), (None, true, true));
     }
 }

@@ -13,6 +13,7 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 // Entity kinds — the `entity_kind` recipe component, and the value
 // stamped into `grid_rows.upstream_entity_kind`.
+pub const KIND_PROJECT: &str = "project";
 pub const KIND_THREAD: &str = "thread";
 pub const KIND_RECORD: &str = "record";
 pub const KIND_TOOL_USE: &str = "tool_use";
@@ -27,6 +28,11 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 /// transcript id.
 pub fn thread(source_id: &str, thread_id: &str) -> Identity {
     IDS.mint(source_id, KIND_THREAD, thread_id.to_string(), None)
+}
+
+/// A project, keyed by the working directory its threads ran in.
+pub fn project(source_id: &str, cwd: &str) -> Identity {
+    IDS.mint(source_id, KIND_PROJECT, cwd.to_string(), None)
 }
 
 /// One line of a rollout, by its number within the thread.

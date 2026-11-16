@@ -308,6 +308,23 @@ pub fn not_negative(key: &str, value: Option<i64>) -> Result<(), String> {
     }
 }
 
+/// A wait between requests a config gives in seconds, held to 0 to 3600;
+/// unset waits none.
+pub fn seconds_between_requests(
+    key: &str,
+    seconds: Option<f64>,
+) -> Result<std::time::Duration, String> {
+    match seconds {
+        None => Ok(std::time::Duration::ZERO),
+        Some(s) if s.is_finite() && (0.0..=3600.0).contains(&s) => {
+            Ok(std::time::Duration::from_secs_f64(s))
+        }
+        Some(s) => Err(format!(
+            "`{key}` is {s}; it is seconds between requests, from 0 to 3600"
+        )),
+    }
+}
+
 /// A config stanza a source shows in `datalib-step help <type>`: its
 /// `[[groups]]` entry and its steps, the group's id the source type's own
 /// name. Each provider's config crate exports its own as `EXAMPLES`, a

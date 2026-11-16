@@ -56,6 +56,14 @@ Every row shares the PR's `qmd_path`, `conversation_uuid` and
 (repo, comment or review id) for the rest. A row that will not validate
 is dropped and recorded as a problem rather than failing the render.
 
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). The repository
+is a place, keyed by the id GitHub gives it on the PR's `base.repo`,
+which a rename keeps (its full name where the payload has no id). The
+PR is read together inside it, and its own row is the container's: the
+description is that row's text, so it has no row of its own. Every
+comment sits in the PR. A review comment's `in_reply_to_id` is a
+`ReplyTo` edge to the comment it answers, not a parent.
+
 ## Run it
 
 Render runs as a source's `render_markdown` step (`datalib-step`); there

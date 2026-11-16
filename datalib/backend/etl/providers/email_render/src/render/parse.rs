@@ -452,11 +452,11 @@ pub(crate) fn resolve_labels(
     mailboxes: &[Value],
     only_labels: &[String],
 ) -> datalib_etl_email::mailbox_labels::Resolved {
-    let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = mailboxes
+    let data_nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = mailboxes
         .iter()
         .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
         .collect();
-    datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels)
+    datalib_etl_email::mailbox_labels::resolve(&data_nodes, only_labels)
 }
 
 /// What the run reads, and on a full walk under a label filter the

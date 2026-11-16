@@ -151,8 +151,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
     });
@@ -204,8 +204,8 @@ async fn a_reset_and_resync_preserves_data_tables() {
     let db = RawDb::open(&db_path_for(&out_db)).await.unwrap();
     let download = fetch(FetchOptions {
         export_dir: Some(api.clone()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
     });

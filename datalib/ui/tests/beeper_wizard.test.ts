@@ -57,6 +57,7 @@ group = "beeper"
 function = "render_markdown"
 inputs = ["beeper/ingest"]
 [steps.params]
+# Retired, and still accepted: a room is one document now.
 period = "month"
 networks = ["signal", "googlechat"]
 `);

@@ -2,7 +2,6 @@
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -90,12 +89,12 @@ impl DataProcessor for ClaudeIngest {
                 latchkey: self.latchkey.clone(),
                 // users.json is expected alongside the raw store (playback seeds it).
                 export_dir: Some(self.raw_path.clone()),
-                overlap: self
+                refetch_newest_conversations: self
                     .sync
-                    .refresh_most_recent_n_chat_count
-                    .map(|v| v as usize)
-                    .unwrap_or(0),
-                sleep_between: Duration::ZERO,
+                    .refetch_newest_conversations
+                    .map(|v| v as usize),
+                max_conversations_per_run: self.sync.max_conversations_per_run.map(|v| v as usize),
+                wait_between_requests: self.sync.wait_between_requests(),
                 since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 projects: self.sync.projects,

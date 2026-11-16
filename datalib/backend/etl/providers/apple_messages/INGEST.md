@@ -5,7 +5,7 @@ SQLite file Apple's Messages app keeps on a Mac — table for table into
 doltlite, through the same engine as `lightroom`, `apple_photos` and
 `whatsapp` (`datalib/backend/etl/sqlite_mirror/`, explained in
 [`lightroom/INGEST.md`](../lightroom/INGEST.md)). Then it renders every
-chat through chat-common, one page per month. This file covers only what
+chat through chat-common, one page per chat. This file covers only what
 Messages adds.
 
 ## The database
@@ -132,6 +132,12 @@ custom emoji in `associated_message_emoji`) with
 `associated_message_guid` naming the target as `p:<part>/<guid>`. A
 3000-series row withdraws one; render applies them in date order, so a
 withdrawn tapback is absent from the page rather than shown and struck.
+
+An inline reply carries `thread_originator_guid`, the guid of the
+message that started the thread it was sent in; render makes it a reply
+edge to that message when the chat holds it. A database with no such
+column renders without the edges. The fixture sets none; the round-trip
+test sets one.
 `item_type != 0` marks a group event (participant added or removed, a
 rename, someone leaving), rendered as a system note.
 

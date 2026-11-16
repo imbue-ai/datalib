@@ -9,7 +9,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8752-b0c1-474a169fdb3c
 markdown_uuid: 00000000-0000-8752-b0c1-474a169fdb3c
-period: all
 display: "#ten-forward"
 account: "picard@enterprise.starfleet"
 external_id: "C_TENFWD#12604000600.000600"
@@ -46,7 +45,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8a4c-aff9-7a14aadb2344
 markdown_uuid: 00000000-0000-8a4c-aff9-7a14aadb2344
-period: all
 display: "#bridge"
 account: "picard@enterprise.starfleet"
 external_id: "C_BRIDGE#12604000700.000700"
@@ -74,7 +72,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-86e8-a93e-c2df52701153
 markdown_uuid: 00000000-0000-86e8-a93e-c2df52701153
-period: all
 display: "@William T. Riker, Worf"
 account: "picard@enterprise.starfleet"
 external_id: "G_AWAYTEAM#12604000903.000903"
@@ -101,7 +98,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8317-9ef9-393bf7346f79
 markdown_uuid: 00000000-0000-8317-9ef9-393bf7346f79
-period: all
 display: "#bridge"
 account: "picard@enterprise.starfleet"
 external_id: "C_BRIDGE#12604000100.000100"
@@ -148,7 +144,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-85ce-ad38-deac11f57f93
 markdown_uuid: 00000000-0000-85ce-ad38-deac11f57f93
-period: all
 display: "#bridge"
 account: "picard@enterprise.starfleet"
 external_id: "C_BRIDGE#12604000400.000400"
@@ -173,7 +168,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8ad6-bdfa-3f1529359a94
 markdown_uuid: 00000000-0000-8ad6-bdfa-3f1529359a94
-period: all
 display: "@William T. Riker, Worf"
 account: "picard@enterprise.starfleet"
 external_id: "G_AWAYTEAM#12604000904.000904"
@@ -198,7 +192,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-83bc-ae17-f15c9ea6dbb3
 markdown_uuid: 00000000-0000-83bc-ae17-f15c9ea6dbb3
-period: all
 display: "@William T. Riker"
 account: "picard@enterprise.starfleet"
 external_id: "D_RIKER#12604000900.000900"
@@ -223,7 +216,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8c74-8f5e-10f7cfb23eb4
 markdown_uuid: 00000000-0000-8c74-8f5e-10f7cfb23eb4
-period: all
 display: "@William T. Riker"
 account: "picard@enterprise.starfleet"
 external_id: "D_RIKER#12604000901.000901"
@@ -248,7 +240,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8c86-9536-e7d7234af0ca
 markdown_uuid: 00000000-0000-8c86-9536-e7d7234af0ca
-period: all
 display: "@Lt. Cmdr. Data"
 account: "picard@enterprise.starfleet"
 external_id: "D_DATA#12604000902.000902"
@@ -275,7 +266,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8948-9dff-ce3daf102bd8
 markdown_uuid: 00000000-0000-8948-9dff-ce3daf102bd8
-period: all
 display: "#engineering"
 account: "picard@enterprise.starfleet"
 external_id: "C_ENG#12604000500.000500"
@@ -300,7 +290,6 @@ provider: slack
 source_label: "Slack"
 chat_uuid: 00000000-0000-8d68-b7dc-08d9ae2795f6
 markdown_uuid: 00000000-0000-8d68-b7dc-08d9ae2795f6
-period: all
 display: "#bridge"
 account: "picard@enterprise.starfleet"
 external_id: "C_BRIDGE#12604000800.000800"

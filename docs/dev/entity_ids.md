@@ -336,8 +336,8 @@ backup, and expect a re-key when you do:
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss), and `NormalizedDoc::source_ref`
-   on every bucket whose id is not the chat's own — a period of a chat,
-   a subagent's transcript. For contact-common providers,
+   on every document whose id is not the chat's own, such as a
+   subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
    `ContactDoc::upstream_account` (the external id is the contact's `key`).
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids

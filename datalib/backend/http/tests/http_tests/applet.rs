@@ -77,6 +77,8 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 sections: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: Vec::new(),
             },

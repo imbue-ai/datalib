@@ -1879,6 +1879,7 @@ edges
     dst_markdown_uuid
     dst_anchor_uuid
     label
+    kind
 grid_rows
     uuid
     provider
@@ -1906,6 +1907,10 @@ grid_rows
     channel
     conversation_name
     conversation_uuid
+    parent_uuid
+    sort_key
+    read_uuid
+    place_uuid
     message_index
     entire_chat
     preview

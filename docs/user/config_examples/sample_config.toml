@@ -135,7 +135,7 @@ group = "claude-api"
 function = "ingest"
 command = "datalib-step"
 [steps.params.api]
-# refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
+# refetch_newest_conversations = 3   # fetch the 3 newest again every sync
 # since = "2025-01-01"      # only sync conversations updated at/after this
 # projects = false          # skip Claude Projects (default: on)
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)

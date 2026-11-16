@@ -27,12 +27,6 @@ pub fn plan_ingest(ctx: PlanContext, config: SignalConfig) -> Result<Vec<Box<dyn
     let sync = config
         .backup
         .ok_or_else(|| anyhow!("signal source {name} missing `backup.path`"))?;
-    if sync.period.is_some() {
-        anyhow::bail!(
-            "signal `backup.period` is a render knob — put `period` in the \
-             render step's params instead"
-        );
-    }
     Ok(vec![Box::new(SignalIngest {
         id: format!("signal/{name}/download"),
         raw_path,
@@ -122,7 +116,6 @@ mod tests {
             sync: SignalSync {
                 path: td.path().join("backup"),
                 aep_env_var: Some("DATALIB_TEST_SIGNAL_AEP_NEVER_SET".into()),
-                ..Default::default()
             },
         };
         let (progress, control) = (Progress::noop(), DownloadControl::default());

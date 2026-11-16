@@ -29,6 +29,10 @@ pub struct ParsedContact {
     /// came from. Shows up on grid rows as `channel` and groups
     /// contacts together in the UI.
     pub addressbook: String,
+    /// The `addressbooks` row the card is in: upstream's id for the
+    /// address book, which a rename keeps. `None` for a row that names
+    /// none.
+    pub addressbook_id: Option<String>,
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
@@ -151,6 +155,7 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
             if let Some(book) = &row.addressbook_id {
                 c.inputs.push(Input::new("addressbooks", book));
             }
+            c.addressbook_id = row.addressbook_id.clone();
             out.contacts.push(c);
         }
     }
@@ -188,6 +193,7 @@ fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
     let (photo, photo_url) = card_photo(block);
     let photo = photo.map(|p| datalib_etl::blob_cas::blake3_hex(&p.bytes));
     ParsedContact {
+        addressbook_id: None,
         inputs: Vec::new(),
         uid,
         addressbook: addressbook.to_string(),

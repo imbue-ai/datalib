@@ -27,6 +27,7 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_etl_render::processor::Unparsed;
 use datalib_etl_slack::ingest::schema_raw::split_key;
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
 
@@ -71,9 +72,10 @@ use datalib_schema::providers::Provider;
 /// v19: a message's time is on its author's profile clock (`tz`).
 /// v20: a ``` block with code on its fence lines is closed, so it no
 ///     longer turns the messages after it into code.
-/// v21: a message's time names no clock (`Z`): a profile's zone is where
+/// v21: a thread sits in its channel, in its workspace.
+/// v22: a message's time names no clock (`Z`): a profile's zone is where
 ///     its author is now, not where they were when they wrote it.
-pub const RENDER_VERSION: u32 = 21;
+pub const RENDER_VERSION: u32 = 22;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -310,6 +312,14 @@ fn build_chat(
         .get(&root.channel_id)
         .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
         .unwrap_or_default();
+    let is_dm = channels.get(&root.channel_id).is_some_and(|c| c.is_dm);
+    let containers = containers_of(
+        source_id,
+        root,
+        lookups.org_name.clone(),
+        cname.clone(),
+        is_dm,
+    );
     let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
     let thread_uuid = thread.uuid.clone();
 
@@ -352,6 +362,8 @@ fn build_chat(
     NormalizedChat {
         named_after,
         id: thread_uuid.clone(),
+        containers,
+        filed_under: Vec::new(),
         chat_uuid: thread_uuid.clone(),
         display: cname,
         title: Some(title),
@@ -380,7 +392,6 @@ fn build_chat(
         org_name: lookups.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: thread_uuid,
             source_ref: None,
             items,
@@ -396,6 +407,38 @@ fn build_chat(
             .collect(),
         inputs: bucket.inputs.declared(),
     }
+}
+
+/// The workspace, then the channel or direct message: both places a
+/// person browses, each keyed on Slack's own id.
+fn containers_of(
+    source_id: &str,
+    root: &Message,
+    workspace_name: Option<String>,
+    channel_name: String,
+    is_dm: bool,
+) -> Vec<DataNodeRow> {
+    let workspace = ids::workspace(source_id, &root.team_id);
+    let channel = ids::channel(source_id, &root.team_id, &root.channel_id);
+    let channel_kind = if is_dm { "Slack DM" } else { "Slack Channel" };
+    vec![
+        DataNodeRow::new("", workspace.uuid, source_id, "Slack Workspace")
+            .named(workspace_name)
+            .upstream(
+                workspace.entity_kind,
+                workspace.natural_key,
+                root.team_id.clone(),
+            )
+            .place(),
+        DataNodeRow::new("", channel.uuid, source_id, channel_kind)
+            .named(Some(channel_name))
+            .upstream(
+                channel.entity_kind,
+                channel.natural_key,
+                root.team_id.clone(),
+            )
+            .place(),
+    ]
 }
 
 /// Each user who wrote in the thread, once, in the order they first did.
@@ -478,6 +521,7 @@ fn build_item(
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: msg_id.uuid.clone(),
         author_handle: m
             .user_id
@@ -844,6 +888,111 @@ mod tests {
     use datalib_etl_render::inputs::Inputs;
 
     use super::*;
+
+    /// A thread sits in its channel, and the channel in its workspace:
+    /// both places, keyed on Slack's own ids. The thread is what is read
+    /// together, and a reply is a row inside it, not a reply edge.
+    #[test]
+    fn a_thread_sits_in_its_channel_in_its_workspace() {
+        let message = |ts: &str, root: bool| Message {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            ts: ts.into(),
+            thread_ts: Some("12604000100.000100".into()),
+            effective_thread_ts: "12604000100.000100".into(),
+            is_thread_root: root,
+            user_id: Some("U1".into()),
+            text: "Engage.".into(),
+            ts_iso: None,
+            raw_json: serde_json::json!({}),
+        };
+        let mut shared = Shared {
+            workspace: Some(super::super::Workspace {
+                row_id: "T1".into(),
+                team_id: "T1".into(),
+                team_name: Some("Enterprise".into()),
+                team_url: None,
+                self_user_id: None,
+            }),
+            ..Default::default()
+        };
+        shared.channels.insert(
+            "C1".into(),
+            super::super::Channel {
+                channel_id: "C1".into(),
+                name: Some("bridge".into()),
+                ..Default::default()
+            },
+        );
+        let parsed = ParsedSlack {
+            shared,
+            threads: vec![SlackThreadBucket {
+                thread_key: "T1#C1#12604000100.000100".into(),
+                messages: vec![
+                    message("12604000100.000100", true),
+                    message("12604000200.000100", false),
+                ],
+                blobs: Default::default(),
+                inputs: Inputs::default(),
+            }],
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(&parsed, out.path(), "src", &Progress::noop(), &mut |d| {
+            docs.push(d);
+            Ok(())
+        })
+        .unwrap();
+        let [doc] = docs.as_slice() else {
+            panic!("one thread, one document")
+        };
+        let workspace = ids::workspace("src", "T1").uuid;
+        let channel = ids::channel("src", "T1", "C1").uuid;
+        let thread = ids::thread("src", "T1", "C1", "12604000100.000100").uuid;
+        let tree: Vec<_> = doc
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                    n.upstream_id.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tree,
+            [
+                (workspace.as_str(), None, true, false, Some("T1")),
+                (
+                    channel.as_str(),
+                    Some(workspace.as_str()),
+                    true,
+                    false,
+                    Some("C1")
+                ),
+                (
+                    thread.as_str(),
+                    Some(channel.as_str()),
+                    false,
+                    true,
+                    Some("C1#12604000100.000100")
+                ),
+            ]
+        );
+        assert_eq!(doc.data_nodes[0].name.as_deref(), Some("Enterprise"));
+        assert_eq!(doc.data_nodes[1].name.as_deref(), Some("#bridge"));
+        let messages: Vec<_> = doc.rows.iter().filter(|r| r.uuid != thread).collect();
+        assert_eq!(messages.len(), 2);
+        for row in messages {
+            assert_eq!(row.parent_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.read_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.place_uuid.as_deref(), Some(channel.as_str()));
+        }
+        assert!(doc.edges.is_empty(), "{:?}", doc.edges);
+    }
 
     /// A root opening with a ``` block was titled "```Kitchen".
     #[test]

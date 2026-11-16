@@ -38,6 +38,7 @@ use datalib_columns::Entity;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{entity_link, stamp_text_html};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
@@ -373,6 +374,18 @@ fn step_link(step: &str) -> String {
     entity_link(function, &Entity::Step(step).uri(), step)
 }
 
+/// The report, read together at the top of its source, as the subject
+/// that is its document describes it: every other measurement sits in it.
+fn report_node(source_id: &str, markdown_uuid: &str, subjects: &[Subject]) -> DataNodeRow {
+    let mut node = DataNodeRow::new(markdown_uuid, markdown_uuid, source_id, "Storage report")
+        .named(Some(format!("{source_id} storage")))
+        .read_together();
+    if let Some(s) = subjects.iter().find(|s| s.uuid(source_id) == markdown_uuid) {
+        node = node.upstream(s.kind.as_str(), s.path.clone(), None);
+    }
+    node
+}
+
 /// Turn a scan into the document and samples to store. Writes nothing:
 /// see [`Measured::write_report`]. `None` when the source has nothing
 /// to measure. `rendered_rel` is the render step's own tree, where the
@@ -456,6 +469,12 @@ pub fn plan(
             items: s.items,
         });
     }
+    let node = report_node(source_id, &markdown_uuid, &subjects);
+    let inside = Lineage::top().below(&node);
+    for row in rows.iter_mut().filter(|r| r.uuid != markdown_uuid) {
+        row.parent_uuid = inside.parent_uuid.clone();
+        row.read_uuid = inside.read_uuid.clone();
+    }
 
     Ok(Some(Measured {
         doc: RenderedMarkdown {
@@ -471,6 +490,8 @@ pub fn plan(
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: vec![node],
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         },
@@ -596,6 +617,44 @@ mod tests {
             None,
         );
         assert_eq!(recomputed, row.uuid);
+    }
+
+    /// The report is read together, and each measurement other than the
+    /// tree its document is sits in it.
+    #[test]
+    fn each_measurement_sits_in_the_report() {
+        let td = tempfile::tempdir().unwrap();
+        let subjects = vec![
+            subject("s/ingest", MeasurementKind::Tree, Some(64), Some(2)),
+            subject(
+                "s/ingest/e.doltlite_db#t",
+                MeasurementKind::Table,
+                None,
+                Some(7),
+            ),
+        ];
+        let m = plan(
+            td.path(),
+            "s",
+            "s/render_markdown",
+            subjects,
+            "2026-09-07T10:00:00-07:00",
+        )
+        .unwrap()
+        .expect("a measured source");
+        let doc = &m.doc;
+        assert_eq!(doc.data_nodes.len(), 1);
+        assert_eq!(doc.data_nodes[0].uuid, doc.markdown_uuid);
+        assert!(doc.data_nodes[0].read_together);
+        assert_eq!(doc.data_nodes[0].upstream_id.as_deref(), Some("s/ingest"));
+        let tree = doc.rows.iter().find(|r| r.is_document).unwrap();
+        let table = doc.rows.iter().find(|r| !r.is_document).unwrap();
+        assert_eq!(tree.parent_uuid, None);
+        assert_eq!(
+            table.parent_uuid.as_deref(),
+            Some(doc.markdown_uuid.as_str())
+        );
+        assert_eq!(table.read_uuid.as_deref(), Some(doc.markdown_uuid.as_str()));
     }
 
     fn previous(subjects: &[Subject]) -> std::collections::HashMap<String, Option<i64>> {

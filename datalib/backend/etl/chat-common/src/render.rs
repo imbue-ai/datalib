@@ -1,10 +1,14 @@
-//! `render_all` — drives every `(chat, period)` bucket through
+//! `render_all` — drives every chat's documents through
 //! [`render_one`] and feeds rendered docs into the orchestrator's
 //! `on_doc_complete` callback.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+use datalib_schema::edges::{EdgeKind, EdgeRow};
+use datalib_schema::filings::FilingRow;
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -54,7 +58,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v24: a `Markdown` body that leaves a fence or an HTML block open is
 /// closed at its end, so the messages after it are not swallowed.
 /// v25: titles, names, filenames and labels lose their bidi controls.
-pub const LAYOUT_VERSION: u32 = 25;
+/// v26: a chat is one document; the front matter has no `period`, and
+/// no title says which months it holds.
+pub const LAYOUT_VERSION: u32 = 26;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -76,7 +82,6 @@ pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
@@ -277,6 +282,8 @@ fn chat_names_shown(chat: &NormalizedChat) -> NormalizedChat {
     let shown = |s: &Option<String>| s.as_deref().map(without_bidi_controls);
     NormalizedChat {
         id: chat.id.clone(),
+        containers: chat.containers.clone(),
+        filed_under: chat.filed_under.clone(),
         chat_uuid: chat.chat_uuid.clone(),
         display: without_bidi_controls(&chat.display),
         title: shown(&chat.title),
@@ -389,6 +396,9 @@ fn render_one(
         &mut problems,
     );
     put_supplied_terms(chat, doc, &mut rows);
+    let tree = tree_of(profile, chat, doc, source_id);
+    place_rows(&mut rows, &doc.markdown_uuid, &tree);
+    let edges = reply_edges(doc);
 
     let items_rendered = doc
         .items
@@ -408,7 +418,7 @@ fn render_one(
         render_version: profile.render_version,
         rows,
         sections,
-        edges: Vec::new(),
+        edges,
         contacts: crate::people::document_contacts(
             source_id,
             &doc.items,
@@ -418,6 +428,8 @@ fn render_one(
         .iter()
         .map(datalib_etl_render::photo::with_photo_url)
         .collect(),
+        data_nodes: tree.data_nodes,
+        filings: tree.filings,
         photos: Vec::new(),
         problems,
     })
@@ -469,26 +481,15 @@ fn report_missing_bytes(doc: &mut NormalizedDoc, blobs: &BlobBundle) {
 
 // Markdown
 
-/// `(2024-03)` for a time bucket; nothing for the one bucket that holds
-/// the whole chat, where "(all)" would tell the reader nothing.
-fn period_suffix(period_key: &str) -> Option<String> {
-    (period_key != Period::key_for_all()).then(|| format!("({period_key})"))
-}
-
 fn render_markdown(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
 ) -> Vec<Section> {
-    let period = period_suffix(&doc.period_key);
-    let title = match &period {
-        Some(p) => format!("{chat_title} {p}"),
-        None => chat_title.to_string(),
-    };
     let mut s = String::with_capacity(1024);
     s.push_str("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(&title)));
+    s.push_str(&format!("title: {}\n", yaml_name(chat_title)));
     s.push_str(&format!("provider: {}\n", profile.provider));
     s.push_str(&format!(
         "source_label: {}\n",
@@ -496,7 +497,6 @@ fn render_markdown(
     ));
     s.push_str(&format!("chat_uuid: {}\n", chat.chat_uuid));
     s.push_str(&format!("markdown_uuid: {}\n", doc.markdown_uuid));
-    s.push_str(&format!("period: {}\n", doc.period_key));
     s.push_str(&format!("display: {}\n", yaml_scalar(&chat.display)));
     if let Some(a) = &chat.account {
         s.push_str(&format!("account: {}\n", yaml_scalar(a)));
@@ -510,13 +510,10 @@ fn render_markdown(
     s.push_str(&format!("item_count: {}\n", message_count(doc)));
     s.push_str("---\n\n");
 
-    // The chat's name and the period go in separately: a long title is
-    // clamped, and `(2024-03)` — which says *which slice of the
-    // conversation this file is* — must survive that.
     s.push_str(
         &Title {
             text: chat_title,
-            suffix: period.as_deref(),
+            suffix: None,
             markdown_uuid: Some(&doc.markdown_uuid),
             // Public per-chat URL when the provider has one (LinkedIn
             // post, Slack permalink, …); None for backup-based providers.
@@ -908,6 +905,151 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
 // Grid rows
 
 #[allow(clippy::too_many_arguments)]
+/// The containers one document of a chat carries, and where its rows sit.
+struct Tree {
+    data_nodes: Vec<DataNodeRow>,
+    filings: Vec<FilingRow>,
+    /// Where the document's own row sits.
+    document: Lineage,
+    /// Where its messages and reactions sit.
+    inside: Lineage,
+}
+
+/// The chat's containers, then the chat, read together and its own place
+/// when nothing above it is one. A document that is part of a chat rather
+/// than all of it, as a sub-agent's transcript is of a session, is a
+/// container inside the chat, read on its own.
+fn tree_of(
+    profile: &RenderProfile,
+    chat: &NormalizedChat,
+    doc: &NormalizedDoc,
+    source_id: &str,
+) -> Tree {
+    let md = &doc.markdown_uuid;
+    let mut data_nodes = Vec::with_capacity(chat.containers.len() + 2);
+    let mut at = Lineage::top();
+    for container in &chat.containers {
+        let node = DataNodeRow {
+            markdown_uuid: md.clone(),
+            ..container.clone()
+        }
+        .under(&at);
+        at = at.below(&node);
+        data_nodes.push(node);
+    }
+    let mut chat_node = DataNodeRow::new(md, &chat.chat_uuid, source_id, &profile.chat_kind)
+        .named(Some(chat.display.clone()))
+        .read_together();
+    if !chat.containers.iter().any(|c| c.is_place) {
+        chat_node = chat_node.place();
+    }
+    // As the document row's backpointer: a document that is the whole chat
+    // and says what it is upstream (a sub-agent's transcript) says so here.
+    let own_ref = doc.source_ref.as_ref().filter(|_| *md == chat.chat_uuid);
+    let upstream = match own_ref {
+        Some(r) => Some((r.entity_kind.clone(), r.native_id.clone())),
+        None => chat
+            .external_id
+            .clone()
+            .map(|id| (profile.chat_entity_kind.to_string(), id)),
+    };
+    if let Some((kind, id)) = upstream {
+        chat_node = chat_node.upstream(kind, id, chat.upstream_account.clone());
+    }
+    let chat_node = chat_node.under(&at);
+    let in_chat = at.below(&chat_node);
+    data_nodes.push(chat_node);
+    let filings = filed(chat, md, &mut data_nodes);
+    if *md == chat.chat_uuid {
+        return Tree {
+            data_nodes,
+            filings,
+            document: at,
+            inside: in_chat,
+        };
+    }
+    let mut part = DataNodeRow::new(md, md, source_id, &profile.chat_kind).read_together();
+    if let Some(r) = &doc.source_ref {
+        part = part.upstream(
+            r.entity_kind.clone(),
+            r.native_id.clone(),
+            chat.upstream_account.clone(),
+        );
+    }
+    let part = part.under(&in_chat);
+    let inside = in_chat.below(&part);
+    data_nodes.push(part);
+    Tree {
+        data_nodes,
+        filings,
+        document: in_chat,
+        inside,
+    }
+}
+
+/// The chat filed under the last container of each path in
+/// `chat.filed_under`, and each container of every path added to `data_nodes`
+/// once, in its place.
+fn filed(chat: &NormalizedChat, md: &str, data_nodes: &mut Vec<DataNodeRow>) -> Vec<FilingRow> {
+    let mut filings = Vec::with_capacity(chat.filed_under.len());
+    for path in &chat.filed_under {
+        let mut at = Lineage::top();
+        for container in path {
+            let node = DataNodeRow {
+                markdown_uuid: md.to_string(),
+                ..container.clone()
+            }
+            .under(&at);
+            at = at.below(&node);
+            if !data_nodes.iter().any(|n| n.uuid == node.uuid) {
+                data_nodes.push(node);
+            }
+        }
+        if let Some(under) = &at.parent_uuid {
+            filings.push(FilingRow::new(md, &chat.chat_uuid, under));
+        }
+    }
+    filings
+}
+
+/// The document's own row where the document sits; every other row, a
+/// message or a reaction, inside it.
+fn place_rows(rows: &mut [GridRow], markdown_uuid: &str, tree: &Tree) {
+    for row in rows {
+        let at = if row.uuid == markdown_uuid {
+            &tree.document
+        } else {
+            &tree.inside
+        };
+        row.parent_uuid = at.parent_uuid.clone();
+        row.read_uuid = at.read_uuid.clone();
+        row.place_uuid = at.place_uuid.clone();
+    }
+}
+
+/// A reply edge from each item that answers another in this document. One
+/// whose target is not here keeps only what its body says.
+fn reply_edges(doc: &NormalizedDoc) -> Vec<EdgeRow> {
+    let md = &doc.markdown_uuid;
+    let held: std::collections::HashSet<&str> =
+        doc.items.iter().map(|i| i.message_uuid.as_str()).collect();
+    doc.items
+        .iter()
+        .filter_map(|item| {
+            let to = item.reply_to.as_deref().filter(|to| held.contains(to))?;
+            Some(EdgeRow {
+                kind: EdgeKind::ReplyTo.as_i64(),
+                edge_uuid: datalib_id::edge_id(md, Some(&item.message_uuid), md, Some(to), None),
+                src_markdown_uuid: md.clone(),
+                src_anchor_uuid: Some(item.message_uuid.clone()),
+                dst_markdown_uuid: md.clone(),
+                dst_anchor_uuid: Some(to.to_string()),
+                label: None,
+            })
+        })
+        .collect()
+}
+
 fn build_grid_rows(
     profile: &RenderProfile,
     chat: &NormalizedChat,
@@ -1369,6 +1511,8 @@ mod tests {
             contacts: Vec::new(),
             inputs: Vec::new(),
             id: "100".to_string(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             display: "Bridge Crew".to_string(),
             author: None,
@@ -1381,11 +1525,11 @@ mod tests {
             org_uuid: None,
             org_name: None,
             buckets: vec![NormalizedDoc {
-                period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
                 source_ref: None,
                 orphan_reactions: Vec::new(),
                 items: vec![NormalizedChatItem {
+                    reply_to: None,
                     message_uuid: "33333333-3333-3333-3333-333333333333".to_string(),
                     author_handle: None,
                     author_kind: AuthorKind::Named,
@@ -1419,6 +1563,195 @@ mod tests {
                 }],
             }],
         }
+    }
+
+    fn whole(mut chat: NormalizedChat) -> NormalizedChat {
+        chat.buckets[0].markdown_uuid = chat.chat_uuid.clone();
+        chat
+    }
+
+    /// A chat with nothing above it is read together and is its own place;
+    /// its messages and reactions sit in it, and its own row at the top.
+    #[test]
+    fn a_chat_alone_is_read_together_and_its_own_place() {
+        let chat = whole(mk_chat());
+        let doc = &chat.buckets[0];
+        let tree = tree_of(&test_profile(), &chat, doc, "src");
+        let [node] = tree.data_nodes.as_slice() else {
+            panic!("{:?}", tree.data_nodes)
+        };
+        assert_eq!(node.uuid, chat.chat_uuid);
+        assert_eq!(node.markdown_uuid, doc.markdown_uuid);
+        assert!(node.read_together && node.is_place, "{node:?}");
+        assert_eq!(node.parent_uuid, None);
+        assert_eq!(node.upstream_id.as_deref(), Some("bridge-crew@g.us"));
+
+        let mut rows = rows_of(&test_profile(), &chat);
+        place_rows(&mut rows, &doc.markdown_uuid, &tree);
+        let chat_id = Some(chat.chat_uuid.clone());
+        for row in &rows {
+            if row.uuid == chat.chat_uuid {
+                assert_eq!(row.parent_uuid, None, "{row:?}");
+            } else {
+                assert_eq!(
+                    (&row.parent_uuid, &row.read_uuid, &row.place_uuid),
+                    (&chat_id, &chat_id, &chat_id),
+                    "{}",
+                    row.uuid
+                );
+            }
+        }
+    }
+
+    /// A Slack thread sits in its channel: the channel is the place, so the
+    /// thread is not one, and each container carries the document's id.
+    #[test]
+    fn a_chat_under_a_place_sits_in_it() {
+        let mut chat = whole(mk_chat());
+        chat.containers = vec![
+            DataNodeRow::new("", "workspace", "src", "Slack workspace").place(),
+            DataNodeRow::new("", "channel", "src", "Slack channel").place(),
+        ];
+        let doc = &chat.buckets[0];
+        let tree = tree_of(&test_profile(), &chat, doc, "src");
+        let parents: Vec<_> = tree
+            .data_nodes
+            .iter()
+            .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref(), n.is_place))
+            .collect();
+        assert_eq!(
+            parents,
+            [
+                ("workspace", None, true),
+                ("channel", Some("workspace"), true),
+                (chat.chat_uuid.as_str(), Some("channel"), false),
+            ]
+        );
+        assert!(tree
+            .data_nodes
+            .iter()
+            .all(|n| n.markdown_uuid == doc.markdown_uuid));
+        assert_eq!(tree.inside.place_uuid.as_deref(), Some("channel"));
+        assert_eq!(
+            tree.inside.read_uuid.as_deref(),
+            Some(chat.chat_uuid.as_str())
+        );
+    }
+
+    /// A document that is part of a chat, as a sub-agent's transcript is of
+    /// its session, is a container inside the chat, read on its own.
+    #[test]
+    fn a_document_that_is_part_of_a_chat_is_read_on_its_own() {
+        let chat = mk_chat();
+        let doc = &chat.buckets[0];
+        let tree = tree_of(&test_profile(), &chat, doc, "src");
+        let part = tree.data_nodes.last().unwrap();
+        assert_eq!(part.uuid, doc.markdown_uuid);
+        assert_eq!(part.parent_uuid.as_deref(), Some(chat.chat_uuid.as_str()));
+        assert!(part.read_together);
+        assert_eq!(
+            tree.document.parent_uuid.as_deref(),
+            Some(chat.chat_uuid.as_str())
+        );
+        assert_eq!(
+            tree.inside.read_uuid.as_deref(),
+            Some(doc.markdown_uuid.as_str())
+        );
+        assert_eq!(
+            tree.inside.place_uuid.as_deref(),
+            Some(chat.chat_uuid.as_str())
+        );
+    }
+
+    /// An email thread is filed under each of its labels; a nested label
+    /// brings its parents, and two labels under one parent carry it once.
+    #[test]
+    fn a_chat_is_filed_under_the_last_container_of_each_path() {
+        let mut chat = whole(mk_chat());
+        let work = DataNodeRow::new("", "work", "src", "Label").place();
+        chat.filed_under = vec![
+            vec![
+                work.clone(),
+                DataNodeRow::new("", "acme", "src", "Label").place(),
+            ],
+            vec![work, DataNodeRow::new("", "zeta", "src", "Label").place()],
+        ];
+        let doc = &chat.buckets[0];
+        let tree = tree_of(&test_profile(), &chat, doc, "src");
+        let under: Vec<_> = tree.filings.iter().map(|f| f.under_uuid.as_str()).collect();
+        assert_eq!(under, ["acme", "zeta"]);
+        assert!(tree.filings.iter().all(|f| f.node_uuid == chat.chat_uuid));
+        let labels: Vec<_> = tree
+            .data_nodes
+            .iter()
+            .filter(|n| n.kind == "Label")
+            .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref()))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("work", None),
+                ("acme", Some("work")),
+                ("zeta", Some("work"))
+            ]
+        );
+    }
+
+    /// The containers and filings a provider names reach the document
+    /// `render_all` hands on: a copy of the chat made on the way, to clean
+    /// its names, once dropped them both.
+    #[test]
+    fn a_rendered_document_carries_the_containers_its_chat_names() {
+        let mut chat = whole(mk_chat());
+        chat.containers = vec![DataNodeRow::new("", "channel", "src", "Slack channel").place()];
+        chat.filed_under = vec![vec![DataNodeRow::new("", "label", "src", "Label").place()]];
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &test_profile(),
+            &[chat],
+            out.path(),
+            "test",
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |doc| {
+                docs.push(doc);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let uuids: Vec<_> = docs[0].data_nodes.iter().map(|n| n.uuid.as_str()).collect();
+        assert!(
+            uuids.contains(&"channel") && uuids.contains(&"label"),
+            "{uuids:?}"
+        );
+        assert_eq!(docs[0].filings.len(), 1);
+    }
+
+    /// A reply becomes an edge from it to what it answers, when that is in
+    /// the same document; one whose target is elsewhere draws none.
+    #[test]
+    fn a_reply_to_an_item_in_the_document_is_an_edge() {
+        let mut chat = mk_chat();
+        let doc = &mut chat.buckets[0];
+        let mut answer = doc.items[0].clone();
+        answer.message_uuid = "answer".into();
+        answer.reply_to = Some(doc.items[0].message_uuid.clone());
+        let mut stray = doc.items[0].clone();
+        stray.message_uuid = "stray".into();
+        stray.reply_to = Some("not-here".into());
+        doc.items.extend([answer, stray]);
+        let edges = reply_edges(doc);
+        let [edge] = edges.as_slice() else {
+            panic!("{edges:?}")
+        };
+        assert_eq!(EdgeKind::parse(edge.kind), Some(EdgeKind::ReplyTo));
+        assert_eq!(edge.src_anchor_uuid.as_deref(), Some("answer"));
+        assert_eq!(
+            edge.dst_anchor_uuid.as_deref(),
+            Some("33333333-3333-3333-3333-333333333333")
+        );
+        assert_eq!(edge.src_markdown_uuid, edge.dst_markdown_uuid);
     }
 
     /// An email's To and Cc reach the search by handle, and its labels as
@@ -1717,6 +2050,7 @@ mod tests {
         let profile = test_profile();
         let mut chat = mk_chat();
         chat.buckets[0].items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
             author_handle: None,
             author_kind: AuthorKind::Named,
@@ -2044,6 +2378,7 @@ mod tests {
 
     fn aside_item(uuid: &str, text: &str) -> NormalizedChatItem {
         NormalizedChatItem {
+            reply_to: None,
             message_uuid: uuid.to_string(),
             author_handle: None,
             author_kind: AuthorKind::Named,
@@ -2300,6 +2635,7 @@ mod tests {
         let mut chat = mk_chat();
         let base = chat.buckets[0].items[0].clone();
         let item = |id: &str, branch: &[&str]| NormalizedChatItem {
+            reply_to: None,
             message_uuid: id.to_string(),
             text: Some(format!("text of {id}")),
             branch: branch.iter().map(|b| b.to_string()).collect(),
@@ -2477,37 +2813,6 @@ mod tests {
         assert_eq!(chat_heading(&chat), "WhatsApp user …0108");
         chat.title = Some("#bridge: Make it so.".to_string());
         assert_eq!(chat_heading(&chat), "#bridge: Make it so.");
-    }
-
-    /// An unbucketed chat's title read "Bridge Crew (all)" (#902); a
-    /// monthly bucket keeps its "(2364-04)".
-    #[test]
-    fn only_a_real_time_bucket_suffixes_the_title() {
-        let profile = test_profile();
-        let mut chat = mk_chat();
-
-        let monthly = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Bridge Crew",
-        ));
-        assert!(
-            monthly.contains("title: \"Bridge Crew (2364-04)\"\n"),
-            "{monthly}"
-        );
-        assert!(monthly.contains(">Bridge Crew (2364-04)</h1>"), "{monthly}");
-
-        chat.buckets[0].period_key = Period::key_for_all().to_string();
-        let whole = join(&render_markdown(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            "Bridge Crew",
-        ));
-        assert!(whole.contains("title: \"Bridge Crew\"\n"), "{whole}");
-        assert!(whole.contains(">Bridge Crew</h1>"), "{whole}");
-        assert!(!whole.contains("(all)"), "{whole}");
     }
 
     #[test]

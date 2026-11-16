@@ -15,7 +15,7 @@ use serde_json::Value;
 use datalib_etl_github::ingest::db::{db_path_for, LoadedChild, LoadedRaw, RawDb};
 
 use datalib_etl_forge_render_common::{
-    opt_str, str_field, ChangeRequest, Comment, Parsed, Section,
+    opt_str, str_field, ChangeRequest, Comment, Container, Parsed, Section,
 };
 
 use super::ids::{KIND_ISSUE_COMMENT, KIND_PR_REVIEW, KIND_PR_REVIEW_COMMENT};
@@ -84,6 +84,23 @@ async fn read_everything(
 
 /// The bucket key a PR's rows share: `pull_requests.id`, and the same
 /// string composed from any child row's `(repo_full_name, pr_number)`.
+/// The repository a PR is in, by the id GitHub gives it on the PR's
+/// base, which a rename keeps; by its name where the payload has no id.
+fn repository(source_id: &str, base: Option<&Value>, name: &str) -> Container {
+    let id = base
+        .and_then(|b| b.pointer("/repo/id"))
+        .and_then(Value::as_i64)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| name.to_string());
+    let id = super::ids::repository(source_id, &id);
+    Container {
+        uuid: id.uuid,
+        kind: "GitHub repository",
+        entity_kind: id.entity_kind,
+        upstream_id: id.natural_key,
+    }
+}
+
 fn pr_pk(repo: &str, num: u32) -> String {
     format!("{repo}#{num}")
 }
@@ -112,6 +129,7 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
         out.change_requests.push(ChangeRequest {
             uuid: super::ids::pull_request(source_id, &repo, num, created_at.as_deref()).uuid,
             row_id: pr.id,
+            container_node: Some(repository(source_id, base, &repo)),
             container: repo,
             number: num,
             title: str_field(p, "title"),
@@ -261,5 +279,16 @@ mod no_data_tests {
             parse_api_dir(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.change_requests.is_empty());
         assert!(parsed.comments.is_empty());
+    }
+    /// A repository is keyed by GitHub's id for it, so a renamed one is
+    /// the same container.
+    #[test]
+    fn a_renamed_repository_is_the_same_container() {
+        let base = serde_json::json!({"repo": {"id": 1701, "full_name": "o/r"}});
+        let before = repository("src", Some(&base), "o/r");
+        let after = repository("src", Some(&base), "o/renamed");
+        assert_eq!(before.uuid, after.uuid);
+        assert_eq!(before.upstream_id, "1701");
+        assert_eq!(before.entity_kind, "repository");
     }
 }

@@ -17,6 +17,7 @@ use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::{join, Section};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -162,9 +163,13 @@ fn render_one(
             )
         })
         .collect();
+    let (data_nodes, at) = tree(profile, doc, source_id);
     let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
+        row.parent_uuid = at.parent_uuid;
+        row.read_uuid = at.read_uuid;
+        row.place_uuid = at.place_uuid;
     }
 
     // `row` reaches the index through `on_doc_complete` below; the
@@ -188,12 +193,46 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(())
+}
+
+/// The address book, then the card in it, read on its own; and where the
+/// card's row sits.
+fn tree(
+    profile: &ContactRenderProfile,
+    doc: &ContactDoc,
+    source_id: &str,
+) -> (Vec<DataNodeRow>, Lineage) {
+    let md = &doc.doc_uuid;
+    let mut data_nodes = Vec::with_capacity(2);
+    let mut at = Lineage::top();
+    if let Some(book) = &doc.address_book {
+        let book = DataNodeRow {
+            markdown_uuid: md.clone(),
+            ..book.clone()
+        }
+        .under(&at);
+        at = at.below(&book);
+        data_nodes.push(book);
+    }
+    let own = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
+        .named(Some(display_or_id(doc).to_string()))
+        .upstream(
+            profile.contact_entity_kind,
+            doc.contact.key.clone(),
+            doc.upstream_account.clone(),
+        )
+        .read_together()
+        .under(&at);
+    data_nodes.push(own);
+    (data_nodes, at)
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -601,6 +640,7 @@ mod tests {
             contact,
             doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_label: "LinkedIn Connections".to_string(),
+            address_book: None,
             member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
@@ -657,6 +697,58 @@ mod tests {
             account: Some("jlp@enterprise.test".to_string()),
             render_version: 1,
         }
+    }
+
+    /// A card is read on its own inside its address book, a place, and
+    /// its row sits where the card does.
+    #[test]
+    fn a_card_sits_in_its_address_book() {
+        let mut doc = mk_contact();
+        doc.address_book = Some(
+            DataNodeRow::new("", "book", "linkedin", "Address book")
+                .upstream("addressbook", "acct!/books/bridge/", None)
+                .place(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc.clone()],
+            dir.path(),
+            "linkedin",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rendered = &docs[0];
+        let md = doc.doc_uuid.as_str();
+        let data_nodes: Vec<(&str, &str, Option<&str>, bool, bool)> = rendered
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.markdown_uuid.as_str(),
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            data_nodes,
+            vec![
+                (md, "book", None, true, false),
+                (md, md, Some("book"), false, true),
+            ]
+        );
+        let row = &rendered.rows[0];
+        assert_eq!(row.parent_uuid.as_deref(), Some("book"));
+        assert_eq!(row.place_uuid.as_deref(), Some("book"));
+        assert_eq!(row.read_uuid, None);
     }
 
     #[test]

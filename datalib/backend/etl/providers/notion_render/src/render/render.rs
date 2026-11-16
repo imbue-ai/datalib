@@ -611,6 +611,8 @@ pub fn render_notion(
                 sections: Vec::new(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                data_nodes: doc.data_nodes.clone(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: doc.problems.clone(),
             })?;
@@ -666,6 +668,8 @@ pub fn render_notion(
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: doc.data_nodes.clone(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: doc.problems.clone(),
         })?;
@@ -692,6 +696,8 @@ pub fn render_notion(
             sections: Vec::new(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: doc.problems,
         })?;

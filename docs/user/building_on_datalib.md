@@ -442,7 +442,7 @@ three things, in this order:
 
 ## Showing a rendered document
 
-The rendered documents (an email thread, a Slack channel's month) are
+The rendered documents (an email thread, a Slack thread) are
 markdown, served by `GET /applet/unified_document_index/chat/{markdown_uuid}`.
 Two shapes in them are a contract your app can build on:
 

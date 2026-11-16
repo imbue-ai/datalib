@@ -95,9 +95,13 @@ pub struct FetchOptions {
     pub export_dir: Option<PathBuf>,
     /// The N most recently updated conversations of each org are
     /// fetched every run, held or not: a check against the live copy.
-    pub overlap: usize,
-    /// Between detail fetches.
-    pub sleep_between: Duration,
+    /// Ignored in `conv_uuids` mode.
+    pub refetch_newest_conversations: Option<usize>,
+    /// Conversations fetched per run, at most. Ignored in `conv_uuids`
+    /// mode.
+    pub max_conversations_per_run: Option<usize>,
+    /// Between conversation fetches, named or listed.
+    pub wait_between_requests: Duration,
     /// Only sync conversations whose listing `updated_at` is at or
     /// after this instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC).
     /// Older conversations are never detail-fetched — the listing walk
@@ -134,8 +138,9 @@ impl FetchOptions {
             latchkey: LatchkeySettings::default(),
             db,
             export_dir: None,
-            overlap: 0,
-            sleep_between: Duration::ZERO,
+            refetch_newest_conversations: None,
+            max_conversations_per_run: None,
+            wait_between_requests: Duration::ZERO,
             since: None,
             conv_uuids: Vec::new(),
             projects: true,
@@ -214,7 +219,8 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
-        "overlap": opts.overlap,
+        "refetch_newest_conversations": opts.refetch_newest_conversations,
+        "max_conversations_per_run": opts.max_conversations_per_run,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
     });
@@ -671,7 +677,10 @@ impl Ctx<'_> {
     async fn named(&self, orgs: &[Value], s: &mut FetchSummary) -> Result<bool> {
         let named = &self.opts.conv_uuids;
         self.bar.expect(named.len() as u64);
-        for raw in named {
+        for (i, raw) in named.iter().enumerate() {
+            if i > 0 && self.opts.wait_between_requests > Duration::ZERO {
+                sleep(self.opts.wait_between_requests).await;
+            }
             if self.stop().requested() {
                 break;
             }
@@ -891,12 +900,12 @@ impl Ctx<'_> {
         }
 
         let mut listed: Vec<Listed> = Vec::new();
-        let mut overlap: HashSet<String> = HashSet::new();
+        let mut newest: HashSet<String> = HashSet::new();
         let mut org_of: HashMap<String, (String, String)> = HashMap::new();
         for (org_uuid, org_name, listing) in &listings_by_org {
             // `since` gates fetching only: rows already stored stay, so
             // moving it further back later lists the older conversations
-            // as owed. Out-of-scope items are invisible to the overlap too.
+            // as owed. Out-of-scope items are never among the newest either.
             let mut in_scope: Vec<&Value> = Vec::new();
             for c in listing {
                 if updated_at_in_scope(c.get("updated_at").and_then(Value::as_str), since) {
@@ -911,9 +920,12 @@ impl Ctx<'_> {
                 let kb = b.get("updated_at").and_then(Value::as_str).unwrap_or("");
                 kb.cmp(ka)
             });
-            for c in sorted.iter().take(self.opts.overlap) {
+            for c in sorted
+                .iter()
+                .take(self.opts.refetch_newest_conversations.unwrap_or(0))
+            {
                 if let Some(u) = c.get("uuid").and_then(Value::as_str) {
-                    overlap.insert(u.into());
+                    newest.insert(u.into());
                 }
             }
             for item in &in_scope {
@@ -958,13 +970,16 @@ impl Ctx<'_> {
 
         let in_scope = listed.len();
         let mut owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed.clone()).await?;
-        // The overlap is looked at every run, held or not.
+        // The newest are looked at every run, held or not.
         for l in listed {
-            if overlap.contains(&l.key) && !owed.iter().any(|o| o.key == l.key) {
+            if newest.contains(&l.key) && !owed.iter().any(|o| o.key == l.key) {
                 owed.push(l);
             }
         }
         s.skipped = in_scope - owed.len();
+        if let Some(cap) = self.opts.max_conversations_per_run {
+            owed.truncate(cap);
+        }
         info!(
             event = "claude_priority_split",
             owed = owed.len(),
@@ -1031,7 +1046,17 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     if !ctx.opts.conv_uuids.is_empty() {
         ctx.config_problems.lock().unwrap().extend(ignored_beside(
             "conv_uuids",
-            &[("since", ctx.opts.since.clone())],
+            &[
+                ("since", ctx.opts.since.clone()),
+                (
+                    "max_conversations_per_run",
+                    ctx.opts.max_conversations_per_run.map(|n| n.to_string()),
+                ),
+                (
+                    "refetch_newest_conversations",
+                    ctx.opts.refetch_newest_conversations.map(|n| n.to_string()),
+                ),
+            ],
         ));
     }
     if !rate_limited {

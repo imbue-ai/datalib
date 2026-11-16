@@ -80,7 +80,7 @@ reports "Operation not permitted" is missing that, not the file.
 
 The whole database is mirrored table for table with its history, so a
 message deleted on the Mac is still in an earlier commit of the store.
-Every chat renders as a page a month.
+Every chat renders as one page, however long it runs.
 
 ## Apple Photos
 
@@ -778,8 +778,8 @@ file with a long history then fetches every revision.
 places and photos; YouTube watch history and subscriptions; and Gemini
 Apps activity, each prompt with Gemini's response and the files and
 images either one carried. Everything is rendered to markdown: a
-conversation as a page per month, and Gemini, YouTube and Maps as a
-page per year (subscriptions are one list). Voice bills and greetings
+conversation, and each of Gemini, YouTube and Maps, as one page
+(subscriptions are one list). Voice bills and greetings
 are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then

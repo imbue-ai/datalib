@@ -561,12 +561,13 @@ async fn a_repo_opened_before_the_first_commit_reads_after_it() {
     // same way.
     sqlx::query(
         "CREATE TABLE edges (edge_uuid TEXT PRIMARY KEY, src_markdown_uuid TEXT, \
-                 src_anchor_uuid TEXT, dst_markdown_uuid TEXT, dst_anchor_uuid TEXT, label TEXT)",
+                 src_anchor_uuid TEXT, dst_markdown_uuid TEXT, dst_anchor_uuid TEXT, label TEXT, \
+                 kind INTEGER)",
     )
     .execute(&writer)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO edges VALUES ('e-1','c-1',NULL,'c-2',NULL,'cites')")
+    sqlx::query("INSERT INTO edges VALUES ('e-1','c-1',NULL,'c-2',NULL,'cites',0)")
         .execute(&writer)
         .await
         .unwrap();

@@ -69,8 +69,8 @@ async fn claude_synth_playback_extract_roundtrip() {
         // Point export_dir at our input snapshot so users.json gets
         // ingested before the listing pass needs account_uuid.
         export_dir: Some(api.clone()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: Vec::new(),
         ..FetchOptions::new(db.clone())
     });

@@ -212,6 +212,7 @@ fn build_chats(
                 let date_ms = own_stamp_ms(Some(date), "DATE", parse_date_ms, &mut problems);
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
+                    reply_to: None,
                     message_uuid: id.uuid,
                     author_handle: Handle::linkedin_profile_url(field(p, "SENDER PROFILE URL")),
                     author_kind: match nonempty(from) {
@@ -258,6 +259,8 @@ fn build_chats(
             contacts: Vec::new(),
             inputs: inputs.declared(),
             id: format!("{table}:{conv}"),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: conversation.uuid.clone(),
             display,
             title: None,
@@ -272,7 +275,6 @@ fn build_chats(
             org_name: None,
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
-                period_key: "all".to_string(),
                 markdown_uuid: conversation.uuid,
                 source_ref: None,
                 items,

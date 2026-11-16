@@ -11,22 +11,12 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Signal;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_CHAT: &str = "chat";
-pub const KIND_PERIOD: &str = "chat_period";
 pub const KIND_MESSAGE: &str = "message";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn chat(source_id: &str, chat_id: &str) -> Identity {
     IDS.mint(source_id, KIND_CHAT, chat_id.to_string(), None)
-}
-
-pub fn period(source_id: &str, chat_id: &str, period_key: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_PERIOD,
-        composite_key(&[chat_id, period_key]),
-        None,
-    )
 }
 
 /// `date_sent` is both part of the key and the item's stamp.
@@ -48,7 +38,6 @@ mod tests {
     fn natural_key_regenerates_the_uuid() {
         for got in [
             chat("sig", "1"),
-            period("sig", "1", "2024-03"),
             message("sig", "1", "2", 1_700_000_000_999),
         ] {
             assert_eq!(
@@ -68,7 +57,7 @@ mod tests {
     #[test]
     fn two_sources_and_two_kinds_separate() {
         assert_ne!(chat("a", "1").uuid, chat("b", "1").uuid);
-        assert_ne!(chat("a", "1").uuid, period("a", "1", "all").uuid);
+        assert_ne!(chat("a", "1").uuid, message("a", "1", "1", 0).uuid);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub const KIND_PR: &str = "pull_request";
 pub const KIND_ISSUE_COMMENT: &str = "issue_comment";
 pub const KIND_PR_REVIEW: &str = "pr_review";
 pub const KIND_PR_REVIEW_COMMENT: &str = "pr_review_comment";
+pub const KIND_REPOSITORY: &str = "repository";
 
 /// `created_at` is the stamp GitHub wrote on the record, as the row
 /// stores it — a PR's or a comment's own, never derived — so the id
@@ -41,6 +42,19 @@ pub fn pull_request(
     created_at: Option<&str>,
 ) -> Identity {
     identity(source_id, repo, KIND_PR, number.to_string(), created_at)
+}
+
+/// `key` is GitHub's numeric id for the repository, which a rename
+/// keeps. No stamp: a repository is a container.
+pub fn repository(source_id: &str, key: &str) -> Identity {
+    Identity::mint(
+        ID_NAMESPACE,
+        source_id,
+        None,
+        KIND_REPOSITORY,
+        key.to_string(),
+        None,
+    )
 }
 
 pub fn comment(

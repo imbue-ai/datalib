@@ -252,6 +252,7 @@ fn chat(
         text_format: format,
     };
     let item = |uuid: &str, author: &str, text: String| NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
@@ -280,6 +281,8 @@ fn chat(
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "text-edge".into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: "00000000-0000-8000-8000-0000000e00c1".into(),
         display: "Ten Forward".into(),
         title: Some("Ten Forward".into()),
@@ -292,7 +295,6 @@ fn chat(
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: "00000000-0000-8000-8000-0000000e00d1".into(),
             source_ref: None,
             items: vec![
@@ -338,6 +340,7 @@ fn forge(text: &str, dir: &Path) -> Result<(String, Pieces)> {
         uuid: FIRST.into(),
         row_id: "r".into(),
         container: "starfleet/enterprise".into(),
+        container_node: None,
         number: 1701,
         title: "Recalibrate the deflector".into(),
         body: text.to_string(),

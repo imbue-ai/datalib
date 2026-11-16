@@ -765,8 +765,6 @@ export async function fetchGroups<Row = SearchRow>(
 
 export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
   // One UUID per rendered `.md` file — no disambiguation needed.
-  // Provider-specific sharding (beeper's per-period files) is already
-  // encoded in the markdown_uuid scheme.
   return getJson<ChatResponse>(
     `${UNIFIED_DOCUMENT_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
     signal,

@@ -315,17 +315,18 @@ is not (`tests/claude_tests/interrupt.rs` cuts a replayed run at every
 request and requires the store an uninterrupted run leaves). The ones
 never fetched come first, then the stale, so genuinely new
 conversations are fetched first. The N most recently updated
-conversations of each org (`refresh_most_recent_n_chat_count`, CLI
-`--overlap`) are fetched every run, held or not, as a check against the
-live copy.
+conversations of each org (`refetch_newest_conversations`) are fetched
+every run, held or not, as a check against the live copy. A run fetches
+at most `max_conversations_per_run` of all these, and waits
+`seconds_between_requests` between them.
 
 Items whose listing `updated_at` predates the configured `since`
 (`api.since`, a day, an RFC 3339 instant or an offset such as `-30d`
 resolved against the run's start; CLI `--since`, RFC 3339 or
 `YYYY-MM-DD`, assumed UTC; in a config a day is midnight in the
 run's own offset)
-are out of scope: they are never detail-fetched and are invisible to
-the overlap. The filter only gates fetching — already-stored rows are
+are out of scope: they are never detail-fetched and never counted
+among the newest. The filter only gates fetching — already-stored rows are
 untouched — so moving `since` further back later lists the newly in
 scope conversations as owed on that run.
 
@@ -391,7 +392,7 @@ above is that it mostly won't.
     un-fetched until the same re-fetch happens.
 
 To force either one, make the API re-fetch: widen `api.since`, raise
-`refresh_most_recent_n_chat_count`, name the conversations in
+`refetch_newest_conversations`, name the conversations in
 `api.conv_uuids`, or `datalib-dag --reset` the whole store.
 
 ### The hazard: don't leave both download steps pointed at one store
@@ -420,7 +421,11 @@ conversations, every run, instead of walking the listing, and prunes
 nothing. Each
 org is tried in turn; a `404`, or a `403` that outlasts the retries,
 means "wrong org, try the next". The rows are upserted beside what the
-store already holds.
+store already holds. The listing's settings (`since`,
+`max_conversations_per_run`, `refetch_newest_conversations`) then do
+nothing, and each one set is a warning row (`ignored`) on the Manage
+screen. `seconds_between_requests` still applies, and projects are
+still mirrored.
 
 ## Rate limits
 

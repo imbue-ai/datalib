@@ -19,6 +19,14 @@ pub mod edges {
     include!("edges.rs");
 }
 
+pub mod data_nodes {
+    include!("data_nodes.rs");
+}
+
+pub mod filings {
+    include!("filings.rs");
+}
+
 pub mod search_terms {
     include!("search_terms.rs");
 }

@@ -1,7 +1,6 @@
 //! Render the Takeout feeds into markdown via the shared chat renderer:
-//! Google Chat spaces and Google Voice conversations a document per
-//! month, the activity feeds (Gemini, YouTube, Google Maps — see
-//! [`crate::feeds`]) a document per year.
+//! a document per Google Chat space, Google Voice conversation and
+//! activity feed (Gemini, YouTube, Google Maps — see [`crate::feeds`]).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -52,7 +51,9 @@ use datalib_schema::providers::Provider;
 ///     as `me`; a Voice text someone else sent, and a voicemail, is to the
 ///     account (`to:me`).
 /// v12: a Chat message's stamps keep the zone its date was written in.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: a Chat space, a Voice conversation and a feed are one document
+///     each, under the chat's own uuid, rather than one per month or year.
+pub const RENDER_VERSION: u32 = 13;
 
 /// Projection for `BlobBundle::load_many` over the Voice CAS edge: the
 /// `ref_name` (attachment filename) is the bundle key; `content_type`
@@ -464,7 +465,7 @@ fn voice_attachment_refs(m: &Value) -> Vec<String> {
 }
 
 /// One [`NormalizedChat`] per conversation (contact or participant set),
-/// each periodized into month buckets. Conversations are keyed on the
+/// in one document. Conversations are keyed on the
 /// phone number so name-labeled and number-labeled exports of the same
 /// contact merge (see `google_voice::derive_channel`).
 fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<NormalizedChat> {
@@ -499,25 +500,6 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             msgs.iter().map(|m| voice_item(source_id, m)).collect();
         items.sort_by_key(|i| i.date_ms);
 
-        // Month buckets (`YYYY-MM`), oldest first.
-        let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-        for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
-        }
-        let buckets: Vec<NormalizedDoc> = by_month
-            .into_iter()
-            .map(|(period_key, items)| {
-                let month = ids::voice_month(source_id, &chat_id, &period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    markdown_uuid: month.uuid,
-                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
-                    period_key,
-                    items,
-                }
-            })
-            .collect();
-
         let named_after = voice_named_after(&chat_id, &display, &msgs);
         let conversation = ids::voice_conversation(source_id, &chat_id);
         chats.push(NormalizedChat {
@@ -525,7 +507,9 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             contacts: Vec::new(),
             inputs: inputs.declared(),
             id: chat_id.clone(),
-            chat_uuid: conversation.uuid,
+            containers: Vec::new(),
+            filed_under: Vec::new(),
+            chat_uuid: conversation.uuid.clone(),
             display,
             author: None,
             account: None,
@@ -536,7 +520,12 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets,
+            buckets: vec![NormalizedDoc {
+                orphan_reactions: Vec::new(),
+                markdown_uuid: conversation.uuid,
+                source_ref: None,
+                items,
+            }],
         });
     }
     chats
@@ -585,6 +574,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 .filter(|s| !s.is_empty())
                 .map(escape_md_block);
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle,
                 author_kind,
@@ -627,6 +617,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
                 _ => format!("**{label}**"),
             };
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: party_handle(party),
                 author_kind,
@@ -667,6 +658,7 @@ fn voice_item(source_id: &str, m: &Value) -> NormalizedChatItem {
             let (author_display, author_kind) = shown(party);
             let system_note = Some(format!("{note} — {author_display}"));
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: party_handle(party),
                 author_kind,
@@ -770,15 +762,6 @@ fn voice_date_ms(m: &Value, problems: &mut Vec<Problem>) -> Option<i64> {
     )
 }
 
-pub(crate) fn month_of(ms: Option<i64>) -> String {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_millis_opt(ms.unwrap_or(0))
-        .single()
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 pub(crate) fn mime_of(name: &str) -> Option<String> {
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase())?;
     let ct = match ext.as_str() {
@@ -837,32 +820,34 @@ mod tests {
         assert_eq!(chats.len(), 1, "two messages in one space => one chat");
         assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
-        // Both messages are the same month => one bucket, sorted oldest-first.
+        // Sorted oldest-first.
         assert_eq!(chats[0].buckets.len(), 1);
-        assert_eq!(chats[0].buckets[0].period_key, "2025-02");
         assert_eq!(
             chats[0].buckets[0].items[0].text.as_deref(),
             Some("Set a course.")
         );
     }
 
+    /// A space was a document per month, each under a uuid minted from
+    /// the month; it is one document under the space's own uuid.
     #[test]
-    fn periodizes_into_month_buckets() {
-        // Same space, two different months => two buckets (not one
-        // monolithic "all" doc), like Signal/WhatsApp/Voice.
+    fn a_space_spanning_two_months_is_one_document() {
         let messages = vec![
             json!({"message_id":"BBB/T1/M1","created_date":"Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC","creator":{"name":"Picard","email":"p@e"},"text":"Feb."}),
             json!({"message_id":"BBB/T2/M2","created_date":"Wednesday, March 5, 2025 at 9:34:00\u{202f}PM UTC","creator":{"name":"Riker","email":"r@e"},"text":"March."}),
         ];
         let groups: Vec<(String, Value)> = vec![];
         let chats = chat::build("gt", &with_ids(&messages, "message_id"), &groups, &[]);
-        assert_eq!(chats.len(), 1);
-        let keys: Vec<&str> = chats[0]
-            .buckets
-            .iter()
-            .map(|b| b.period_key.as_str())
-            .collect();
-        assert_eq!(keys, vec!["2025-02", "2025-03"]);
+        let [chat] = chats.as_slice() else {
+            panic!("one chat: {chats:?}")
+        };
+        let [doc] = chat.buckets.as_slice() else {
+            panic!("one document: {:?}", chat.buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chat.chat_uuid);
+        assert!(doc.source_ref.is_none());
+        let texts: Vec<_> = doc.items.iter().map(|i| i.text.as_deref()).collect();
+        assert_eq!(texts, [Some("Feb."), Some("March.")]);
         // Falls back to the bare space id when no group dir provided members.
         assert_eq!(chats[0].display, "BBB");
     }
@@ -884,7 +869,7 @@ mod tests {
             feb.is_some_and(|ms| ms > 0),
             "narrow no-break space must still parse"
         );
-        assert_eq!(month_of(feb), "2025-02");
+        assert_eq!(feb, Some(1_739_273_615_000));
     }
 
     /// A Chat message dated in a zone outside North America got its time
@@ -919,8 +904,6 @@ mod tests {
                 "chat::parse_date_ms({bad:?}) fabricated a stamp"
             );
         }
-        // …and an undated item still files, under the epoch bucket.
-        assert_eq!(month_of(None), "1970-01");
     }
 
     #[test]
@@ -941,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_groups_by_contact_and_buckets_by_month() {
+    fn voice_groups_by_contact_into_one_document() {
         let messages = vec![
             json!({"id":"u1","kind":"text","conversation_key":"+12025550102","conversation_display":"William Riker","when":"2364-03-01T09:00:00.742-08:00","sender":{"tel":"+12025550102","name":"William Riker"},"is_me":false,"body":"Hello","attachments":[]}),
             json!({"id":"u2","kind":"text","conversation_key":"+12025550102","conversation_display":"+12025550102","when":"2364-04-02T10:00:00.000-08:00","sender":{"tel":"+12025550100","name":null},"is_me":true,"body":"Hi back","attachments":[]}),
@@ -951,16 +934,15 @@ mod tests {
         // Human name wins over the bare-number display.
         assert_eq!(chats[0].display, "William Riker");
         assert_eq!(chats[0].id, "voice:+12025550102");
-        // Two distinct months → two buckets.
-        assert_eq!(chats[0].buckets.len(), 2);
-        assert_eq!(chats[0].buckets[0].period_key, "2364-03");
-        assert_eq!(chats[0].buckets[1].period_key, "2364-04");
+        // Two months, one document under the conversation's own uuid.
+        let [doc] = chats[0].buckets.as_slice() else {
+            panic!("one document: {:?}", chats[0].buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
+        assert_eq!(doc.items.len(), 2);
         // is_me → "Me".
-        assert_eq!(chats[0].buckets[1].items[0].author_display, "Me");
-        assert_eq!(
-            chats[0].buckets[1].items[0].author_kind,
-            AuthorKind::Account
-        );
+        assert_eq!(doc.items[1].author_display, "Me");
+        assert_eq!(doc.items[1].author_kind, AuthorKind::Account);
         // Named after the person it is with, by their number: the search
         // list titled it by a bare number before.
         assert_eq!(

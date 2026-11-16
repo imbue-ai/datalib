@@ -13,6 +13,10 @@ pub struct NormalizedEvent {
     /// The calendar's datalib id, and its name as the service shows it.
     pub calendar_uuid: String,
     pub calendar_label: String,
+    /// The calendar's upstream record, as the provider spells it: an id
+    /// a rename keeps.
+    pub calendar_entity_kind: &'static str,
+    pub calendar_upstream_id: String,
     /// The zone a floating time on this calendar is in, where known.
     pub calendar_time_zone: Option<String>,
     /// `grid_rows.upstream_id` / `upstream_entity_kind`: exactly what
