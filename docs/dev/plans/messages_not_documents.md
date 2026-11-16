@@ -38,6 +38,22 @@ store holds no text, so everything that needs it (the search index,
 the viewer, landing a hit on a message) reads the file and cuts it by
 byte offsets.
 
+**So this plan also ends the markdown files.** Each item's rendered
+text is stored in the database with its row, and nothing is written to
+disk but the stores and the blobs. That removes a whole class of
+machinery:
+
+- `section_layout`, the byte spans that cut a file into messages, and
+  the check that fails a render when they do not add up to the file's
+  size;
+- `qmd_path`, the `unindexed/` directory convention, and unlinking an
+  old file when its path moves or its document empties;
+- reading a file and converting bytes to lines to land a hit, and
+  re-quoting the snippet from it;
+- a file and its database row disagreeing after a crash between the
+  two writes. The text commits with its row, so a reader pinned to a
+  commit sees the text that commit had.
+
 ## What a document is today
 
 Measured in the code, not the docs. One document is:
@@ -232,6 +248,19 @@ against the eval before the next.
 - **Notion and Drive.** A page is one item today with no rows for its
   blocks. Are blocks items, so a hit lands on a paragraph, or is the
   page the item and its comments the children?
+- **What storing the text costs.** On one real root (186k files) the
+  markdown is 1.25 GB and the render stores already 9.6 GB. Doltlite
+  keeps every version a commit reached and does not compress
+  ([`doltlite.md`](../doltlite.md) §"What a write costs"), so a
+  re-render that changes every item's text (a render-version bump)
+  pins a second copy until history is folded. An append is cheap if
+  the key is the item's uuid, which is time-prefixed, so new items land
+  in the last leaves: a growing agent session adds its new messages
+  instead of rewriting the whole file as it does today. To measure
+  before step 3: the growth of one full re-render, and whether the text
+  belongs in the render store (versioned with its row, readable at a
+  commit) or in a plain SQLite file beside it (no history, nothing to
+  fold).
 - **Is a section's uuid always its row's uuid?** In `chat-common` the
   `data-section-uuid` wrapper and the message's grid row share one uuid.
   That has not been checked for every renderer outside it (email,
