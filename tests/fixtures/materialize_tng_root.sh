@@ -13,7 +13,7 @@
 #                                      backend reads, with the search index's
 #                                      tables (`:ingested_tng_search_index`).
 #   unified_document_index/search_index/inference_cache.sqlite  every chunk's
-#                                      vector (`:ingested_tng_vectors`).
+#                                      vector (`:ingested_tng_inference_cache`).
 #   unified_document_index/models/     the embedding model, linked in from
 #                                      bazel outputs.
 #   <stanza>/render_time_series/...    each time-series source's store, and

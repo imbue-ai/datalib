@@ -316,3 +316,35 @@ mod tests {
         );
     }
 }
+
+/// ggml picks its SIMD kernels when it is compiled, and these answer from
+/// the same `#if`s, so they say what the linked ggml was built with.
+#[cfg(test)]
+mod simd {
+    #[cfg(target_arch = "x86_64")]
+    extern "C" {
+        fn ggml_cpu_has_avx2() -> i32;
+        fn ggml_cpu_has_fma() -> i32;
+        fn ggml_cpu_has_f16c() -> i32;
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    extern "C" {
+        fn ggml_cpu_has_neon() -> i32;
+    }
+
+    /// Without `X86_COPTS` in llama_cpp.BUILD, ggml builds its SSE2
+    /// baseline and the fixture's embed took 30-48 minutes on CI.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn ggml_is_built_with_avx2_fma_and_f16c() {
+        let built = unsafe { (ggml_cpu_has_avx2(), ggml_cpu_has_fma(), ggml_cpu_has_f16c()) };
+        assert_eq!(built, (1, 1, 1), "ggml's (AVX2, FMA, F16C)");
+    }
+
+    #[test]
+    #[cfg(target_arch = "aarch64")]
+    fn ggml_is_built_with_neon() {
+        assert_eq!(unsafe { ggml_cpu_has_neon() }, 1);
+    }
+}

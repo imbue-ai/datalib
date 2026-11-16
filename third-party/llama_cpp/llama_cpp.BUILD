@@ -39,6 +39,29 @@ COMMON_COPTS = [
     "//conditions:default": [],
 }) + ["-D_XOPEN_SOURCE=600"]
 
+# ggml picks its x86 kernels at compile time, by these flags. Without them
+# x86_64 gets the SSE2 baseline and an embedding runs tens of times slower.
+# They are upstream's non-native default (GGML_NATIVE=OFF in
+# ggml/src/ggml-cpu/CMakeLists.txt): x86-64-v3, so a CPU without AVX2
+# (before Haswell, 2013) cannot run the binary.
+X86_COPTS = select({
+    "@platforms//cpu:x86_64": [
+        "-msse4.2",
+        "-mf16c",
+        "-mfma",
+        "-mbmi2",
+        "-mavx",
+        "-mavx2",
+        "-DGGML_SSE42",
+        "-DGGML_F16C",
+        "-DGGML_FMA",
+        "-DGGML_BMI2",
+        "-DGGML_AVX",
+        "-DGGML_AVX2",
+    ],
+    "//conditions:default": [],
+})
+
 ARCH_SRCS = select({
     "@platforms//cpu:aarch64": [
         "ggml/src/ggml-cpu/arch/arm/quants.c",
@@ -156,7 +179,7 @@ cc_library(
         "-DGGML_COMMIT=\\\"" + LLAMA_RELEASE + "\\\"",
         "-DGGML_USE_LLAMAFILE",
         "-DGGML_USE_CPU_REPACK",
-    ] + select({
+    ] + X86_COPTS + select({
         "@platforms//os:macos": ["-DGGML_METAL_EMBED_LIBRARY"],
         "//conditions:default": [],
     }),

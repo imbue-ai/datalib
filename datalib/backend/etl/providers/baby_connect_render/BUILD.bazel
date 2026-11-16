@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Render half of the `baby_connect` provider. This is the side that knows
+# `datalib_schema`; //datalib/backend/etl/providers/baby_connect is the
+# download half and deliberately does not.
+rust_library(
+    name = "datalib_etl_baby_connect_render",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_baby_connect_render",
+    edition = "2021",
+    proc_macro_deps = [
+        "@datalib_crates//:async-trait",
+    ],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/baby_connect:datalib_etl_baby_connect",
+        "//datalib/backend/etl/providers/baby_connect_config:datalib_etl_baby_connect_config",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "baby_connect_render_unittests",
+    size = "small",
+    crate = ":datalib_etl_baby_connect_render",
+    edition = "2021",
+)
