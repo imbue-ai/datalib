@@ -1,6 +1,7 @@
 //! Every hermetic document-index test, one binary: each module is one
 //! behaviour.
 
+mod children;
 mod dolt_backend_integration;
 mod fixture_db_snapshot;
 mod qmd_index_state;

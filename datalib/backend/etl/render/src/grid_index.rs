@@ -27,7 +27,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
-use datalib_schema::data_nodes::{DataNodeRow, DDL as DATA_NODES_DDL};
+use datalib_schema::data_nodes::{DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
@@ -602,7 +602,7 @@ async fn record_unreadable_store(
 pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
-            .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
+            .chain(remade_indexes())
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
             // What the terms derive, which no DDL shows.
             .chain([TERMS_SHAPE]),
@@ -651,9 +651,8 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
     for ddl in index_ddl()
-        .chain(search)
+        .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
     {
         sqlx::query(ddl)
@@ -664,13 +663,22 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// The search bar's indexes are left out of a build into an empty index
+/// The indexes only reads use: the search bar's, and those that list a
+/// container's children.
+fn remade_indexes() -> impl Iterator<Item = &'static str> {
+    GRID_ROWS_INDEXES
+        .iter()
+        .map(|(_table, ddl)| *ddl)
+        .chain(CHILDREN_INDEXES.iter().copied())
+}
+
+/// The read indexes are left out of a build into an empty index
 /// and made once at its end, and remade around a source's rewrite of a
 /// large share of the index. Kept up row by row, each changed row costs
 /// a page in every one of them, more pages than SQLite's cache holds;
 /// built at the end they are sorted and contiguous.
 async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
+    for ddl in remade_indexes() {
         let name = index_name(ddl).with_context(|| format!("no index name in {ddl}"))?;
         // Audited: `name` is parsed out of our own static index DDL.
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX IF EXISTS {name}")))
@@ -682,8 +690,8 @@ async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 }
 
 async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
-        sqlx::query(*ddl)
+    for ddl in remade_indexes() {
+        sqlx::query(ddl)
             .execute(&mut *conn)
             .await
             .with_context(|| format!("create index: {ddl}"))?;

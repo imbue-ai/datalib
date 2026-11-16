@@ -10,6 +10,9 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use crate::children::{
+    self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, RowFacts, Side, Split, Via,
+};
 use crate::db::{build_where, vals_holding, ChatMeta};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
@@ -567,7 +570,131 @@ fn grouping<R>(
     }
 }
 
+/// A read of the tree's tables from an index an older build wrote, which
+/// has none of them, until `grid_index` rebuilds it: no children.
+fn older_than_the_tree(e: &sqlx::Error) -> bool {
+    match missing_schema(e) {
+        Some(Missing::Table(t)) => ["grid_rows", "data_nodes", "filings"].contains(&t.as_str()),
+        Some(Missing::Column(c)) => c.ends_with("parent_uuid") || c.ends_with("sort_key"),
+        None => false,
+    }
+}
+
 impl At {
+    async fn child_key(&mut self, parent: &str, uuid: &str) -> Result<Option<String>, RepoError> {
+        match sqlx::query_scalar(children::CHILD_KEY_SQL)
+            .bind(parent)
+            .bind(uuid)
+            .fetch_optional(&mut *self.tx)
+            .await
+        {
+            Ok(key) => Ok(key),
+            Err(e) if older_than_the_tree(&e) => Ok(None),
+            Err(e) => Err(RepoError::Internal(format!(
+                "find {uuid} among {parent}'s children: {e}"
+            ))),
+        }
+    }
+
+    async fn children_past(
+        &mut self,
+        parent: &str,
+        via: Via,
+        side: Side,
+        split: &Split,
+    ) -> Result<Vec<children::Found>, RepoError> {
+        let want = match side {
+            Side::Before => split.before,
+            Side::After => split.after,
+        };
+        // Audited: `children_sql` is built from literals alone; every
+        // value is bound.
+        let read: Result<Vec<(String, String)>, _> = sqlx::query_as(sqlx::AssertSqlSafe(
+            children::children_sql(via, side, split.at_is_after),
+        ))
+        .bind(parent)
+        .bind(&split.at.sort_key)
+        .bind(&split.at.uuid)
+        .bind((want + 1) as i64)
+        .fetch_all(&mut *self.tx)
+        .await;
+        match read {
+            Ok(rows) => Ok(rows
+                .into_iter()
+                .map(|(sort_key, uuid)| children::Found {
+                    key: Key { sort_key, uuid },
+                    via,
+                })
+                .collect()),
+            Err(e) if older_than_the_tree(&e) => Ok(Vec::new()),
+            Err(e) => Err(RepoError::Internal(format!(
+                "list {parent}'s children: {e}"
+            ))),
+        }
+    }
+
+    async fn child_facts(
+        &mut self,
+        keys: &[Key],
+    ) -> Result<
+        (
+            std::collections::HashMap<String, RowFacts>,
+            std::collections::HashMap<String, NodeFacts>,
+        ),
+        RepoError,
+    > {
+        if keys.is_empty() {
+            return Ok(Default::default());
+        }
+        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
+        let wanted = serde_json::to_string(&uuids)
+            .map_err(|e| RepoError::Internal(format!("encode children: {e}")))?;
+        let internal = |e: sqlx::Error| RepoError::Internal(format!("describe children: {e}"));
+        type RowRead = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows: Vec<RowRead> = sqlx::query_as(children::ROW_FACTS_SQL)
+            .bind(&wanted)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(internal)?;
+        let nodes: Vec<(String, String, Option<String>)> =
+            match sqlx::query_as(children::NODE_FACTS_SQL)
+                .bind(&wanted)
+                .fetch_all(&mut *self.tx)
+                .await
+            {
+                Ok(nodes) => nodes,
+                Err(e) if older_than_the_tree(&e) => Vec::new(),
+                Err(e) => return Err(internal(e)),
+            };
+        let rows = rows
+            .into_iter()
+            .map(|(uuid, kind, author, created_at, preview, markdown_uuid)| {
+                (
+                    uuid,
+                    RowFacts {
+                        kind,
+                        author,
+                        created_at,
+                        preview,
+                        markdown_uuid,
+                    },
+                )
+            })
+            .collect();
+        let nodes = nodes
+            .into_iter()
+            .map(|(uuid, kind, name)| (uuid, NodeFacts { kind, name }))
+            .collect();
+        Ok((rows, nodes))
+    }
+
     /// Runs [`ordered_sql`]; a table the index does not have yet holds no
     /// rows.
     async fn ordered_keys<C: Column>(
@@ -808,6 +935,36 @@ impl At {
 impl IndexRepo for DoltRepo {
     async fn head(&self) -> Result<Option<String>, RepoError> {
         Ok(self.pinned().await?.map(|at| at.commit))
+    }
+
+    async fn children(
+        &self,
+        parent: &str,
+        ask: &Ask,
+        limit: usize,
+    ) -> Result<ChildrenPage, ChildrenFailure> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(ChildrenPage::default());
+        };
+        let item_key = match ask {
+            Ask::Around(Anchor::Item(uuid)) => at.child_key(parent, uuid).await?,
+            _ => None,
+        };
+        let split = children::split(parent, ask, item_key, limit)?;
+        let mut before = Vec::with_capacity(Via::ALL.len());
+        let mut after = Vec::with_capacity(Via::ALL.len());
+        for via in Via::ALL {
+            before.push(at.children_past(parent, via, Side::Before, &split).await?);
+            after.push(at.children_past(parent, via, Side::After, &split).await?);
+        }
+        let cut = children::window(&split, before, after);
+        let (rows, nodes) = at.child_facts(&cut.keys).await?;
+        Ok(ChildrenPage {
+            children: children::describe(cut.keys, &rows, &nodes),
+            before: cut.before,
+            after: cut.after,
+            at: Some(at.commit),
+        })
     }
 
     async fn source_ids(&self) -> Result<Vec<String>, RepoError> {

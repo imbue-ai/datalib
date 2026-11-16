@@ -1,7 +1,8 @@
 # Messages, not documents: grouping chosen when a search runs
 
-**Status: proposal (2026-11-16). Step 1 is being built (draft PR, branch
-`tree-step-1`); nothing else is.** Facts about
+**Status: proposal (2026-11-16). Steps 1 and 2 are being built (draft
+PR on branch `tree-step-1`; branch `tree-step-2` on top of it); nothing
+else is.** Facts about
 the tree were checked against the code that day; file references are
 to that tree.
 

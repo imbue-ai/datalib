@@ -8,6 +8,17 @@
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
+/// What listing a container's children reads, made in the grid index
+/// alone: nothing asks a render store for children. A page of children is
+/// one range of a `(parent, sort_key, uuid)` index, read in order; a page's
+/// containers are looked up by uuid.
+pub const CHILDREN_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_parent ON grid_rows (parent_uuid, sort_key, uuid)",
+    "CREATE INDEX IF NOT EXISTS data_nodes_by_parent ON data_nodes (parent_uuid, sort_key, uuid)",
+    "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid)",
+    "CREATE INDEX IF NOT EXISTS filings_by_under ON filings (under_uuid, node_uuid)",
+];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "data_nodes", primary_key = "markdown_uuid, uuid")]
 pub struct DataNodeRow {

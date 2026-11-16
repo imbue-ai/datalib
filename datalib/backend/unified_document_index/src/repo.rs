@@ -56,6 +56,16 @@ pub trait IndexRepo: Send + Sync {
     /// Every source holding a row.
     async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
 
+    /// A page of `parent`'s children in `(sort_key, uuid)` order, as `ask`
+    /// asks for it, `limit` a side ([`crate::children`]). Empty for a root
+    /// with no index yet.
+    async fn children(
+        &self,
+        parent: &str,
+        ask: &crate::children::Ask,
+        limit: usize,
+    ) -> Result<crate::children::ChildrenPage, crate::children::ChildrenFailure>;
+
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
     /// or newest first with none. Its free text is qmd's; nothing here
