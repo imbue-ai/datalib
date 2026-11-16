@@ -903,8 +903,8 @@ what changed since, and for a quiet workspace that takes seconds.
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
 (`export`). Mirrors messages, your posts and comments, the skills on
 your profile, and connections as contacts. The rest of the export is
-stored but not searchable, and the source's warning names those
-tables.
+stored but not searchable, and a note on the source's Manage row
+names those tables.
 
 **Settings & Privacy** → **Data privacy** → **Get a copy of your
 data**, request the full archive, and unzip it when the email arrives

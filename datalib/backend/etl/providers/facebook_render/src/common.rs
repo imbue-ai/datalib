@@ -37,7 +37,8 @@ use serde_json::Value;
 /// v12: the owner is marked as the account's own, by their name and the
 ///     profile's address, so search reads both as `me`.
 /// v13: the tables no feed reads are counted on record.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: the tables no feed reads are a note, not a warning.
+pub const RENDER_VERSION: u32 = 14;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 

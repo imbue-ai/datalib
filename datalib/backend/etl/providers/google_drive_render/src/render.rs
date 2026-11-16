@@ -32,7 +32,8 @@ use crate::unsupported;
 /// v4: the files that are not Docs are counted on record.
 /// v5: a comment's time, which Drive stamps in its own UTC, says it
 ///     names no one's clock (`Z`).
-pub const RENDER_VERSION: u32 = 5;
+/// v6: the files that are not Docs are a note, not a warning.
+pub const RENDER_VERSION: u32 = 6;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
