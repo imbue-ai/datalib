@@ -849,8 +849,10 @@ mod tests {
 
     /// The guarantee behind a Manage count: for every counter, the
     /// number the app server draws is the number of rows its query lists
-    /// here — over rows of every stage and severity, two sources, the
-    /// index's own row about one of them, and a mute. A count that is not
+    /// here — over rows of every stage and severity (the time-series and
+    /// occurrences steps' among them), two sources, the index's own row
+    /// about one of them, and a mute; and for a source group, the sum of
+    /// its steps' is what its query lists. A count that is not
     /// the list it opens is the bug this pins.
     #[tokio::test]
     async fn every_count_is_the_rows_its_query_lists() {
@@ -932,23 +934,52 @@ mod tests {
             );
             seen.push(counter.1);
         }
-        for by in [CountedBy::Download, CountedBy::Render, CountedBy::Index] {
+        for by in [
+            CountedBy::Download,
+            CountedBy::Render,
+            CountedBy::TimeSeries,
+            CountedBy::Occurrences,
+            CountedBy::Index,
+        ] {
             assert!(seen.contains(&by), "no {by:?} rows to check");
         }
+        // A source group's steps: a document source's, a time-series
+        // source's, a calendar's, and all four at once.
+        let groups: [&[CountedBy]; 4] = [
+            &[CountedBy::Download, CountedBy::Render],
+            &[
+                CountedBy::Download,
+                CountedBy::Render,
+                CountedBy::TimeSeries,
+            ],
+            &[
+                CountedBy::Download,
+                CountedBy::Render,
+                CountedBy::Occurrences,
+            ],
+            &[
+                CountedBy::Download,
+                CountedBy::Render,
+                CountedBy::TimeSeries,
+                CountedBy::Occurrences,
+            ],
+        ];
         for source in ["enterprise", "defiant"] {
-            let pair: Vec<Counter> = [CountedBy::Download, CountedBy::Render]
-                .into_iter()
-                .map(|by| datalib_problem_mutes::counter_of(source, by))
-                .collect();
-            let shown: i64 = pair
-                .iter()
-                .map(|c| counts[c].shown.errors + counts[c].shown.warnings)
-                .sum();
-            assert_eq!(
-                listed(group_query(&pair).unwrap()).await as i64,
-                shown,
-                "{source}"
-            );
+            for bys in groups {
+                let steps: Vec<Counter> = bys
+                    .iter()
+                    .map(|by| datalib_problem_mutes::counter_of(source, *by))
+                    .collect();
+                let shown: i64 = steps
+                    .iter()
+                    .map(|c| counts[c].shown.errors + counts[c].shown.warnings)
+                    .sum();
+                assert_eq!(
+                    listed(group_query(&steps).unwrap()).await as i64,
+                    shown,
+                    "{source} {bys:?}"
+                );
+            }
         }
     }
 

@@ -284,24 +284,59 @@ pub async fn counts(data_root: &Path) -> Result<Option<HashMap<Counter, Counted>
 /// muted ones.
 const COUNTED_ONLY: &str = "-severity:info muted:no";
 
+/// Every counter a source has: whose rows a source's steps find.
+const SOURCE_COUNTERS: [CountedBy; 4] = [
+    CountedBy::Download,
+    CountedBy::Render,
+    CountedBy::TimeSeries,
+    CountedBy::Occurrences,
+];
+
 /// The problems grid's query for exactly the rows a counter shows.
 pub fn query(counter: &Counter) -> String {
-    let own = datalib_problems::INDEX_OWN_SCOPE_KEY;
     match counter {
-        (_, CountedBy::Index) => format!("scope:entity doc:{own} {COUNTED_ONLY}"),
-        (Some(source), CountedBy::Download) => {
-            format!("source:{source} stage:fetch -doc:{own} {COUNTED_ONLY}")
-        }
-        (Some(source), CountedBy::Render) => {
-            format!("source:{source} -stage:fetch -doc:{own} {COUNTED_ONLY}")
+        (_, CountedBy::Index) => format!(
+            "scope:entity doc:{} {COUNTED_ONLY}",
+            datalib_problems::INDEX_OWN_SCOPE_KEY
+        ),
+        (Some(source), by) => {
+            source_query(source, &[*by]).expect("one source counter always has a query")
         }
         (None, by) => unreachable!("a {by:?} count is always a source's"),
     }
 }
 
+/// The query for the rows of `source` that the counters `bys` show
+/// together. The search bar has no `OR`, so a set holding the render's
+/// is the source's rows less the stages of the counters it lacks, and
+/// any other set must be one counter. `None` when no query names them.
+fn source_query(source: &str, bys: &[CountedBy]) -> Option<String> {
+    let stages: String = if bys.contains(&CountedBy::Render) {
+        SOURCE_COUNTERS
+            .iter()
+            .filter(|by| !bys.contains(by))
+            .flat_map(|by| by.own_stages())
+            .map(|stage| format!(" -stage:{}", stage.as_str()))
+            .collect()
+    } else {
+        match bys {
+            [one] => one
+                .own_stages()
+                .iter()
+                .map(|stage| format!(" stage:{}", stage.as_str()))
+                .collect(),
+            _ => return None,
+        }
+    };
+    Some(format!(
+        "source:{source}{stages} -doc:{} {COUNTED_ONLY}",
+        datalib_problems::INDEX_OWN_SCOPE_KEY
+    ))
+}
+
 /// The query for the rows a group's counters show together: one
-/// counter's, or a source's download and render as one. `None` for any
-/// other mix, which no one query names.
+/// counter's, or several of one source's that one query names. `None`
+/// for any other mix.
 pub fn group_query(counters: &[Counter]) -> Option<String> {
     let mut counters: Vec<&Counter> = counters.iter().collect();
     counters.sort_by_key(|(s, by)| (s.clone(), *by as u8));
@@ -309,10 +344,16 @@ pub fn group_query(counters: &[Counter]) -> Option<String> {
     match counters.as_slice() {
         [] => None,
         [one] => Some(query(one)),
-        [(Some(a), CountedBy::Download), (Some(b), CountedBy::Render)] if a == b => Some(format!(
-            "source:{a} -doc:{} {COUNTED_ONLY}",
-            datalib_problems::INDEX_OWN_SCOPE_KEY
-        )),
+        [(Some(source), _), ..] => {
+            let mut bys = Vec::new();
+            for (s, by) in &counters {
+                if s.as_deref() != Some(source.as_str()) || *by == CountedBy::Index {
+                    return None;
+                }
+                bys.push(*by);
+            }
+            source_query(source, &bys)
+        }
         _ => None,
     }
 }
@@ -345,8 +386,30 @@ mod tests {
             Some(query(&render))
         );
         assert_eq!(
+            query(&render),
+            "source:enterprise -stage:fetch -stage:time_series -stage:occurrences \
+             -doc:render_store -severity:info muted:no"
+        );
+        assert_eq!(
             group_query(&[render.clone(), download.clone()]).as_deref(),
-            Some("source:enterprise -doc:render_store -severity:info muted:no")
+            Some(
+                "source:enterprise -stage:time_series -stage:occurrences -doc:render_store \
+                 -severity:info muted:no"
+            )
+        );
+        let series = c(Some("enterprise"), CountedBy::TimeSeries);
+        assert_eq!(
+            query(&series),
+            "source:enterprise stage:time_series -doc:render_store -severity:info muted:no"
+        );
+        assert_eq!(
+            group_query(&[download.clone(), render.clone(), series.clone()]).as_deref(),
+            Some("source:enterprise -stage:occurrences -doc:render_store -severity:info muted:no")
+        );
+        assert_eq!(
+            group_query(&[download.clone(), series]),
+            None,
+            "no query names two stages without the render's"
         );
         assert_eq!(
             group_query(&[download, c(Some("defiant"), CountedBy::Render)]),

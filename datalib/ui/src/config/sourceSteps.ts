@@ -1164,7 +1164,8 @@ export function embedAllowed(type: string | null | undefined): boolean {
 
 /// Give a source of a time-series type its `render_time_series` step and
 /// a place in the time-series index's inputs, adding the index and the
-/// applet that serves it when the config has none. A package source is
+/// applet that serves it when the config has none, and in `grid_index`'s,
+/// which copies the step's problem rows into the problems list. A package source is
 /// one when its package has a `render_time_series` program, which its
 /// step then runs. A source of any other type is left as it is.
 export function setTimeSeriesStep(
@@ -1192,7 +1193,7 @@ export function setTimeSeriesStep(
       `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }
-  return wireIntoFanIns(next, id, "time_series_index");
+  return wireIntoFanIns(wireIntoFanIns(next, id, "time_series_index"), id, "grid_index");
 }
 
 /// The source types whose events have occurrences. Mirrors
@@ -1201,16 +1202,18 @@ export function setTimeSeriesStep(
 export const OCCURRENCE_TYPES = ["calendar"];
 
 /// Give a source of a type with occurrences its `render_occurrences`
-/// step, which lists every occurrence in a window of days. Nothing
-/// reads it but the person or the agent who asks, so it joins no index.
+/// step, which lists every occurrence in a window of days. Its rows are
+/// read by the person or the agent who asks; `grid_index` reads it only
+/// to copy its problem rows into the problems list.
 export function setOccurrencesStep(text: string, group: string, type: string): string {
   if (!OCCURRENCE_TYPES.includes(type)) return text;
   const id = `${group}/render_occurrences`;
   if (listSteps(text).some((s) => s.id === id)) return text;
-  return insertEntries(
+  const next = insertEntries(
     text,
     `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
   );
+  return wireIntoFanIns(next, id, "grid_index");
 }
 
 /// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,

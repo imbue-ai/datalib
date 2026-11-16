@@ -88,10 +88,28 @@ pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
 travel with the row.
 
+Two steps besides the render keep problems of their own, each in its
+own store under a stage no other step writes
+(`datalib_problems::Stage::OWN_STORE`): `render_time_series`, a file
+whose time series could not be read (`time_series`), and
+`render_occurrences`, an event whose occurrences could not be listed
+(`occurrences`). Each finds every one of them again on each run, so
+its rows replace the store's whole (`step_problems::replace`), keeping
+the stamps of the unchanged. `grid_index` takes both steps as inputs,
+for these rows alone, and copies each step's rows apart from the
+render store's (`copy_own_store_problems`): a source's render-store
+copy replaces every stage but those two, and each step's copy only its
+own, so neither erases the other's. A step no longer among the inputs
+has its rows taken out. Wiring an existing config's `grid_index` to
+read them is one of the config upgrades the app makes without asking
+(`datalib_migrate_config::problem_inputs`).
+
 The Manage screen's red and yellow counts are the index's rows, counted
-by whose they are: a fetch-stage row on the Download row, the index's
-own row about a render store it could not read on `grid_index`'s, every
-other row on the render's. A group's count is the sum of its steps'.
+by whose they are: a fetch-stage row on the Download row, a
+time-series-stage row on `render_time_series`'s, an occurrences-stage
+row on `render_occurrences`'s, the index's own row about a render
+store it could not read on `grid_index`'s, every other row on the
+render's. A group's count is the sum of its steps'.
 An `info` row is counted nowhere: nothing failed, and the problems grid
 is where it is seen. Each count opens exactly the rows it counted
 ([`problem_mutes/README.md`](../problem_mutes/README.md)). A step still
@@ -99,7 +117,7 @@ reports whole-store counts of the rows it found itself as
 `problems{severity=…}` metrics (a download at every seal too, right
 after it has written the problems its run has found so far,
 `run_problems::collecting_sealed`), and those are what a step that
-writes no rows is drawn from, in grey.
+writes no rows (a package's own program) is drawn from, in grey.
 
 A download's problem names only its raw entity (`<table>:<id>`): the
 grid row it is about has an id minted under the source's id, which the

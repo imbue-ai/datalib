@@ -15,8 +15,30 @@ pub mod store;
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Context, Result};
+use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_time_series_schema::{TimeSeries, TimeSeriesRow, Unit};
 use sqlx::SqlitePool;
+
+/// The problem rows for the records a source's time series could not be
+/// read from, as `(record, why)`: a warning each, since the record's
+/// time series are left out and the rest are not. The step writes them
+/// into its store (`datalib_etl::step_problems`).
+pub fn unreadable_problems(source_id: &str, unreadable: &[(String, String)]) -> Vec<ProblemRow> {
+    unreadable
+        .iter()
+        .map(|(record, why)| {
+            ProblemRow::new(
+                source_id,
+                Stage::TimeSeries,
+                Scope::Entity(record),
+                None,
+                Outcome::Dropped,
+                Problem::explained(Reason::RenderFailed, None, why).severity(Severity::Warning),
+                None,
+            )
+        })
+        .collect()
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {

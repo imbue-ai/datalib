@@ -23,6 +23,17 @@ use crate::source_type::SourceType;
 /// `(source function, index group, index function)`.
 const FAN_INS: &[(&str, &str, &str)] = &[
     ("render_markdown", UNIFIED_DOCUMENT_INDEX_DIR, "grid_index"),
+    // For their problem rows alone.
+    (
+        "render_time_series",
+        UNIFIED_DOCUMENT_INDEX_DIR,
+        "grid_index",
+    ),
+    (
+        "render_occurrences",
+        UNIFIED_DOCUMENT_INDEX_DIR,
+        "grid_index",
+    ),
     (
         "keyword_index",
         UNIFIED_DOCUMENT_INDEX_DIR,

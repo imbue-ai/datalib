@@ -360,7 +360,8 @@ the program it runs in `command`; datalib's own steps run
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_document_index` reads every render tree its `inputs`
-name into the SQL index the grid reads. A searched source fills its own
+name into the SQL index the grid reads, and the problem rows of the
+time-series and occurrences steps it names. A searched source fills its own
 part of the search index (`search_*` tables in the grid index's file, and
 the vectors in `search_index/inference_cache.sqlite`) with two more steps
 of its own, `keyword_index` and then `embed`, so the slow embedding can be
