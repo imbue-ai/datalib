@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, NaiveTime};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::{yaml_name, yaml_scalar};
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::Inputs;
@@ -156,6 +156,7 @@ pub fn build(
         .to_string_lossy()
         .into_owned();
     let title = format!("{kid_name} — {}", month_title(month));
+    let front = front(&id, &title, kid, month);
 
     let mut entries: Vec<(&String, &Value)> = store
         .entries
@@ -188,7 +189,7 @@ pub fn build(
         title: &title,
         kid_name: &kid_name,
         in_month,
-        sections: vec![Section::unkeyed(head(&id, &title, kid, month, zone))],
+        sections: vec![Section::unkeyed(head(&front, &id, &title, zone))],
         rows: Vec::new(),
         problems: Vec::new(),
         stamps: Vec::new(),
@@ -259,6 +260,7 @@ pub fn build(
         render_version: RENDER_VERSION,
         rows,
         sections,
+        front,
         edges: Vec::new(),
         contacts: Vec::new(),
         data_nodes: vec![kid_node, month_node],
@@ -268,15 +270,18 @@ pub fn build(
     }
 }
 
-fn head(id: &Identity, title: &str, kid: &str, month: &str, zone: Option<&NamedZone>) -> String {
-    let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_name(title)));
-    s.push_str(&format!("provider: {}\n", Provider::BabyConnect));
-    s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-    s.push_str(&format!("markdown_uuid: {}\n", id.uuid));
-    s.push_str(&format!("kid_id: {}\n", yaml_scalar(kid)));
-    s.push_str(&format!("month: {}\n", yaml_scalar(month)));
-    s.push_str("---\n\n");
+fn front(id: &Identity, title: &str, kid: &str, month: &str) -> Front {
+    Front::new()
+        .name("title", title)
+        .plain("provider", Provider::BabyConnect)
+        .text("source_label", SOURCE_LABEL)
+        .plain("markdown_uuid", &id.uuid)
+        .text("kid_id", kid)
+        .text("month", month)
+}
+
+fn head(front: &Front, id: &Identity, title: &str, zone: Option<&NamedZone>) -> String {
+    let mut s = front.draw();
     s.push_str(
         &Title {
             text: title,
