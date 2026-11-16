@@ -9,7 +9,17 @@ import { copyToClipboard } from "@/clipboard";
 /// A field as a spreadsheet reads it back: quoted, with its quotes
 /// doubled, when it holds a tab, a line break or a quote.
 export function tsvField(s: string): string {
-  return /[\t\n\r"]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  const text = startsLikeFormula(s) ? `'${s}` : s;
+  return /[\t\n\r"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+// A cell a spreadsheet would run: an email subject `=HYPERLINK(…)` pasted
+// into Sheets or Excel is a live link. A leading `'` tells both to keep
+// the cell as text; the cell then shows the text as written and the `'`
+// only in the formula bar (a text editor shows it). A negative number is
+// a number and nothing more, so it stays one.
+function startsLikeFormula(s: string): boolean {
+  return /^[=+\-@\t\r]/.test(s) && !/^-\d*\.?\d+$/.test(s);
 }
 
 export function rowsAsTsv<T>(

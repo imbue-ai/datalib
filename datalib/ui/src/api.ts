@@ -551,7 +551,7 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 /// same body, like a walk of the data root (`…/refresh`).
 type GetOptions = { toast?: boolean; method?: "GET" | "POST" };
 
-type Answer = { ok: boolean; status: number; body: string };
+type Answer = { ok: boolean; status: number; type: string | null; body: string };
 
 /// GETs asked in one task share one request: the cards a live frame
 /// reaches, or a card's sections mounting together, all ask in the same
@@ -562,7 +562,12 @@ const askedThisTask = new Map<string, Promise<Answer>>();
 function sharedGet(url: string): Promise<Answer> {
   let answer = askedThisTask.get(url);
   if (!answer) {
-    answer = fetch(url).then(async (r) => ({ ok: r.ok, status: r.status, body: await r.text() }));
+    answer = fetch(url).then(async (r) => ({
+      ok: r.ok,
+      status: r.status,
+      type: r.headers.get("Content-Type"),
+      body: await r.text(),
+    }));
     askedThisTask.set(url, answer);
     queueMicrotask(() => askedThisTask.delete(url));
   }
@@ -588,7 +593,7 @@ async function getJson<T>(
       if (toast) pushToast(err.message);
       throw err;
     }
-    return JSON.parse(a.body) as T;
+    return jsonBody<T>(url, a.type, a.body, toast);
   }
   let r: Response;
   try {
@@ -612,7 +617,19 @@ async function getJson<T>(
     if (toast) pushToast(err.message);
     throw err;
   }
-  return (await r.json()) as T;
+  return jsonBody<T>(url, r.headers.get("Content-Type"), await r.text(), toast);
+}
+
+// Only a body that says it is JSON is read as JSON: some same-origin
+// paths serve what a stranger sent, and a link can name any path.
+function jsonBody<T>(url: string, type: string | null, body: string, toast: boolean): T {
+  const media = (type ?? "").split(";")[0].trim().toLowerCase();
+  if (media !== "application/json") {
+    const err = new Error(`${url}: the answer is ${media || "untyped"}, not JSON`);
+    if (toast) pushToast(err.message);
+    throw err;
+  }
+  return JSON.parse(body) as T;
 }
 
 /// A key a search bar takes, and what its values are
