@@ -364,6 +364,45 @@ step's state — for this run and the ones before it, which is what the
 Manage screen reads. The store, its retention and how to read it:
 [`logging.md`](logging.md).
 
+### Problems: what you could not do
+
+A problem is one thing your step could not fully do: a record it could
+not fetch, a file it could not read. A step keeps its problems in
+`problems.sqlite` in its own folder (`<data root>/<group>/<function>/`),
+plain SQLite that a reader opens while you write it. Either write it
+yourself through `datalib_step_problems::StepFile`, as `datalib-step`
+will, or send two lines and let the runner write it for you:
+
+```json
+{"event":"problem","key":"record:messages:C01/1712345678.000100","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"HTTP 404","about":{"kind":"message","id":"C01/1712345678.000100"}}
+{"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
+```
+
+- **`key`** is your name for the problem, the same on every run that
+  finds it; the problem's id is minted from your step id and the key.
+  `listing:<name>`, `phase:<name>` and `record:<table>:<id>` are the
+  spellings `covered` matches.
+- **`severity`** is `error`, `warning` or `info`. **`outcome`** and
+  **`reason`** are words of your own (datalib's steps use
+  `datalib_problems::Outcome` and `Reason`); **`sample`** says what
+  happened.
+- **`about`** names what you were holding when it arose, never an id
+  some other step mints: `kind`, `id` and `account` for the upstream
+  record, `node` for a node's uuid you already have, `path` for a file.
+  All optional; none means your run as a whole.
+- **`covered`** says what this run checked again, so what it covered
+  and did not find again can go: `all`, `listings` (every `listing:`
+  and `phase:` key), `records` of one `table`, or `files` `under` a
+  folder. A `records` or `files` line with `all_but` vouches for every
+  one but those, and counts even when your run fails; without it, and
+  for `all` and `listings`, only a run that succeeds clears anything.
+
+The runner writes the problems as they arrive, at most a second after
+a line, so they show while you run, and clears when you end. A step
+that sends no `problem` or `covered` line has its file left alone. Run
+by hand (§"Running `datalib-step` by hand"), these lines are printed
+and kept nowhere; a step that wants them kept writes the file itself.
+
 ### The outcome line
 
 The last thing you may print is one `outcome` event — the content
