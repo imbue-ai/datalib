@@ -189,3 +189,47 @@ fn the_lines_read_as_the_protocol_spells_them() {
     let all: Covered = serde_json::from_str(r#"{"event":"covered","kind":"all"}"#).unwrap();
     assert_eq!(all, Covered::All);
 }
+
+async fn insert(pool: &sqlx::SqlitePool, row: &ProblemRow) {
+    // Audited: `insert_sql` is built from `ProblemRow`'s consts.
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert_sql())))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A step's problems are read from every store in its folder: a raw
+/// store as its last seal left it, never the rows its writer holds
+/// uncommitted, with the step's group filled in where a download's row
+/// names no source; and the step's own `problems.sqlite` beside it.
+#[tokio::test]
+async fn a_steps_problems_are_its_stores_rows_as_last_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let step = "riker/ingest";
+    let store = dir.path().join(step).join("entities.doltlite_db");
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    let pool = datalib_etl::doltlite_raw::open(&store, &[]).await.unwrap();
+    insert(&pool, &found("messages:1", "404").into_row("")).await;
+    datalib_etl::doltlite_raw::commit_run(&pool, "seal")
+        .await
+        .unwrap();
+    insert(&pool, &found("messages:2", "404").into_row("")).await;
+
+    let mut file = StepFile::open(dir.path(), step, at(1)).await.unwrap();
+    file.record(vec![row("listing:channels")]).await.unwrap();
+    file.finish(&[], Ended::Succeeded).await.unwrap();
+
+    let read = of_step(dir.path(), step).await;
+    pool.close().await;
+    assert!(read.unread.is_empty(), "{:?}", read.unread);
+    let mut seen: Vec<(&str, &str)> = read
+        .rows
+        .iter()
+        .map(|r| (r.scope_key.as_str(), r.source_id.as_str()))
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        [("listing:channels", "enterprise"), ("messages:1", "riker")]
+    );
+}
