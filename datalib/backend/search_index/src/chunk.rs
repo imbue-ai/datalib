@@ -5,9 +5,11 @@
 //!
 //! A heading of level one or two starts a chunk, inside a section or
 //! between them, so an edit under one heading moves only the chunks under
-//! it. A chunk that holds less than a quarter of the budget takes the
-//! heading in rather than standing alone, so a document's front matter
-//! stays with its title.
+//! it; so does an item (a message), so a Meaning hit, which lands on the
+//! first item its chunk covers, lands on the one it matched. A chunk that
+//! holds less than a quarter of the budget takes the heading or item in
+//! rather than standing alone, so a document's front matter stays with its
+//! title and short messages share a chunk.
 //!
 //! The budget is in bytes. qmd's is 900 tokens, which it reads as 3,600
 //! characters; counting bytes keeps text with many multi-byte characters
@@ -51,6 +53,7 @@ pub struct Prompted {
 /// prompts, so the two never disagree.
 pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> {
     let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
+    let items: Vec<bool> = sections.iter().map(|s| s.lead.is_some()).collect();
     let whole = texts.concat();
     let mut starts = Vec::with_capacity(texts.len());
     let mut at = 0;
@@ -58,7 +61,7 @@ pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> 
         starts.push(at);
         at += t.len();
     }
-    chunks(&texts)
+    chunks_within(&texts, &items, MAX_BYTES, OVERLAP_BYTES)
         .into_iter()
         .map(|chunk| {
             let span = &whole[chunk.start..chunk.end];
@@ -78,23 +81,27 @@ pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> 
 }
 
 pub fn chunks(sections: &[&str]) -> Vec<Chunk> {
-    chunks_within(sections, MAX_BYTES, OVERLAP_BYTES)
+    chunks_within(sections, &[], MAX_BYTES, OVERLAP_BYTES)
 }
 
-fn chunks_within(sections: &[&str], max: usize, overlap: usize) -> Vec<Chunk> {
+/// `items[i]`: section `i` starts an item, which breaks a chunk as a
+/// heading does.
+fn chunks_within(sections: &[&str], items: &[bool], max: usize, overlap: usize) -> Vec<Chunk> {
     let mut out = Vec::new();
     let mut open: Option<Chunk> = None;
     let mut at = 0;
     for (i, text) in sections.iter().enumerate() {
         let base = at;
         at += text.len();
+        let mut item_start = items.get(i).copied().unwrap_or(false);
         for (s, e, heading) in segments(text) {
             let piece = &text[s..e];
             let (start, end) = (base + s, base + e);
             if piece.trim().is_empty() {
                 continue;
             }
-            if heading && open.is_some_and(|c| c.end - c.start >= max / 4) {
+            let breaks = heading || std::mem::take(&mut item_start);
+            if breaks && open.is_some_and(|c| c.end - c.start >= max / 4) {
                 out.extend(open.take());
             }
             if piece.len() > max {
@@ -205,7 +212,7 @@ mod tests {
     use super::*;
 
     fn spans(sections: &[&str], max: usize, overlap: usize) -> Vec<(usize, usize, usize, usize)> {
-        chunks_within(sections, max, overlap)
+        chunks_within(sections, &[], max, overlap)
             .into_iter()
             .map(|c| (c.start, c.end, c.first_section, c.last_section))
             .collect()
@@ -230,6 +237,26 @@ mod tests {
             assert_eq!(text.matches(lead.as_str()).count(), 1, "chunk {i}");
             assert_eq!(p.hash, chunk_hash("Ten Forward", text));
         }
+    }
+
+    /// An item starts a chunk as a heading does, so a Meaning hit lands on
+    /// the message it matched; short items still share one, and text that
+    /// starts no item (a page's body) still packs.
+    #[test]
+    fn an_item_starts_a_chunk_once_the_one_before_holds_enough() {
+        let long = "a".repeat(400);
+        let texts = [long.as_str(), long.as_str(), "b\n", "c\n"];
+        let items = [true, true, true, true];
+        let got: Vec<(usize, usize)> = chunks_within(&texts, &items, 1000, 100)
+            .iter()
+            .map(|c| (c.first_section, c.last_section))
+            .collect();
+        assert_eq!(got, [(0, 0), (1, 1), (2, 3)]);
+        let unbroken: Vec<(usize, usize)> = chunks_within(&texts, &[], 1000, 100)
+            .iter()
+            .map(|c| (c.first_section, c.last_section))
+            .collect();
+        assert_eq!(unbroken, [(0, 3)]);
     }
 
     #[test]

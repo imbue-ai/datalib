@@ -7,11 +7,12 @@
 
 use crate::IndexSection;
 
-/// Raised with every change to what [`draw`] makes of any piece. The
-/// index keeps the version a document was drawn with and draws it again
-/// when this moves; `text_tests::the_golden_draw_is_this_versions` fails
-/// when the drawing changes and this does not.
-pub const INDEX_TEXT_VERSION: u32 = 2;
+/// Raised with every change to what [`draw`] makes of any piece, or to
+/// where its chunks fall (`chunk.rs`). The index keeps the version a
+/// document was drawn with and draws it again when this moves;
+/// `text_tests::the_golden_draw_is_this_versions` fails when the drawing
+/// changes and this does not.
+pub const INDEX_TEXT_VERSION: u32 = 3;
 
 /// One piece of a document as the render store keeps it, with the facts
 /// its item's row adds.
