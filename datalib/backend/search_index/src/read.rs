@@ -122,6 +122,23 @@ impl Reader {
         }
     }
 
+    /// Whether any of `source_id`'s documents was drawn by another
+    /// version of the drawing or the chunking than this build's: what the
+    /// launch's migrate pass asks, since a new version alone moves nothing
+    /// the keyword pass reads.
+    pub async fn drawn_by_another_version(&self, source_id: &str) -> Result<bool> {
+        let other: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM search_documents \
+              WHERE source_id = ?1 AND content_hash NOT LIKE '%' || ?2 LIMIT 1",
+        )
+        .bind(source_id)
+        .bind(crate::text::key_suffix())
+        .fetch_optional(&self.index)
+        .await
+        .context("look for documents drawn by another version")?;
+        Ok(other.is_some())
+    }
+
     /// How many documents the index holds, embedded or not.
     pub async fn documents(&self) -> Result<usize> {
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM search_documents")

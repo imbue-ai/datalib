@@ -14,6 +14,12 @@ use crate::IndexSection;
 /// changes and this does not.
 pub const INDEX_TEXT_VERSION: u32 = 3;
 
+/// What ends the key the index files a document under: the version it was
+/// drawn and chunked with.
+pub fn key_suffix() -> String {
+    format!(".t{INDEX_TEXT_VERSION}")
+}
+
 /// One piece of a document as the render store keeps it, with the facts
 /// its item's row adds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
