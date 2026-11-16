@@ -78,6 +78,7 @@ import {
 import { page as thisPage } from "@/telemetry";
 import { changed, subscribeLive } from "@/live";
 import { compareStamps, formatRelative, formatShortStamp } from "@/config/timeFormat";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
@@ -627,7 +628,7 @@ function levelClass(line: RunLogLine | undefined): string {
 const ROW_HEIGHT = 24;
 
 /// A cell's text, with the row's level colour and the whole value on
-/// hover. Text, never HTML: `enableHtmlRendering` is off below, so a
+/// hover. Text, never HTML: the grid is `TEXT_ONLY_GRID`, so a
 /// log line that contains markup is shown as the characters it is.
 const plain: Formatter<RunLogLine> = (_r, _c, value, _col, line) => ({
   text: value == null ? "" : String(value),
@@ -1015,7 +1016,7 @@ function gridOptions(): GridOption {
   return {
     datasetIdPropertyName: "seq",
     // Cells and group rows are text (see `plain`), never markup.
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
     // A click only selects (grid/rowIdioms.ts): several with ⌘ or
     // Shift, for ⌘C to copy as TSV. A line opens in full beside the
     // card on a double-click, Enter or its menu.

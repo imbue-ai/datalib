@@ -875,6 +875,10 @@ again, and the only ones that should know the grid's DOM or options:
   search hid even after a plain click.
 - `grid/gridFrame.ts` — how a grid sits in its card: the resize options
   that make it follow the card's frame, and the theme test.
+- `grid/textOnly.ts` — `TEXT_ONLY_GRID`, which every grid spreads: what
+  a grid draws from a string is text (row values are strangers'), its
+  sanitizer lets no markup through, and it warns rather than `alert()`s.
+  `//:lint_repo` refuses a grid without it.
 - `grid/columnLayout.ts` — how every grid treats its columns: never
   fitted to the viewport, so a width a person drags stays, and carried
   across a rebuild. Each of the four spreads its `KEEP_COLUMN_WIDTHS`.

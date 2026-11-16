@@ -36,6 +36,7 @@ import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedC
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
 import { chipCardSource, chipElAt, chipOf } from "./chipActions";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const props = withDefaults(
   defineProps<{
@@ -423,7 +424,7 @@ function options(): GridOption {
   const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
     enableEmptyDataWarningMessage: false,
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
@@ -449,9 +450,6 @@ function options(): GridOption {
     // declare some hidden until asked for.
     enableColumnPicker: true,
     columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
-    // The grid's own answer to a box narrower than the pinned columns
-    // is an alert().
-    errorCallback: (msg) => console.warn(`TableGrid: ${msg}`),
     // Folding a tree row goes through the grid's filters, so filtering
     // is on; nothing here is filterable, and the filter row stays hidden.
     enableFiltering: true,
@@ -525,8 +523,13 @@ function readPath(item: unknown, field: string): unknown {
     .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
 }
 
+/// A field names the row's own data. One that walks into what every
+/// object inherits would let an edit change them all.
+const INHERITED = new Set(["__proto__", "constructor", "prototype"]);
+
 function writePath(item: unknown, field: string, value: unknown) {
   const parts = field.split(".");
+  if (parts.some((p) => INHERITED.has(p))) return;
   const last = parts.pop()!;
   const target = parts.reduce<unknown>(
     (v, k) => (v as Record<string, unknown> | undefined)?.[k],

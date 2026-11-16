@@ -156,6 +156,7 @@ import SearchField from "@/search/SearchField.vue";
 import { lastSearchView, rememberSearchView, type SearchViewId } from "./searchViewPref";
 import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows, muteProblems } = useApi();
 
@@ -613,9 +614,16 @@ function applyColumns(cols: CurrentColumn[], pins = pinsOf(vueGrid?.slickGrid.ge
   fitRowsToPictures();
 }
 
-/// Each pinned column and the edge it is held to.
-function pinsOf(cols: { id: string | number; pinned?: DockingSide | null }[]) {
-  return new Map(cols.flatMap((c) => (c.pinned ? [[String(c.id), c.pinned] as const] : [])));
+/// Each pinned column and the edge it is held to. A layout comes from
+/// the card's link, which anyone can write, so only the two edges count.
+function pinsOf(cols: { id: string | number; pinned?: unknown }[]) {
+  return new Map(
+    cols.flatMap((c) =>
+      c.pinned === "left" || c.pinned === "right"
+        ? [[String(c.id), c.pinned as DockingSide] as const]
+        : [],
+    ),
+  );
 }
 
 /// Tall enough for two lines of clamped snippet text plus padding.
@@ -1655,9 +1663,16 @@ function applyInitialLayout() {
     );
   }
   applySort(sortersOf(sortOrder.value));
-  if (layout?.group?.length && groupingPlugin) {
+  // Only columns this grid has, with a header drawn: the grouping throws
+  // on any other, and the link that carried the layout may name anything.
+  const grid = vueGrid.slickGrid;
+  const known = new Set(grid.getColumns().map((c) => String(c.id)));
+  const group = (layout?.group ?? []).filter(
+    (id) => typeof id === "string" && known.has(id) && grid.getHeaderColumn(id) != null,
+  );
+  if (group.length && groupingPlugin) {
     restoring = true;
-    groupingPlugin.setDroppedGroups(layout.group);
+    groupingPlugin.setDroppedGroups(group);
     restoring = false;
   }
 }
@@ -2038,7 +2053,9 @@ function gridOptions(): GridOption {
   return {
     datasetIdPropertyName: rowsSpec?.row_key ?? "uuid",
     // Cells are text, never markup: a row's snippet is the source's own.
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
+    // A pin the header menu asks for that the box is too narrow to hold.
+    errorCallback: (message: string) => pushToast(message.replace(/^\[SlickGrid\]\s*/, ""), "warn"),
     enableEmptyDataWarningMessage: false,
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
