@@ -137,6 +137,9 @@ pub enum Retired {
     /// A `grid_index` that does not read a `render_time_series` or
     /// `render_occurrences` step (`problem_inputs.rs`).
     UnreadProblems,
+    /// A ChatGPT or Claude ingest's API setting under its old name
+    /// (`conversation_settings.rs`).
+    ConversationSettingNames,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

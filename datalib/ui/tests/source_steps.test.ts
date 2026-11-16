@@ -979,8 +979,9 @@ describe("what Check account authenticates as", () => {
 
 describe("the ChatGPT descriptor", () => {
   /// ChatGPT's form is Claude's with the Claude-only knobs left out:
-  /// same connection block, same probe, same scoping fields, writing the
-  /// same `api` table `datalib-step` dispatches on.
+  /// same connection block, same probe, same scoping fields and the same
+  /// API settings, writing the same `api` table `datalib-step` dispatches
+  /// on; only ChatGPT's listing has pages to cap.
   it("mirrors Claude's connection block", () => {
     expect(CHATGPT.wizard).toBe(true);
     expect(CHATGPT.canProbe).toBe(true);
@@ -1003,8 +1004,16 @@ describe("the ChatGPT descriptor", () => {
       "export.path",
       "api.since",
       "api.conv_uuids",
+      "api.max_conversations_per_run",
+      "api.refetch_newest_conversations",
+      "api.seconds_between_requests",
+      "api.max_listing_pages",
       "when_deleted_upstream",
     ]);
+    const claudeApi = (CLAUDE.fields ?? [])
+      .map((f) => f.target)
+      .filter((t) => t.startsWith("api.") && !t.startsWith("api.project"));
+    expect(claudeApi.filter((t) => !targets.includes(t))).toEqual([]);
   });
 
   it("writes an api table even with nothing filled in", () => {

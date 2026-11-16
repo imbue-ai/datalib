@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::download_problems::DownloadProblem;
+use datalib_etl::download_problems::{ignored_beside, DownloadProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
@@ -72,11 +72,17 @@ pub struct FetchOptions {
     pub db: RawDb,
     /// Seals as flushes land, when the step driver hands one over.
     pub sealer: Option<datalib_etl::raw_store::Sealer>,
-    pub max_pages: Option<usize>,
-    /// Conversations fetched per run, at most.
-    pub limit: Option<usize>,
-    /// Between detail fetches.
-    pub sleep_between: Duration,
+    /// Listing pages walked, at most. Ignored in `conv_uuids` mode.
+    pub max_listing_pages: Option<usize>,
+    /// Conversations fetched per run, at most. Ignored in `conv_uuids`
+    /// mode.
+    pub max_conversations_per_run: Option<usize>,
+    /// The N most recently updated conversations are fetched every run,
+    /// held or not: a check against the live copy. Ignored in
+    /// `conv_uuids` mode.
+    pub refetch_newest_conversations: Option<usize>,
+    /// Between conversation fetches, named or listed.
+    pub wait_between_requests: Duration,
     /// Only sync conversations whose `update_time` is at or after this
     /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
     /// conversations are never detail-fetched, and the listing walk
@@ -111,9 +117,10 @@ impl FetchOptions {
             latchkey: LatchkeySettings::default(),
             db,
             sealer: None,
-            max_pages: None,
-            limit: None,
-            sleep_between: Duration::ZERO,
+            max_listing_pages: None,
+            max_conversations_per_run: None,
+            refetch_newest_conversations: None,
+            wait_between_requests: Duration::ZERO,
             since: None,
             conv_uuids: Vec::new(),
             now: None,
@@ -170,8 +177,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
-        "max_pages": opts.max_pages,
-        "limit": opts.limit,
+        "max_listing_pages": opts.max_listing_pages,
+        "max_conversations_per_run": opts.max_conversations_per_run,
+        "refetch_newest_conversations": opts.refetch_newest_conversations,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
         "export": opts.export,
@@ -363,7 +371,7 @@ impl Ctx<'_> {
         let walk = |archived| {
             list_all_conversations(
                 self.client,
-                self.opts.max_pages,
+                self.opts.max_listing_pages,
                 since_secs,
                 &self.opts.progress,
                 archived,
@@ -427,25 +435,38 @@ impl Ctx<'_> {
         // it further back later lists the older conversations as owed. An
         // unparseable `update_time` is in scope.
         let mut listed: Vec<Listed> = Vec::new();
+        let mut updated_at: Vec<Option<i64>> = Vec::new();
         for item in &items {
             let Some(id) = item.get("id").and_then(Value::as_str) else {
                 continue;
             };
             let update_time = item.get("update_time");
-            if let (Some(cutoff), Some(secs)) = (since_secs, update_time.and_then(update_time_secs))
-            {
+            let secs = update_time.and_then(update_time_secs);
+            if let (Some(cutoff), Some(secs)) = (since_secs, secs) {
                 if secs < cutoff {
                     s.out_of_scope += 1;
                     continue;
                 }
             }
             listed.push(Listed::new(id, version_of(update_time)));
+            updated_at.push(secs);
         }
         let in_scope = listed.len();
+        let newest = newest(
+            &listed,
+            &updated_at,
+            self.opts.refetch_newest_conversations.unwrap_or(0),
+        );
         let mut owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed).await?;
+        // The newest are looked at every run, held or not.
+        for l in newest {
+            if !owed.iter().any(|o| o.key == l.key) {
+                owed.push(l);
+            }
+        }
         s.skipped = in_scope - owed.len();
-        if let Some(limit) = self.opts.limit {
-            owed.truncate(limit);
+        if let Some(cap) = self.opts.max_conversations_per_run {
+            owed.truncate(cap);
         }
         info!(
             event = "chatgpt_priority_split",
@@ -515,6 +536,10 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         .map(parse_since_secs)
         .transpose()
         .with_context(|| format!("sync.since {:?}", ctx.opts.since))?;
+    ctx.config_problems
+        .lock()
+        .unwrap()
+        .extend(ignored_beside_conv_uuids(ctx.opts));
     let mut rate_limited = if ctx.opts.conv_uuids.is_empty() {
         ctx.listed(s, since_secs).await?
     } else {
@@ -530,6 +555,32 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
             .config(std::mem::take(&mut *ctx.config_problems.lock().unwrap()));
     }
     Ok(())
+}
+
+/// The listing's settings a run that names its conversations has no use
+/// for, each a warning row.
+fn ignored_beside_conv_uuids(opts: &FetchOptions) -> Vec<DownloadProblem> {
+    if opts.conv_uuids.is_empty() {
+        return Vec::new();
+    }
+    ignored_beside(
+        "conv_uuids",
+        &[
+            ("since", opts.since.clone()),
+            (
+                "max_listing_pages",
+                opts.max_listing_pages.map(|n| n.to_string()),
+            ),
+            (
+                "max_conversations_per_run",
+                opts.max_conversations_per_run.map(|n| n.to_string()),
+            ),
+            (
+                "refetch_newest_conversations",
+                opts.refetch_newest_conversations.map(|n| n.to_string()),
+            ),
+        ],
+    )
 }
 
 /// Of `listed`, what `table` does not hold at or after the version
@@ -623,6 +674,20 @@ pub(crate) fn parse_conversation(id: &str, full: &Value) -> Result<Conversation>
         payload: serde_json::to_string(&full).context("serialize conversation")?,
         volatile,
     })
+}
+
+/// The `n` of `listed` updated most recently, by the `updated_at` beside
+/// each; one with none sorts last. The active and archived listings are
+/// each newest-first, but not one after the other.
+fn newest(listed: &[Listed], updated_at: &[Option<i64>], n: usize) -> Vec<Listed> {
+    let mut by_time: Vec<(&Listed, Option<i64>)> =
+        listed.iter().zip(updated_at.iter().copied()).collect();
+    by_time.sort_by_key(|a| std::cmp::Reverse(a.1));
+    by_time
+        .into_iter()
+        .take(n)
+        .map(|(l, _)| l.clone())
+        .collect()
 }
 
 /// The version a conversation is listed at: its `update_time` in whole
@@ -749,7 +814,7 @@ pub fn image_asset_file_id(part: &Value) -> Option<&str> {
 /// A conversation listing, and whether it is the *whole* listing.
 ///
 /// The distinction is the only thing that makes pruning safe here. The walk
-/// stops early for two ordinary reasons — a `since` cutoff, a `max_pages`
+/// stops early for two ordinary reasons — a `since` cutoff, a `max_listing_pages`
 /// cap — and in both cases the pages it never asked for hold conversations
 /// that still exist. Deleting on that reading would remove most of the
 /// archive on the first `since`-scoped run.
@@ -795,10 +860,10 @@ fn conversation_id(item: &Value) -> Option<String> {
     item.get("id").and_then(Value::as_str).map(String::from)
 }
 
-#[instrument(skip_all, fields(max_pages, since_secs, archived))]
+#[instrument(skip_all, fields(max_listing_pages, since_secs, archived))]
 async fn list_all_conversations(
     client: &ChatGPTClient,
-    max_pages: Option<usize>,
+    max_listing_pages: Option<usize>,
     since_secs: Option<i64>,
     progress: &datalib_etl::progress::Progress,
     archived: bool,
@@ -873,11 +938,11 @@ async fn list_all_conversations(
                 break;
             }
         }
-        if let Some(cap) = max_pages {
+        if let Some(cap) = max_listing_pages {
             if pages >= cap {
                 info!(
                     event = "chatgpt_listing_capped",
-                    max_pages = cap,
+                    max_listing_pages = cap,
                     "the listing stopped at the configured page cap"
                 );
                 break;
@@ -940,6 +1005,23 @@ mod tests {
         let listing = json!(iso_for_epoch(epoch));
         assert_eq!(update_time_secs(&detail), Some(1_710_959_331));
         assert_eq!(update_time_secs(&detail), update_time_secs(&listing));
+    }
+
+    /// The archived listing follows the active one, so the newest are
+    /// found by update time, not by place; one with no time is never
+    /// taken before one with a time.
+    #[test]
+    fn the_newest_are_chosen_by_update_time_across_both_listings() {
+        let listed: Vec<Listed> = ["active-old", "archived-new", "undated", "active-new"]
+            .into_iter()
+            .map(|id| Listed::new(id, None::<String>))
+            .collect();
+        let at = [Some(10), Some(30), None, Some(20)];
+        let keys =
+            |n| -> Vec<String> { newest(&listed, &at, n).into_iter().map(|l| l.key).collect() };
+        assert_eq!(keys(2), ["archived-new", "active-new"]);
+        assert_eq!(keys(4).last().map(String::as_str), Some("undated"));
+        assert!(keys(0).is_empty());
     }
 
     /// The version a conversation is held at is the same whether the

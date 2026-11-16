@@ -3,7 +3,9 @@
 //! name `ClaudeConfig` without linking the provider.
 
 pub use datalib_source_common::WhenDeletedUpstream;
-use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
+use datalib_source_common::{
+    not_negative, seconds_between_requests, LatchkeySettings, LocalPath, SourceCommon,
+};
 use serde::{Deserialize, Serialize};
 
 /// This source's config stanzas, for `datalib-step help`.
@@ -71,6 +73,18 @@ impl ClaudeConfig {
         if let Some(api) = &self.api {
             datalib_time::TimeWindow::check("api", api.since.as_deref(), None)
                 .map_err(anyhow::Error::msg)?;
+            not_negative(
+                "api.max_conversations_per_run",
+                api.max_conversations_per_run,
+            )
+            .map_err(anyhow::Error::msg)?;
+            not_negative(
+                "api.refetch_newest_conversations",
+                api.refetch_newest_conversations,
+            )
+            .map_err(anyhow::Error::msg)?;
+            seconds_between_requests("api.seconds_between_requests", api.seconds_between_requests)
+                .map_err(anyhow::Error::msg)?;
         }
         if self.api.is_some() && self.export.is_some() {
             anyhow::bail!(
@@ -82,7 +96,9 @@ impl ClaudeConfig {
     }
 }
 
-/// JMAP-less Claude.ai sync knobs (conversation refresh + explicit UUIDs).
+/// The API's settings. `since`, `max_conversations_per_run`,
+/// `refetch_newest_conversations`, `seconds_between_requests` and
+/// `conv_uuids` mean the same on the `chatgpt` source.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
@@ -91,14 +107,27 @@ pub struct ClaudeApiSync {
     /// offset from the run's start (`-30d`). Older conversations are
     /// never detail-fetched, and one already mirrored stays; moving the
     /// start further back later backfills on the next run. Unset → sync
-    /// everything.
+    /// everything. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
     pub since: Option<String>,
-    /// Force-refetch the N most-recently-updated conversations each run.
+    /// Fetch at most this many conversations per run, the ones never
+    /// fetched first; the next run fetches the rest. Unset fetches every
+    /// one that is owed. Ignored, with a warning, beside `conv_uuids`.
     #[serde(default)]
-    pub refresh_most_recent_n_chat_count: Option<i64>,
-    /// When non-empty, restrict the fetch to exactly these conversation UUIDs
-    /// (bare UUID or a paste-able `https://claude.ai/chat/<uuid>` URL).
+    pub max_conversations_per_run: Option<i64>,
+    /// Fetch this many of each org's most recently updated conversations
+    /// again every run, even when the copy here is already at the
+    /// `updated_at` listed: a check against the live copy. Unset fetches
+    /// only what changed. Ignored, with a warning, beside `conv_uuids`.
+    #[serde(default)]
+    pub refetch_newest_conversations: Option<i64>,
+    /// Seconds to wait between requests, from 0 to 3600. Unset waits
+    /// none; the download still backs off on its own when rate-limited.
+    #[serde(default)]
+    pub seconds_between_requests: Option<f64>,
+    /// When non-empty, fetch exactly these conversations every run, by
+    /// UUID or a paste-able `https://claude.ai/chat/<uuid>` URL, with no
+    /// listing. Projects are still mirrored.
     #[serde(default)]
     pub conv_uuids: Vec<String>,
     /// Also mirror Claude Projects: each project's description, custom
@@ -121,11 +150,25 @@ fn default_true() -> bool {
     true
 }
 
+impl ClaudeApiSync {
+    /// The wait between requests; `validate` has refused a value this
+    /// would not fit.
+    pub fn wait_between_requests(&self) -> std::time::Duration {
+        seconds_between_requests(
+            "api.seconds_between_requests",
+            self.seconds_between_requests,
+        )
+        .unwrap_or_default()
+    }
+}
+
 impl Default for ClaudeApiSync {
     fn default() -> Self {
         Self {
             since: None,
-            refresh_most_recent_n_chat_count: None,
+            max_conversations_per_run: None,
+            refetch_newest_conversations: None,
+            seconds_between_requests: None,
             conv_uuids: Vec::new(),
             projects: default_true(),
             project_uuids: Vec::new(),
@@ -242,5 +285,33 @@ mod tests {
         let err = load("last month").unwrap_err().to_string();
         assert!(err.contains("`api.since`"), "{err}");
         assert!(toml::from_str::<ClaudeConfig>("[api]\nuntil = \"+1d\"\n").is_err());
+    }
+
+    #[test]
+    fn negative_counts_and_waits_are_refused_by_name() {
+        for (key, bad) in [
+            ("max_conversations_per_run", "-3"),
+            ("refetch_newest_conversations", "-3"),
+            ("seconds_between_requests", "-1.0"),
+        ] {
+            let cfg: ClaudeConfig = toml::from_str(&format!("[api]\n{key} = {bad}\n")).unwrap();
+            let err = cfg.validate().unwrap_err().to_string();
+            assert!(err.contains(&format!("`api.{key}`")), "{err}");
+        }
+        let c: ClaudeApiSync = toml::from_str("seconds_between_requests = 0.25").unwrap();
+        assert_eq!(
+            c.wait_between_requests(),
+            std::time::Duration::from_millis(250)
+        );
+    }
+
+    /// The name the re-fetch count had before it matched `chatgpt`'s is
+    /// refused at load; `datalib-migrate-config` rewrites it.
+    #[test]
+    fn the_old_name_is_refused() {
+        assert!(
+            toml::from_str::<ClaudeConfig>("[api]\nrefresh_most_recent_n_chat_count = 3\n")
+                .is_err()
+        );
     }
 }

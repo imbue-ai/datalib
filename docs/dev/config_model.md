@@ -541,7 +541,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Seven rewrites are made without asking,
+well enough to name the tool. Nine rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -590,7 +590,7 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   seven that is meant to take an entry out; it still refuses a result
+   nine that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
@@ -600,6 +600,18 @@ the next would put the first back:
 7. Todoist's window (`upgrade_todoist_since`, `todoist_since.rs`): a
    Todoist ingest's `api.completed_since` becomes `api.since`, its value
    as it was. The loader refuses the old key.
+8. The problem inputs (`upgrade_problem_inputs`, `problem_inputs.rs`):
+   `grid_index` gets each `render_time_series` and `render_occurrences`
+   step in its `inputs`, so their problem rows reach the problems list
+   and the Manage counts.
+9. The conversation settings (`upgrade_conversation_settings`,
+   `conversation_settings.rs`): a ChatGPT ingest's `api.max_pages`,
+   `api.limit` and `api.sleep_between` become `api.max_listing_pages`,
+   `api.max_conversations_per_run` and `api.seconds_between_requests`,
+   and a Claude ingest's `api.refresh_most_recent_n_chat_count` becomes
+   `api.refetch_newest_conversations`, each value as it was. The two
+   sources' API settings now share their names. The loader refuses the
+   old keys.
 
 A source may not take `unified_index`, `unified_document_index` or
 `unified_time_series_index` as its id

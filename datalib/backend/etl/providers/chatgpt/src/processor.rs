@@ -97,9 +97,13 @@ impl DataProcessor for ChatgptIngest {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
                 latchkey: self.latchkey.clone(),
-                max_pages: self.sync.max_pages.map(|v| v as usize),
-                limit: self.sync.limit.map(|v| v as usize),
-                sleep_between: self.sync.sleep_between(),
+                max_listing_pages: self.sync.max_listing_pages.map(|v| v as usize),
+                max_conversations_per_run: self.sync.max_conversations_per_run.map(|v| v as usize),
+                refetch_newest_conversations: self
+                    .sync
+                    .refetch_newest_conversations
+                    .map(|v| v as usize),
+                wait_between_requests: self.sync.wait_between_requests(),
                 since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 now: Some(ctx.now.to_string()),

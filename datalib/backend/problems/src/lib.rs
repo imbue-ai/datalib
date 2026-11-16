@@ -144,6 +144,12 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A setting the config gives that the run did not use, because
+        /// another one it gives takes its place (`since` beside
+        /// `conv_uuids`). → nothing is lost, but the config says more
+        /// than the mirror does; reported every run until it is
+        /// corrected.
+        Ignored,
         /// A bucket a render looked at produced no document, though the
         /// rows it was last built from are still upstream. → the
         /// document an earlier run rendered is kept, possibly stale,

@@ -88,8 +88,8 @@ async fn run(raw: &std::path::Path, api: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
     let o = FetchOptions {
         export_dir: Some(api.to_path_buf()),
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: vec!["c1".to_string()],
         projects: false,
         ..FetchOptions::new(db.clone())
