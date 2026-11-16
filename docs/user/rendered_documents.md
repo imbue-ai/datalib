@@ -162,15 +162,15 @@ nearest thing to its sender's clock that the source has:
 |---|---|
 | email | the `Date:` header's offset (for Fastmail, `sentAt`'s) |
 | Google Chat, from a Takeout | the zone the export names (`CET`, `PST`) |
-| Slack | the zone the author's profile is set to (`tz`), on the message's date, daylight saving included. It is their profile as of the last time Slack listed them, so a message from before a move reads on the new zone's clock |
 | a calendar event | the event's own zone |
 
 **`Z` says the clock is unknown.** Since RFC 9557, which updated RFC
 3339, `Z` means "the instant in UTC is known, the local offset is not",
 and `+00:00` means the time really was on UTC's clock. (RFC 3339 spelled
 the first `-00:00`; read that the same way.) A message's time is written
-with `Z` when its source records only an instant: a Slack author with no
-profile zone, a phone backup's milliseconds (SMS, iMessage, Signal), a
+with `Z` when its source records only an instant: a Slack message (an
+author's profile names where they are now, not where they were when
+they wrote it), a phone backup's milliseconds (SMS, iMessage, Signal), a
 service stamping its own UTC (a Drive, Todoist, Notion, GitHub or
 GitLab comment). Show such a
 time on your reader's own clock rather than as UTC; datalib's viewer
