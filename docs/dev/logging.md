@@ -262,10 +262,27 @@ says `where the render's time went`, in `load_ms` (the store's answer),
   `metric` event, not a sentence with a number in it. The Manage
   screen's queue and ETA (in its Status column) and the sync dashboard's charts come from
   `metric_samples`.
-- **A secret.** The request log drops `?token=`; a line you write must
-  not carry a credential either. Do it by construction, not by scrubbing
-  a pattern out afterwards: print a URL as a `ShownUrl` (scheme, host,
-  path), since a signed URL carries its credential in the query.
+
+## What a line may carry
+
+The log is the person's own and stays on their machine, under their
+data root, beside the mirror it describes. So a line may carry whatever
+helps someone work out what happened: a search they typed, a file path,
+a record's subject, an account's name. Leaving such things out makes a
+failure harder to diagnose and protects nothing that the data root does
+not already hold.
+
+- **Never a secret**: a token, a password, a cookie, an API key. Do it
+  by construction, not by scrubbing a pattern out afterwards: print a
+  URL as a `ShownUrl` (scheme, host, path), since a signed URL carries
+  its credential in the query. The request log drops `?token=`.
+- **The home directory is written `~`** in every line's message and
+  fields and in a step's error (`runs/src/redact.rs`), where lines enter
+  the store, so you need not do it yourself. It only matches a whole
+  path prefix: `/Users/alice` stays when the home is `/Users/al`.
+
+Because a log can hold a person's data, it is theirs to share, not
+ours: before a log goes into a public issue, the person reads it first.
 
 ## Reading it
 
