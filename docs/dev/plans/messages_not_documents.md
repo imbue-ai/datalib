@@ -277,6 +277,7 @@ Every place that assumes a document, from the read side of the tree:
 | `Keyed` / `Kept::Sections` | what the filters keep, per document | what the filters keep is a set of items |
 | `WithoutVectors` | documents without vectors | items not covered by any embedded chunk |
 | Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | the items of what is read together, a page at a time, opened at one |
+| The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
 | Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with what holds it looked up |
 | Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
 | Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
@@ -327,10 +328,11 @@ against the eval before the next.
    section's uuid is already its row's
    ([`problems_as_step_events.md`](problems_as_step_events.md)
    §"What the tree does today"). `grid_index`
-   carries the columns and an index on `(parent, sort key, uuid)`. A re-render
+   carries the columns. A re-render
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
-2. **Children in order.** One route that lists a container's
+2. **Children in order.** The index on `(parent, sort key, uuid)`, made
+   with the first query that uses it, and one route that lists a container's
    children in order, a page at a time. The viewer can use it
    beside the file.
 3. **Text in the render store.** Each item's rendered text is stored
