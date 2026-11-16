@@ -60,7 +60,9 @@ pub struct KeptSection {
     pub text: String,
     pub framed: bool,
     pub addressed: Option<String>,
+    pub labels: Option<String>,
     pub author: Option<String>,
+    pub author_handle: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -72,15 +74,25 @@ impl KeptSection {
             .and_then(datalib_schema::sections::parse_addressed)
             .unwrap_or_default()
             .into_iter()
-            .map(|a| (a.role.as_str().to_string(), a.name))
+            .map(|a| datalib_search_index::text::Addressed {
+                role: a.role.as_str().to_string(),
+                name: a.name,
+                handle: a.handle,
+            })
             .collect();
         datalib_search_index::text::Piece {
             uuid: self.uuid,
             text: self.text,
             framed: self.framed,
             author: self.author,
+            author_handle: self.author_handle,
             created_at: self.created_at,
             addressed,
+            labels: self
+                .labels
+                .as_deref()
+                .and_then(datalib_schema::sections::parse_labels)
+                .unwrap_or_default(),
         }
     }
 }
@@ -114,8 +126,8 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
-            "INSERT INTO sections (markdown_uuid, seq, uuid, text, framed, addressed) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sections (markdown_uuid, seq, uuid, text, framed, addressed, labels) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.markdown_uuid)
         .bind(row.seq)
@@ -123,6 +135,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         .bind(&row.text)
         .bind(row.framed)
         .bind(&row.addressed)
+        .bind(&row.labels)
         .execute(&mut **conn)
         .await
         .with_context(|| format!("document {}: store section {}", md.markdown_uuid, row.seq))?;
@@ -965,7 +978,7 @@ impl IndexedMarkdownStore {
         blocking(async {
             sqlx::query_as(
                 "SELECT s.markdown_uuid, s.seq, s.uuid, s.text, s.framed, s.addressed, \
-                        g.author, g.created_at \
+                        s.labels, g.author, g.author_handle, g.created_at \
                  FROM sections s LEFT JOIN grid_rows g ON g.uuid = s.uuid \
                  WHERE s.markdown_uuid IN (SELECT value FROM json_each(?)) \
                  ORDER BY s.markdown_uuid, s.seq",

@@ -423,6 +423,26 @@ async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
     }
 }
 
+/// The words find an item by a word of its labels, beside `label:`, which
+/// matches a label exactly: the index text draws an item's labels
+/// (`search_index/src/text.rs`; the addresses it draws are pinned there).
+#[tokio::test]
+async fn the_words_find_an_item_by_its_labels() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let found = tests::search_part(&s, "patrol", tests::Part::Words, 0, 1_000).await;
+    assert!(
+        found.rows.iter().any(|r| r.source_id == "google-takeout"
+            && r.markdown_uuid.as_deref() == Some("00000000-0000-8911-b4f4-e7022a921136")),
+        "{:?}",
+        found
+            .rows
+            .iter()
+            .map(|r| (&r.source_id, &r.markdown_uuid))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// With meaning left out, a search is scoped by `source:` like any other,
 /// and its groups count the same rows its pages list.
 #[tokio::test]
