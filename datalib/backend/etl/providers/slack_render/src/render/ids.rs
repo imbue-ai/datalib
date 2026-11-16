@@ -6,6 +6,8 @@ use datalib_time::{IsoOffsetTimestamp, RecordStampPrecision};
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Slack;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
+pub const KIND_WORKSPACE: &str = "workspace";
+pub const KIND_CHANNEL: &str = "channel";
 pub const KIND_THREAD: &str = "thread";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_REACTION: &str = "reaction";
@@ -58,6 +60,26 @@ pub fn ts_to_ms(ts: &str) -> Option<i64> {
 /// else has to agree with it. A thread's id carries none: its row's
 /// stamp is derived from its items.
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
+
+pub fn workspace(source_id: &str, team_id: &str) -> Identity {
+    IDS.mint_in(
+        source_id,
+        team_id,
+        KIND_WORKSPACE,
+        team_id.to_string(),
+        None,
+    )
+}
+
+pub fn channel(source_id: &str, team_id: &str, channel_id: &str) -> Identity {
+    IDS.mint_in(
+        source_id,
+        team_id,
+        KIND_CHANNEL,
+        channel_id.to_string(),
+        None,
+    )
+}
 
 pub fn thread(source_id: &str, team_id: &str, channel_id: &str, thread_ts: &str) -> Identity {
     IDS.mint_in(
@@ -126,6 +148,8 @@ mod tests {
     #[test]
     fn natural_key_regenerates_the_uuid() {
         for (team, got) in [
+            ("T1", workspace("src", "T1")),
+            ("T1", channel("src", "T1", "C1")),
             ("T1", thread("src", "T1", "C1", "1.1")),
             ("T1", message("src", "T1", "C1", "1.1")),
             ("T1", reaction("src", "T1", "C1", "1.1", "wave", "U1")),

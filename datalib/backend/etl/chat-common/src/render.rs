@@ -281,8 +281,8 @@ fn chat_names_shown(chat: &NormalizedChat) -> NormalizedChat {
     let shown = |s: &Option<String>| s.as_deref().map(without_bidi_controls);
     NormalizedChat {
         id: chat.id.clone(),
-        containers: Vec::new(),
-        filed_under: Vec::new(),
+        containers: chat.containers.clone(),
+        filed_under: chat.filed_under.clone(),
         chat_uuid: chat.chat_uuid.clone(),
         display: without_bidi_controls(&chat.display),
         title: shown(&chat.title),
@@ -957,12 +957,18 @@ fn tree_of(
     if !chat.containers.iter().any(|c| c.is_place) {
         chat_node = chat_node.place();
     }
-    if let Some(id) = &chat.external_id {
-        chat_node = chat_node.upstream(
-            profile.chat_entity_kind,
-            id.clone(),
-            chat.upstream_account.clone(),
-        );
+    // As the document row's backpointer: a document that is the whole chat
+    // and says what it is upstream (a sub-agent's transcript) says so here.
+    let own_ref = doc.source_ref.as_ref().filter(|_| *md == chat.chat_uuid);
+    let upstream = match own_ref {
+        Some(r) => Some((r.entity_kind.clone(), r.native_id.clone())),
+        None => chat
+            .external_id
+            .clone()
+            .map(|id| (profile.chat_entity_kind.to_string(), id)),
+    };
+    if let Some((kind, id)) = upstream {
+        chat_node = chat_node.upstream(kind, id, chat.upstream_account.clone());
     }
     let chat_node = chat_node.under(&at);
     let in_chat = at.below(&chat_node);
@@ -1704,6 +1710,37 @@ mod tests {
                 ("zeta", Some("work"))
             ]
         );
+    }
+
+    /// The containers and filings a provider names reach the document
+    /// `render_all` hands on: a copy of the chat made on the way, to clean
+    /// its names, once dropped them both.
+    #[test]
+    fn a_rendered_document_carries_the_containers_its_chat_names() {
+        let mut chat = whole(mk_chat());
+        chat.containers = vec![NodeRow::new("", "channel", "src", "Slack channel").place()];
+        chat.filed_under = vec![vec![NodeRow::new("", "label", "src", "Label").place()]];
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &test_profile(),
+            &[chat],
+            out.path(),
+            "test",
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |doc| {
+                docs.push(doc);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let uuids: Vec<_> = docs[0].nodes.iter().map(|n| n.uuid.as_str()).collect();
+        assert!(
+            uuids.contains(&"channel") && uuids.contains(&"label"),
+            "{uuids:?}"
+        );
+        assert_eq!(docs[0].filings.len(), 1);
     }
 
     /// A reply becomes an edge from it to what it answers, when that is in

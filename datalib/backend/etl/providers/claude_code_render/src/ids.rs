@@ -10,6 +10,7 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 // Entity kinds — the `entity_kind` recipe component, and the value
 // stamped into `grid_rows.upstream_entity_kind`.
+pub const KIND_PROJECT: &str = "project";
 pub const KIND_SESSION: &str = "session";
 pub const KIND_AGENT_TRANSCRIPT: &str = "agent_transcript";
 pub const KIND_RECORD: &str = "record";
@@ -36,6 +37,11 @@ pub fn transcript(source_id: &str, session_id: &str, agent_id: Option<&str>) -> 
             None,
         ),
     }
+}
+
+/// A project, keyed by the working directory its sessions ran in.
+pub fn project(source_id: &str, cwd: &str) -> Identity {
+    IDS.mint(source_id, KIND_PROJECT, cwd.to_string(), None)
 }
 
 pub fn record(source_id: &str, record_uuid: &str, date_ms: Option<i64>) -> Identity {

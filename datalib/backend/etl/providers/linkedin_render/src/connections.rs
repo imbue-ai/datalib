@@ -186,6 +186,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
         contact: person,
         doc_uuid: id.uuid,
         group_label: GROUP_LABEL.to_string(),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
