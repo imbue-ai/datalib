@@ -3,13 +3,14 @@
 //! at the last paragraph, line, sentence or word break before the limit,
 //! and its pieces overlap. A chunk therefore names the sections it covers.
 //!
-//! A heading of level one or two starts a chunk, inside a section or
-//! between them, so an edit under one heading moves only the chunks under
-//! it; so does an item (a message), so a Meaning hit, which lands on the
-//! first item its chunk covers, lands on the one it matched. A chunk that
-//! holds less than a quarter of the budget takes the heading or item in
-//! rather than standing alone, so a document's front matter stays with its
-//! title and short messages share a chunk.
+//! An item (a message) always starts a chunk of its own, so a Meaning hit,
+//! which lands on the first item its chunk covers, lands on the one it
+//! matched; in the search eval that beat packing short messages together
+//! on every measure, for 4% more chunks. A heading of level one or two
+//! inside a section starts a chunk too, so an edit under one heading moves
+//! only the chunks under it, unless the chunk so far holds less than a
+//! quarter of the budget: then it takes the heading in, so a document's
+//! front matter stays with its title.
 //!
 //! The budget is in bytes. qmd's is 900 tokens, which it reads as 3,600
 //! characters; counting bytes keeps text with many multi-byte characters
@@ -100,8 +101,9 @@ fn chunks_within(sections: &[&str], items: &[bool], max: usize, overlap: usize) 
             if piece.trim().is_empty() {
                 continue;
             }
-            let breaks = heading || std::mem::take(&mut item_start);
-            if breaks && open.is_some_and(|c| c.end - c.start >= max / 4) {
+            let new_item = std::mem::take(&mut item_start);
+            let full_enough = open.is_some_and(|c| c.end - c.start >= max / 4);
+            if new_item || (heading && full_enough) {
                 out.extend(open.take());
             }
             if piece.len() > max {
@@ -239,11 +241,11 @@ mod tests {
         }
     }
 
-    /// An item starts a chunk as a heading does, so a Meaning hit lands on
-    /// the message it matched; short items still share one, and text that
-    /// starts no item (a page's body) still packs.
+    /// Every item starts a chunk, so a Meaning hit lands on the message it
+    /// matched, however short; text that starts no item (a page's body)
+    /// still packs.
     #[test]
-    fn an_item_starts_a_chunk_once_the_one_before_holds_enough() {
+    fn every_item_starts_a_chunk() {
         let long = "a".repeat(400);
         let texts = [long.as_str(), long.as_str(), "b\n", "c\n"];
         let items = [true, true, true, true];
@@ -251,7 +253,7 @@ mod tests {
             .iter()
             .map(|c| (c.first_section, c.last_section))
             .collect();
-        assert_eq!(got, [(0, 0), (1, 1), (2, 3)]);
+        assert_eq!(got, [(0, 0), (1, 1), (2, 2), (3, 3)]);
         let unbroken: Vec<(usize, usize)> = chunks_within(&texts, &[], 1000, 100)
             .iter()
             .map(|c| (c.first_section, c.last_section))
