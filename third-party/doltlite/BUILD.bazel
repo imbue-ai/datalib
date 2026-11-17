@@ -34,7 +34,7 @@ filegroup(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `//tools:version_pins_test`
 # enforces that.
-DOLTLITE_VERSION = "0.51.3"
+DOLTLITE_VERSION = "0.51.12"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -49,6 +49,9 @@ DOLTLITE_DEFINES = [
     "-DDOLTLITE_PROLLY=1",
     "-DDOLTLITE_VERSION=\\\"" + DOLTLITE_VERSION + "\\\"",
     "-DSQLITE_CORE",
+    # BLAKE3's SIMD kernels are compiled as objects of their own
+    # (`:blake3_kernels`), so the amalgamation leaves them on.
+    "-DDOLTLITE_BLAKE3_SIMD_OBJECTS",
     # SQLite vtable extensions doltlite enables by default; we
     # repeat them here so the amalgamation's extension init code
     # (statically compiled in) matches what sqlx-sqlite expects.
@@ -211,8 +214,8 @@ genrule(
 
 # BLAKE3's SIMD kernels for doltlite's chunk hashing (BLAKE3_KERNELS
 # above), from `@blake3_c` at the version the amalgamation embeds. The
-# amalgamation ships with them turned off; `amalgamation_blake3_simd.patch`
-# turns them on. Hashing chunks was over 40% of a Lightroom mirror's
+# amalgamation ships with them turned off unless it is told they are built
+# as objects of their own (`DOLTLITE_BLAKE3_SIMD_OBJECTS`). Hashing chunks was over 40% of a Lightroom mirror's
 # writer thread on the portable code (README.md § "BLAKE3's SIMD kernels").
 [
     cc_library(
