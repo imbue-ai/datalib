@@ -4,7 +4,7 @@
 Generates the DAG config `datalib-dag` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
-and leaves the staged outputs where `tar_qmd.py` can pick them up.
+and leaves the staged outputs where `tar_rendered.py` can pick them up.
 Beside them it writes `config_body.toml`: the same sources as
 render-only groups, for `materialize_tng_root.sh` to declare in the
 root it builds from the tars.

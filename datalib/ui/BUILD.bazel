@@ -536,7 +536,7 @@ _RENDER_PREVIEW_DATA = [
     ":hostile_samples",
     "//datalib/backend/etl/chat-common:render_chat_samples",
     "//datalib/backend/etl/contact-common:render_contact_samples",
-    "//tests/fixtures:ingested/qmd_md.tar",
+    "//tests/fixtures:ingested/rendered_md.tar",
     "@nodejs_host//:node_bin",
 ]
 
@@ -545,7 +545,7 @@ _RENDER_PREVIEW_ENV = {
     "DATALIB_TEST_CONTACT_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/contact-common:render_contact_samples)",
     "DATALIB_TEST_EDGES_GOLDEN_RLOC": "$(rlocationpath tests/goldens/text_edges_preview.html)",
     "DATALIB_TEST_EDGES_RLOC": "$(rlocationpath :hostile_samples)",
-    "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/qmd_md.tar)",
+    "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/rendered_md.tar)",
     "DATALIB_TEST_GOLDEN_RLOC": "$(rlocationpath tests/goldens/render_preview.html)",
     "DATALIB_TEST_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "DATALIB_TEST_PREVIEW_JS_RLOC": "$(rlocationpath :render_preview_script)",
