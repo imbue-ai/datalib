@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,7 +129,9 @@ type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
 // it: the fixture root minus its sources, the pre-built index and the
-// markdown trees. The streaming spec needs this rather than the
+// markdown trees. It shares the fixture root's embedding model, which
+// the grid_index step cuts search text with, so nothing fetches one.
+// The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of
@@ -156,6 +159,12 @@ group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "'${APPLET_BIN}' unified_grid_and_search_index"
 `,
+  );
+  const index = path.join(root, "unified_grid_and_search_index");
+  mkdirSync(index, { recursive: true });
+  symlinkSync(
+    path.join(fixtureRoot, "unified_grid_and_search_index", "models"),
+    path.join(index, "models"),
   );
   return root;
 }
