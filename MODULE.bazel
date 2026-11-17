@@ -482,8 +482,8 @@ register_toolchains("@rust_toolchains//:all")
 #
 # `extra_target_compatible_with` stamps the same `//platforms:musl`
 # constraint the rust musl toolchains use onto the cc toolchains, so
-# only an explicit `--config=musl-*` build resolves them; host builds
-# keep the autodetected host cc toolchain.
+# only an explicit `--config=musl-*` build resolves them; every other
+# Linux build gets the LLVM toolchain registered below.
 bazel_dep(name = "toolchains_musl", version = "0.1.29")
 
 toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
@@ -492,19 +492,13 @@ toolchains_musl.config(
 )
 use_repo(toolchains_musl, "musl_toolchains_hub")
 
-# Register the musl cc toolchains from the ROOT module, not just via
-# toolchains_musl's own MODULE.bazel. Root-module registrations take
-# precedence in toolchain resolution; relying on the dependency
-# module's registration let Bazel's auto-configured host cc toolchain
-# (registered by an earlier module in the graph, and constraint-wise a
-# match for any `linux + <cpu>` platform — it carries no linker
-# constraint) win the musl platforms on Linux hosts. Symptom: the
-# release leg linked the (since-removed) wreq-based impersonating curl
-# with `/usr/bin/gcc` against glibc-compiled BoringSSL objects and
-# died on `__memcpy_chk` / `fopen64`. Harmless for every other build: these toolchains require
-# `//platforms:musl`, which only the musl platforms carry. (macOS
-# hosts never hit the ambiguity — a darwin host cc toolchain can't
-# target linux at all.)
+# Register the musl cc toolchains from the ROOT module, and ahead of the
+# LLVM one below. Resolution takes the first registered toolchain that
+# matches, and a toolchain that only asks for `linux + <cpu>` matches
+# the musl platforms too: a glibc toolchain winning them links musl
+# objects against glibc and dies on `__memcpy_chk` / `fopen64`.
+# Harmless for every other build: these toolchains require
+# `//platforms:musl`, which only the musl platforms carry.
 register_toolchains("@musl_toolchains_hub//:all")
 
 # The C/C++ toolchain every Linux build uses, gnu legs and build tools

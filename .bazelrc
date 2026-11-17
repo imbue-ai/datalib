@@ -238,12 +238,12 @@ build:buildbuddy --experimental_remote_downloader_local_fallback=true
 
 # BuildBuddy remote EXECUTION, on top of the cache above. Opt-in via
 # `--config=remote`. CI-only, and the reason is toolchain resolution
-# rather than policy: the C/C++ half of this build resolves through
-# bazel's autodetected `local_config_cc`, which is generated from the
-# CLIENT host. Run this from a mac and bazel hands a darwin cc
-# toolchain to a Linux executor. `test.yml` runs *inside* the same
-# devcontainer image the executors run, so there the client and the
-# worker agree — which is what makes it safe there and nowhere else.
+# rather than policy: toolchains are resolved on the CLIENT. A Linux
+# client resolves the hermetic LLVM toolchain MODULE.bazel registers,
+# which runs on any Linux executor; a mac client resolves Apple's and
+# hands a darwin cc toolchain to a Linux executor. `test.yml` runs
+# *inside* the same devcontainer image the executors run, so there the
+# client and the worker agree.
 #
 # The problem it solves is not the critical path, which is a chain of
 # rustc invocations no core count shortens. It is the queue behind it:

@@ -130,8 +130,10 @@ mod tests {
         let states = thread_states(Path::new("/proc/self/task"));
         #[cfg(target_os = "linux")]
         {
-            // SAFETY: gettid takes no arguments and touches no memory.
-            let tid = unsafe { libc::gettid() };
+            // SAFETY: gettid takes no arguments and touches no memory. By
+            // syscall: the glibc the Linux toolchain links against predates
+            // its wrapper.
+            let tid = unsafe { libc::syscall(libc::SYS_gettid) };
             let line = states
                 .lines()
                 .find(|l| l.trim_start().starts_with(&format!("{tid} ")))
