@@ -2064,7 +2064,7 @@ fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
 /// wrote it.
 const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 
-/// A source's own search step, which embeds what the grid step's keyword
+/// A source's own search step, which embeds what the `grid_index` step's keyword
 /// pass cut of its `render_markdown` whoever wrote it — so a diff group
 /// may have it too.
 const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["embed"];

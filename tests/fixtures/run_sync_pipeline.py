@@ -618,7 +618,7 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = [{grid_list}]"""
         )
-        # Each source embeds what the grid step's keyword pass cut of it.
+        # Each source embeds what the `grid_index` step's keyword pass cut of it.
         # The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)

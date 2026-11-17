@@ -87,7 +87,7 @@ pub struct Appended {
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
-    /// The config has the grid step an `embed` reads, and the stanza has
+    /// The config has the `grid_index` step an `embed` reads, and the stanza has
     /// none, so the source is found by its words alone until one is added.
     pub found_by_words_alone: bool,
 }
@@ -541,7 +541,7 @@ inputs = [
         );
         assert_eq!(appended.group, "work-mail");
         // No embedding_map here, and the minimal stanza has no embed for
-        // one to read; the grid step searches it by its words.
+        // one to read; the `grid_index` step searches it by its words.
         assert!(appended.unread.is_empty());
         assert!(appended.found_by_words_alone);
     }

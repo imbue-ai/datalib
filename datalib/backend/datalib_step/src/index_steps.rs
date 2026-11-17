@@ -1,4 +1,4 @@
-//! The search's per-source step beside the grid step's keyword pass:
+//! The search's per-source step beside the `grid_index` step's keyword pass:
 //! each source's `embed`, which fills the vectors its chunks lack
 //! (`search_index.rs`).
 
@@ -61,7 +61,7 @@ pub(crate) fn ensure_embed_model(dir: &Path, fetch: datalib_embedding_models::Fe
 }
 
 /// The pinned model, provisioned, and its tokenizer, read without the
-/// weights: the grid step's keyword pass and each embed cut chunks counted
+/// weights: the `grid_index` step's keyword pass and each embed cut chunks counted
 /// in its tokens.
 pub(crate) async fn open_model(
     data_root: &Path,

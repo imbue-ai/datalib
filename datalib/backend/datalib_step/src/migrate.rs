@@ -636,7 +636,7 @@ mod tests {
     }
 
     /// A new version of the index's drawing or chunking moves nothing the
-    /// grid step's keyword pass reads, so the migrate pass asks for it:
+    /// `grid_index` step's keyword pass reads, so the migrate pass asks for it:
     /// when a source it reads was drawn by another version, and not before
     /// there is an index or once it is this build's; and when the index's
     /// tables are in another shape, which its next writer empties.

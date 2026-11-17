@@ -360,7 +360,7 @@ mod tests {
     fn load(name: &str, toml: &str, dir: &Path) -> Loaded {
         let path = dir.join(format!("{}.toml", name.replace('/', "_")));
         // In a new library's config, as `examples --append` puts it: its
-        // `embed` reads the index's grid step.
+        // `embed` reads the `grid_index` step.
         std::fs::write(
             &path,
             format!(

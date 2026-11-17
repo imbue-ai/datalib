@@ -2507,7 +2507,7 @@ mod tests {
             "scaffold rejected: {}\n---\n{text}",
             checked.render(std::path::Path::new("scaffold"))
         );
-        // The grid step has no source to read yet, so on a scaffolded
+        // The `grid_index` step has no source to read yet, so on a scaffolded
         // root it *is* the fringe. It is what
         // `--sync` can target until the first source is added — and
         // running it against nothing is a no-op, not an error.
