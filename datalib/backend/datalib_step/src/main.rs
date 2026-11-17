@@ -11,6 +11,7 @@ mod check_params;
 mod compact;
 mod config_backup;
 mod dispatch;
+mod embed_prompts;
 mod embedding_map;
 mod events;
 mod exit_watchdog;
@@ -128,6 +129,10 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "fetch the search index's embedding models before the first embed",
         command: "datalib-step pull-models",
+    },
+    Example {
+        what: "embed the prompts piped to stdin, one {\"hash\", \"prompt\"} object a line, as the embed step would; vectors come out on stdout",
+        command: "datalib-step embed-prompts",
     },
     Example {
         what: "say which built-in steps' params a sync would refuse (datalib-dag --check runs this)",
@@ -274,6 +279,27 @@ enum Cmd {
         /// `$XDG_CACHE_HOME/qmd/models` or `~/.cache/qmd/models`.
         #[arg(long)]
         models_dir: Option<PathBuf>,
+    },
+    /// Utility (not a pipeline step): embed prompts read from stdin, one
+    /// `{"hash", "prompt"}` JSON object a line, and write one
+    /// `{"hash", "vector", "cut"}` object a line to stdout, in order,
+    /// through the embedder the `embed` step uses. Needs no data root.
+    EmbedPrompts {
+        /// The model's directory, put in place as `pull-models` does;
+        /// default is qmd's own cache.
+        #[arg(long, conflicts_with = "model")]
+        models_dir: Option<PathBuf>,
+        /// A model file to load as it is, with no check that it is the
+        /// pinned one.
+        #[arg(long)]
+        model: Option<PathBuf>,
+        /// Run on the CPU even where there is a GPU.
+        #[arg(long)]
+        cpu: bool,
+        /// Prompts and tokens per call to the model, as `8:2048`; default
+        /// is the device's own.
+        #[arg(long, value_parser = parse_batching)]
+        batching: Option<datalib_embedder::Batching>,
     },
     /// Utility (not a pipeline step): put the Node runtime for latchkey in
     /// place — the tree beside the binaries when one is shipped, else the
@@ -494,6 +520,32 @@ async fn main() {
             }
         }
     }
+    // `embed-prompts` likewise; its stdout holds only vectors.
+    if let Some(Cmd::EmbedPrompts {
+        models_dir,
+        model,
+        cpu,
+        batching,
+    }) = &cli.cmd
+    {
+        let (models_dir, model, cpu, batching) =
+            (models_dir.clone(), model.clone(), *cpu, *batching);
+        let embedded = tokio::task::spawn_blocking(move || {
+            embed_prompts_cli(models_dir, model, cpu, batching)
+        })
+        .await
+        .expect("embed-prompts task panicked");
+        match embedded {
+            Ok(n) => {
+                datalib_obs::status_line!("embedded {n} prompts");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
     // `pull-runtime` likewise. Off the async runtime for the same
     // reason as `pull-models`.
     if let Some(Cmd::PullRuntime { into }) = &cli.cmd {
@@ -676,6 +728,7 @@ async fn run(
         Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
         Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
+        Some(Cmd::EmbedPrompts { .. }) => unreachable!("embed-prompts is answered in main"),
         Some(Cmd::PullRuntime { .. }) => unreachable!("pull-runtime is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
             unreachable!("topo-sort-config is answered in main")
@@ -967,6 +1020,53 @@ fn interrupt_own_group() {
     }
     datalib_parent_watch::report("the runner is gone; stopping this step and what it spawned");
     unsafe { libc::kill(0, libc::SIGINT) };
+}
+
+fn parse_batching(s: &str) -> Result<datalib_embedder::Batching, String> {
+    let (prompts, tokens) = s.split_once(':').ok_or("PROMPTS:TOKENS, as 8:2048")?;
+    Ok(datalib_embedder::Batching {
+        prompts: prompts.parse().map_err(|e| format!("prompts: {e}"))?,
+        tokens: tokens.parse().map_err(|e| format!("tokens: {e}"))?,
+    })
+}
+
+fn embed_prompts_cli(
+    models_dir: Option<PathBuf>,
+    model: Option<PathBuf>,
+    cpu: bool,
+    batching: Option<datalib_embedder::Batching>,
+) -> anyhow::Result<usize> {
+    let open = move || {
+        let model = match model {
+            Some(file) => file,
+            None => {
+                let dir = models_dir.unwrap_or_else(datalib_qmd_models::shared_models_dir);
+                index_steps::ensure_embed_model(&dir, datalib_qmd_models::Fetch::from_env())?;
+                search_index::model_file(&dir)
+            }
+        };
+        let device = if cpu {
+            datalib_embedder::Device::Cpu
+        } else {
+            datalib_embedder::Device::Best
+        };
+        let batching = batching.unwrap_or_else(|| {
+            datalib_embedder::Batching::for_device(&datalib_embedder::device_for(device))
+        });
+        let e = datalib_embedder::Embedder::open_with(&model, device, 0, batching)?;
+        let b = e.batching();
+        datalib_obs::status_line!(
+            "embedding on {} ({}), {} prompts / {} tokens per call",
+            e.device(),
+            datalib_embedder::cuda_module_report().unwrap_or("no CUDA module looked for"),
+            b.prompts,
+            b.tokens
+        );
+        Ok(e)
+    };
+    let stdin = std::io::stdin().lock();
+    let stdout = std::io::stdout().lock();
+    embed_prompts::run(stdin, stdout, open)
 }
 
 #[cfg(test)]
