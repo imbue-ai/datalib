@@ -91,7 +91,7 @@ struct Row {
     markdown_uuid: Option<String>,
 }
 
-/// Whether a document is filed for the grid alone, so qmd has no text of it.
+/// Whether a document is filed for the grid alone, so the search index has no text of it.
 fn is_unindexed(qmd_path: &str) -> bool {
     qmd_path
         .split('/')
@@ -232,7 +232,7 @@ async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
     out
 }
 
-/// The words a document's text holds, cut where qmd's tokenizer cuts
+/// The words a document's text holds, cut where the keyword index's tokenizer cuts
 /// them (at anything not a letter or digit), keeping the ones of four or
 /// more letters and nothing else, lowercased.
 fn words(text: &str) -> BTreeSet<String> {
@@ -434,7 +434,7 @@ async fn every_row_is_found_by_what_it_holds() {
     }
 
     // Notion's table of contents is filed for the grid alone: its title
-    // finds its row on the fields, and the words, which reads qmd,
+    // finds its row on the fields, and the words, which reads the search index,
     // does not return it.
     let contents_rows = |got: Vec<SearchRow>| {
         got.iter()

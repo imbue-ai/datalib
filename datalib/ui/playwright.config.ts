@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,7 +129,9 @@ type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
 // it: the fixture root minus its sources, the pre-built index and the
-// markdown trees. The streaming spec needs this rather than the
+// markdown trees. It shares the fixture root's embedding model, which
+// the grid_index step cuts search text with, so nothing fetches one.
+// The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of
@@ -149,13 +152,19 @@ name = "Grid and Search Index"
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "grid_index"
-inputs = []
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "'${APPLET_BIN}' unified_grid_and_search_index"
 `,
+  );
+  const index = path.join(root, "unified_grid_and_search_index");
+  mkdirSync(index, { recursive: true });
+  symlinkSync(
+    path.join(fixtureRoot, "unified_grid_and_search_index", "models"),
+    path.join(index, "models"),
   );
   return root;
 }
@@ -500,13 +509,13 @@ export default defineConfig({
   },
   projects: [
     {
-      // The qmd cold start, owned and named — see
-      // tests/e2e/qmd-warmup.setup.ts for why it can't be left to
+      // The search model's cold start, owned and named — see
+      // tests/e2e/search-warmup.setup.ts for why it can't be left to
       // whichever spec sorts first. `testMatch` here overrides the
       // top-level `*.spec.ts` pattern, so this file and only this file
       // runs in the project.
       name: "warmup",
-      testMatch: /qmd-warmup\.setup\.ts/,
+      testMatch: /search-warmup\.setup\.ts/,
       use: { browserName: "chromium" },
     },
     {
@@ -550,7 +559,7 @@ export default defineConfig({
         /selected-message-outline\.spec\.ts/,
         // Clicks, modifier clicks and Tab: where the engines' focus differs.
         /grid-selection\.spec\.ts/,
-        /qmd-index-columns\.spec\.ts/,
+        /index-columns\.spec\.ts/,
         // The search field, a CodeMirror editor: the desktop app's typing.
         /search-field\.spec\.ts/,
         /column-reveal\.spec\.ts/,

@@ -6,9 +6,9 @@
 #   * `bazelisk test //datalib/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
-#   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
+#   <stanza>/render_markdown/...       Conversation markdown trees (from rendered.tar).
 #   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
-#                                      (from qmd.tar; no raw store beside it).
+#                                      (from rendered.tar; no raw store beside it).
 #   unified_grid_and_search_index/grid_index/db.sqlite  the plain SQLite grid index the
 #                                      backend reads, with the search index's
 #                                      tables (`:ingested_tng_search_index`).
@@ -48,13 +48,13 @@ OUT_ROOT="${1:-}"
 APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
 DB_FILE="$(rlocation _main/tests/fixtures/ingested/search_index.sqlite)"
 VECTORS_FILE="$(rlocation _main/tests/fixtures/ingested/inference_cache.sqlite)"
-QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
+RENDERED_TAR="$(rlocation _main/tests/fixtures/ingested/rendered.tar)"
 TIME_SERIES_TAR="$(rlocation _main/tests/fixtures/ingested/time_series.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: search_index.sqlite not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$VECTORS_FILE" ]]  || { echo "ERROR: inference_cache.sqlite not found at $VECTORS_FILE" >&2; exit 1; }
-[[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
+[[ -f "$RENDERED_TAR" ]]  || { echo "ERROR: rendered.tar not found at $RENDERED_TAR" >&2; exit 1; }
 [[ -f "$TIME_SERIES_TAR" ]] || { echo "ERROR: time_series.tar not found at $TIME_SERIES_TAR" >&2; exit 1; }
 [[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
 
@@ -62,10 +62,10 @@ command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1
 
 mkdir -p "$OUT_ROOT"
 
-# The archive is rooted at `qmd/` (the genrule's staging dir name); strip
-# that one component so the per-stanza markdown trees land at
+# The archive is rooted at `root/` (tar_rendered.py); strip that one
+# component so the per-stanza markdown trees land at
 # `<root>/<stanza>/render_markdown/...`.
-tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
+tar -xf "$RENDERED_TAR" -C "$OUT_ROOT" --strip-components=1
 # The index names each source's store by its path under the root and the
 # commit it read, so the stores land where they were written.
 tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
@@ -118,16 +118,16 @@ EOF
 } > "$OUT_ROOT/config.toml"
 
 # The embedding model, where a search of this root looks for it
-# (`datalib_qmd_models::models_dir_for`): every search by meaning embeds
+# (`datalib_embedding_models::models_dir_for`): every search by meaning embeds
 # the query. A link INTO the runfiles tree rather than a copy in every
 # root, the same assumption the applet `command` above already makes.
 MODELS_DIR="$OUT_ROOT/unified_grid_and_search_index/models"
 mkdir -p "$MODELS_DIR"
-EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
+EMBED_MODEL="_main/third-party/embedding_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""
 if [[ -z "$src" || ! -s "$src" ]]; then
   echo "ERROR: embedding model not found in runfiles: $EMBED_MODEL" >&2
-  echo "  (is //third-party/qmd_models:embeddinggemma still in this target's \`data\`?)" >&2
+  echo "  (is //third-party/embedding_models:embeddinggemma still in this target's \`data\`?)" >&2
   exit 3
 fi
 ln -sfn "$src" "$MODELS_DIR/$(basename "$EMBED_MODEL")"

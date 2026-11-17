@@ -463,7 +463,10 @@ fn refresh_floor(now: &IsoOffsetTimestamp, days: u32) -> Option<IsoOffsetTimesta
     let at = now
         .inner()
         .checked_sub_signed(chrono::Duration::days(days.into()))?;
-    (at.timestamp() >= 0).then(|| IsoOffsetTimestamp::from(at))
+    if at.timestamp() < 0 {
+        return None;
+    }
+    IsoOffsetTimestamp::try_from(at).ok()
 }
 
 /// How the searches of one gap ended.

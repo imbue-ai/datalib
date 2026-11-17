@@ -108,7 +108,7 @@ describe("freeSpaceView", () => {
       running: false,
       steps: [
         step("a/ingest", "done", null, { before: 3000, after: 1000 }),
-        step("a/keyword_index", "done"),
+        step("a/embed", "done"),
       ],
     });
     expect(freeSpaceView(over, false)).toMatchObject({ tone: "done", label: "Freed 2.0 kB" });
@@ -147,7 +147,7 @@ describe("the sources of a pass", () => {
       ],
       rerender: [
         "ten-forward/render_markdown",
-        "ten-forward/keyword_index",
+        "ten-forward/embed",
         "unified_grid_and_search_index/grid_index",
       ],
     };

@@ -42,19 +42,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in

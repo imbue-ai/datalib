@@ -82,7 +82,10 @@ fn hit(d: &str, m: Option<&str>) -> (String, Option<String>) {
 #[tokio::test]
 async fn a_word_lands_on_the_message_that_says_it() {
     let (_dir, index) = open().await;
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(hits(&index, "thursday").await, [hit("d1", Some("m2"))]);
     assert_eq!(hits(&index, "lunch").await, [hit("d1", Some("m1"))]);
     assert_eq!(
@@ -95,7 +98,10 @@ async fn a_word_lands_on_the_message_that_says_it() {
 #[tokio::test]
 async fn sections_and_chunks_are_byte_spans_of_the_document() {
     let (_dir, index) = open().await;
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     let sections: Vec<(Option<String>, i64, i64)> =
         sqlx::query_as("SELECT uuid, start_byte, end_byte FROM search_sections ORDER BY seq")
             .fetch_all(index.pool())
@@ -123,7 +129,10 @@ async fn sections_and_chunks_are_byte_spans_of_the_document() {
 async fn a_document_with_no_text_is_found_by_its_title() {
     let (_dir, index) = open().await;
     index
-        .put(&[doc("d2", "h1", "Offsite agenda", &[])])
+        .put(
+            &[doc("d2", "h1", "Offsite agenda", &[])],
+            &crate::chunk::four_bytes_a_token,
+        )
         .await
         .unwrap();
     assert_eq!(hits(&index, "offsite").await, [hit("d2", None)]);
@@ -135,14 +144,20 @@ async fn a_document_with_no_text_is_found_by_its_title() {
 #[tokio::test]
 async fn a_changed_hash_replaces_a_document() {
     let (_dir, index) = open().await;
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     let changed = doc(
         "d1",
         "h2",
         "Planning",
         &[(Some("m3"), "dinner on saturday")],
     );
-    index.put(&[changed]).await.unwrap();
+    index
+        .put(&[changed], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(count(&index, "search_sections").await, 1);
     assert_eq!(postings(&index, "thursday").await, 0);
     assert_eq!(hits(&index, "dinner").await, [hit("d1", Some("m3"))]);
@@ -176,9 +191,15 @@ async fn a_grown_thread_keeps_its_earlier_chunks() {
             .collect();
         doc("d1", hash, "Planning", &refs)
     };
-    index.put(&[as_doc(11, "h1")]).await.unwrap();
+    index
+        .put(&[as_doc(11, "h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     let before = index.chunks("mail").await.unwrap();
-    index.put(&[as_doc(12, "h2")]).await.unwrap();
+    index
+        .put(&[as_doc(12, "h2")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     let after = index.chunks("mail").await.unwrap();
     assert!(before.len() >= 2, "{before:?}");
     assert_eq!(before[..before.len() - 1], after[..before.len() - 1]);
@@ -189,7 +210,10 @@ async fn a_grown_thread_keeps_its_earlier_chunks() {
 async fn a_removed_document_leaves_nothing_behind() {
     let (_dir, index) = open().await;
     let other = doc("d2", "h1", "Other", &[(Some("m9"), "budget again")]);
-    index.put(&[thread("h1"), other]).await.unwrap();
+    index
+        .put(&[thread("h1"), other], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     index.remove(&["d1".to_string()]).await.unwrap();
     assert_eq!(hits(&index, "budget").await, [hit("d2", Some("m9"))]);
     assert_eq!(postings(&index, "lunch").await, 0);
@@ -203,7 +227,10 @@ async fn indexed_names_only_its_own_source() {
     let (_dir, index) = open().await;
     let mut chat = doc("c1", "h9", "", &[(Some("x"), "hello")]);
     chat.source_id = "chat".into();
-    index.put(&[thread("h1"), chat]).await.unwrap();
+    index
+        .put(&[thread("h1"), chat], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(
         index.indexed("chat").await.unwrap(),
         BTreeMap::from([("c1".to_string(), "h9".to_string())])
@@ -217,7 +244,10 @@ async fn the_files_hold_no_copy_of_the_text() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite");
     let index = Index::open(&path).await.unwrap();
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(hits(&index, "afternoon").await.len(), 1);
     index.close().await;
     for entry in std::fs::read_dir(dir.path()).unwrap() {
@@ -236,7 +266,10 @@ async fn an_index_in_another_shape_empties_only_its_own_tables() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.sqlite");
     let index = Index::open(&path).await.unwrap();
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     for sql in [
         "CREATE TABLE grid_rows (uuid TEXT)",
         "INSERT INTO grid_rows VALUES ('m1')",
@@ -288,10 +321,16 @@ async fn only_a_change_raises_the_generation() {
             .unwrap()
     };
     let start = generation().await;
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     let put = generation().await;
     assert!(put > start);
-    index.put(&[thread("h1")]).await.unwrap();
+    index
+        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(generation().await, put);
     index.remove(&["d1".to_string()]).await.unwrap();
     assert!(generation().await > put);
@@ -304,7 +343,10 @@ async fn a_source_no_longer_configured_leaves_and_takes_its_hashes() {
     let (_dir, index) = open().await;
     let mut chat = doc("c1", "h9", "Chat", &[(Some("x"), "hello there")]);
     chat.source_id = "chat".into();
-    index.put(&[thread("h1"), chat]).await.unwrap();
+    index
+        .put(&[thread("h1"), chat], &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(index.keep_sources(&["mail".to_string()]).await.unwrap(), 1);
     assert!(index.indexed("chat").await.unwrap().is_empty());
     let hashes = index.all_hashes().await.unwrap();
@@ -329,7 +371,10 @@ async fn a_large_put_commits_in_parts() {
     let docs: Vec<IndexDoc> = (0..3)
         .map(|i| doc(&format!("d{i}"), "h", "T", &[(Some("m"), big.as_str())]))
         .collect();
-    index.put(&docs).await.unwrap();
+    index
+        .put(&docs, &crate::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     assert_eq!(generation().await - before, 3, "one commit per part");
     assert_eq!(count(&index, "search_documents").await, 3);
 }

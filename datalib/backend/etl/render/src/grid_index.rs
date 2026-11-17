@@ -622,6 +622,14 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
 
+/// What [`crate::search_terms::write_people`] reads the grid's authors
+/// from, so a pass reads two short columns rather than every row's text
+/// (#1803). Only the index's: never dropped for a remake, since the query
+/// names it, and out of [`schema_hash`], since it changes no row and
+/// adding it must not rebuild the index.
+pub(crate) const AUTHORS_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
+
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the
 /// row, owned by document; a row that moved left them behind (#1202).
@@ -654,6 +662,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl()
         .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX])
     {
         sqlx::query(ddl)
             .execute(pool)
@@ -841,8 +850,8 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
 }
 
 /// Drops the grid's own tables when they were written in another shape,
-/// under the write lock: a source's `keyword_index` may be writing the
-/// search index's tables in the same file meanwhile.
+/// under the write lock: the search index's tables share the file, and
+/// stay.
 async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let have = datalib_store_meta::schema_hash_in(&mut tx)
@@ -913,8 +922,8 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
             "journal_size_limit",
             datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
         )
-        // Each source's `keyword_index` writes the search index's tables in
-        // this file too, a batch of documents at a time.
+        // The step's keyword pass writes the search index's tables in this
+        // file too, a batch of documents at a time.
         .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -1180,13 +1189,13 @@ pub async fn apply_one(
     md: &RenderedMarkdown,
 ) -> Result<usize> {
     let md = crate::names::settled(md);
-    let qmd_rel = md
+    let md_rel = md
         .md_path
         .strip_prefix(out_dir)
         .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_markdown(write_lock, &md, &qmd_rel).await
+    apply_markdown(write_lock, &md, &md_rel).await
 }
 
 /// Every source under the data root with a render store: the directory
@@ -3137,7 +3146,13 @@ mod shape_tests {
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
         let search = datalib_search_index::Index::open(&db).await.unwrap();
-        search.put(&[search_doc("md-1")]).await.unwrap();
+        search
+            .put(
+                &[search_doc("md-1")],
+                &datalib_search_index::chunk::four_bytes_a_token,
+            )
+            .await
+            .unwrap();
         search.close().await;
         sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&pool)
@@ -3174,7 +3189,7 @@ mod shape_tests {
         }
         {
             let docs = [search_doc("md-2")];
-            let put = search.put(&docs);
+            let put = search.put(&docs, &datalib_search_index::chunk::four_bytes_a_token);
             tokio::pin!(put);
             let waited =
                 tokio::time::timeout(std::time::Duration::from_millis(500), &mut put).await;

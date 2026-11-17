@@ -13,6 +13,7 @@ pub mod diagnostics;
 pub mod disk_space;
 pub mod events;
 pub mod graph;
+pub mod input_pattern;
 pub mod lock;
 pub mod memory;
 pub mod run_state;

@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use datalib_unified_grid_and_search_index::qmd::index_state::IndexStamp;
+use datalib_unified_grid_and_search_index::hits::index_state::IndexStamp;
 
 use super::models::ModelGate;
 use super::{meaning_ranking, parse_query, with_people, Index, SearchFailure};
@@ -89,7 +89,7 @@ pub(super) async fn warm_once(s: &Index) {
         };
         match meaning_ranking(s, &parsed).await {
             Ok(_) | Err(SearchFailure::NoIndex) => {}
-            Err(SearchFailure::Qmd(e) | SearchFailure::Index(e)) => {
+            Err(SearchFailure::Ranking(e) | SearchFailure::Index(e)) => {
                 tracing::warn!(query = q, error = %e, "could not warm the search by meaning");
                 return;
             }

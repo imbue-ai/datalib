@@ -4,6 +4,8 @@
 //! chunks fall (`chunk.rs`) shows up here in review, rather than as a
 //! search that quietly finds less. Drawn by `datalib-step index-text
 //! --chunks`, the command a person runs, over the fixture's rendered root.
+//! Every prompt it prints fits the model's context, counted by the model's
+//! own tokenizer.
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -11,13 +13,24 @@ use std::process::Command;
 #[test]
 fn every_sources_index_text_is_this() {
     let td = tempfile::tempdir().unwrap();
-    let tarball = std::env::var_os("INGESTED_QMD_TAR").expect("INGESTED_QMD_TAR");
+    let tarball = std::env::var_os("INGESTED_RENDERED_TAR").expect("INGESTED_RENDERED_TAR");
     tar::Archive::new(std::fs::File::open(tarball).unwrap())
         .unpack(td.path())
         .unwrap();
+    // Where the steps keep the model for this root: `--chunks` cuts the
+    // chunks with its tokenizer.
+    let model =
+        std::fs::canonicalize(std::env::var_os("EMBED_MODEL").expect("EMBED_MODEL")).unwrap();
+    let models = td.path().join("root/unified_grid_and_search_index/models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::os::unix::fs::symlink(
+        &model,
+        models.join("hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"),
+    )
+    .unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .arg("index-text")
-        .arg(td.path().join("qmd"))
+        .arg(td.path().join("root"))
         .arg("--chunks")
         .output()
         .unwrap();
@@ -27,6 +40,7 @@ fn every_sources_index_text_is_this() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8(out.stdout).unwrap();
+    every_prompt_fits_the_model(&text, &model);
 
     let mut by_source: BTreeMap<String, String> = BTreeMap::new();
     let mut source = String::new();
@@ -47,6 +61,30 @@ fn every_sources_index_text_is_this() {
     for (source, text) in by_source {
         insta::assert_snapshot!(format!("index_text__{source}"), text);
     }
+}
+
+/// Each `--- chunk` block's prompt, BOS and EOS added, is within the
+/// model's context: the chunker counts its budget in the model's tokens,
+/// so no chunk is cut short when it is embedded.
+fn every_prompt_fits_the_model(text: &str, model: &std::path::Path) {
+    let tokenizer = datalib_embedder::Tokenizer::open(model).unwrap();
+    let context = datalib_embedder::CONTEXT_TOKENS as usize;
+    let mut prompts = 0;
+    for block in text.split("\n--- chunk ").skip(1) {
+        let (head, rest) = block.split_once('\n').unwrap_or((block, ""));
+        let prompt = rest.split("\n=== ").next().unwrap_or_default();
+        let prompt = prompt.strip_suffix('\n').unwrap_or(prompt);
+        let tokens = tokenizer.ends(prompt).unwrap().len() + 2;
+        assert!(
+            tokens <= context,
+            "chunk {head}: {tokens} tokens, past the model's {context}"
+        );
+        prompts += 1;
+    }
+    assert!(
+        prompts > 400,
+        "{prompts} prompts read: the parse found too few"
+    );
 }
 
 /// `--- chunk 3 <hash>` as `--- chunk 3`: the hash is of the prompt below

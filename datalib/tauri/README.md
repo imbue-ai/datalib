@@ -338,7 +338,7 @@ have you let in?".
   `.window-state.json` under the app's config directory. It cannot be
   made narrower than 720px, so the toolbar's search box stays in view.
 - No blocking model download at startup: qmd's models are fetched on
-  first need by the steps and the search applet (`datalib_qmd_models`),
+  first need by the steps and the search applet (`datalib_embedding_models`),
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-stdout` handshake.
 - There is no `datalib:` link handler; the shell does not link

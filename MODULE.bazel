@@ -311,7 +311,7 @@ filegroup(
 )
 
 # qmd's GGUF models are fetched by a build action, not a repository
-# rule: see //third-party/qmd_models. As `http_file` repositories they were
+# rule: see //third-party/embedding_models. As `http_file` repositories they were
 # downloaded whenever `//...` was analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.

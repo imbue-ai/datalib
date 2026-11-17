@@ -7,7 +7,7 @@ pub mod build_id;
 pub mod cache;
 pub mod cuda_module;
 pub mod layout;
+pub mod models;
 pub mod node_runtime;
 pub mod plain_sqlite;
-pub mod qmd;
 pub mod runtime_manifest;

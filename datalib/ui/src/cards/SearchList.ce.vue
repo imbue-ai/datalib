@@ -116,9 +116,9 @@ async function run(keepPick = false) {
     const echo = page.query_echo;
     notice.value =
       page.refused?.[0] ??
-      (echo?.qmd_index_missing
+      (echo?.search_index_missing
         ? "Nothing has been indexed for search yet, so there is nothing to match your words against. Sync a source first."
-        : (echo?.qmd_error ?? null));
+        : (echo?.search_error ?? null));
     // A query the search cannot read yet leaves the last results up.
     if (page.refused?.length) return report(q, "refused");
     emit("answered", echo);

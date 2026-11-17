@@ -406,7 +406,7 @@ export function perseusView(): CardRender {
     // limit is set high enough for the full Histories across all editions
     // (8 books × chapters × sections × ~13 editions). The free-text
     // portion is empty, so this routes through the SQL filter path, not
-    // qmd ranking.
+    // the search's ranking.
     const ac = new AbortController();
     void fetchManageRows(false, ac.signal)
       .then(({ rows }) =>

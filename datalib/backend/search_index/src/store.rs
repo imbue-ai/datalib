@@ -17,7 +17,7 @@ use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
 
-const DDL: [&str; 7] = [
+const DDL: [&str; 8] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
     // whose pieces are parts of one thing and may hold the words between
@@ -61,6 +61,12 @@ const DDL: [&str; 7] = [
     "CREATE TABLE IF NOT EXISTS search_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         generation INTEGER NOT NULL
+    )",
+    // The render commit and the text version a source's keyword pass last
+    // finished at, so a pass whose source has not moved reads nothing.
+    "CREATE TABLE IF NOT EXISTS search_sources (
+        source_id TEXT PRIMARY KEY,
+        read_at TEXT NOT NULL
     )",
 ];
 
@@ -143,8 +149,9 @@ impl Index {
     /// Indexes `docs`, committing after about [`PUT_BYTES`] of their text
     /// so the file's other writers wait seconds, not the whole batch. A
     /// document already held with the same hash is left alone; a changed
-    /// one has its sections and chunks replaced, in one transaction.
-    pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
+    /// one has its sections and chunks replaced, in one transaction. Its
+    /// chunks are counted in `ends`'s tokens before the transaction opens.
+    pub async fn put(&self, docs: &[IndexDoc], ends: crate::chunk::TokenEnds<'_>) -> Result<()> {
         let mut rest = docs;
         while !rest.is_empty() {
             let mut bytes = 0;
@@ -157,10 +164,17 @@ impl Index {
                 })
                 .count();
             let (now, later) = rest.split_at(take);
+            let chunked = now
+                .iter()
+                .map(|d| {
+                    d.prompted(ends)
+                        .with_context(|| format!("chunk document {}", d.markdown_uuid))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let mut changed = false;
-            for doc in now {
-                changed |= put_one(&mut tx, doc)
+            for (doc, chunks) in now.iter().zip(&chunked) {
+                changed |= put_one(&mut tx, doc, chunks)
                     .await
                     .with_context(|| format!("index document {}", doc.markdown_uuid))?;
             }
@@ -196,9 +210,9 @@ impl Index {
         Ok(())
     }
 
-    /// Removes every document whose source is not one of `sources`: what
-    /// the aggregator does with a source taken out of the config. Returns
-    /// how many went.
+    /// Removes every document whose source is not one of `sources`, and
+    /// what its keyword pass last read: a source taken out of the config or
+    /// out of search. Returns how many documents went.
     pub async fn keep_sources(&self, sources: &[String]) -> Result<usize> {
         let gone: Vec<String> = sqlx::query_scalar(
             "SELECT markdown_uuid FROM search_documents \
@@ -210,7 +224,49 @@ impl Index {
         if !gone.is_empty() {
             self.remove(&gone).await?;
         }
+        sqlx::query(
+            "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(sources)?)
+        .execute(&self.pool)
+        .await
+        .context("forget the passes of sources no longer searched")?;
         Ok(gone.len())
+    }
+
+    /// What `source_id`'s last finished keyword pass read, as
+    /// [`Index::set_read_at`] wrote it; `None` before its first.
+    pub async fn read_at(&self, source_id: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT read_at FROM search_sources WHERE source_id = ?")
+            .bind(source_id)
+            .fetch_optional(&self.pool)
+            .await
+            .context("read where the source's keyword pass last read")
+    }
+
+    /// Records that `source_id`'s documents are in line with what it read
+    /// at `read_at`; `None` forgets it, so the next pass reads it whole.
+    pub async fn set_read_at(&self, source_id: &str, read_at: Option<&str>) -> Result<()> {
+        let done = match read_at {
+            Some(at) => {
+                sqlx::query(
+                    "INSERT INTO search_sources (source_id, read_at) VALUES (?1, ?2) \
+                 ON CONFLICT (source_id) DO UPDATE SET read_at = excluded.read_at",
+                )
+                .bind(source_id)
+                .bind(at)
+                .execute(&self.pool)
+                .await
+            }
+            None => {
+                sqlx::query("DELETE FROM search_sources WHERE source_id = ?")
+                    .bind(source_id)
+                    .execute(&self.pool)
+                    .await
+            }
+        };
+        done.context("record where the source's keyword pass read")?;
+        Ok(())
     }
 
     /// Every chunk hash the index names, each once: what the inference
@@ -268,7 +324,11 @@ impl Index {
 }
 
 /// `false` when the document was already held as it is.
-async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
+async fn put_one(
+    conn: &mut SqliteConnection,
+    doc: &IndexDoc,
+    chunks: &[crate::chunk::Prompted],
+) -> Result<bool> {
     let held: Option<(i64, String, String)> = sqlx::query_as(
         "SELECT doc_id, source_id, content_hash FROM search_documents WHERE markdown_uuid = ?",
     )
@@ -329,7 +389,7 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
             .await?;
         at = end;
     }
-    for (seq, p) in doc.prompted().iter().enumerate() {
+    for (seq, p) in chunks.iter().enumerate() {
         let c = &p.chunk;
         sqlx::query(
             "INSERT INTO search_chunks \

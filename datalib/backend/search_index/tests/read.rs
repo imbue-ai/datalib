@@ -46,7 +46,10 @@ async fn fixture(docs: &[IndexDoc], vectors: &[(String, Vec<f32>)]) -> Fixture {
     let index_path = dir.path().join("index.sqlite");
     let cache_path = dir.path().join("cache.sqlite");
     let index = Index::open(&index_path).await.unwrap();
-    index.put(docs).await.unwrap();
+    index
+        .put(docs, &datalib_search_index::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     index.close().await;
     let cache = InferenceCache::open(&cache_path).await.unwrap();
     cache
@@ -231,10 +234,16 @@ fn message(uuid: &str, text: &str) -> IndexSection {
 async fn a_document_is_embedded_only_once_every_chunk_is() {
     let mut two = doc("mail", "two", &[]);
     two.sections = vec![message("m1", "warp core"), message("m2", "coolant leak")];
-    let halves = two.prompted();
+    let halves = two
+        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
+        .unwrap();
     assert_eq!(halves.len(), 2, "a message starts a chunk of its own");
     let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
-    let chat_chunk = chat.prompted()[0].hash.clone();
+    let chat_chunk = chat
+        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
+        .unwrap()[0]
+        .hash
+        .clone();
     let model = datalib_search_index::model_key();
     let asked = ["two", "chat"].map(String::from);
 
@@ -290,7 +299,7 @@ async fn no_index_reads_as_none() {
     assert!(reader.is_none());
 }
 
-/// The grid index's file is there before any `keyword_index` has run: the
+/// The grid index's file is there before any keyword pass has run: the
 /// reader takes it as no index yet, not as an error.
 #[tokio::test]
 async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
