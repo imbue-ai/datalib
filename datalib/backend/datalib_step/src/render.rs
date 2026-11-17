@@ -10,7 +10,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{BucketEnd, Input, ReadScope, RenderCtx, RenderProcessor};
-use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, METRIC};
+use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -458,14 +458,6 @@ pub fn render_source(
     }
     store.commit_batch()?;
     let raw_commit = one_consumed_commit(&name, &consumed);
-    // What the download could not do, carried into this store so it
-    // travels on with the documents: the raw store's `problems` at the
-    // commit this run rendered from, re-minted under this source's id.
-    let fetch_problems = raw_db
-        .as_deref()
-        .map(|raw_db| fetch_problems_of(raw_db, raw_commit.as_deref(), &name))
-        .transpose()
-        .with_context(|| format!("read the download's problems for {name}"))?;
 
     // A full render in which every processor read its store walked
     // everything, so whatever it did not produce is gone. A processor
@@ -580,12 +572,11 @@ pub fn render_source(
              (see `problems` in its indexed_markdown.doltlite_db)"
         );
     }
-    // After the sweep, so an item a problem names is a row the store
-    // still holds.
-    if let Some(rows) = fetch_problems {
-        carry_fetch_problems(&store, processors, &name, rows)
-            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
-    }
+    // The download's problems are read in its own store; a copy an
+    // older build carried in here goes.
+    store
+        .replace_stage_problems(Stage::Fetch, &[])
+        .with_context(|| format!("drop the download's problems from {name}'s store"))?;
     if !endings.is_empty() {
         tracing::info!(
             source = %name,
@@ -1138,160 +1129,6 @@ fn emptied_table_evidence(
 /// usually held, and a page bounds what a bucket of a million rows loads.
 const KEYS_PER_PAGE: usize = 64;
 
-/// Replace the store's fetch problems with `rows`, each naming the grid
-/// row its raw entity is where the store holds one.
-fn carry_fetch_problems(
-    store: &IndexedMarkdownStore,
-    processors: &[Box<dyn RenderProcessor>],
-    source_id: &str,
-    rows: Vec<ProblemRow>,
-) -> Result<()> {
-    let mut items = items_of_entities(processors, source_id, &rows);
-    let upstream = upstream_of_entities(processors, &rows, &items);
-    let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
-    let found = store.grid_rows_by_upstream(&keys)?;
-    for (item, key) in items.iter_mut().zip(upstream) {
-        if let Some((kind, id)) = key {
-            *item = found.get(&(kind.to_string(), id)).cloned();
-        }
-    }
-    let wanted: Vec<String> = items.iter().flatten().cloned().collect();
-    let held = store.grid_rows_among(&wanted)?;
-    store.replace_stage_problems(Stage::Fetch, &with_items(rows, items, &held))
-}
-
-/// The grid row each problem is about, by the first processor that
-/// knows its raw entity. The download knows only the raw key: the uuid
-/// is minted under the source's id, which it never sees.
-fn items_of_entities(
-    processors: &[Box<dyn RenderProcessor>],
-    source_id: &str,
-    rows: &[ProblemRow],
-) -> Vec<Option<String>> {
-    rows.iter()
-        .map(|row| {
-            if row.item_uuid.is_some() {
-                return row.item_uuid.clone();
-            }
-            if row.scope_kind != ScopeKind::Entity {
-                return None;
-            }
-            let (table, id) = raw_entity(&row.scope_key)?;
-            processors
-                .iter()
-                .find_map(|p| p.item_of_entity(source_id, table, id))
-        })
-        .collect()
-}
-
-/// For each problem no processor could mint a uuid for, the upstream
-/// key of its row, by the first processor that knows one.
-fn upstream_of_entities(
-    processors: &[Box<dyn RenderProcessor>],
-    rows: &[ProblemRow],
-    items: &[Option<String>],
-) -> Vec<Option<(&'static str, String)>> {
-    rows.iter()
-        .zip(items)
-        .map(|(row, item)| {
-            if item.is_some() || row.scope_kind != ScopeKind::Entity {
-                return None;
-            }
-            let (table, id) = raw_entity(&row.scope_key)?;
-            processors
-                .iter()
-                .find_map(|p| p.upstream_of_entity(table, id))
-        })
-        .collect()
-}
-
-/// The raw `(table, id)` an entity-scoped fetch problem names:
-/// `table:id` from a fetch attempt, `record:table:id` from a record the
-/// download could not reach at all.
-fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
-    scope_key
-        .strip_prefix(datalib_etl::download_problems::RECORD_PREFIX)
-        .unwrap_or(scope_key)
-        .split_once(':')
-}
-
-/// Each row with its item, where the store holds that row: a filled
-/// `item_uuid` always opens something. The problem's id was minted
-/// before this lookup, so it does not move with whether the row exists.
-fn with_items(
-    rows: Vec<ProblemRow>,
-    items: Vec<Option<String>>,
-    held: &HashSet<String>,
-) -> Vec<ProblemRow> {
-    rows.into_iter()
-        .zip(items)
-        .map(|(row, item)| ProblemRow {
-            item_uuid: item.filter(|uuid| held.contains(uuid)),
-            ..row
-        })
-        .collect()
-}
-
-/// The raw store's `problems` at `commit` (HEAD when the run consumed
-/// none), each minted again under `source_id` — the download did not
-/// know it — with the stamps the download gave them. Empty when there
-/// is no store, nothing committed, or a store from before the table.
-fn fetch_problems_of(
-    raw_db: &Path,
-    commit: Option<&str>,
-    source_id: &str,
-) -> Result<Vec<ProblemRow>> {
-    use datalib_schema::problems::{Problem, Scope};
-    if !raw_db.exists() {
-        return Ok(Vec::new());
-    }
-    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, commit))
-        .with_context(|| format!("open {} for its problems", raw_db.display()))?
-    else {
-        return Ok(Vec::new());
-    };
-    let pool = reader.pool().clone();
-    let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
-            .bind(Stage::Fetch.as_str())
-            .fetch_all(&pool)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Vec::new(),
-            Err(e) => return Err(e).context("read the raw store's problems"),
-        };
-        rows.iter()
-            .map(|r| {
-                let raw = ProblemRow::from_row(r)?;
-                Ok(ProblemRow {
-                    first_seen_at_utc: raw.first_seen_at_utc.clone(),
-                    changed_at_utc: raw.changed_at_utc.clone(),
-                    tz_offset: raw.tz_offset.clone(),
-                    ..ProblemRow::new(
-                        source_id,
-                        raw.stage,
-                        Scope::Entity(&raw.scope_key),
-                        raw.item_uuid.as_deref(),
-                        raw.outcome,
-                        Problem {
-                            reason: raw.reason,
-                            field: raw.field.clone(),
-                            path: raw.path.clone(),
-                            rule: raw.rule.clone(),
-                            sample: raw.sample.clone(),
-                            severity: Some(raw.severity),
-                        },
-                        None,
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()
-    });
-    blocking(pool.close());
-    result
-}
-
 /// Whether this run diffs from the stored cursor or renders every bucket.
 #[derive(Debug, PartialEq, Eq)]
 enum RenderPlan {
@@ -1609,102 +1446,6 @@ mod plan_tests {
             .unwrap();
         store.commit("fixture").unwrap();
         store.close();
-    }
-
-    /// Knows the rows of one raw table, each keyed by its raw id.
-    struct Resolves(&'static str);
-
-    #[async_trait::async_trait]
-    impl RenderProcessor for Resolves {
-        fn id(&self) -> &str {
-            "resolves"
-        }
-        async fn run(&self, _ctx: &RenderCtx<'_>) -> Result<String> {
-            Ok(String::new())
-        }
-        fn item_of_entity(&self, _source_id: &str, table: &str, id: &str) -> Option<String> {
-            (table == self.0).then(|| id.to_string())
-        }
-    }
-
-    fn fetch_problem(scope_key: &str) -> ProblemRow {
-        use datalib_schema::problems::{Outcome, Problem, Reason, Scope};
-        ProblemRow::new(
-            "src",
-            Stage::Fetch,
-            Scope::Entity(scope_key),
-            None,
-            Outcome::Ok,
-            Problem::record(Reason::FetchFailed, "curl: (22) 403"),
-            None,
-        )
-    }
-
-    /// A fetch problem names its grid row only when the store holds
-    /// that row after the sweep: a filled `item_uuid` always opens
-    /// something. Its id does not move with the lookup.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_fetch_problem_names_its_row_only_when_the_store_holds_it() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path().join("src/render_markdown");
-        write_doc(&root, "kept");
-        write_doc(&root, "swept");
-
-        let store = IndexedMarkdownStore::open(&root).unwrap();
-        let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
-        seal_run(
-            &store,
-            td.path(),
-            RunEnd {
-                source_id: "src",
-                sweep: true,
-                keep: &keep,
-                buckets: &BTreeMap::new(),
-                storage: None,
-                cursor: None,
-            },
-        )
-        .unwrap();
-        let rows = vec![
-            fetch_problem("things:kept"),
-            fetch_problem("record:things:kept"),
-            fetch_problem("things:swept"),
-            fetch_problem("things:never-rendered"),
-            fetch_problem("others:kept"),
-            fetch_problem("listing:things"),
-        ];
-        let ids: Vec<String> = rows.iter().map(|r| r.problem_uuid.clone()).collect();
-        let processors: Vec<Box<dyn RenderProcessor>> =
-            vec![Box::new(Resolves("users")), Box::new(Resolves("things"))];
-        carry_fetch_problems(&store, &processors, "src", rows).unwrap();
-        store.commit("carry").unwrap();
-        store.close();
-
-        let reader = IndexedMarkdownStore::open_for_reading(&root, None)
-            .unwrap()
-            .expect("the store has a commit");
-        let stored = reader.problems_at_pin().unwrap();
-        let item_of = |id: &str| {
-            stored
-                .iter()
-                .find(|r| r.problem_uuid == id)
-                .unwrap_or_else(|| panic!("problem {id} was not carried"))
-                .item_uuid
-                .clone()
-        };
-        let items: Vec<Option<String>> = ids.iter().map(|id| item_of(id)).collect();
-        assert_eq!(
-            items,
-            [
-                Some("kept".into()),
-                Some("kept".into()),
-                None,
-                None,
-                None,
-                None
-            ]
-        );
-        reader.close();
     }
 
     /// A full render sweeps what the walk did not produce and records
