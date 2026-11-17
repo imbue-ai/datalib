@@ -631,6 +631,8 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("contact:*", vec!["picard-card", "senior-staff-card"]),
         ("email:picard@enterprise.org", vec!["picard-card"]),
         // A document, and every row in it.
+        ("id:riker-thread", vec!["riker-email", "riker-thread"]),
+        // `convo:` is the key's old name, kept for saved searches.
         ("convo:riker-thread", vec!["riker-email", "riker-thread"]),
         // Keys combine with AND.
         ("with:picard kind:Email", vec!["riker-email"]),
@@ -657,7 +659,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // Column keys: the whole value, case and all.
         "kind:email",
         "contact:Picard",
-        "convo:riker",
+        "id:riker",
         // The email column holds a card's first address only.
         "email:jean-luc@chateau-picard.example",
         // `email:` is that column, not a person's address: Riker has no

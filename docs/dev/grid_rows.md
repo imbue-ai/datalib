@@ -84,7 +84,7 @@ descending, a document row ahead of the rows inside it at the same
 moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
-(`#[col(…, search = "convo", uuid)]`, and `search(order = …, range = …,
+(`#[col(…, search = "id", uuid)]`, and `search(order = …, range = …,
 qmd)` on the struct), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
@@ -276,8 +276,8 @@ in it, and on a document's own row its own title. The grid shows it as
 the Subject column (`subject_ref`, which on a contact's row is the
 card's chip and in a conversation named by its people a chip for each,
 from its `subject` terms), and `subject:` finds it by its whole name, `conversation:`
-being the same key; `convo:` names the conversation by id, and is what
-the cell's Keep only writes.
+being the same key; `id:` (also `convo:`, its old name) names the
+conversation by id, and is what the cell's Keep only writes.
 
 `channel` is where a row is filed when that is *not* its subject: a
 card's address book, an event's calendar, a sensor's device, LinkedIn's

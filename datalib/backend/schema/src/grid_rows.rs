@@ -173,12 +173,12 @@ pub struct GridRow {
     /// The row's subject: the conversation, thread, page, event or card it
     /// belongs to, carried onto every child row so a grid row stands alone
     /// without a join. For a document's own row this is its own title.
-    /// Searched by name as `subject:`; `convo:` names it by id.
+    /// Searched by name as `subject:`; `id:` names it by id.
     #[col(sql = "TEXT", search = "subject", alias = "conversation")]
     pub conversation_name: Option<String>,
     /// The parent thread, so the preview pane knows what to open. Equals
     /// `uuid` for thread-level rows.
-    #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
+    #[col(sql = "VARCHAR(96)", search = "id", alias = "convo", uuid)]
     pub conversation_uuid: String,
     /// The container this row lives in, a `data_nodes.uuid`: the chat, thread,
     /// page or session that holds it. Null where no container holds it.

@@ -150,7 +150,7 @@ mod tests {
                 ("org_name", none, "org_name", false),
                 ("channel", none, "channel", false),
                 ("subject", &["conversation"], "conversation_name", false),
-                ("convo", none, "conversation_uuid", true),
+                ("id", &["convo"], "conversation_uuid", true),
                 ("source", &["source_id"], "source_id", false),
                 ("notion_page", none, "notion_page_uuid", true),
                 ("byte_size", none, "byte_size", false),
@@ -177,7 +177,7 @@ mod tests {
         );
         assert_eq!(
             for_column::<GridColumn>("conversation_name"),
-            Some(("convo", "conversation_uuid"))
+            Some(("id", "conversation_uuid"))
         );
         assert_eq!(for_column::<GridColumn>("score"), None);
         assert_eq!(for_column::<GridColumn>("snippet"), None);

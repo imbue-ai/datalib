@@ -98,10 +98,16 @@ for every document of a source; `--document <id>` for one, `--at
 The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
-`account:`, `project:`, `convo:` (a document by its id, and every row in it), `contact:` and
-`email:` (an address book's columns), and the id of any other column the
-grid shows (`org_name:`, `created_at:`, …). These match the whole value
-as stored, case and all: `kind:Email`, not `kind:email`.
+`account:`, `project:`, `id:`, `contact:` and `email:` (an address
+book's columns), and the id of any other column the grid shows
+(`org_name:`, `created_at:`, …). These match the whole value as stored,
+case and all: `kind:Email`, not `kind:email`.
+
+`id:` takes a document's id (a thread, a conversation, a page) and
+finds that document and every row in it; Keep only on a Subject cell
+writes it. A message's own id finds nothing, since a message is a row
+inside a document, not a document. `convo:` is its old name and still
+works.
 
 ### Writing a time
 

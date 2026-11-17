@@ -561,15 +561,15 @@ mod tests {
 
     #[test]
     fn quoted_value_with_escapes() {
-        let q = parse_query(r#"convo:"a\"b\\c""#);
+        let q = parse_query(r#"id:"a\"b\\c""#);
         assert_eq!(q.terms[0].value, "a\"b\\c");
     }
 
     #[test]
     fn negated_quoted_value() {
-        let q = parse_query(r#"-convo:"hello world""#);
+        let q = parse_query(r#"-id:"hello world""#);
         assert!(q.terms[0].negate);
-        assert_eq!(q.terms[0].field, col("convo"));
+        assert_eq!(q.terms[0].field, col("id"));
         assert_eq!(q.terms[0].value, "hello world");
     }
 
