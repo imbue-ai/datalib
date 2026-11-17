@@ -9,8 +9,11 @@ Source for the multi-arch image published to
 - **CI publish path:** the `docker-image` job in
   [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
   takes the per-triple Linux tarballs from that run's artifacts and feeds
-  them into the build context this directory expects,
-  and `docker-publish` tags what it pushes.
+  them into the build context this directory expects
+  (`scripts/release/stage_docker_context.sh`), and `docker-publish` tags
+  what it pushes. `docker-image-cuda` and `docker-publish-cuda` do the same
+  for the `-cuda` variant with `--build-arg CUDA=12`
+  ([`docs/dev/docker.md`](/docs/dev/docker.md) § "The CUDA variant").
 
 This README is for working on the image itself.
 
@@ -18,7 +21,7 @@ This README is for working on the image itself.
 
 | File             | Purpose                                                                                          |
 |------------------|--------------------------------------------------------------------------------------------------|
-| `Dockerfile`     | Multi-arch Ubuntu 26.04 image, run as uid 1000 (`datalib`). Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball. |
+| `Dockerfile`     | Multi-arch Ubuntu 26.04 image, run as uid 1000 (`datalib`). Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball, and `ARG CUDA` (`none` or `12`) for the CUDA variant. |
 | `entrypoint.sh`  | Bootstraps `LATCHKEY_ENCRYPTION_KEY` from a per-bind-mount key file. PID 1 wrapper under tini.   |
 | `demo/config.toml` | The demo data library baked into the image at `/opt/datalib/demo`. |
 | `stage_demo.sh`  | Copies the demo's fixture inputs + config into a build context (`build_docker.sh` and release.yml both call it). |
