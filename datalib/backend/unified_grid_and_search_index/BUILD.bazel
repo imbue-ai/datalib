@@ -1,9 +1,9 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
-load(":qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
+load(":search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
 
-# The unified grid and search index: the grid index, the qmd index, and the query
-# language over them.
+# The unified grid and search index: the grid index, the search index's query
+# side, and the query language over them.
 #
 # Visibility is the point of this crate existing. Only the step that
 # writes the indexes and the applet that serves them may link it —
@@ -30,12 +30,10 @@ rust_library(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
-        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sha2",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
@@ -55,23 +53,8 @@ rust_test(
     ],
 )
 
-# The TNG fixture's data root and a Bazel-staged qmd to search it with,
-# for tests here and in the applet that run a real `qmd mcp`.
-rust_library(
-    name = "qmd_fixture",
-    testonly = True,
-    srcs = ["tests/qmd_fixture/lib.rs"],
-    crate_name = "datalib_qmd_fixture",
-    edition = "2021",
-    visibility = ["//datalib/backend/applets:__pkg__"],
-    deps = [
-        "//datalib/backend/runtime:datalib_runtime",
-        "@datalib_crates//:runfiles",
-    ],
-)
-
 # The TNG fixture's data root with its search index, vectors and model,
-# for the applet's tests that search it.
+# for the tests here and in the applet that search it.
 rust_library(
     name = "search_fixture",
     testonly = True,
@@ -92,15 +75,15 @@ rust_test(
     name = "unified_grid_and_search_index_tests",
     srcs = glob(["tests/unified_grid_and_search_index_tests/*.rs"]),
     crate_root = "tests/unified_grid_and_search_index_tests/main.rs",
-    data = glob(["tests/unified_grid_and_search_index_tests/snapshots/*.snap"], allow_empty = True) + QMD_FIXTURE_DATA,
+    data = glob(["tests/unified_grid_and_search_index_tests/snapshots/*.snap"], allow_empty = True) + SEARCH_FIXTURE_DATA,
     edition = "2021",
-    env = QMD_FIXTURE_ENV | {
+    env = SEARCH_FIXTURE_ENV | {
         "INSTA_WORKSPACE_ROOT": ".",
     },
     deps = [
         "//datalib/backend/h3:datalib_h3",
         "@datalib_crates//:h3o",
-        ":qmd_fixture",
+        ":search_fixture",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/query:datalib_query",

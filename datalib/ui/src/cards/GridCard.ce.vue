@@ -466,8 +466,8 @@ function qmdFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedde
   if (v === null) return "Unknown.";
   if (which === "indexed") {
     return v
-      ? "This document's current content is in the qmd keyword index."
-      : "Not in the qmd index — either never indexed, or re-rendered since the last indexing run.";
+      ? "This document's current content is in the keyword index."
+      : "Not in the keyword index — either never indexed, or re-rendered since the last indexing run.";
   }
   return v
     ? "Embedded: semantic search can reach this document."
@@ -1624,8 +1624,7 @@ const extraColumns: Column[] = [
     field: "markdown_uuid",
     name: "Indexed",
     hidden: true,
-    toolTip:
-      "Whether this row's rendered document is in the qmd keyword index, at its current content",
+    toolTip: "Whether this row's rendered document is in the keyword index, at its current content",
     width: 100,
     cssClass: "tg-center",
     cellAttrs: { "col-id": "qmd_indexed" },

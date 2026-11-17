@@ -56,8 +56,7 @@ test --zip_undeclared_test_outputs=true
 #                `*_live` tests). Nothing qmd-shaped reaches npx under
 #                bazel any more: both consumers stage a
 #                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so
-#                `bundled_command` wins before the npx fallback — the
-#                fixture genrule (//tests/fixtures:ingested_tng_qmd) and
+#                `bundled_command` wins before the npx fallback —
 #                //datalib/ui:e2e_test (see run_e2e.sh).
 #
 # That second one matters because of the PATH pinned just below. The
@@ -94,17 +93,18 @@ build:macos --host_macos_minimum_os=11.0
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
 # from inside the sandbox instead of re-downloading it. Nothing in the
 # build reads that directory any more: the models are pinned in
-# fetched by a build action (`//third-party/qmd_models`) and reach the two places that need them —
-# `//tests/fixtures:ingested_tng_qmd` and `:materialize_tng_root` — as
+# fetched by a build action (`//third-party/qmd_models`) and reach what
+# needs them — the fixture's vectors and `:materialize_tng_root` — as
 # ordinary bazel inputs. Dropping the mount also drops its onboarding
 # cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
 # directory turned into a build failure rather than a warning.
 #
 # The host cache still exists and still matters — it is where the SHIPPED
 # app puts models at sync time, which is why
-# `qmd_indexer::default_models_dir()` still has to agree with qmd's own
-# `MODEL_CACHE_DIR`. That agreement is asserted by the rust unit test
-# `default_models_dir_matches_qmd_default` and by
+# `datalib_qmd_models::shared_models_dir()` still has to agree with qmd's
+# own `MODEL_CACHE_DIR`, where earlier builds put them. That agreement is
+# asserted by the rust unit test
+# `the_shared_cache_is_where_qmd_kept_its_models` and by
 # `//tools:qmd_model_cache_path_test`.
 #
 # `--action_env=HOME` stays. It was introduced alongside the mount, but

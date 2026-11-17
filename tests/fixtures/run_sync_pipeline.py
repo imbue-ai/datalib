@@ -466,7 +466,7 @@ def prepare(argv: list[str]) -> Prepared:
 
     # ── DAG config: a download+render pair per source, plus the index
     # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
-    # `:ingested_tng_qmd` builds the search index separately.
+    # `:ingested_tng_search_index` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
     root_entries: list[str] = []

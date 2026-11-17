@@ -97,7 +97,7 @@ impl Index {
         let repo = datalib_unified_grid_and_search_index::dolt_repo::DoltRepo::open(root.clone())
             .await
             .with_context(|| format!("open the grid index under {}", root.display()))?;
-        let models: Arc<dyn datalib_qmd_indexer::VerifiedModels> = Arc::new(models);
+        let models: Arc<dyn models::VerifiedModels> = Arc::new(models);
         Ok(Index {
             local_embedder: Arc::new(local_embedder::LocalEmbedder::new(models, deadline)),
             held_vectors: Arc::default(),

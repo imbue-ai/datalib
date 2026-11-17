@@ -292,8 +292,7 @@ export DATALIB_TEST_E2E_PLAYBACK_DIR="$PLAYBACK_STAGE"
 # --- the Node that runs qmd ------------------------------------------
 #
 # Stage a `DATALIB_RUNTIME_DIR` from the Bazel-managed Node and qmd
-# package tree, the same two symlinks `tests/fixtures/build_qmd_index.py`
-# makes. With it set, `datalib_core::node_runtime::bundled_command` wins
+# package tree. With it set, `datalib_core::node_runtime::bundled_command` wins
 # and the `npx -y @tobilu/qmd@<v>` fallback is never reached.
 #
 # Why it matters here specifically: npm keys the npx cache on the package

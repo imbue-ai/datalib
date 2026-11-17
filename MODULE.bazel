@@ -616,10 +616,10 @@ bazel_dep(name = "bazel_lib", version = "3.7.2")
 
 # rules_nodejs is already in the graph transitively (via aspect_rules_js);
 # declared explicitly so we can `use_repo` the host Node toolchain repo.
-# `//tests/fixtures:ingested_tng_qmd` needs the node BINARY as a label —
-# it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
-# package tree) so `datalib_core::node_runtime::bundled_command` resolves,
-# which is what takes `npx` out of the build.
+# The e2e suite and the render preview need the node BINARY as a label:
+# the e2e suite stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the
+# qmd package tree) so `datalib_core::node_runtime::bundled_command`
+# resolves, which is what takes `npx` out of the build.
 bazel_dep(name = "rules_nodejs", version = "6.7.7")
 
 # NODE_VERSION is the one Node pin in the repo, and it is read by
@@ -672,8 +672,8 @@ npm.npm_translate_lock(
 use_repo(npm, "npm_lint")
 
 # The qmd CLI and its 277-package transitive tree, replacing the
-# `npx -y @tobilu/qmd@<v>` fetch that `//tests/fixtures:ingested_tng_qmd`
-# used to perform on every cache miss. `npx -y` resolves that tree from
+# `npx -y @tobilu/qmd@<v>` fetch the fixture's qmd index build used to
+# perform on every cache miss. `npx -y` resolves that tree from
 # the live registry with no lockfile and no integrity checking, and runs
 # every package's install scripts while doing it; this gets the identical
 # tree from a checked-in lockfile where every tarball carries a sha512,

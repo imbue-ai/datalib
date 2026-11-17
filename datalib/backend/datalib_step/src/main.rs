@@ -459,7 +459,7 @@ async fn main() {
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
         let dir = models_dir
             .clone()
-            .unwrap_or_else(datalib_qmd_indexer::default_models_dir);
+            .unwrap_or_else(datalib_qmd_models::shared_models_dir);
         // Off the async runtime: the fetch is blocking I/O, and reqwest's
         // blocking client refuses to be dropped on a runtime thread.
         let ensure = {

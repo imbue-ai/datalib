@@ -178,12 +178,12 @@ sh_binary(
     srcs = ["release_steps_docker.sh"],
 )
 
-# Asserts that the vendored qmd snapshot and `default_models_dir()`
+# Asserts that the vendored qmd snapshot and `shared_models_dir()`
 # agree on `~/.cache/qmd/models` (the upstream qmd default) — the path
 # the SHIPPED app downloads models to. See
 # check_qmd_model_cache_path.sh for the full rationale. Pairs with the
-# rust-side unit test
-# //datalib/backend/qmd_indexer:qmd_indexer_unittests.
+# rust-side unit test in
+# //datalib/backend/qmd_models:qmd_models_unittests.
 sh_test(
     name = "qmd_model_cache_path_test",
     size = "small",
@@ -250,7 +250,6 @@ py_test(
         "//datalib/backend/runtime:src/qmd.rs",
         "//datalib/tauri:rust-toolchain.toml",
         "//datalib/ui:pnpm-lock.yaml",
-        "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",
         "//third-party/qmd:package.json",
         "//third-party/latchkey/runtime:package.json",

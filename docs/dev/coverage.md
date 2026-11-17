@@ -79,7 +79,7 @@ reached **677 first-party source files**, including:
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
     `contacts`, `perseus`, `email`, `yolink`)
   - shared infra (`doltlite_raw`, `blob_cas`, `load`, `latchkey`,
-    `obs`, `qmd_indexer`, `signal-backup` crypto + writer)
+    `obs`, `signal-backup` crypto + writer)
   - the `datalib-dag` orchestrator and `datalib-step` step binary
     themselves
 
