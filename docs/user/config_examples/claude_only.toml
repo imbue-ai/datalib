@@ -38,7 +38,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

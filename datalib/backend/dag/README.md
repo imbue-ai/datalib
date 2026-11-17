@@ -146,7 +146,10 @@ starts** in a tick, visited in topological order, iff:
    and `code_version` — differs from the one recorded then, or it
    answered a launch's `--migrate` with `needs_rerun` and has not
    succeeded since), or it declares no inputs and has not run since the
-   request opened, since a source's real input is outside the graph;
+   request opened, since a source's real input is outside the graph. A
+   fan-in whose `inputs` are patterns that match no step yet (`*/embed`
+   where no source is searched by meaning) reads nothing too, but it
+   declared inputs, so it is no source: it runs only when stale;
 6. **no producer it reads holds it**: none is running without streaming
    (or with this step reading its files), and none is about to
    run, held only by a lock or a reader, since that one would
@@ -347,9 +350,10 @@ follows from it:
   graph does not show: two sources on one account's rate limit, a GPU.
 - **Every config has four default locks** (`supervisor/locks.rs`). The
   three budgets are `network` (4 slots), `cpu` (4) and `index` (2). A
-  step that names no locks holds one of them: `network` for a step with
-  no inputs, `cpu` for a step with inputs under a group with a `type`,
-  `index` for any other step with inputs; so a download waiting out a
+  step that names no locks holds one of them: `network` for a step that
+  declares no inputs, `cpu` for a step with inputs under a group with a
+  `type`, `index` for any other step, a fan-in whose patterns match
+  nothing yet among them; so a download waiting out a
   rate limit never keeps a render from starting. The fourth, `embedder`
   (1 slot), is what every built-in `embed` that names no locks holds
   instead, so one embedding model is loaded at a time and one step

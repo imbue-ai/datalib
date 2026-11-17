@@ -158,7 +158,13 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel, fetch: Fetch) -> Result<Ou
             model.repo,
             model.revision
         );
-        fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        // Another process that found it wrong too may have removed it first.
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("remove {}", path.display()));
+            }
+            _ => {}
+        }
         let _ = fs::remove_file(stamp_path(&path));
     }
     status_line!(

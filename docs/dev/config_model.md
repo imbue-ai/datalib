@@ -36,8 +36,8 @@ id = "unified_grid_and_search_index"       # no type: it mirrors nothing
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-# every source's render, and its time-series and occurrences steps
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+# every source's render
+inputs = ["*/render_markdown"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -132,6 +132,15 @@ package's programs by its path under the data root, in its `command`;
   (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
   joins no index. The rows and their columns:
   `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
+- An `embed` step takes one parameter, `embed_on_modal_from_n_chunks`,
+  a whole number. Absent, the source's chunks are embedded on this
+  machine and never leave it. Present, a run that owes at least that
+  many chunks (prompts the inference cache has no vector for) sends all
+  of them to the person's own Modal account to be embedded on rented
+  GPUs, and a run that owes fewer embeds them here; `0` sends every run.
+  `check-params` refuses anything else. What leaves and what guards it:
+  `docs/dev/security_posture.md` § "What leaves the machine for Modal";
+  how the step does it: `docs/dev/plans/embed_on_modal.md`.
 - The search steps are the exception to "a step writes its own tree":
   `grid_index`'s keyword pass writes the search index's tables in the
   grid index's file, each source's `embed` writes its vectors to the
@@ -426,15 +435,16 @@ blocks the step that names it. `datalib-dag --check` prints what each
 pattern stood for.
 
 The index steps read by pattern: `grid_index` reads
-`*/render_markdown`, `*/render_time_series` and `*/render_occurrences`,
-`embedding_map` reads `*/embed`, and
+`*/render_markdown`, `embedding_map` reads `*/embed`, and
 `time_series_index` reads `*/render_time_series`
-(`datalib_dag::config::FAN_INS`). `grid_index` takes the groups it
+(`datalib_dag::config::FAN_INS`). No index reads a
+`render_occurrences` step. `grid_index` takes the groups it
 indexes from those inputs, the group being each input's first segment
-(`index_steps::groups_from_inputs`). `grid_index` passes over the
-`render_time_series` and `render_occurrences` steps its patterns name:
-their problems are read in their own stores (`etl/README.md` §"Problems
-stay in the step that found them").
+(`index_steps::groups_from_inputs`). It passes over a
+`render_time_series` or `render_occurrences` input, which an older
+config may still name: their problems are read in their own stores
+(`etl/README.md` §"Problems stay in the step that found them"), and an
+unattended rewrite (`unread_inputs.rs`, below) takes them out.
 Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
 rendered tree is still on disk.
@@ -615,7 +625,7 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   nine that is meant to take an entry out; it still refuses a result
+   twelve that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
@@ -625,11 +635,7 @@ the next would put the first back:
 7. Todoist's window (`upgrade_todoist_since`, `todoist_since.rs`): a
    Todoist ingest's `api.completed_since` becomes `api.since`, its value
    as it was. The loader refuses the old key.
-8. The problem inputs (`upgrade_problem_inputs`, `problem_inputs.rs`):
-   `grid_index` gets each `render_time_series` and `render_occurrences`
-   step in its `inputs`, so their problem rows reach the problems list
-   and the Manage counts.
-9. The conversation settings (`upgrade_conversation_settings`,
+8. The conversation settings (`upgrade_conversation_settings`,
    `conversation_settings.rs`): a ChatGPT ingest's `api.max_pages`,
    `api.limit` and `api.sleep_between` become `api.max_listing_pages`,
    `api.max_conversations_per_run` and `api.seconds_between_requests`,
@@ -637,24 +643,32 @@ the next would put the first back:
    `api.refetch_newest_conversations`, each value as it was. The two
    sources' API settings now share their names. The loader refuses the
    old keys.
-10. The keyword fold (`upgrade_keyword_fold`, `keyword_fold.rs`): each
+9. The keyword fold (`upgrade_keyword_fold`, `keyword_fold.rs`): each
    built-in `keyword_index` step goes, with its comments; every input
    that named one (an `embed`, the embedding map) reads `grid_index`
    instead; and each source `grid_index` reads that had no
    `keyword_index` is listed in its `params.not_searched`, so nothing
    out of search comes into it. A config with no `grid_index` gets one
    reading every render. The loader refuses the old step.
-11. The aggregator (`upgrade_aggregator_drop`, `aggregator_drop.rs`):
+10. The aggregator (`upgrade_aggregator_drop`, `aggregator_drop.rs`):
    each built-in `qmd_aggregator` step goes, with its comments, and an
    input that named one (the embedding map's) reads `*/embed`.
    `grid_index` sweeps the vectors and reports what search holds. The
    loader refuses the old step.
-12. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
+11. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
    an index step whose `inputs` name every step of a function it reads
    (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
    every render, so it reads the same steps and, from then on, every
    source added. A list that leaves a step out is left as written, since
    whoever wrote it may have meant it. The loader still reads the lists.
+12. The unread inputs (`upgrade_unread_inputs`, `unread_inputs.rs`):
+   `grid_index` stops naming `render_time_series` and
+   `render_occurrences` steps, by pattern or by id. A config was given
+   them so `grid_index` could copy their problem rows; problems are now
+   read in each step's own store, `grid_index` passes over those inputs,
+   and all they did was run it again after every such render. A
+   `grid_index` that runs a program other than `datalib-step` is left
+   as written.
 13. The search locks (`upgrade_lock_names`, `lock_names.rs`): a step's
    `locks` that named `qmd_embed` name `embedder`, in a list or a
    table, and `qmd_keyword` is dropped from them; a step left holding

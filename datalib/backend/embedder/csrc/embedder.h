@@ -30,6 +30,9 @@ const char *dl_embedder_device_for(int32_t use_gpu);
 int32_t dl_embedder_load_module(const char *path, char *err, size_t err_len);
 
 // Whether this build and machine offer a GPU at all.
+// 1 when the dynamic loader can load `name` (a library's soname), else 0.
+int32_t dl_embedder_can_load(const char *name);
+
 int32_t dl_embedder_gpu_available(void);
 void dl_embedder_close(dl_embedder *e);
 

@@ -1,0 +1,2 @@
+# Modal's license, staged beside its SDK (README.md).
+exports_files(["LICENSE"])
