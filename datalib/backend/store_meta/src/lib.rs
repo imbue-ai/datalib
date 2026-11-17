@@ -51,7 +51,7 @@ pub enum StoreKind {
     /// Every source's time series rows, pointing at their stores
     /// (`unified_time_series_index/time_series_index`).
     TimeSeriesIndex,
-    /// The grid index (`unified_grid_and_search_index/grid_index`).
+    /// The grid index (`unified_grid_and_search_index/unified_grid_and_search_index`).
     GridIndex,
     /// Every source's keyword index and embeddings, keyed by document,
     /// holding no text (`unified_grid_and_search_index/search_index`). Plain SQLite.

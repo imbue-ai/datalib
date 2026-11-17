@@ -20,8 +20,8 @@ use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
 
-fn grid_index() -> String {
-    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/grid_index")
+fn index_step_id() -> String {
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}")
 }
 
 const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
@@ -87,7 +87,7 @@ pub struct Appended {
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
-    /// The config has the `grid_index` step an `embed` reads, and the stanza has
+    /// The config has the `unified_grid_and_search_index` step an `embed` reads, and the stanza has
     /// none, so the source is found by its words alone until one is added.
     pub found_by_words_alone: bool,
 }
@@ -157,7 +157,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
     let config_has_search = have
         .steps
         .iter()
-        .any(|s| s.step_id().as_deref() == Some(grid_index().as_str()));
+        .any(|s| s.step_id().as_deref() == Some(index_step_id().as_str()));
     let has = |function: &str| {
         adding
             .steps
@@ -464,7 +464,7 @@ mod tests {
     }
 
     /// The case the command exists for: a source added to a new root
-    /// reaches the grid, which a hand-edit that forgets `grid_index`'s
+    /// reaches the grid, which a hand-edit that forgets `unified_grid_and_search_index`'s
     /// inputs silently does not.
     #[test]
     fn a_source_on_the_starter_config_is_wired_into_the_grid() {
@@ -474,7 +474,10 @@ mod tests {
         let appended = append(starter, &stanza).unwrap();
         checks_clean(&appended.text);
         assert_eq!(
-            inputs_of(&appended.text, "unified_grid_and_search_index/grid_index"),
+            inputs_of(
+                &appended.text,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["slack/render_markdown"]
         );
         assert!(
@@ -485,7 +488,7 @@ mod tests {
             appended.wired,
             [(
                 "slack/render_markdown".to_string(),
-                "unified_grid_and_search_index/grid_index".to_string()
+                "unified_grid_and_search_index/unified_grid_and_search_index".to_string()
             )]
         );
         // Above the index block, whose comments stay with it, and the
@@ -523,7 +526,7 @@ id = \"unified_grid_and_search_index\"
 
 [[steps]]
 group = \"unified_grid_and_search_index\"
-function = \"grid_index\"
+function = \"unified_grid_and_search_index\"
 inputs = [
   \"slack/render_markdown\", # the work one
 ]
@@ -541,7 +544,7 @@ inputs = [
         );
         assert_eq!(appended.group, "work-mail");
         // No embedding_map here, and the minimal stanza has no embed for
-        // one to read; the `grid_index` step searches it by its words.
+        // one to read; the `unified_grid_and_search_index` step searches it by its words.
         assert!(appended.unread.is_empty());
         assert!(appended.found_by_words_alone);
     }

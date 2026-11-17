@@ -139,11 +139,12 @@ jobs:
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    # After the runtime artifacts exist, whose sha256s the manifest below
-    # carries. `!cancelled()` rather than the default `success()`: a runtime
-    # leg that failed costs the tarballs that name it (their manifest step
-    # fails), not every tarball.
-    needs: runtime
+    # After the runtime artifacts and the CUDA module exist, whose sha256s
+    # the manifest below carries (the module's in the x86_64 gnu tarball's
+    # alone). `!cancelled()` rather than the default `success()`: a runtime
+    # leg or a `cuda` job that failed costs the tarballs that name it (their
+    # manifest step fails), not every tarball.
+    needs: [runtime, cuda]
     if: ${{ !cancelled() }}
     strategy:
       # One platform failing shouldn't cancel the others: a re-run of the
@@ -306,12 +307,18 @@ jobs:
       # The step is a script so //tools:stage_tarball_test runs the same
       # lines before a tag does (docs/dev/release_steps.md): the binaries
       # `:bin` laid out above, the `latchkey` launcher, the commit, the
-      # manifest of the runtime asset the `runtime` job staged (with its
-      # sha256 and size), and the third-party notices — then the tarball
+      # manifest of the assets the `runtime` and `cuda` jobs staged (with
+      # their sha256s and sizes), and the third-party notices — then the tarball
       # and its sha256.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runtime-${{ matrix.runtime-triple }}
+          path: ${{ runner.temp }}/runtime-assets
+      # The CUDA module, which only the x86_64 gnu manifest names.
+      - if: matrix.triple == 'x86_64-unknown-linux-gnu'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
           path: ${{ runner.temp }}/runtime-assets
 
       - name: Stage tarball

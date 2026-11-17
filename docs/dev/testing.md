@@ -101,8 +101,7 @@ Two things follow from sharing a process:
 * **Anything process-global is now shared.** An environment variable
   one test sets is every test's. A binary whose tests need one runs
   them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
-  beside it: `DATALIB_RUNTIME_DIR` in `unified_grid_and_search_index_tests` and
-  `applet_unittests`). Playback is not one: a test points the future it
+  beside it); none does today. Playback is not one: a test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:
@@ -183,10 +182,17 @@ one binary would be indistinguishable.
   `data-sources-*` specs and a few more), each against a backend and
   root of its own, so no two specs ever share a queue.
 * **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
-* **`warmup`** — the search model's cold load, paid once before every
-  other project starts. The load and the first search take 20–26 s of
-  heavy CPU on a 4-vCPU CI runner, and a page opened meanwhile has frozen
-  for seconds, past an expect's 5 s; so nothing runs beside it.
+* **`warmup`** — the search model's cold load, paid once before `chromium`
+  and `webkit` start.
+
+Bazel runs them as three tests, each with its own timeout, and
+`//datalib/ui:e2e_test` is the `test_suite` of all three:
+`e2e_chromium_test` runs `warmup` and `chromium`, `e2e_sandboxes_test`
+the `chromium-<spec>` projects, and `e2e_webkit_test` `warmup` and
+`webkit`. `DATALIB_TEST_E2E_PART` tells `playwright.config.ts` which
+part it is, and it starts only that part's backends; unset, as under
+`bazel run //datalib/ui:e2e`, it runs everything. A new spec lands in a
+part by the project it lands in, with nothing to choose.
 
 The `webkit` project exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a
@@ -395,8 +401,8 @@ source.
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
 hunt one, repeat the spec (§"Running one spec, and running it several
-times") or `bazelisk test //datalib/ui:e2e_test --runs_per_test=N
---local_test_jobs=1`. `scripts/flaky_tests.py` lists the targets that
+times") or `bazelisk test //datalib/ui:e2e_<part>_test --runs_per_test=N
+--local_test_jobs=1` for the part that holds it. `scripts/flaky_tests.py` lists the targets that
 went red and then green on the same commit.
 
 ## The sign-in suite
@@ -476,7 +482,7 @@ with `[checkpoint_cadence] at_most_every_secs = 2` at the top of that
 config and a `chatgpt` group whose ingest step's params are
 `[steps.params.api]`. The NDJSON on stderr shows the chain: a
 `checkpoint` from the ingest, a `step_start` for its render within
-milliseconds, and one for `unified_grid_and_search_index/grid_index` right after.
+milliseconds, and one for `unified_grid_and_search_index/unified_grid_and_search_index` right after.
 
 ## Bazel-fetched test data (`lightroom`)
 

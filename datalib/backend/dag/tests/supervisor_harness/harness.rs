@@ -665,6 +665,15 @@ impl Harness {
         id
     }
 
+    /// A sync of everything, with the roots the server's Sync all opens
+    /// one on: the config's fringe.
+    pub async fn sync_all(&mut self) -> String {
+        let path = config::root_config_path(self.root.path());
+        let (checked, _) = config::load_graded(&path).unwrap();
+        let fringe = checked.graph.fringe_ids();
+        self.sync(&fringe).await
+    }
+
     pub async fn stop(&mut self, request: &str) {
         self.person.request_stop(request, "person").await.unwrap();
         self.note(format!("person: stop {request}"));

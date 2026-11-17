@@ -134,9 +134,6 @@ pub enum Retired {
     ImplicitStepCommand,
     /// A Todoist ingest's window named `completed_since` (`todoist_since.rs`).
     TodoistCompletedSince,
-    /// A `grid_index` that does not read a `render_time_series` or
-    /// `render_occurrences` step (`problem_inputs.rs`).
-    UnreadProblems,
     /// A ChatGPT or Claude ingest's API setting under its old name
     /// (`conversation_settings.rs`).
     ConversationSettingNames,
@@ -146,6 +143,12 @@ pub enum Retired {
     /// A `qmd_aggregator` step, from before `grid_index` swept the vectors
     /// and reported (`aggregator_drop.rs`).
     AggregatorStep,
+    /// The index step under its old function, `grid_index`
+    /// (`index_step_name.rs`).
+    GridIndexStep,
+    /// A `grid_index` that names a `render_time_series` or
+    /// `render_occurrences` step it does not read (`unread_inputs.rs`).
+    UnreadGridInputs,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

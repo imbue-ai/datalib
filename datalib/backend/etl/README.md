@@ -111,7 +111,7 @@ stage no other step writes (`datalib_problems::Stage::OWN_STORE`):
 could not be listed (`occurrences`). Each finds every one of them again
 on each run, so its rows replace the store's whole
 (`datalib_step_problems::replace`), keeping the stamps of the
-unchanged. `grid_index` keeps only its own rows, about a render store
+unchanged. `unified_grid_and_search_index` keeps only its own rows, about a render store
 it could not read, and drops a source's when it reads that store again.
 
 The Manage screen's red and yellow counts are every step's rows, read
@@ -119,7 +119,7 @@ where each step keeps them, counted by whose they are: a fetch-stage
 row on the Download row, a time-series-stage row on
 `render_time_series`'s, an occurrences-stage row on
 `render_occurrences`'s, the index's own row about a render store it
-could not read on `grid_index`'s, every other row on the render's. A
+could not read on `unified_grid_and_search_index`'s, every other row on the render's. A
 group's count is the sum of its steps'. An `info` row is counted
 nowhere: nothing failed, and the problems grid is where it is seen. The
 problems grid gathers the same rows into a table of its read's own and
@@ -620,7 +620,7 @@ one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
 predates the table. A reader of a derived store asks it once per pass
-rather than probing for each table: `grid_index` compares a render
+rather than probing for each table: `unified_grid_and_search_index` compares a render
 store's `schema_hash` with `indexed_markdown::schema_hash`, the same
 value the scheduler fingerprints, and leaves a store in any other shape
 as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
@@ -652,7 +652,7 @@ test that reads an unchanged input twice and asserts the second
 `commit_run` returns `None`.
 
 `insert_sql` exists for the one path where upserting would be wrong. In
-`grid_index`, a primary-key collision is a *finding* — two sources minting
+`unified_grid_and_search_index`, a primary-key collision is a *finding* — two sources minting
 the same `grid_rows.uuid` is a correctness emergency — so that path wants the
 generated column list and binds without the `ON CONFLICT` clause, and lets
 the error surface so it can name the other document.

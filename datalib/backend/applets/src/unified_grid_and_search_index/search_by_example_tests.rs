@@ -260,7 +260,7 @@ fn cards() -> Vec<ContactDoc> {
 }
 
 /// Renders the cast and commits every document to the root's grid index
-/// the way the `grid_index` step does; returns each supplied term as
+/// the way the `unified_grid_and_search_index` step does; returns each supplied term as
 /// `(row, kind, value)`.
 async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     let mut docs: Vec<RenderedMarkdown> = Vec::new();

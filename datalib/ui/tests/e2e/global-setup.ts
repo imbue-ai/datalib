@@ -95,6 +95,35 @@ async function warmApplets(urls: string[], token: string): Promise<void> {
   );
 }
 
+/// Ask every backend for the Manage table once, and wait for each answer.
+///
+/// Settled is not ready for the first spec on a root: its first page is
+/// the sources card, which draws from `/api/manage/rows`, and specs give
+/// that card five seconds. On a busy CI runner the first answer after a
+/// launch has taken longer, and the first spec of a sandboxed root failed
+/// on a card still saying "Loading the sources…".
+async function awaitManageRows(servers: Server[], token: string): Promise<void> {
+  await Promise.all(
+    servers.map(async (server) => {
+      const ctx = await request.newContext({
+        baseURL: server.url,
+        extraHTTPHeaders: { authorization: `Bearer ${token}` },
+      });
+      try {
+        const res = await ctx.get("/api/manage/rows", { timeout: 60_000 });
+        if (!res.ok()) {
+          throw new Error(
+            `backend ${server.name} (${server.url}) answered /api/manage/rows with ` +
+              `${res.status()} — its output is in ${server.log}`,
+          );
+        }
+      } finally {
+        await ctx.dispose();
+      }
+    }),
+  );
+}
+
 /// How busy the machine is, once a second for the whole run, so a
 /// failure's trace can be laid against it: a page that painted nothing
 /// for seconds while every core was taken was starved, not slow. Linux
@@ -140,7 +169,9 @@ export default async function globalSetup(): Promise<() => void> {
     // `bazel test` never saw it.
     assertOnlyKnownSpecsWriteTheConfig(decodeURIComponent(new URL(".", import.meta.url).pathname));
     const token = process.env.DATALIB_TOKEN ?? "";
-    await awaitHealthy(JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[], token);
+    const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[];
+    await awaitHealthy(servers, token);
+    await awaitManageRows(servers, token);
     const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
       url: string;
     }[];

@@ -537,7 +537,7 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
                 m.md_path.display()
             );
         }
-        // What the grid_index step consumes rides on the emitted
+        // What the `unified_grid_and_search_index` step consumes rides on the emitted
         // document itself now, not in a file beside the markdown.
         assert!(!m.rows.is_empty(), "{} projected no rows", m.markdown_uuid);
     }

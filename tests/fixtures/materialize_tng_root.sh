@@ -9,7 +9,7 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from rendered.tar).
 #   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
 #                                      (from rendered.tar; no raw store beside it).
-#   unified_grid_and_search_index/grid_index/db.sqlite  the plain SQLite grid index the
+#   unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite  the plain SQLite grid index the
 #                                      backend reads, with the search index's
 #                                      tables (`:ingested_tng_search_index`).
 #   unified_grid_and_search_index/search_index/inference_cache.sqlite  every chunk's
@@ -71,11 +71,11 @@ tar -xf "$RENDERED_TAR" -C "$OUT_ROOT" --strip-components=1
 tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the grid index, with the search index's tables, into the
-# `grid_index` step's tree, and the vectors beside it, where the backend
+# `unified_grid_and_search_index` step's tree, and the vectors beside it, where the backend
 # opens them.
-mkdir -p "$OUT_ROOT/unified_grid_and_search_index/grid_index" "$OUT_ROOT/unified_grid_and_search_index/search_index"
-cp "$DB_FILE" "$OUT_ROOT/unified_grid_and_search_index/grid_index/db.sqlite"
-chmod u+w "$OUT_ROOT/unified_grid_and_search_index/grid_index/db.sqlite"
+mkdir -p "$OUT_ROOT/unified_grid_and_search_index/unified_grid_and_search_index" "$OUT_ROOT/unified_grid_and_search_index/search_index"
+cp "$DB_FILE" "$OUT_ROOT/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
+chmod u+w "$OUT_ROOT/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
 cp "$VECTORS_FILE" "$OUT_ROOT/unified_grid_and_search_index/search_index/inference_cache.sqlite"
 chmod u+w "$OUT_ROOT/unified_grid_and_search_index/search_index/inference_cache.sqlite"
 

@@ -201,7 +201,7 @@ FACEBOOK_TABLES_NOT_READ = (
 )
 # The TNG ride's activity file is not a FIT file, so `render_time_series`
 # leaves its time series out and keeps a warning in its own store, which
-# `grid_index` copies into the index under the step's own stage.
+# `unified_grid_and_search_index` copies into the index under the step's own stage.
 GARMIN_RIDE_WITH_NO_FIT = (
     "5692ad7c-fce5-54e6-96af-eb91974cbf89|warning|time_series|entity|17010414002"
     "|||render_failed|no .FIT signature"
@@ -553,14 +553,16 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if s.get("function") == "ingest"
         )
 
-    def _grid_index_inputs(self) -> tuple[str, ...]:
-        """What the config's `grid_index` reads: every source's render.
+    def _index_step_inputs(self) -> tuple[str, ...]:
+        """What the config's `unified_grid_and_search_index` reads: every source's render.
         The runner always hands a fan-in all of these, and a source
         missing from them is one the config dropped, which leaves the
         index."""
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
         steps = config.get("steps", [])
-        (step,) = [s for s in steps if s.get("function") == "grid_index"]
+        (step,) = [
+            s for s in steps if s.get("function") == "unified_grid_and_search_index"
+        ]
         ids = [
             f"{s['group']}/{s['function']}" if "group" in s else s["id"] for s in steps
         ]
@@ -578,11 +580,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     @property
     def _index_db(self) -> Path:
-        """The grid index the `grid_index` fan-in step writes."""
+        """The grid index the `unified_grid_and_search_index` fan-in step writes."""
         return (
             self.workspace
             / "unified_grid_and_search_index"
-            / "grid_index"
+            / "unified_grid_and_search_index"
             / "db.sqlite"
         )
 
@@ -1118,17 +1120,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # The step's tracing event, as it reaches stderr: JSON nested inside
     # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
-    _GRID_INDEX_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
+    _INDEX_STEP_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
 
-    def _grid_index_reads(self, stderr: str) -> list[int]:
-        """How many documents each grid_index step in a run READ.
+    def _index_step_reads(self, stderr: str) -> list[int]:
+        """How many documents each `unified_grid_and_search_index` step in a run READ.
 
         Not `loaded`: that was already 0 on a steady-state run before
         the index kept cursors, because the fingerprint compare happened
         after paying to read every document out of every source's store.
         `read` is the number the cursors actually move.
         """
-        return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
+        return [int(n) for n in self._INDEX_STEP_READ.findall(stderr)]
 
     def _run_pipeline(
         self, *, reset: bool, now: str | None = None
@@ -1933,7 +1935,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # sink: the one built to fail, and the ones its downloads cannot
         # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
-        # stops one bad record from poisoning `grid_index` for every
+        # stops one bad record from poisoning `unified_grid_and_search_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
@@ -1953,7 +1955,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._index_problems(),
             [],
-            "grid_index copies no source's problems; each is read in its own store",
+            "the index step copies no source's problems; each is read in its own store",
         )
         # A download names only its raw record; render says which grid row
         # that record belongs to, and the reader links the two. These are
@@ -2088,7 +2090,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._scalar(self._index_db, "SELECT generation FROM store_generation;")
             ),
             0,
-            "grid_index must seal, raising the index's generation",
+            "the index step must seal, raising the index's generation",
         )
         # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()
@@ -2173,17 +2175,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # store. Asserting on it would pass either way and prove
         # nothing.
         # Every pass, not one pass: since `render` streams, a producer
-        # finishing can dispatch `grid_index` before its siblings are done,
+        # finishing can dispatch `unified_grid_and_search_index` before its siblings are done,
         # so a run has one pass per source whose version moved plus the
         # final one. What must hold either way is that each of them reads
         # nothing — that is the claim, and it does not depend on how many
         # times the step was dispatched.
-        reads2 = self._grid_index_reads(run2.stderr)
-        self.assertTrue(reads2, "run 2 recorded no grid_index pass at all")
+        reads2 = self._index_step_reads(run2.stderr)
+        self.assertTrue(reads2, "run 2 recorded no index step pass at all")
         self.assertEqual(
             set(reads2),
             {0},
-            "every one of run 2's grid_index passes must read 0 documents: "
+            "every one of run 2's index step passes must read 0 documents: "
             "nothing changed, so every source's dolt_diff should have come "
             f"back empty (got {reads2})",
         )
@@ -2374,8 +2376,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # only this one has moved.
         self._run_step(
             "unified_grid_and_search_index",
-            "grid_index",
-            inputs=self._grid_index_inputs(),
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         self.assertEqual(
@@ -2456,8 +2458,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
             "unified_grid_and_search_index",
-            "grid_index",
-            inputs=self._grid_index_inputs(),
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         github_docs_after = set(

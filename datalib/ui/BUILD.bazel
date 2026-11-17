@@ -89,7 +89,8 @@ js_run_binary(
 
 # Playwright e2e suite, exposed two ways from the same wrapper script:
 #   bazelisk run  //datalib/ui:e2e        — interactive
-#   bazelisk test //datalib/ui:e2e_test   — picked up by `bazel test //...`
+#   bazelisk test //datalib/ui:e2e_test   — all three parts below; picked
+#                                           up by `bazel test //...`
 #
 # In `test` mode the wrapper runs Playwright from the runfiles tree,
 # using the bazel-linked `:node_modules` (materialized by rules_js from
@@ -204,71 +205,111 @@ sh_binary(
     deps = _E2E_DEPS,
 )
 
+# The suite is three tests, one per part of `playwright.config.ts`'s
+# projects (`DATALIB_TEST_E2E_PART`), and `:e2e_test` runs them all.
+# Whole it took 600-850 s on CI against the 900 s ceiling, and one run
+# timed out two-thirds of the way through; each part takes about a
+# third of that, under its own ceiling. On one four-core runner they run
+# one after another (each is `cpu:4`), so the split buys headroom, not
+# wall clock. docs/dev/testing.md § "The Playwright suite runs in two
+# engines" says which spec lands in which part.
+#
+# Each test's `tags`, `timeout` and `env_inherit`, said once:
+#
+# Needs network (Playwright fetches any missing browser binary —
+# chromium and webkit) and the host's pnpm / node / Playwright cache,
+# hence `no-sandbox` + `requires-network`. Do NOT add the `external`
+# tag: this is a routine UI integration test that must run on the
+# default `bazel test //...` path, which is what CI runs.
+# `requires-network` already gates it out of hermetic / offline runs;
+# `external` would over-exclude.
+#
+# `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
+# the backend processes, a browser engine and Playwright's own worker
+# pool use all of it anyway, and without the tag bazel starts
+# `:unit_test` and `:typecheck_test` beside it and all of them run ~3x
+# slower than they do alone.
+#
+# `long` = 900 s. An `sh_test` with no `size` or `timeout` is `medium`,
+# 300 s, and a part has been seen to need more than a third of that on
+# a slow runner. There is no cost to the larger budget: bazel enforces
+# the ceiling, it does not wait for it.
+#
+# Bazel scrubs the test env, so anything the suite still needs from the
+# host is named in `env_inherit`. HOME is down to one job: Playwright
+# resolves its browser cache to `~/Library/Caches/ms-playwright`, and
+# the browsers are not Bazel inputs (measured: with HOME dropped and
+# `--test_env=PLAYWRIGHT_BROWSERS_PATH=...` supplied, the suite passes).
+# Whoever makes the browsers a Bazel input deletes HOME and
+# `requires-network` in one go. PATH is the `bazel run` half: that mode
+# uses the source tree and needs the host's pnpm / node; under `bazel
+# test` both come from Bazel. `E2E_BROWSERS` narrows which engines
+# run_e2e.sh provisions; unset means both, which every caller uses.
+_E2E_ENV_INHERIT = [
+    "PATH",
+    "HOME",
+    "E2E_BROWSERS",
+]
+
+# The search grid, the document pane and everything else that leaves
+# the config alone, in Chromium against the one shared fixture root.
 sh_test(
-    name = "e2e_test",
+    name = "e2e_chromium_test",
     srcs = ["run_e2e.sh"],
     data = _E2E_DATA,
-    env = _E2E_ENV,
-    deps = _E2E_DEPS,
-    # Needs network (Playwright fetches any missing browser binary —
-    # chromium and webkit) and the host's pnpm / node / Playwright
-    # cache, hence `no-sandbox` + `requires-network`. Do NOT add the
-    # `external` tag: this is a routine UI integration test that must
-    # run on the default `bazel test //...` path, which is what CI runs.
-    # `requires-network` already gates it out of hermetic / offline
-    # runs; `external` would over-exclude.
-    #
-    # `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
-    # nine backend processes, two browser engines and Playwright's own
-    # worker pool use all of it anyway, and without the tag bazel starts
-    # `:unit_test` and `:typecheck_test` beside it and all three run ~3x
-    # slower than they do alone.
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "chromium"),
+    env_inherit = _E2E_ENV_INHERIT,
     tags = [
         "cpu:4",
         "no-remote-exec",
         "no-sandbox",
         "requires-network",
     ],
-    # `long` = 900s. NOT decoration: an `sh_test` with no `size` or
-    # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
-    # not fit in that. It runs every spec file across two browser
-    # engines behind nine backend processes, and the `warmup`
-    # project alone pays the search model's cold load, once for the
-    # whole suite.
-    #
-    # Measured wall clock: ~40-70s warm, and 193-202s per run over
-    # `--runs_per_test=5` (avg 198s) on a 10-core laptop. A single
-    # uncached run right after the AG Grid 36 / Vite 8 bump took 207s,
-    # and it has been seen to blow the 300s ceiling outright with a
-    # bazel build competing for cores. 300s is not a budget, it is a
-    # coin flip — and a flaky merge gate teaches people to re-run
-    # rather than to read. 900s is ~4x the observed runtime: tight
-    # enough to bound a genuine hang, loose enough not to fail a slow
-    # runner. There is no cost to the larger budget — bazel enforces
-    # the ceiling, it does not wait for it.
     timeout = "long",
-    # Bazel scrubs the test env, so anything the suite still needs from
-    # the host has to be named here.
-    #
-    # HOME is down to ONE job: Playwright resolves its browser cache to
-    # `~/Library/Caches/ms-playwright`, and the browsers are not Bazel
-    # inputs. Measured rather than assumed: with HOME dropped
-    # from this list and `--test_env=PLAYWRIGHT_BROWSERS_PATH=...`
-    # supplied, the suite passes. Whoever makes the browsers a Bazel
-    # input deletes this line and `requires-network` in one go.
-    #
-    # PATH is the `bazel run` half: that mode uses the source tree and
-    # needs the host's pnpm / node. Under `bazel test` both come from
-    # Bazel (`:node_modules`, `@nodejs_host`).
-    env_inherit = [
-        "PATH",
-        "HOME",
-        # Which browser engines run_e2e.sh provisions; unset means both,
-        # which is what every caller uses today — CI included, now that
-        # the Linux image bakes WebKit's OS libraries alongside
-        # Chromium's. Kept as an escape hatch for an environment that
-        # can only run one engine.
-        "E2E_BROWSERS",
+    deps = _E2E_DEPS,
+)
+
+# The specs that rewrite their config (`CONFIG_MUTATING`), each against
+# a root and backend of its own.
+sh_test(
+    name = "e2e_sandboxes_test",
+    srcs = ["run_e2e.sh"],
+    data = _E2E_DATA,
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "sandboxes"),
+    env_inherit = _E2E_ENV_INHERIT,
+    tags = [
+        "cpu:4",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+    deps = _E2E_DEPS,
+)
+
+# What renders or scrolls, again in the desktop app's engine.
+sh_test(
+    name = "e2e_webkit_test",
+    srcs = ["run_e2e.sh"],
+    data = _E2E_DATA,
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "webkit"),
+    env_inherit = _E2E_ENV_INHERIT,
+    tags = [
+        "cpu:4",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+    deps = _E2E_DEPS,
+)
+
+test_suite(
+    name = "e2e_test",
+    tests = [
+        ":e2e_chromium_test",
+        ":e2e_sandboxes_test",
+        ":e2e_webkit_test",
     ],
 )
 

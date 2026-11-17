@@ -109,11 +109,10 @@ fn generate() -> String {
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
         "\n# The SQL index behind the grid and search reads every source's documents\n\
-         # into the grid and the keyword search, and the problem rows of its\n\
-         # time-series and occurrences steps; `params.not_searched` would keep a\n\
+         # into the grid and the keyword search; `params.not_searched` would keep a\n\
          # source out of search.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
+         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"unified_grid_and_search_index\"\ncommand = \"datalib-step\"\n{}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
@@ -127,7 +126,7 @@ fn generate() -> String {
          [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
-        inputs(&["render_markdown", "render_time_series", "render_occurrences"]),
+        inputs(&["render_markdown"]),
         inputs(&["render_time_series"]),
     ));
     for s in &sources {

@@ -361,14 +361,14 @@ the program it runs in `command`; datalib's own steps run
 `datalib-step`.
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
-`grid_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
+`unified_grid_and_search_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
 name (`*/render_markdown`, every source's) into the SQL index the grid
 reads. It then puts each source in the keyword search, the `search_*`
 tables in the same file, but those its `params.not_searched` lists. A
 source searched by meaning has one more step of its own, `embed`, which
-reads `grid_index` and fills the vectors in
+reads `unified_grid_and_search_index` and fills the vectors in
 `search_index/inference_cache.sqlite`, so the slow embedding can be
-turned off or run by hand per source. `grid_index` also sweeps the
+turned off or run by hand per source. `unified_grid_and_search_index` also sweeps the
 vectors no chunk names and reports what search holds of each source
 (`docs/dev/plans/search_index_from_ram.md` is how the search index came
 to replace qmd's). `embedding_map` reads every `embed` and lays the
@@ -429,7 +429,7 @@ it should not have.
 ## The grid_rows union table
 
 The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
+`datalib/backend/schema/src/grid_rows.rs`), which `unified_grid_and_search_index` fills
 from every source's render store and the `unified_grid_and_search_index` applet reads
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
@@ -478,8 +478,9 @@ The rules, none optional. How our code enforces them is in
   per-file lock refuses it. `datalib-http` owns feedback, usage and
   remote media; the applet only reads. (The grid index is not doltlite:
   it is plain SQLite in WAL mode, which keeps no history and needs none
-  of these rules. `grid_index` alone writes it, under the runner's
-  `qmd_keyword` lock.) A download takes its store as an input
+  of these rules. The `unified_grid_and_search_index` step alone writes
+  it, under the runner's `qmd_keyword` lock.) A download takes its store
+  as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
@@ -493,7 +494,7 @@ The rules, none optional. How our code enforces them is in
 - **A reader opens read-only and reads one commit**, one of
   [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
   `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
-  read-only open of `<file>@<hash>`. Render and `grid_index` read their
+  read-only open of `<file>@<hash>`. Render and `unified_grid_and_search_index` read their
   input stores the last way (`doltlite_raw::open_reader`), so their
   queries name the tables themselves. A process that *moves a ref*,
   even on its own branch, is a writer.

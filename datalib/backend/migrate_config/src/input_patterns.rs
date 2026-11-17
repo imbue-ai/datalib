@@ -137,7 +137,7 @@ inputs = ["picard/ingest"]
 group = "picard"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "riker"
@@ -165,12 +165,11 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = [
     "picard/render_markdown", # the captain's mail
     "riker/render_markdown",
-    "riker/render_time_series",
 ]
 
 [[steps]]
@@ -219,17 +218,10 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
     fn complete_lists_become_patterns_and_read_the_same_steps() {
         assert!(is_retired(BEFORE).unwrap());
         let after = rewrite(BEFORE).unwrap();
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         let map = "unified_grid_and_search_index/embedding_map";
         let export = "exports/csv";
-        assert_eq!(
-            written_inputs(&after, grid),
-            [
-                "*/render_markdown",
-                "*/render_time_series",
-                "*/render_occurrences"
-            ]
-        );
+        assert_eq!(written_inputs(&after, grid), ["*/render_markdown"]);
         assert_eq!(written_inputs(&after, map), ["*/embed"]);
         assert_eq!(
             written_inputs(&after, export),
@@ -254,12 +246,11 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
         let partial = BEFORE.replace("    \"riker/render_markdown\",\n", "");
         let after = rewrite(&partial).unwrap();
         assert_eq!(
-            written_inputs(&after, "unified_grid_and_search_index/grid_index"),
-            [
-                "picard/render_markdown",
-                "*/render_time_series",
-                "*/render_occurrences"
-            ]
+            written_inputs(
+                &after,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
+            ["picard/render_markdown"]
         );
     }
 }

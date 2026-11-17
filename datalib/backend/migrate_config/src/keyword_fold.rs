@@ -39,11 +39,7 @@ struct GroupView {
 }
 
 /// What a `grid_index` the rewrite adds reads.
-const GRID_READS: &[&str] = &[
-    "*/render_markdown",
-    "*/render_time_series",
-    "*/render_occurrences",
-];
+const GRID_READS: &[&str] = &["*/render_markdown"];
 
 #[derive(Deserialize)]
 struct StepView {
@@ -273,7 +269,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
@@ -283,7 +279,7 @@ inputs = ["*/keyword_index", "*/embed"]
 "#;
 
     fn check(text: &str) -> datalib_dag::config::ConfigCheck {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }
@@ -311,7 +307,7 @@ inputs = ["*/keyword_index", "*/embed"]
         assert!(!after.contains("keyword_index\"\ncommand"), "{after}");
         assert!(!after.contains("the captain's mail, in search"), "{after}");
         let check = check(&after);
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert_eq!(inputs_of(&check, "picard/embed"), [grid]);
         let mut mapped = inputs_of(&check, "unified_grid_and_search_index/embedding_map");
         mapped.sort();
@@ -352,14 +348,17 @@ inputs = ["*/keyword_index", "*/embed"]
         let no_grid = BEFORE.replace(
             "[[steps]]\ngroup = \"unified_grid_and_search_index\"\nfunction = \"grid_index\"\n\
              command = \"datalib-step\"\n\
-             inputs = [\"*/render_markdown\", \"*/render_time_series\", \"*/render_occurrences\"]\n",
+             inputs = [\"*/render_markdown\"]\n",
             "",
         );
         assert!(!no_grid.contains("grid_index"), "{no_grid}");
         let after = rewrite(&no_grid).unwrap();
         let check = check(&after);
         assert_eq!(
-            inputs_of(&check, "unified_grid_and_search_index/grid_index"),
+            inputs_of(
+                &check,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["picard/render_markdown", "q/render_markdown"]
         );
         assert!(after.contains("params.not_searched = [\"q\"]"), "{after}");

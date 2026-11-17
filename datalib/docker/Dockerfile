@@ -257,9 +257,9 @@ RUN set -eux; \
     mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
     datalib-dag /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
         "SELECT count(*) FROM search_documents;" | grep -qv '^0$'; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
 

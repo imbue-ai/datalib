@@ -64,7 +64,7 @@ const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 struct Index {
     /// The data root, for resolving a document's on-disk neighbours.
     root: Arc<PathBuf>,
-    /// The grid index. Read-only: the `grid_index` step is its only
+    /// The grid index. Read-only: the `unified_grid_and_search_index` step is its only
     /// writer, so holding it open across a sync is safe.
     repo: DynIndexRepo,
     /// Embeds a Meaning search's text in this process, with the model the
@@ -594,7 +594,7 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
     if echo["search_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
-             words are searchable once `grid_index` has run after its render"
+             words are searchable once `unified_grid_and_search_index` has run after its render"
                 .to_string(),
         );
     }
@@ -1684,7 +1684,7 @@ pub struct IndexStateRequest {
 /// its fields keep the names they had when the search index answered them.
 #[derive(Debug, Serialize)]
 pub struct IndexStateResponse {
-    /// False when no `grid_index` keyword pass has written the search index
+    /// False when no `unified_grid_and_search_index` keyword pass has written the search index
     /// yet, so every document is legitimately un-indexed rather than
     /// unknown.
     pub index_present: bool,
@@ -2274,7 +2274,7 @@ mod tests {
     }
 
     /// Commits one chat per `(uuid, created_at)` to the root's grid index,
-    /// the way the `grid_index` step writes and seals it.
+    /// the way the `unified_grid_and_search_index` step writes and seals it.
     async fn index_chats(root: &std::path::Path, chats: &[(&str, &str)]) {
         let docs: Vec<Doc> = chats
             .iter()
@@ -2287,7 +2287,7 @@ mod tests {
     type Doc<'a> = (&'a str, &'a str, &'a str, Option<&'a str>);
 
     /// Commits one document per entry to the root's grid index, the way
-    /// the `grid_index` step writes and seals it.
+    /// the `unified_grid_and_search_index` step writes and seals it.
     async fn index_documents(root: &std::path::Path, docs: &[Doc<'_>]) {
         let rows = docs
             .iter()
@@ -3115,14 +3115,50 @@ mod tests {
         assert_eq!(offered[0].label.as_deref(), Some("Captain"));
     }
 
-    /// The index `datalib-applet search` answers from, opened by the
-    /// applet's own [`open_with_models_verified`] rather than by
-    /// repeating it here. A test is a caller with no server warming its
-    /// models, which is exactly what that function is for.
+    /// The index the applet serves over `root`, opened by its own
+    /// [`Index::open`], with the embedding model every test in this binary
+    /// shares ([`shared_embedder`]).
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        open_with_models_verified(root.to_path_buf())
-            .await
-            .expect("open an index with the embedding model verified")
+        let mut s = Index::open(
+            root.to_path_buf(),
+            models::ModelGate::new(root),
+            ONE_SEARCH_DEADLINE,
+        )
+        .await
+        .expect("open an index");
+        s.local_embedder = shared_embedder();
+        s
+    }
+
+    /// The embedding model, verified by the applet's own
+    /// [`open_with_models_verified`] and loaded once for the whole test
+    /// binary: each test's own would hash the model's 300 MB again (its
+    /// verified stamp lives beside the model, in that test's root) and
+    /// load it again. Verified on a thread of its own, since a test's
+    /// runtime cannot block on another.
+    fn shared_embedder() -> Arc<local_embedder::LocalEmbedder> {
+        static SHARED: std::sync::OnceLock<(
+            tempfile::TempDir,
+            Arc<local_embedder::LocalEmbedder>,
+        )> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let root = super::search_tests::fixture_root();
+                let opened = std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            tokio::runtime::Runtime::new()
+                                .expect("a runtime to verify the model on")
+                                .block_on(open_with_models_verified(root.path().to_path_buf()))
+                        })
+                        .join()
+                        .expect("verifying the model panicked")
+                })
+                .expect("open an index with the embedding model verified");
+                (root, opened.local_embedder)
+            })
+            .1
+            .clone()
     }
 
     pub(super) async fn search(

@@ -25,7 +25,7 @@ common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 # Undeclared test outputs as one downloadable `outputs.zip` rather than
 # a loose directory tree.
 #
-# `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
+# Each part of `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
 # trace per test, with the trace viewer bundled — into
 # TEST_UNDECLARED_OUTPUTS_DIR. Zipped, it arrives as a single artifact
 # on the BuildBuddy invocation page that you can download and open;
@@ -89,12 +89,16 @@ test:macos --test_env=LANG=C.UTF-8
 build:macos --macos_minimum_os=11.0
 build:macos --host_macos_minimum_os=11.0
 
-# Nothing in the build reads the host's model cache (`~/.cache/qmd/models`,
-# where the shipped app keeps the embedding model): the model is fetched by
-# a build action (`//third-party/embedding_models`) and reaches what needs
-# it as an ordinary input. `HOME` is passed through because which actions
-# would notice its absence has not been enumerated.
-build --action_env=HOME
+# No `--action_env=HOME`, on Linux or a mac. An inherited `--action_env`
+# value is in the cache key of every C compile, genrule and test, so
+# passing the caller's `HOME` (`/root` in a cloud session, `/github/home`
+# on CI, `/Users/<name>` on a mac) kept machines from sharing those
+# entries. A test still gets one: bazel's test-setup.sh sets
+# `HOME=$TEST_TMPDIR`, private to the test. The build reads no host cache;
+# the embedding model reaches what needs it as an input
+# (`//third-party/embedding_models`), and Apple's toolchain builds without
+# one. A test that does need the real `HOME` (Playwright's browser cache)
+# names it in its own `env_inherit`.
 
 # Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
 # STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation

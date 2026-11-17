@@ -237,7 +237,7 @@ account above it) have no parent today. They get one:
 - **A source is a node.** It is the source's group: its uuid is minted
   from the group id, and its children are the source's top containers.
   Renderers do not mint it; they keep naming no parent at their top,
-  and `grid_index`, which knows each row's source, reads that as the
+  and `unified_grid_and_search_index`, which knows each row's source, reads that as the
   source node. A step is not a node: it is how a source's data was
   made, and it lives in the DAG. A problem's `stage` says which step
   raised it.
@@ -258,7 +258,7 @@ containers, its source and the person's folders to the library, and
 "how many problems under X" is the same lookup as "how many items
 under X".
 
-**How "under" stays fast.** `grid_index` keeps one table of every
+**How "under" stays fast.** `unified_grid_and_search_index` keeps one table of every
 node's ancestors, `(node, ancestor, depth)`, following both kinds of
 parent, so "under X" is one indexed lookup however deep X is and
 whichever way a node reached it. A message under a nested label is
@@ -415,7 +415,7 @@ agent notices. The step that stops writing the files (step 5) first
 makes the applet serve everything they held, rewrites both docs, and
 says it in the release notes. The `.md` trees already on disk are
 derived, so the render step deletes its own tree on its first run after
-that step, as the aggregator deleted qmd's index.
+that step, as the index step deletes the tree qmd's index was in.
 
 Everything this changes is derived: render stores, the grid, the search
 index. They are rebuilt from the raw stores, which already hold every
@@ -443,7 +443,7 @@ against the eval before the next.
    contents and Perseus's sentence spans (no rows); everywhere else a
    section's uuid is already its row's
    ([`problems_as_step_events.md`](problems_as_step_events.md)
-   §"What the tree does today"). `grid_index`
+   §"What the tree does today"). `unified_grid_and_search_index`
    carries the columns. A re-render
    and a re-index; nothing a person sees changes. Fixes the
    `conversation_uuid` docs on the way.
@@ -454,14 +454,14 @@ against the eval before the next.
 3. **The body in the render store.** Each item's body is stored with
    its row, and the index text is drawn from it on read
    (§"Store the body, format on read"). The search index reads items from the store instead of
-   cutting files, and `keyword_index` folds into `grid_index`, which
+   cutting files, and `keyword_index` folds into the index step, which
    already reads every render store. Leaving a source out of search
-   must survive the fold: today it is a source with no `keyword_index`
-   step (`datalib_step/src/append.rs`), and `embed` stays the per-source
-   switch for meaning. After the fold it is the source's absence from
-   the aggregator's inputs, which already drops any source it does not
-   name, and the config upgrade rewrites every existing root's
-   `keyword_index` steps into that. In three parts:
+   survives the fold: before it, a source was out of search by having
+   no `keyword_index` step, and `embed` stays the per-source switch for
+   meaning. After it, a source is out of search by being named in the
+   index step's `params.not_searched`; the step searches every source
+   it reads but those. The config upgrade lists there every source that
+   had no `keyword_index` step. In three parts:
    - **3a. Bodies.** A `sections` table in the render store: every
      piece of a document in order, keyed or not. chat-common hands each
      item's body and who it was addressed to, and marks its layout as
@@ -501,13 +501,20 @@ against the eval before the next.
      item, re-embedding only the chunks whose hash moved. A golden test
      draws chat-common's and the hostile samples and fails when the
      output changes and the version does not.
-   - **3c. The fold.** `keyword_index` into `grid_index`, with the
-     config upgrade above. That upgrade runs after the rewrite that
-     renamed the index group to `unified_grid_and_search_index`
-     (`migrate_config/src/index_name.rs`, #1796). The one-slot
-     `qmd_keyword` lock (#1795) is then held by `grid_index` and
-     `qmd_aggregator` alone: `BUILTIN_LOCKS` in `dag/src/config.rs`,
-     its test and the docs that name the lock's holders change with it.
+   - **3c. The fold.** `keyword_index` into the index step, with the
+     config upgrade above (`migrate_config/src/keyword_fold.rs`,
+     #1818), which runs after the rewrite that renamed the index group
+     to `unified_grid_and_search_index` (`index_name.rs`, #1796). The
+     index step took over the aggregator's work too: it keeps the
+     inference cache to the vectors a chunk still names and reports what
+     search holds of each source, so `qmd_aggregator` is gone and the
+     embedding map reads every `*/embed` (`aggregator_drop.rs`, #1821,
+     merged into #1818). That left the one-slot `qmd_keyword` lock
+     (#1795) with one holder, the index step, which the runner never
+     runs beside itself, so the lock can go (#1845). The step has since
+     taken its group's name: its function is
+     `unified_grid_and_search_index`, where it was `grid_index`
+     (`index_step_name.rs`).
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
@@ -519,7 +526,7 @@ against the eval before the next.
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
    together, and the eval picks the window.
-8. **Browsing the tree.** The ancestors table in `grid_index`, with
+8. **Browsing the tree.** The ancestors table in `unified_grid_and_search_index`, with
    each row's sort key copied in so everything under a node is one
    index range around an anchor; `under:` and `at:` as search keys; and
    the tree card. Whether a large subtree pages off that index or by
@@ -555,7 +562,7 @@ against the eval before the next.
   the tree card show the thread or the message there?
 - **Counts on the tree card.** "How many items under X" for a node with
   half a million under it is a count over the ancestors table; it may
-  need keeping per node at `grid_index` time rather than counting when
+  need keeping per node at `unified_grid_and_search_index` time rather than counting when
   a level opens.
 - **Which upstream hierarchies to bring in.** Email labels and
   mailboxes and Lightroom's keywords and collections already reach the

@@ -1,6 +1,7 @@
 // A pasted uuid is answered from the grid index's search terms, which the
-// fixture's own `grid_index` step wrote, not from the ranked search: the row comes back
-// first, saying it matched as its own id.
+// fixture's own `unified_grid_and_search_index` step wrote, not from the
+// ranked search: the row comes back first, saying it matched as its own
+// id.
 
 import { test, expect, type Page } from "@playwright/test";
 import { EVERY_ROW, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";

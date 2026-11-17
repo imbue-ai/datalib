@@ -1,5 +1,5 @@
-//! The `grid_index` function: every source's render store, stacked into
-//! the unified grid table at `unified_grid_and_search_index/grid_index`,
+//! The `unified_grid_and_search_index` function: every source's render store, stacked into
+//! the unified grid table at `unified_grid_and_search_index/unified_grid_and_search_index`,
 //! then each searched source's documents into the search index's keyword
 //! tables in the same file. It keeps the inference cache to the vectors a
 //! chunk still names, and reports what search holds of each source.
@@ -16,17 +16,17 @@ use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
 use crate::source::StepEnv;
 
-/// The one tree this step writes, `unified_grid_and_search_index/grid_index`, as the
+/// The one tree this step writes, `unified_grid_and_search_index/unified_grid_and_search_index`, as the
 /// applet that reads it resolves it from the data root.
 pub fn out_rel() -> String {
     format!(
         "{}/{}",
         datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        datalib_core::layout::GRID_DIR
+        datalib_core::layout::INDEX_STEP_DIR
     )
 }
 
-/// What a config may say to `grid_index`.
+/// What a config may say to `unified_grid_and_search_index`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Params {
@@ -42,7 +42,7 @@ impl Params {
         if params.is_null() {
             return Ok(Params::default());
         }
-        serde_json::from_value(params).context("read grid_index's params")
+        serde_json::from_value(params).context("read unified_grid_and_search_index's params")
     }
 
     /// `sources` less the ones kept out of search.
@@ -124,8 +124,7 @@ pub(crate) async fn run_with(
 
     // The stores to read come from the graph, not from a directory scan:
     // the same rule the search step follows, so the two indexes agree on
-    // what a source is. A `render_time_series` or `render_occurrences`
-    // input is read for its problem rows alone.
+    // what a source is.
     let render_inputs = render_inputs(&env.inputs);
     let sources = crate::index_steps::groups_from_inputs(&render_inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
@@ -360,12 +359,12 @@ mod tests {
         let data_root = td.path();
 
         let env = StepEnv {
-            step: "unified_grid_and_search_index/grid_index".into(),
+            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
             group: "unified_grid_and_search_index".into(),
             group_type: None,
             source_group: None,
             source_group_type: None,
-            function: crate::function::Function::GridIndex,
+            function: crate::function::Function::UnifiedGridAndSearchIndex,
             inputs: Vec::new(),
         };
         run(
@@ -388,7 +387,7 @@ mod tests {
         );
         assert!(
             !data_root
-                .join("unified_grid_and_search_index/grid_index/CACHEDIR.TAG")
+                .join("unified_grid_and_search_index/unified_grid_and_search_index/CACHEDIR.TAG")
                 .exists(),
             "the per-index tag was replaced by the one on the parent"
         );

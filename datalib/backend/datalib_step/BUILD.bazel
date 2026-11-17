@@ -3,15 +3,17 @@ load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the built-in step program for the DAG runner
 # (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
-# render_markdown / grid_index / embed / embedding_map) and its
-# group's type from the environment the runner sets, and honors the DAG
-# step contract (NDJSON events on stdout, final outcome line).
+# render_markdown / unified_grid_and_search_index / embed / embedding_map)
+# and its group's type from the environment the runner sets, and honors the
+# DAG step contract (NDJSON events on stdout, final outcome line).
 #
 # Bazel-only: it links the provider crates, which have no cargo
 # counterpart.
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
+    # The Modal driver, run by the bundled Node (src/modal.rs).
+    compile_data = ["src/modal/embed_on_modal.mjs"],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
@@ -180,8 +182,14 @@ rust_test(
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
+        # The Modal driver's tests run it on the pinned Node against a
+        # stand-in for Modal's SDK (search_index.rs).
+        "@nodejs_host//:node_bin",
+        "src/modal/testdata/fake_embed_prompts.mjs",
+        "src/modal/testdata/fake_sdk.mjs",
     ] + glob(["raw_shapes/*.json"]),
     edition = "2021",
+    env = {"NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)"},
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
