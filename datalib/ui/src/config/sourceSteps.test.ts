@@ -193,10 +193,10 @@ function = "ingest"
 params.api = {}
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 `;
@@ -217,7 +217,7 @@ inputs = ["slack/render_markdown"]
     const step = listSteps(next).find((s) => s.id === "slack-diff/render_markdown")!;
     expect(step.inputs).toEqual(["slack/ingest"]);
     expect(step.params).toEqual({ diff: { from: "aaa", to: "bbb", max_documents: 50 } });
-    const fanIn = listSteps(next).find((s) => s.id === "unified_document_index/grid_index")!;
+    const fanIn = listSteps(next).find((s) => s.id === "unified_grid_and_search_index/grid_index")!;
     expect(fanIn.inputs).toContain("slack-diff/render_markdown");
     expect(next).toContain('source = "slack"');
   });

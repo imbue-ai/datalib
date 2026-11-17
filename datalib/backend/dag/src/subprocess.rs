@@ -1331,7 +1331,7 @@ mod tests {
         let consumer = {
             let passes = passes.clone();
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: crate::step::StepCtx| {
                     let passes = passes.clone();
                     async move {
@@ -1376,7 +1376,9 @@ mod tests {
             .filter_map(|e| match e {
                 Event::Metric {
                     step, name, value, ..
-                } if step == "unified_document_index/grid" && name == "queued" => Some(*value),
+                } if step == "unified_grid_and_search_index/grid" && name == "queued" => {
+                    Some(*value)
+                }
                 _ => None,
             })
             .collect();

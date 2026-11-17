@@ -14,8 +14,8 @@
 //! params — and, after it, `lowercase_ids.rs`: every id that names a
 //! folder becomes lower case; then `qmd_steps.rs`: the `qmd_index` fan-in becomes
 //! `qmd_aggregator`, downstream of each source's own qmd steps; then
-//! `document_index.rs`: the `unified_index` group, its steps and its
-//! applet become `unified_document_index`; then `time_series_steps.rs`:
+//! `index_name.rs`: the `unified_index` or `unified_document_index`
+//! group, its steps and its applet become `unified_grid_and_search_index`; then `time_series_steps.rs`:
 //! a source with time series gets its `render_time_series` step and the
 //! config its time-series index; then `time_series_embeds.rs`: a
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
@@ -30,7 +30,7 @@
 
 pub mod conversation_settings;
 pub mod convert;
-pub mod document_index;
+pub mod index_name;
 pub mod lowercase_ids;
 pub mod problem_inputs;
 pub mod qmd_steps;
@@ -64,7 +64,7 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if qmd_steps::is_retired(text)? {
         return Ok(LegacyFormat::QmdIndex);
     }
-    if document_index::is_retired(text)? {
+    if index_name::is_retired(text)? {
         return Ok(LegacyFormat::UnifiedIndex);
     }
     if time_series_steps::is_retired(text)? {
@@ -103,7 +103,7 @@ pub fn convert(text: &str) -> Result<String> {
     };
     let out = lowercase_ids::rewrite(&out)?;
     let out = qmd_steps::rewrite(&out)?;
-    let out = document_index::rewrite(&out)?;
+    let out = index_name::rewrite(&out)?;
     let out = if time_series_steps::is_retired(&out)? {
         time_series_steps::rewrite(&out)?
     } else {
@@ -139,17 +139,17 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
 }
 
 /// The rewrite `datalib-http` makes unattended, to a config whose index
-/// group is still `unified_index`. `None` when there is nothing to do.
+/// group still has one of its earlier names. `None` when there is nothing to do.
 /// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
 /// every entry the original did, each under its new id.
-pub fn upgrade_document_index(text: &str) -> Result<Option<String>> {
-    if !document_index::is_retired(text).unwrap_or(false) {
+pub fn upgrade_index_name(text: &str) -> Result<Option<String>> {
+    if !index_name::is_retired(text).unwrap_or(false) {
         return Ok(None);
     }
-    let out = document_index::rewrite(text)?;
+    let out = index_name::rewrite(text)?;
     refuse_a_loss(text, &out, |e| {
         let (kind, id) = e.split_once(' ').unwrap_or(("", e));
-        match document_index::renamed(id) {
+        match index_name::renamed(id) {
             Some(new) => format!("{kind} {new}"),
             None => e.to_string(),
         }
@@ -277,10 +277,10 @@ pub const UNATTENDED: [Rewrite; 9] = [
         run: upgrade_qmd_steps,
     },
     Rewrite {
-        why: "still names its index group `unified_index`",
-        what: "the `unified_index` group, its steps and its applet are now \
-               `unified_document_index`",
-        run: upgrade_document_index,
+        why: "still names its index group `unified_index` or `unified_document_index`",
+        what: "the index group, its steps and its applet are now \
+               `unified_grid_and_search_index`, named for the grid and the search it holds",
+        run: upgrade_index_name,
     },
     Rewrite {
         why: "has a source with time series and no time-series index",
@@ -790,7 +790,7 @@ inputs = ["slack/render_markdown"]
             "{out}"
         );
         assert!(
-            out.contains("group = \"unified_document_index\"\nfunction = \"grid_index\""),
+            out.contains("group = \"unified_grid_and_search_index\"\nfunction = \"grid_index\""),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
@@ -816,8 +816,8 @@ inputs = ["slack/render_markdown"]
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         let by_id = |id: &str| cfg.applets.iter().find(|a| a.id == id).unwrap().clone();
         assert_eq!(
-            by_id("unified_document_index").group.as_deref(),
-            Some("unified_document_index")
+            by_id("unified_grid_and_search_index").group.as_deref(),
+            Some("unified_grid_and_search_index")
         );
         assert_eq!(by_id("slack_view").group.as_deref(), Some("slack"));
         assert_eq!(cfg.groups.len(), 2);
@@ -1002,7 +1002,7 @@ inputs = ["mail/render_markdown"]
     #[test]
     fn the_unattended_upgrades_chain_to_the_current_shape() {
         let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
-        let out = upgrade_document_index(&out).unwrap().unwrap();
+        let out = upgrade_index_name(&out).unwrap().unwrap();
         let out = upgrade_step_commands(&out).unwrap().unwrap();
         assert_eq!(upgrade_step_commands(&out).unwrap(), None);
         let check = datalib_dag::config::check_text(&out);
@@ -1011,10 +1011,10 @@ inputs = ["mail/render_markdown"]
             .cfg
             .steps
             .iter()
-            .any(|s| s.id == "unified_document_index/qmd_aggregator"));
+            .any(|s| s.id == "unified_grid_and_search_index/qmd_aggregator"));
         assert!(!out.contains("\"unified_index"), "{out}");
-        assert_eq!(upgrade_document_index(&out).unwrap(), None);
-        assert_eq!(upgrade_document_index("not [ toml").unwrap(), None);
+        assert_eq!(upgrade_index_name(&out).unwrap(), None);
+        assert_eq!(upgrade_index_name("not [ toml").unwrap(), None);
         assert_eq!(convert(SHARED_QMD_INDEX).unwrap(), out);
     }
 
@@ -1022,14 +1022,14 @@ inputs = ["mail/render_markdown"]
     /// clash the loader settles by dropping one of them, so the rename is
     /// refused rather than made.
     #[test]
-    fn the_document_index_upgrade_refuses_a_rename_that_drops_a_step() {
+    fn the_index_name_upgrade_refuses_a_rename_that_drops_a_step() {
         let current = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         let clash = format!(
-            "{current}\n[[steps]]\nid = \"unified_document_index/qmd_aggregator\"\n\
+            "{current}\n[[steps]]\nid = \"unified_grid_and_search_index/qmd_aggregator\"\n\
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
         assert!(datalib_dag::config::check_text(&clash).is_clean());
-        let err = upgrade_document_index(&clash).unwrap_err().to_string();
+        let err = upgrade_index_name(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
     }
 

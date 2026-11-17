@@ -1,0 +1,392 @@
+//! The ordered results of recent searches. A search's rows are listed once
+//! per query, sort and commit, then every page of it is a slice of the
+//! list: the second page of a search does not run it again.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use datalib_unified_grid_and_search_index::group::Within;
+use datalib_unified_grid_and_search_index::qmd::index_state::IndexStamp;
+use datalib_unified_grid_and_search_index::qmd::QmdHit;
+use datalib_unified_grid_and_search_index::sort::Sort;
+
+/// Searches kept. A list of every row of a large root is a few MB of
+/// uuids; this many of those is the most it holds.
+const CAPACITY: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Key {
+    pub q: String,
+    pub sort: Vec<Sort>,
+    /// The group whose rows these are; empty for the whole search.
+    pub within: Vec<Within>,
+    /// The commit the list was read at, `None` before the index has one.
+    /// A search after the index moves is a different key, so a list never
+    /// outlives the rows it names.
+    pub at: Option<String>,
+}
+
+/// One row of a search's result, in order: a row, or a document a
+/// free-text ranking found, which a page lands on one of its messages.
+#[derive(Debug, Clone)]
+pub struct Entry {
+    pub uuid: String,
+    /// What qmd matched, for a free-text search.
+    pub hit: Option<Hit>,
+    /// The message a document's hit landed on and the lines quoted from
+    /// it, set the first time a page shows it.
+    pub landed: Arc<OnceLock<(String, String)>>,
+}
+
+/// A free-text ranking's score for a row or document, and the words it
+/// matched, shown as the row's Contents.
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub score: f64,
+    pub snippet: String,
+    /// A hit on a whole document, still to be landed on a message.
+    pub document: Option<Arc<QmdHit>>,
+}
+
+impl Entry {
+    pub fn new(uuid: String, hit: Option<Hit>) -> Self {
+        Self {
+            uuid,
+            hit,
+            landed: Arc::default(),
+        }
+    }
+
+    /// The row this entry shows: the message its hit landed on, once a
+    /// page has landed it, else its own uuid.
+    pub fn row(&self) -> &str {
+        self.landed.get().map_or(&self.uuid, |(uuid, _)| uuid)
+    }
+
+    /// Whether a page must still land this entry before showing it.
+    pub fn unlanded(&self) -> Option<&QmdHit> {
+        let document = self.hit.as_ref()?.document.as_deref()?;
+        self.landed.get().is_none().then_some(document)
+    }
+}
+
+#[derive(Default)]
+pub struct ResultCache {
+    lists: Mutex<VecDeque<(Key, Arc<Vec<Entry>>)>>,
+    turns: Mutex<HashMap<Key, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl ResultCache {
+    /// Held while one request lists `key`. A search card asks for a
+    /// query's rows and its groups at once, and qmd answers one search at
+    /// a time in seconds: without a turn, both miss the cache and qmd
+    /// ranks the same words twice, the second waiting behind the first.
+    /// Look in the cache again once the turn is yours.
+    pub async fn turn(&self, key: &Key) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = {
+            let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+            // A gate only the map holds is one nobody is waiting on.
+            turns.retain(|_, g| Arc::strong_count(g) > 1);
+            turns.entry(key.clone()).or_default().clone()
+        };
+        gate.lock_owned().await
+    }
+
+    pub fn get(&self, key: &Key) -> Option<Arc<Vec<Entry>>> {
+        let mut entries = self.lists.lock().unwrap_or_else(|e| e.into_inner());
+        let i = entries.iter().position(|(k, _)| k == key)?;
+        let found = entries.remove(i)?;
+        let list = found.1.clone();
+        entries.push_front(found);
+        Some(list)
+    }
+
+    pub fn put(&self, key: Key, list: Arc<Vec<Entry>>) {
+        let mut entries = self.lists.lock().unwrap_or_else(|e| e.into_inner());
+        entries.retain(|(k, _)| k != &key);
+        entries.push_front((key, list));
+        entries.truncate(CAPACITY);
+    }
+}
+
+/// What a search's structured terms keep, worked out once per query and
+/// commit and shared by every answer to it: Words narrows to its
+/// documents, Meaning to its messages, a page lands only on its rows.
+/// Asked of the index each time, one person key cost seconds per ask, and
+/// one search asked four or five times.
+pub struct Keyed {
+    pub rows: HashSet<String>,
+    pub documents: HashSet<String>,
+    pub kept: HashMap<String, datalib_unified_grid_and_search_index::qmd::vectors::Kept>,
+}
+
+/// How many of the documents a search could find have no vectors, so search
+/// by meaning cannot reach them, in all and by source, most first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct WithoutVectors {
+    pub total: u64,
+    pub by_source: Vec<(String, u64)>,
+}
+
+impl WithoutVectors {
+    /// `candidates` are `(document, source)`; a document filed under two
+    /// sources counts once.
+    pub fn among(candidates: &[(String, String)], with_vectors: &HashSet<String>) -> Self {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut by_source: HashMap<&str, u64> = HashMap::new();
+        for (document, source) in candidates {
+            if !with_vectors.contains(document) && seen.insert(document) {
+                *by_source.entry(source).or_default() += 1;
+            }
+        }
+        let mut by_source: Vec<(String, u64)> = by_source
+            .into_iter()
+            .map(|(source, n)| (source.to_string(), n))
+            .collect();
+        by_source.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        WithoutVectors {
+            total: seen.len() as u64,
+            by_source,
+        }
+    }
+}
+
+/// What counting [`WithoutVectors`] last read: the documents with vectors,
+/// until the qmd index moves, and the last search's count, until it or the
+/// grid does. A person repeats one search far more than they change it.
+#[derive(Default)]
+pub struct VectorCoverage {
+    pub with_vectors: Option<(Vec<IndexStamp>, Arc<HashSet<String>>)>,
+    pub last: Option<(CoverageKey, WithoutVectors)>,
+}
+
+/// A search's cache key, the grid's commit and how the qmd index looks.
+pub type CoverageKey = (String, Option<String>, Vec<IndexStamp>);
+
+/// A search's terms, written out, and the commit they were read at.
+pub type KeyedKey = (String, Option<String>);
+
+/// The terms of the last few searches, as `Keyed`: a search card asks for
+/// its Best, Words and Meaning answers with the same keys.
+#[derive(Default)]
+pub struct KeyedCache {
+    entries: VecDeque<(KeyedKey, Arc<Keyed>)>,
+}
+
+impl KeyedCache {
+    pub fn get(&mut self, key: &KeyedKey) -> Option<Arc<Keyed>> {
+        let i = self.entries.iter().position(|(k, _)| k == key)?;
+        let found = self.entries.remove(i)?;
+        let keyed = found.1.clone();
+        self.entries.push_front(found);
+        Some(keyed)
+    }
+
+    pub fn put(&mut self, key: KeyedKey, keyed: Arc<Keyed>) {
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_front((key, keyed));
+        self.entries.truncate(KEYED_CAPACITY);
+    }
+}
+
+/// A key that keeps nearly every row holds a set of nearly a million
+/// uuids, so only a few are kept.
+const KEYED_CAPACITY: usize = 4;
+
+/// The most rows one page carries.
+pub const MAX_PAGE: usize = 100_000;
+
+/// A page's size once it also reaches the row `through` names, wherever
+/// that row is past `offset`: a grid re-reading the rows it holds, or
+/// seeking a selected row, asks for them in one request.
+pub fn reaching(list: &[Entry], offset: usize, limit: usize, through: Option<&str>) -> usize {
+    let target =
+        through.and_then(|uuid| list.iter().position(|e| e.uuid == uuid || e.row() == uuid));
+    let needed = target.map_or(0, |i| (i + 1).saturating_sub(offset));
+    limit.max(needed).min(MAX_PAGE)
+}
+
+/// Which of `ids` are among the search's rows, in the order asked: how a
+/// grid learns whether a selected row it has not loaded is still in the
+/// results of a new search.
+pub fn among(list: &[Entry], ids: &[String]) -> Vec<String> {
+    let held: std::collections::HashSet<&str> = list
+        .iter()
+        .flat_map(|e| [e.uuid.as_str(), e.row()])
+        .collect();
+    ids.iter()
+        .filter(|id| held.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The `limit` entries from `offset`, and the offset of the next page, or
+/// `None` when these reach the end.
+pub fn page(list: &[Entry], offset: usize, limit: usize) -> (&[Entry], Option<usize>) {
+    let start = offset.min(list.len());
+    let end = start.saturating_add(limit).min(list.len());
+    let next = (end < list.len()).then_some(end);
+    (&list[start..end], next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(n: usize) -> Vec<Entry> {
+        (0..n).map(|i| Entry::new(format!("u{i}"), None)).collect()
+    }
+
+    fn key(q: &str, at: &str) -> Key {
+        Key {
+            q: q.into(),
+            sort: Vec::new(),
+            within: Vec::new(),
+            at: Some(at.into()),
+        }
+    }
+
+    #[test]
+    fn pages_cover_the_list_once_and_say_where_the_next_starts() {
+        let l = list(5);
+        let (first, next) = page(&l, 0, 2);
+        assert_eq!(first.len(), 2);
+        assert_eq!(next, Some(2));
+        let (last, next) = page(&l, 4, 2);
+        assert_eq!(last[0].uuid, "u4");
+        assert_eq!(next, None, "the last page says there is no more");
+        let (exact, next) = page(&l, 3, 2);
+        assert_eq!(exact.len(), 2);
+        assert_eq!(next, None, "a page ending on the last row is the last");
+    }
+
+    #[test]
+    fn among_answers_which_ids_the_search_holds_in_the_order_asked() {
+        let ids = ["u7", "gone", "u2"].map(String::from);
+        assert_eq!(among(&list(10), &ids), ["u7", "u2"]);
+        assert!(among(&list(10), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_page_stretches_to_reach_the_row_it_is_asked_through() {
+        let l = list(10);
+        assert_eq!(reaching(&l, 0, 2, Some("u6")), 7);
+        assert_eq!(reaching(&l, 4, 2, Some("u6")), 3, "counted from the offset");
+        assert_eq!(
+            reaching(&l, 0, 5, Some("u1")),
+            5,
+            "never shorter than asked"
+        );
+        assert_eq!(reaching(&l, 8, 2, Some("u1")), 2, "a row already passed");
+        assert_eq!(reaching(&l, 0, 2, Some("gone")), 2, "a row the list lacks");
+        assert_eq!(reaching(&l, 0, 2, None), 2);
+        assert_eq!(reaching(&l, 0, MAX_PAGE + 1, None), MAX_PAGE);
+    }
+
+    /// A person sees one number above the results and which sources hold it,
+    /// so a source with its embed step off is plain from the rest.
+    #[test]
+    fn it_counts_the_candidates_without_vectors_by_source() {
+        let candidates: Vec<(String, String)> = [
+            ("embedded", "slack"),
+            ("a", "slack"),
+            ("b", "notion"),
+            ("c", "notion"),
+            ("c", "datalib"),
+        ]
+        .iter()
+        .map(|(d, s)| (d.to_string(), s.to_string()))
+        .collect();
+        let with_vectors = HashSet::from(["embedded".to_string()]);
+        assert_eq!(
+            WithoutVectors::among(&candidates, &with_vectors),
+            WithoutVectors {
+                total: 3,
+                by_source: vec![("notion".to_string(), 2), ("slack".to_string(), 1)],
+            }
+        );
+        assert_eq!(
+            WithoutVectors::among(&[], &with_vectors),
+            WithoutVectors::default()
+        );
+    }
+
+    /// An offset past the end is an empty last page, not a panic: the list
+    /// may have been rebuilt shorter since the client counted.
+    #[test]
+    fn an_offset_past_the_end_is_an_empty_last_page() {
+        let l = list(3);
+        let (rows, next) = page(&l, 10, 5);
+        assert!(rows.is_empty());
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn a_list_is_found_again_only_under_its_own_key() {
+        let cache = ResultCache::default();
+        cache.put(key("a", "c1"), Arc::new(list(2)));
+        assert_eq!(cache.get(&key("a", "c1")).map(|l| l.len()), Some(2));
+        assert!(
+            cache.get(&key("a", "c2")).is_none(),
+            "the index moved: a new commit is a new list"
+        );
+        assert!(cache.get(&key("b", "c1")).is_none());
+    }
+
+    /// The least recently used list goes first, so the searches a person
+    /// is paging through stay while ones left behind make room.
+    #[test]
+    fn it_keeps_the_most_recently_used_lists() {
+        let cache = ResultCache::default();
+        for i in 0..CAPACITY {
+            cache.put(key(&format!("q{i}"), "c"), Arc::new(list(1)));
+        }
+        assert!(cache.get(&key("q0", "c")).is_some());
+        cache.put(key("new", "c"), Arc::new(list(1)));
+        assert!(cache.get(&key("q0", "c")).is_some(), "just used, so kept");
+        assert!(
+            cache.get(&key("q1", "c")).is_none(),
+            "least recently used, so gone"
+        );
+    }
+
+    /// The search card's rows and groups arrive together for one query;
+    /// the second must wait for the first's list rather than run qmd
+    /// again (a demo search took 4–14 s, two qmd passes queued on one
+    /// daemon).
+    #[tokio::test]
+    async fn a_second_ask_waits_for_the_list_being_made() {
+        let cache = Arc::new(ResultCache::default());
+        let k = key("warp core", "c1");
+        let first = cache.turn(&k).await;
+
+        let ranked_again = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let second = tokio::spawn({
+            let (cache, k, ranked_again) = (cache.clone(), k.clone(), ranked_again.clone());
+            async move {
+                let _turn = cache.turn(&k).await;
+                if cache.get(&k).is_none() {
+                    ranked_again.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+        // On the test's one thread, this is where the second ask runs up
+        // to its turn.
+        tokio::task::yield_now().await;
+        cache.put(k.clone(), Arc::new(list(3)));
+        drop(first);
+        second.await.unwrap();
+        assert!(
+            !ranked_again.load(std::sync::atomic::Ordering::SeqCst),
+            "the second ask found the first one's list"
+        );
+    }
+
+    #[tokio::test]
+    async fn different_searches_do_not_wait_on_each_other() {
+        let cache = ResultCache::default();
+        let _a = cache.turn(&key("a", "c1")).await;
+        let _b = cache.turn(&key("b", "c1")).await;
+        let _a_later = cache.turn(&key("a", "c2")).await;
+    }
+}

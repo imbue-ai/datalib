@@ -8,7 +8,12 @@
 // and their actions are the Sources table's (`GET /api/manage/rows`,
 // `rowActions.ts`); the series are `GET /api/manage/groups/{id}/dashboard`.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
-import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
+import {
+  UNIFIED_GRID_AND_SEARCH_INDEX,
+  type Dashboard,
+  type ManageResponse,
+  type ManageRow,
+} from "@/api";
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { isDesktopApp, revealActionLabel } from "@/desktop";
@@ -411,7 +416,7 @@ onUnmounted(() => {
             "
             @dblclick="
               groupRow.problems_query
-                ? actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)
+                ? actions.openProblems(groupRow, `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`)
                 : actions.openStepLog(groupRow)
             "
           />

@@ -66,10 +66,10 @@ function = "render_markdown"
 inputs = ["contacts/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["contacts/render_markdown"]
 CONFIG
@@ -157,7 +157,7 @@ commits() {  # <store> — prints the commit count, or fails loudly
 }
 
 raw="$root/contacts/ingest/entities.doltlite_db"
-grid="$root/unified_document_index/grid_index/db.sqlite"
+grid="$root/unified_grid_and_search_index/grid_index/db.sqlite"
 n_raw="$(commits "$raw")"
 rows="$("$shell" -readonly "$grid" "SELECT count(*) FROM grid_rows;")"
 echo "raw store commits: $n_raw; grid_rows: $rows"

@@ -13,7 +13,7 @@ import {
   type GridApi,
 } from "./grid-helpers";
 
-const SEARCH_PATH = "/applet/unified_document_index/search";
+const SEARCH_PATH = "/applet/unified_grid_and_search_index/search";
 const viewTab = (page: Page, name: string) =>
   shownCards(page).getByRole("tab", { name, exact: true });
 const sortPick = (page: Page) => shownCards(page).getByTestId("search-sort");

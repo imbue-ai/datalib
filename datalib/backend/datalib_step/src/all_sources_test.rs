@@ -56,7 +56,7 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 data_root = "~/datalib"
 "#;
 
-const DOCUMENT_INDEX: &str = "unified_document_index";
+const DOCUMENT_INDEX: &str = "unified_grid_and_search_index";
 const TIME_SERIES_INDEX: &str = "unified_time_series_index";
 
 struct Source {
@@ -124,7 +124,7 @@ fn generate() -> String {
          # and the problem rows of its time-series and occurrences steps;\n\
          # the search index's aggregator reads every source's keyword index and\n\
          # embeddings, and keeps the search index to the sources it names.\n\
-         [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Document Index\"\n\n\
+         [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
          [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\ncommand = \"datalib-step\"\n{}\n\
          # The app's search, grid and document view.\n\

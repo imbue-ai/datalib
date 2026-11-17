@@ -1,15 +1,15 @@
 //! The `embedding_map` function: the search index's document embeddings laid out on a
-//! plane by UMAP, written to `unified_document_index/embedding_map`. Each run
+//! plane by UMAP, written to `unified_grid_and_search_index/embedding_map`. Each run
 //! starts from the map the last one wrote, so documents already on it
 //! stay where they were; a reset deletes the map and the next run lays
 //! one out afresh. The layout is `datalib_embedding_map`; the file is
-//! `datalib_unified_document_index::embedding_map`.
+//! `datalib_unified_grid_and_search_index::embedding_map`.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_embedding_map::{Corpus, Progress};
-use datalib_unified_document_index::embedding_map::{
+use datalib_unified_grid_and_search_index::embedding_map::{
     self as map_file, EmbeddingMap, MapPoint, SeedCounts,
 };
 
@@ -18,7 +18,7 @@ use crate::events::{Emitter, OutputClaim};
 pub fn out_rel() -> String {
     format!(
         "{}/{}",
-        datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         map_file::DIR
     )
 }
@@ -86,9 +86,9 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
             .collect(),
     };
     let bytes = map_file::write(data_root, &map)?;
-    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_document_index_dir(
-        data_root,
-    ));
+    datalib_core::layout::mark_derived_cache(
+        &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
+    );
 
     // The map as it now stands, then how this pass seeded it: gauges
     // both, and the second three name the pass they describe.

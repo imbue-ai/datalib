@@ -28,7 +28,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `{UNIFIED_DOCUMENT_INDEX}/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -211,7 +211,7 @@ export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho }
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -303,7 +303,7 @@ export type ChatResponse = {
 
 // One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -404,20 +404,20 @@ export function appletAbsent(id: string, status: number, body: string): boolean 
   }
 }
 
-// --- The unified_document_index applet --------------------------------------------
-export const UNIFIED_DOCUMENT_INDEX = "/applet/unified_document_index";
+// --- The unified_grid_and_search_index applet --------------------------------------------
+export const UNIFIED_GRID_AND_SEARCH_INDEX = "/applet/unified_grid_and_search_index";
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>(`${UNIFIED_DOCUMENT_INDEX}/docs`, signal);
+  return getJson<DocEntry[]>(`${UNIFIED_GRID_AND_SEARCH_INDEX}/docs`, signal);
 }
 
 // --- The embedding map ------------------------------------------------------
-// `unified_document_index/embedding_map`, joined to the grid by the applet
-// (applets/src/unified_document_index/map.rs). Hand-kept in step with it.
+// `unified_grid_and_search_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_grid_and_search_index/map.rs). Hand-kept in step with it.
 
 /// The step that writes the map, as `config.toml` composes its id.
-export const EMBEDDING_MAP_STEP = "unified_document_index/embedding_map";
+export const EMBEDDING_MAP_STEP = "unified_grid_and_search_index/embedding_map";
 
 export type MapPoint = {
   markdown_uuid: string;
@@ -449,7 +449,10 @@ export type EmbeddingMapResponse = {
 };
 
 export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
-  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_DOCUMENT_INDEX}/embedding_map`, signal);
+  const r = await getJson<EmbeddingMapResponse>(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/embedding_map`,
+    signal,
+  );
   for (const e of r.errors ?? []) pushToast(e);
   return r;
 }
@@ -458,7 +461,7 @@ export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<Embedding
 export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
   const params = new URLSearchParams({ q });
   const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
-    `${UNIFIED_DOCUMENT_INDEX}/embedding_map/matches?${params.toString()}`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/embedding_map/matches?${params.toString()}`,
     signal,
   );
   for (const e of r.errors ?? []) pushToast(e);
@@ -491,14 +494,14 @@ export async function fetchQmdState(
   markdownUuids: string[],
   signal?: AbortSignal,
 ): Promise<QmdStateResponse> {
-  const r = await fetch(`${UNIFIED_DOCUMENT_INDEX}/qmd_state`, {
+  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/qmd_state`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ markdown_uuids: markdownUuids }),
     signal,
   });
   if (!r.ok) {
-    throw new Error(`POST ${UNIFIED_DOCUMENT_INDEX}/qmd_state → ${r.status}`);
+    throw new Error(`POST ${UNIFIED_GRID_AND_SEARCH_INDEX}/qmd_state → ${r.status}`);
   }
   const data = (await r.json()) as QmdStateResponse;
   if (data.errors && data.errors.length > 0) {
@@ -654,7 +657,7 @@ export type KeyValues = {
 export type ValueSuggestion = { value: string; count?: number; label?: string };
 
 /// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
-/// table's search (`/applet/unified_document_index/search`, `/api/log`).
+/// table's search (`/applet/unified_grid_and_search_index/search`, `/api/log`).
 export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
   return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
 }
@@ -694,7 +697,7 @@ export type SearchPageSpec = {
   among?: string[];
 };
 
-export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
+export const SEARCH = `${UNIFIED_GRID_AND_SEARCH_INDEX}/search`;
 
 export function fetchSearch(
   q: string,
@@ -783,7 +786,7 @@ export async function fetchGroups<Row = SearchRow>(
 export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
   // One UUID per rendered `.md` file — no disambiguation needed.
   return getJson<ChatResponse>(
-    `${UNIFIED_DOCUMENT_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
     signal,
   );
 }
@@ -835,7 +838,7 @@ export type ConfigResponse = {
   diagnostics: Diagnostic[];
   // Whether the app can serve its own views at all. False when the
   // file is not a config, or when it loads without a usable
-  // `unified_document_index` applet — that applet serves the grid, search and
+  // `unified_grid_and_search_index` applet — that applet serves the grid, search and
   // the document view, so without it every view is a 502 — or when
   // the root was written by a newer datalib (`newer_root`). A root
   // with no config is `exists: false` and the first-run screen's

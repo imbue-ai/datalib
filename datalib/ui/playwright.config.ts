@@ -143,18 +143,18 @@ function bareRoot(prefix: string): string {
     `data_root = "${root}"
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = []
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "'${APPLET_BIN}' unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "'${APPLET_BIN}' unified_grid_and_search_index"
 `,
   );
   return root;
@@ -398,7 +398,7 @@ function servers(): Server[] {
     spawnBackend("empty", EMPTY_ROOT),
     // The one server whose PATH carries the dash-named binaries. The
     // scaffold config names `datalib-dag`, its steps and the
-    // `unified_document_index` applet bare, so PATH is how all three are found —
+    // `unified_grid_and_search_index` applet bare, so PATH is how all three are found —
     // the installed-user arrangement, which the other two never exercise.
     spawnBackend("onboarding", ONBOARDING_ROOT, {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,

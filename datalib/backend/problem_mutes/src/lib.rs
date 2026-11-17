@@ -2,8 +2,8 @@
 //! store's shape, its reads and writes over a pool someone else opened,
 //! and the Manage counts: the grid index's rows less the muted ones, with
 //! the problems grid's query for exactly those rows. Opening the
-//! store to write it is the `unified_document_index` applet's
-//! (`applets/src/unified_document_index/mutes.rs`), so this crate links
+//! store to write it is the `unified_grid_and_search_index` applet's
+//! (`applets/src/unified_grid_and_search_index/mutes.rs`), so this crate links
 //! no ingest machinery and `datalib-http` can read the store through it.
 //! The design: `README.md` beside this file.
 

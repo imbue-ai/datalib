@@ -15,23 +15,23 @@ import { CATALOG } from "../src/config/catalog";
 import { listSteps } from "../src/config/sourceSteps";
 
 const BASE = `[[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = []
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 `;
 
 describe("setApplet", () => {
   it("adds the entry once, running the applet of the same name", () => {
     const on = setApplet(BASE, PHOTOS_APP, true);
-    expect(configuredAppletIds(on)).toEqual(new Set(["unified_document_index", "photos"]));
+    expect(configuredAppletIds(on)).toEqual(new Set(["unified_grid_and_search_index", "photos"]));
     expect(on).toContain('[[applets]]\nid = "photos"\ncommand = "datalib-applet photos"');
     expect(setApplet(on, PHOTOS_APP, true)).toBe(on);
   });
@@ -39,7 +39,7 @@ describe("setApplet", () => {
   it("files the contacts app under the document index, as the starter config does", () => {
     const on = setApplet(BASE, CONTACTS_APP, true);
     const entry = listSteps(on).find((s) => s.id === "datalib_contacts");
-    expect(entry?.group).toBe("unified_document_index");
+    expect(entry?.group).toBe("unified_grid_and_search_index");
     expect(entry?.type).toBe("datalib_contacts");
   });
 

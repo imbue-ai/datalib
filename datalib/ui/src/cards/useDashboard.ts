@@ -4,7 +4,12 @@
 // Read from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, type Ref } from "vue";
-import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
+import {
+  UNIFIED_GRID_AND_SEARCH_INDEX,
+  type ManageResponse,
+  type ManageRow,
+  type SearchRow,
+} from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { changed, oneAtATime, subscribeLive } from "@/live";
 import { formatRelative } from "@/config/timeFormat";
@@ -135,8 +140,10 @@ export function useDashboard(
   function openProblems(row: ManageRow) {
     if (!row.problems_query) return;
     const name =
-      row.id === "unified_document_index" ? "Problems: the index" : `Problems: ${row.name.label}`;
-    open(problemsSource(`${UNIFIED_DOCUMENT_INDEX}/problems`, row.problems_query, name));
+      row.id === "unified_grid_and_search_index"
+        ? "Problems: the index"
+        : `Problems: ${row.name.label}`;
+    open(problemsSource(`${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`, row.problems_query, name));
   }
 
   function openDocument(row: SearchRow) {

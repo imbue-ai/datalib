@@ -142,11 +142,11 @@ describe("a body's references to our own origin", () => {
       "api/manage/rows?refresh=1",
       "../api/config",
       "blobs/a.png",
-      "/applet/unified_document_index/asset/md-1/blobs/a.png",
+      "/applet/unified_grid_and_search_index/asset/md-1/blobs/a.png",
       `/data/mail/ingest/blob/${"ab".repeat(32)}/../../../../api/config`,
       `/data/mail/ingest/blob/%2e%2e/%2e%2e/%2e%2e/api/config`,
       "/api/remote_media?url=https%3A%2F%2Fpixel.example%2Fa.gif&source=other",
-      "/applet/unified_document_index/problems",
+      "/applet/unified_grid_and_search_index/problems",
     ]) {
       const body =
         `<img src="${url}"><video poster="${url}"></video><audio src="${url}"></audio>` +
