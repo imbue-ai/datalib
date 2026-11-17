@@ -348,18 +348,20 @@ follows from it:
   1, a mutex). A step names what it holds: `locks = ["quota"]` takes one
   slot, `locks = { gpu = "exclusive" }` takes them all. For what the
   graph does not show: two sources on one account's rate limit, a GPU.
-- **Every config has four default locks** (`supervisor/locks.rs`). The
+- **Every config has five default locks** (`supervisor/locks.rs`). The
   three budgets are `network` (4 slots), `cpu` (4) and `index` (2). A
   step that names no locks holds one of them: `network` for a step with
   no inputs, `cpu` for a step with inputs under a group with a `type`,
   `index` for any other step with inputs; so a download waiting out a
-  rate limit never keeps a render from starting. The fourth,
-  `qmd_embed` (1 slot, named for the qmd index it once guarded), is held
-  by every built-in `embed` that names no locks, so one embedding model
-  is loaded at a time: each embed is a process of its own that loads the
-  model and spreads over every core. A `[[locks]]`
-  entry of the same name resizes one, and `--parallelism N` sets
-  `network` and `cpu` to N, over the config.
+  rate limit never keeps a render from starting. The other two,
+  `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
+  they once guarded), are held by the built-in index steps that name no
+  locks: `unified_grid_and_search_index` takes `qmd_keyword`, because
+  it writes the grid index's file, which the runner cannot see as
+  shared, and a writer left to wait inside SQLite times out; `embed`
+  takes `qmd_embed`, so one embedding model is loaded at a time. A
+  `[[locks]]` entry of the same name resizes one, and `--parallelism N`
+  sets `network` and `cpu` to N, over the config.
 
 None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only them

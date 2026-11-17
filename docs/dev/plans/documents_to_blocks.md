@@ -511,9 +511,10 @@ against the eval before the next.
      embedding map reads every `*/embed` (`aggregator_drop.rs`, #1821,
      merged into #1818). That left the one-slot `qmd_keyword` lock
      (#1795) with one holder, the index step, which the runner never
-     runs beside itself, so the lock went when the step took its
-     group's name: its function is `unified_grid_and_search_index`,
-     where it was `grid_index` (`index_step_name.rs`).
+     runs beside itself, so the lock can go (#1845). The step has since
+     taken its group's name: its function is
+     `unified_grid_and_search_index`, where it was `grid_index`
+     (`index_step_name.rs`).
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.

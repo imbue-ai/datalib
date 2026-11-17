@@ -401,9 +401,11 @@ can point elsewhere.
 A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network`, `cpu` or `index`, the
-three budgets every config has — or, for a built-in `embed`, the
-one-slot lock every config has too, `qmd_embed`, so one embedding model
-is loaded at a time.
+three budgets every config has — or, for the built-in index steps, one
+of the two one-slot locks every config has too: `qmd_keyword`, held by
+the `unified_grid_and_search_index` step, which writes the grid index's
+file, and `qmd_embed`, held by every `embed`, so one embedding model is
+loaded at a time.
 `reads = "files"` says a step reads its inputs off disk, so no writer of
 them runs beside it. `start = "after_inputs_settle"` says a step waits
 until nothing upstream of it is running or due, rather than starting on
