@@ -32,7 +32,7 @@ workflow's `run:` blocks are one line each:
 | step | script | what it makes |
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple>` | `runtime-<triple>.tar.gz` and its `.sha256` sidecar, from `scripts/stage_runtime.sh` |
-| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest` (the runtime asset, and on x86_64 gnu the CUDA module), every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
 | `cuda` job, "Build and stage" | `scripts/release/build_cuda.sh <bazel flag>…`, which runs `stage_cuda.sh` | `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` (`lib/libggml-cuda.so`, our notice, llama.cpp's license and NVIDIA's for the CUDA runtime) and, for the `-cuda` image only, `cuda-libs-x86_64-unknown-linux-gnu.tar.gz` (cuBLAS and NVIDIA's license for it), each with its sidecar; it refuses a module that needs a symbol `datalib-step` does not export, or a library besides NVIDIA's driver that the staged cuBLAS lacks |
 | the image jobs, "Stage … into docker build context" | `scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets> [<cuda>]` | the build context `datalib/docker/Dockerfile` expects |
 
@@ -140,17 +140,18 @@ missing asset can never be added.
 |---|---|---|
 | the mac leg of `runtime` or `build` | tagged | previous release |
 | a musl leg of `build` | tagged | previous release |
-| a gnu leg of `build` or `runtime` | not tagged | previous release |
+| a gnu leg of `build` or `runtime`, or `cuda` | not tagged | previous release |
 | a `macos-app-*` job | tagged | previous release |
-| `cuda`, or the x86_64 gnu leg of `build` or `runtime` | `-cuda` not tagged | previous release |
 
 The Docker image does not wait for the release. It carries its own runtime, and
 `docker-publish` checks the tagged image against the walkthrough. So
 `ghcr.io/…:latest` can be a version ahead of `releases/latest` until the release
 is published. An image needs both gnu legs, so losing either tags nothing.
 The `-cuda` variant (`docker-image-cuda`, `docker-publish-cuda`) needs the
-x86_64 gnu legs and the `cuda` job, and the plain image does not wait for it
-or fail with it; the release needs both.
+x86_64 gnu legs and the `cuda` job. Every `build` leg waits for `cuda`, since
+the x86_64 gnu tarball's `runtime.manifest` names the module with its sha256
+(docs/dev/runtime_fetch.md § "The CUDA module"), so a failed `cuda` costs
+that tarball and with it both images.
 
 ### What a re-run does
 
@@ -161,8 +162,8 @@ a matrix job that failed runs only its failed legs.
 | what failed | what runs again |
 |---|---|
 | a `build` leg | that leg, both `docker-image` legs, `docker-image-cuda`, both publish jobs, `attest`, `publish-release` |
-| `cuda` | it, `docker-image-cuda`, `docker-publish-cuda`, `attest`, `publish-release` |
-| a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
+| `cuda` | it, all five `build` legs, and the rest of the first row |
+| a `runtime` leg | that leg, all five `build` legs, and the rest of the first row |
 | a `macos-app-*` job | the rest of that chain, `attest`, `publish-release` |
 | `attest` | it and `publish-release`. It signs again, which adds a second attestation for the same bytes |
 | `publish-release` | it alone, which removes its own draft and starts again |

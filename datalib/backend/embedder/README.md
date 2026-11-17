@@ -62,10 +62,15 @@ over the TNG fixture's 484 prompts. The numbers and how they were taken
 are in `docs/dev/plans/embed_on_modal.md` § "Measured on Modal".
 
 - **CUDA comes as a module.** A gnu Linux build loads `libggml-cuda.so`
-  from `lib/` beside the running binary when it is there and loads,
-  and runs on the CPU otherwise, logging which and why
-  (`cuda_module_report`). The module needs the host's driver and cuBLAS
-  12 (`libcublas.so.12`, `libcublasLt.so.12`).
+  from `lib/` beside the running binary when it is there (the `-cuda`
+  image). Otherwise, where NVIDIA's driver library `libcuda.so.1` loads,
+  it loads the module the release tarball's `runtime.manifest` names,
+  fetched into `~/.cache/datalib/cuda/` on first use
+  (`datalib_runtime::cuda_module`, `docs/dev/runtime_fetch.md` § "The
+  CUDA module"). It runs on the CPU when neither gives a module that
+  loads, logging which and why (`cuda_module_report`). The module needs
+  the host's driver and cuBLAS 12 (`libcublas.so.12`,
+  `libcublasLt.so.12`).
 - **CUDA agrees with Metal** as closely as any two devices do (worst
   cosine 0.9991), and with the CPU to 0.9983 at worst, on one 26-token
   prompt; `gpu_check` holds it to 0.998.

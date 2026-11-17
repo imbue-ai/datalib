@@ -4,9 +4,12 @@
 under Bazel (#1750), the embedder loading it (#1752), the module run on
 Modal's T4, A100 and H100 in the published image with several prompts
 per call (#1801, § "Measured on Modal"), and `datalib-step
-embed-prompts`; of step 3, the module as a release asset and the `-cuda`
-image (docs/dev/docker.md § "The CUDA variant"), not yet tried by a tag.
-The rest is not. Facts marked _to check_ have not been
+embed-prompts`. Step 3 is built and not yet tried by a tag: the module
+as a release asset with NVIDIA's licenses beside it, the `-cuda` image
+whose CUDA layers keep their digests from one release to the next
+(docs/dev/docker.md § "The CUDA variant"), and a tarball install
+fetching the module on first use (docs/dev/runtime_fetch.md § "The CUDA
+module"). The rest is not. Facts marked _to check_ have not been
 measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
@@ -131,8 +134,8 @@ x86_64, as a module the one gnu build loads when it can:
   GPU models; ours is 122 MB for five), still more than everyone else
   should carry. It is one more release asset: a tarball install fetches
   it on first use where there is a GPU (`libcuda.so.1` on the loader
-  path; `docs/dev/runtime_fetch.md`), and the `-cuda` image has it
-  built in, so a container never fetches it.
+  path; `docs/dev/runtime_fetch.md` § "The CUDA module"), and the
+  `-cuda` image has it built in, so a container never fetches it.
 - **musl stays CPU-only.** A fully static musl binary cannot `dlopen` a
   glibc library, and NVIDIA's libraries are glibc builds.
 - NVIDIA's toolkit as a pinned, sha256-checked download (NVIDIA publishes
@@ -147,11 +150,14 @@ x86_64, as a module the one gnu build loads when it can:
   `cuda.yml` builds and uploads beside the module, holds a GPU's vectors
   to the CPU's by cosine, run by hand on a Modal GPU, since CI has none.
 
-NVIDIA's libraries are not open source. With cuBLAS on the host, the
-module carries only the CUDA runtime, which NVIDIA's license lists as
-redistributable; what the release's notices must say for it is _to
-check_ before the module is published (`AGENTS.md` § "License: MIT, and
-what may come in").
+NVIDIA's libraries are not open source. The module carries the CUDA
+runtime and the `-cuda` image cuBLAS, both of which the CUDA Toolkit
+EULA's Attachment A lists as redistributable. Each archive carries
+`third-party/llama_cpp/CUDA-NOTICE.md`, which says their use is governed
+by that EULA and not by datalib's MIT license, and NVIDIA's own
+`LICENSE` for the component, verbatim from the archive Bazel fetched it
+in. Whether a release publishes them is the user's decision
+(`AGENTS.md` § "License: MIT, and what may come in").
 
 ## Measured on Modal
 
@@ -290,12 +296,14 @@ supported"; the issue says what to check for in a new SDK release.
    `tests/step_tests/embed_prompts.rs` against the TNG fixture's cache.
 3. The module as a release asset, its license notices, the fetch for a
    tarball install, and the `-cuda` image with the module and cuBLAS.
-   Built, but for the fetch: the release's `cuda`, `docker-image-cuda`
-   and `docker-publish-cuda` jobs, `scripts/release/build_cuda.sh` and
-   `stage_cuda.sh`, the Dockerfile's `CUDA` stage, and
-   `third-party/llama_cpp/CUDA-NOTICE.md`. The fetch is a follow-up: a
-   `cuda` line in `runtime.manifest` and the embedder looking in the
-   fetched tree as well as `lib/`.
+   Built, not yet run by a tag: the release's `cuda`,
+   `docker-image-cuda` and `docker-publish-cuda` jobs,
+   `scripts/release/build_cuda.sh` and `stage_cuda.sh`, the
+   Dockerfile's `CUDA` stage, `third-party/llama_cpp/CUDA-NOTICE.md`
+   with NVIDIA's own `LICENSE` files, and the `cuda` line in
+   `runtime.manifest` that `datalib_runtime::cuda_module` fetches from
+   where there is a driver. Whether releases carry NVIDIA's files at all
+   is the user's decision.
 4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
    the `-cuda` image driven by the JavaScript SDK, measured on one small
    source of a real library, then a large one.

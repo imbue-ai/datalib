@@ -2,7 +2,8 @@
 
 The code is
 `datalib/backend/runtime/src/node_runtime.rs` (where a runtime is looked
-for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
+for), `runtime_manifest.rs` (the manifest), `cuda_module.rs` (where the
+CUDA module is looked for, § "The CUDA module"), `datalib/backend/fetch/`
 (the fetch), `scripts/stage_runtime.sh` (what a runtime holds) and the
 `runtime` and `publish-release` jobs in `.github/workflows/release.yml`
 (how it is published).
@@ -69,7 +70,8 @@ it is the commit they came from, for the log view's source links —
 
 The `build` job writes `runtime.manifest` beside the binaries, reading
 each asset's sha256 from its sidecar and its size from the file, in the
-`runtime` job's artifact. One asset per line:
+`runtime` job's artifact (and the `cuda` job's: § "The CUDA module"). One
+asset per line:
 
 ```
 cpu  runtime-x86_64-unknown-linux-gnu.tar.gz  <sha256> <bytes> https://github.com/…/releases/download/v0.35.0/runtime-x86_64-unknown-linux-gnu.tar.gz
@@ -132,7 +134,7 @@ the models.
 ## When anything may be fetched
 
 One rule covers every download datalib makes for itself (the runtime
-here, qmd's models, the perseus embedder's model files, a package): it
+and the CUDA module here, qmd's models, the perseus embedder's model files, a package): it
 is pinned by sha256 before it is fetched, it is fetched on first use
 only because the install did not ship it, and a miss fails loudly. All
 of them go through `datalib_fetch` (`download_verified`, and
@@ -145,6 +147,48 @@ child process is handed it (`datalib_env`). `DATALIB_QMD_MODELS_NO_FETCH`
 is the older, narrower switch: qmd's models only, reported as missing
 rather than refused, for a test root that stages the one model it
 loads.
+
+## The CUDA module
+
+The x86_64 gnu tarball's manifest has a second line, for llama.cpp's CUDA
+backend, which the embedder loads to run on an NVIDIA GPU
+(`datalib/backend/embedder/README.md`):
+
+```
+cuda ggml-cuda-x86_64-unknown-linux-gnu.tar.gz <sha256> <bytes> https://github.com/…/releases/download/v0.55.0/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz
+```
+
+It is the release's `cuda` job's asset (`scripts/release/stage_cuda.sh`):
+`lib/libggml-cuda.so`, about 105 MB compressed, and its notices. No other
+tarball names one: macOS has Metal built in, and a musl binary cannot
+load a glibc library. So every `build` leg of `release.yml` waits for
+the `cuda` job, whose asset's sha256 the x86_64 gnu leg writes down.
+
+`datalib_runtime::cuda_module` decides where the module comes from, the
+first time a process opens the embedder on the GPU:
+
+1. `lib/libggml-cuda.so` beside the binary, when it is there: the
+   `-cuda` image, or an install that put it there by hand.
+2. Else, only where NVIDIA's driver library (`libcuda.so.1`) loads, the
+   manifest's `cuda` asset, from `$XDG_CACHE_HOME/datalib/cuda/<sha12>/`
+   (`~/.cache/datalib/cuda/`), fetched there first if it is missing.
+   The fetch is the runtime's (`datalib_fetch::cached_asset`): a lock,
+   a download refused unless it hashes as the manifest says, an unpack
+   renamed into place whole, and every other tree in that directory
+   removed.
+3. Else the CPU, and the step's log line says why: no driver, no
+   manifest, no `cuda` line, or the fetch failed.
+
+A laptop or a server without an NVIDIA driver therefore fetches nothing.
+A machine with the driver but without cuBLAS 12 fetches the module once
+and then cannot load it; the log names the missing library, and the
+embed runs on the CPU. `datalib-step` is the one binary that fetches it;
+`datalib-applet` loads one already fetched.
+
+`datalib-step pull-cuda` runs the same path ahead of time, whether or not
+the machine has the driver, and prints where the module is and whether
+the driver loads. `DATALIB_NO_FETCH` refuses this fetch as it does every
+other.
 
 ## Who still bundles
 

@@ -72,6 +72,13 @@ int32_t dl_embedder_load_module(const char *path, char *err, size_t err_len) {
     return (int32_t)ggml_backend_reg_dev_count(reg);
 }
 
+int32_t dl_embedder_can_load(const char *name) {
+    void *handle = dlopen(name, RTLD_LAZY | RTLD_LOCAL);
+    if (!handle) return 0;
+    dlclose(handle);
+    return 1;
+}
+
 int32_t dl_embedder_gpu_available(void) {
     init_once();
     return gpu() ? 1 : 0;

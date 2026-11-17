@@ -2,12 +2,14 @@
 //! bytes are fetched; a download that hashes wrong is refused and
 //! nothing of it is kept. Users: qmd's GGUF models
 //! (`datalib_qmd_models`), the perseus embedder's model files, the
-//! Node runtime a release tarball names in its manifest ([`runtime`]),
-//! and packages (`datalib_packages`), whose manifest is the one document
+//! Node runtime and the CUDA module a release tarball names in its
+//! manifest ([`runtime`], [`cuda`]), and packages (`datalib_packages`), whose manifest is the one document
 //! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
 //! An install that ships what it runs sets [`NO_FETCH_ENV`], and every
 //! fetch here then fails instead of going to the network.
 
+mod cached_asset;
+pub mod cuda;
 pub mod runtime;
 
 use std::fs;
@@ -24,6 +26,7 @@ const CHUNK: usize = 1 << 20;
 const ATTEMPTS: u32 = 6;
 const MAX_REDIRECTS: usize = 10;
 
+pub use cuda::{enable_cuda_fetch, ensure_cuda_module, ReleaseCudaFetcher};
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
 
 /// Set, to anything but empty or `0`, by an install that ships everything
