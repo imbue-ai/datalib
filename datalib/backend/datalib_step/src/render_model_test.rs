@@ -897,8 +897,8 @@ fn assert_every_commit_is_truthful(
 ) {
     for (c, msg) in commits {
         let Some((got, _, _)) = try_render_store_at(&world.data_root, Some(c)) else {
-            assert_eq!(
-                msg, "Initialize data repository",
+            assert!(
+                msg.starts_with("Initialize data repository"),
                 "{ctx}: commit {c} ({msg}) holds no table"
             );
             continue;

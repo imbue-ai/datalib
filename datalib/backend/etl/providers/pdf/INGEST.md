@@ -316,7 +316,7 @@ Two things follow, both deliberate:
   but it is worth knowing before relocating a large tree.
 
 The same property makes the rows differ between machines, which is why
-`fixture_db_snapshot` (in `unified_document_index`'s tests) normalizes
+`fixture_db_snapshot` (in `unified_grid_and_search_index`'s tests) normalizes
 `source_url` through `stable_source_url`.
 
 ## Orphaned documents

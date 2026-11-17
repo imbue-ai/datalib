@@ -47,7 +47,7 @@ one table, `mutes`: the problem's id, who muted it (`muted_how`,
 `manual` or `agent`, with the agent's name), and when (`muted_at_utc` and
 `tz_offset`). The file is made by the first mute.
 
-Its **one writer is the `unified_document_index` applet**, which serves
+Its **one writer is the `unified_grid_and_search_index` applet**, which serves
 the problems grid: `POST /problems/mute` there takes
 `{"problem_uuids": […], "muted": true|false, "agent": "…"?}` and commits
 each call. That applet is the one the app cannot run without, and the

@@ -1,5 +1,5 @@
 //! A config in an old shape — a `qmd_index` step, or the index group
-//! still named `unified_index` — is rewritten by the server itself, at
+//! under an earlier name — is rewritten by the server itself, at
 //! boot and on a hand edit, with the old text kept as `config.toml.bak`;
 //! at boot the index's tree and the loop's record of it follow.
 
@@ -51,7 +51,7 @@ fn is_upgraded(text: &str) -> bool {
         && !text.contains("function = \"qmd_index\"")
 }
 
-/// The scaffold as a build before the rename wrote it.
+/// The scaffold as a build before the first rename wrote it.
 const UNIFIED_INDEX: &str = r#"# my sources
 [[groups]]
 id = "mail"
@@ -93,22 +93,25 @@ function = "embedding_map"
 inputs = ["unified_index/qmd_aggregator"]
 "#;
 
-/// A root from before the rename keeps its index and what a person set:
+/// A root from before a rename keeps its index and what a person set:
 /// the config is renamed, the tree is moved rather than rebuilt, and a
 /// step turned off stays off under its new id.
-#[tokio::test]
-async fn boot_brings_a_unified_index_root_forward() {
+async fn boot_brings_an_old_index_root_forward(old: &str) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    std::fs::write(root.join("config.toml"), UNIFIED_INDEX).unwrap();
-    let kept = root.join("unified_index/qmd_aggregator/qmd/index.sqlite");
+    std::fs::write(
+        root.join("config.toml"),
+        UNIFIED_INDEX.replace("unified_index", old),
+    )
+    .unwrap();
+    let kept = root.join(format!("{old}/search_index/inference_cache.sqlite"));
     std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
     std::fs::write(&kept, "embeddings").unwrap();
     let store = datalib_dag::supervisor::store::Store::open(root)
         .await
         .unwrap();
     store
-        .turn_off("unified_index/embedding_map", "test")
+        .turn_off(&format!("{old}/embedding_map"), "test")
         .await
         .unwrap();
     store.close().await;
@@ -117,19 +120,19 @@ async fn boot_brings_a_unified_index_root_forward() {
 
     let text = std::fs::read_to_string(root.join("config.toml")).unwrap();
     assert!(text.starts_with("# my sources"), "{text}");
-    assert!(!text.contains("\"unified_index"), "{text}");
+    assert!(!text.contains(&format!("\"{old}")), "{text}");
     let check = datalib_dag::config::check_text(&text);
     assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     assert!(check
         .cfg
         .steps
         .iter()
-        .any(|s| s.id == "unified_document_index/embedding_map"));
+        .any(|s| s.id == "unified_grid_and_search_index/embedding_map"));
 
-    assert!(!root.join("unified_index").exists());
+    assert!(!root.join(old).exists());
     assert_eq!(
         std::fs::read_to_string(
-            root.join("unified_document_index/qmd_aggregator/qmd/index.sqlite")
+            root.join("unified_grid_and_search_index/search_index/inference_cache.sqlite")
         )
         .unwrap(),
         "embeddings"
@@ -142,8 +145,18 @@ async fn boot_brings_a_unified_index_root_forward() {
     store.close().await;
     assert_eq!(
         off.keys().collect::<Vec<_>>(),
-        ["unified_document_index/embedding_map"]
+        ["unified_grid_and_search_index/embedding_map"]
     );
+}
+
+#[tokio::test]
+async fn boot_brings_a_unified_index_root_forward() {
+    boot_brings_an_old_index_root_forward("unified_index").await;
+}
+
+#[tokio::test]
+async fn boot_brings_a_unified_document_index_root_forward() {
+    boot_brings_an_old_index_root_forward("unified_document_index").await;
 }
 
 #[tokio::test]

@@ -59,6 +59,10 @@ async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
         .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
         .pragma("temp_store", "memory")
+        .pragma(
+            "journal_size_limit",
+            datalib_runtime::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
+        )
         .busy_timeout(wait);
     // The pool waits as long as SQLite does: its own default (30s) would
     // give up on the connection's first statement while the grid index's

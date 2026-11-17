@@ -119,14 +119,14 @@ async fn unauthenticated_requests_are_refused() {
     assert_eq!(status(&app, put_lib).await, StatusCode::UNAUTHORIZED);
 
     // The applet proxy. The grid's data left this binary for the
-    // `unified_document_index` applet, and the token gate is an outermost layer
+    // `unified_grid_and_search_index` applet, and the token gate is an outermost layer
     // — so it still covers a route this process knows nothing about.
     // Worth pinning: an applet reached without the gate would be an
     // unauthenticated read of the whole mirror.
     assert_eq!(
         status(
             &app,
-            Request::get("/applet/unified_document_index/search?q=&limit=1")
+            Request::get("/applet/unified_grid_and_search_index/search?q=&limit=1")
                 .body(Body::empty())
                 .unwrap()
         )
@@ -430,7 +430,7 @@ async fn a_request_another_page_made_is_refused_whatever_it_carries() {
         ("GET", "/api/config", "same-site", "cors"),
         (
             "GET",
-            "/applet/unified_document_index/search?q=",
+            "/applet/unified_grid_and_search_index/search?q=",
             "cross-site",
             "no-cors",
         ),
@@ -501,7 +501,7 @@ async fn a_link_from_another_site_opens_a_page_and_reaches_no_route() {
         "/api/config",
         "/api/health",
         "/api/sync/stream",
-        "/applet/unified_document_index/search?q=",
+        "/applet/unified_grid_and_search_index/search?q=",
         "/applet/datalib_contacts",
         "/applet/datalib_contacts/",
         "/metrics",

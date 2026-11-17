@@ -225,11 +225,10 @@ needs, and what it leaves behind:
   with doltlite preloaded, so whatever ran before it runs twice. It works
   for `python script.py` and `python -m pkg`, and fails under `python
   -c`, the REPL and Jupyter.
-  Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
-  the pinned wheel never reuses the copy (dolthub/doltlite-python#2,
-  closed upstream after 0.51.3), so a
-  long-lived machine wants those cleared now and then. On Linux the
-  import loads doltlite in place, so `python -c` works there.
+  The first start copies a 3.9 MB library into
+  `$TMPDIR/doltlite-shim-*`, and later starts reuse it
+  (dolthub/doltlite-python#2). On Linux the import loads doltlite in
+  place, so `python -c` works there.
 - **Clean up before starting a child process.** The import leaves
   `_DOLTLITE_BOOTSTRAPPED` in the environment, and on macOS
   `DYLD_INSERT_LIBRARIES` too, so every child process inherits them. A
@@ -499,7 +498,7 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.51.3)
+The facts our rules rest on, checked on the pinned doltlite (0.51.12)
 by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
@@ -704,10 +703,12 @@ name itself and then switches branches in SQL, so `doltlite -readonly
   same schema — leaves `dolt_status` clean and the next `dolt_commit`
   fails with `nothing to commit, working tree clean`. So does the first
   `dolt_commit` of a new store with nothing in it.
-- **The diff goes by table name.** Rename a table to a new name and
-  that name's diff shows every row as added; swap a staging table in
-  (`DROP TABLE t` and `ALTER TABLE t_staging RENAME TO t` in one
-  transaction) and `t`'s diff shows only the rows that differ.
+- **The diff follows a rename.** Rename `t` to `u` and `u`'s diff
+  from before the rename shows no rows: none of them changed. Swap a
+  staging table in (`DROP TABLE t` and `ALTER TABLE t_staging RENAME TO
+  t` in one transaction) and `t`'s diff shows only the rows that
+  differ. (0.51.3 diffed by name, so a renamed table's rows all read as
+  added.)
 - **A diff reads only the main database.** A commit hash from an
   `ATTACH`ed store is `ref not found`; `datalib/backend/dirtree_diff/README.md`
   has the fetch-into-scratch way to compare two files.
@@ -761,17 +762,18 @@ is the recipe in code.
 - **A branch name may hold a slash** (`draft/riker`).
 - **A merge commit and a squash both revert** with `dolt_revert`.
 - **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
-  (`branch is not fully merged`) **or uncommitted rows** (`branch has
-  uncommitted changes`); `-D` drops either, uncommitted rows included,
-  so a branch made again under the same name starts clean. A draft is
-  thrown away with `-D`.
+  (`branch is not fully merged`) **but drops one whose only change is
+  uncommitted rows**, rows and all (0.51.3 refused it with `branch has
+  uncommitted changes`). `-D` drops either, so a branch made again
+  under the same name starts clean. A draft is thrown away with `-D`.
 
 ### Reverting a commit
 
 - **`dolt_revert('<hash>')` makes a new commit that undoes the named
   one, on the active branch, and returns its hash.** The commit need
   not be HEAD; the ones after it stay. The message is
-  `Revert "<original message>"`, and the working set is clean after it.
+  `Revert "<original message>"`, a blank line, and `This reverts commit
+  <hash>.`; the working set is clean after it.
 - **It is a merge, and is refused with `conflicts detected` when a
   later commit changed a row the commit touched.** Nothing is
   committed or changed then. A row still exactly as the commit left it
@@ -915,8 +917,9 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   one reads the folded `main`.
 - **A fold must not drop a commit a reader is open on.** A detached
   `<file>@<commit>` reader in another process, whose commit a fold and
-  gc dropped, gets "database disk image is malformed" on its next read
-  of history; a table scan may still answer from pages it already had.
+  gc dropped, gets `revision '<hash>' is no longer available` on its
+  next read of history; a table scan may still answer from pages it
+  already had.
   A tag on the commit keeps the reader whole. Render and `grid_index`
   read this way, so a fold tags what they are pinned to, or waits.
 - **Doltlite has no verb that drops history**: no `dolt_squash_history`,
@@ -967,7 +970,7 @@ join back, 27 ms and 6 ms.
 
 ### Vector search: vec1
 
-The amalgamation carries SQLite's `vec1` extension (version 0.7,
+The amalgamation carries SQLite's `vec1` extension (version 0.8,
 <https://sqlite.org/vec1>), compiled only with `-DDOLTLITE_VEC1=1`.
 **Nothing we ship has it**; the test-only
 `//third-party/doltlite:doltlite_vec1` shell does, and the tests are
@@ -1050,15 +1053,24 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
   idle one open. `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
-- **Doltlite never checkpoints a plain file's WAL by itself.** Stock
-  SQLite copies the WAL back into the file once a commit leaves it past
-  `wal_autocheckpoint` pages. Doltlite reports the same setting (1000)
-  and never acts on it, so the `-wal` keeps every page ever written. A
-  live root's run store reached 4 GB that way in eight days, and every
-  read of the log slowed with it. An explicit `PRAGMA
-  wal_checkpoint(PASSIVE)` works, and with `journal_size_limit` set,
-  the next write restarts the WAL and cuts the file back. The run
-  store's writer does both every 30 seconds.
+- **A plain file's WAL is checkpointed by itself**, as stock SQLite
+  does, once a commit leaves it past `wal_autocheckpoint` pages (1000).
+  The checkpoint runs in the process that commits, so another process
+  that holds the file open between reads does not stop it (one inside a
+  read holds back the frames it may still read, as in stock SQLite). The `-wal` file keeps its
+  largest size, though, which one large transaction sets, until a write
+  after a checkpoint finds `journal_size_limit` set, or a `wal_checkpoint
+  (TRUNCATE)`; our plain stores in WAL mode (the run store, the grid
+  index's file for both its writers, and the inference cache) set it to
+  `plain_sqlite::WAL_SIZE_LIMIT_BYTES`, 64 MB. Doltlite 0.51.3 never
+  checkpointed by itself
+  (dolthub/doltlite#4402): a live root's run store reached 4 GB in eight
+  days, and a grid index's `-wal` 4 GB in one re-index.
+- **A writer waiting on a plain WAL file gets in between another
+  process's transactions**, as with stock SQLite, after about one of
+  them. Under 0.51.3 it waited until the other process stopped writing
+  altogether, so the grid index's step could not open its file while a
+  `keyword_index` ran for minutes, and failed after 30 seconds.
 - **Doltlite reads a WAL another program wrote.** A plain SQLite
   file another program keeps in WAL mode, as qmd keeps its index, reads
   through doltlite with the rows only its `-wal` holds, so a reader
@@ -1074,8 +1086,9 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
   primary key is still a rowid alias.
 - **FTS3/4/5 and R-tree are compiled in**; foreign keys are off unless
   a connection turns them on.
-- **Every new file starts with an "Initialize data repository" commit**
-  stamped with the wall clock, so two fresh stores differ;
+- **Every new file starts with an `Initialize data repository (<id>)`
+  commit**, the id 32 hex digits of its own, stamped with the wall
+  clock, so two fresh stores differ; match it by prefix;
   `dolt_commit('--date', …)` pins a commit's date. `dolt_log().date`
   has one-second resolution.
 - **`dolt_reset('--hard')` restores tracked tables and keeps an untracked
@@ -1102,6 +1115,7 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.51.12 | a plain SQLite file in WAL mode is checkpointed by itself (dolthub/doltlite#4402), and a writer waiting on one gets in between another process's transactions; under 0.51.3 the grid index's `-wal` reached 4 GB and its step failed to open the file while a `keyword_index` wrote. The amalgamation now guards the lines that turn BLAKE3's kernels off with `DOLTLITE_BLAKE3_SIMD_OBJECTS`, which we define in place of a patch. Seven facts moved: the first commit's message carries an id, a diff follows a table rename, `dolt_branch('-d')` drops a branch whose only change is uncommitted, a revert's message names the commit, a reader whose commit was folded away reads `is no longer available`, vec1 is 0.8, and the Python wheel reuses its library copy on macOS. (0.51.13 was passed over for now: it compiles BLAKE3's kernels itself (dolthub/doltlite#4956), so taking it means dropping `@blake3_c` and the reader wheels' kernel compile.) |
 | 0.51.3 | upstream fixes to concurrent writes, merges and recovery. A `<store>@<commit>` open that finds the store busy now waits under the busy timeout, so the 0.50.17 failure is gone. 0.51.0 also put back the 0.50.14 encoding of a number just before a `DESC` field in a primary key or an index, with no migration; none of our tables has a `DESC` key, so no store of ours was written in the other encoding. Five facts moved: `dolt_commit` inside `BEGIN` leaves the transaction open, `dolt_branch('-d')` refuses uncommitted rows, a scalar sees another connection's commit at once, a hard reset works at the initialization commit, and a busy `dolt_branch` says `database is busy`. |
 | 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. Like 0.50.15, it does not reuse the chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it that no commit reaches, once, and `datalib-dag --free-disk-space` takes it back. Later bumps reuse each other's chunks (dolthub/doltlite#4552; measured by hand, not held by a test). (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |

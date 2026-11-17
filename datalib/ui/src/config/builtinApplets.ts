@@ -23,7 +23,7 @@ export type BuiltinApplet = {
 
 export const CONTACTS_APP: BuiltinApplet = {
   id: "datalib_contacts",
-  group: "unified_document_index",
+  group: "unified_grid_and_search_index",
   label: "Contacts app",
   blurb: "Your own record of who each email address, number and handle is.",
   keywords: ["contacts", "people", "person", "handles", "link", "labels", "app"],

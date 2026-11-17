@@ -123,7 +123,7 @@ pub enum Retired {
     TypesAndMethodTables,
     /// A `qmd_index` fan-in, from before `qmd_aggregator` (`qmd_steps.rs`).
     QmdIndex,
-    /// The index group named `unified_index` (`document_index.rs`).
+    /// The index group under an earlier name (`index_name.rs`).
     UnifiedIndex,
     /// No time-series index, and a source that has time series
     /// (`time_series_steps.rs`).
