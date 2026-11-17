@@ -312,7 +312,7 @@ both; `read_uuid` and `place_uuid` are the nearest container above the
 row of each kind, so grouping by either is one column. Besides its
 parent a row or container may be filed under others, an email thread
 under each of its labels: those are `filings` rows. Why, and what the
-tree is for: `docs/dev/plans/messages_not_documents.md`.
+tree is for: `docs/dev/plans/documents_to_blocks.md`.
 
 ### `conversation_uuid`, `preview`, `content_hash`
 
