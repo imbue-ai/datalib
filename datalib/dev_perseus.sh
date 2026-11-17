@@ -62,28 +62,18 @@ function = "render_markdown"
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
-[[steps]]
-group = "perseus"
-function = "keyword_index"
-inputs = ["perseus/render_markdown"]
-
-[[steps]]
-group = "perseus"
-function = "embed"
-inputs = ["perseus/keyword_index"]
-
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "grid_index"
-inputs = ["perseus/render_markdown"]
+inputs = ["*/render_markdown"]
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["perseus/keyword_index", "perseus/embed"]
+group = "perseus"
+function = "embed"
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]

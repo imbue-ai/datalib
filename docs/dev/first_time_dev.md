@@ -311,20 +311,19 @@ their install scripts run.
 
 ### Search index (default-on, incremental)
 
-Three kinds of step build the search index
+Three steps build the search index
 ([`datalib/backend/search_index`](../../datalib/backend/search_index)).
-Each source's `keyword_index` brings that source's documents in the index
-in line with its render store: it chunks each changed document and writes
-its words and chunks into `search_*` tables of the grid index's file,
-`unified_grid_and_search_index/grid_index/db.sqlite`. Its `embed` embeds every
+`grid_index`, after the grid, brings each searched source's documents in
+the index in line with its render store: it chunks each changed document
+and writes its words and chunks into `search_*` tables of the grid
+index's file, `unified_grid_and_search_index/grid_index/db.sqlite`. Each
+source's `embed` embeds every
 chunk the inference cache,
 `unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
 vector for, in process (`datalib/backend/embedder`, llama.cpp), after
 putting the pinned, sha256-verified embedding model in place through
-`datalib_embedding_models`. `unified_grid_and_search_index/qmd_aggregator` reads
-every source's pair, so it runs after them: it drops any source it does
-not name, sweeps vectors no chunk names, and reports what each source
-holds. This is what a search matches words and meaning against (see
+`datalib_embedding_models`. `grid_index` also sweeps the vectors no chunk
+names, and reports what each source holds. This is what a search matches words and meaning against (see
 `datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:

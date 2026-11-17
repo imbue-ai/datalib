@@ -171,22 +171,10 @@ command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["*/keyword_index", "*/embed"]
-
-[[steps]]
-group = "gmail"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["gmail/render_markdown"]
-
-[[steps]]
 group = "gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -342,9 +330,10 @@ on this page works the same with this `$IMG` and `--gpus all` added.
 No release machine has a GPU, so unlike sections 1 and 2 this is not
 run against each release. Releases after v0.54.1 publish the variant.
 
-The CUDA pieces are NVIDIA's, redistributed under NVIDIA's CUDA Toolkit
-license rather than datalib's MIT license; the image carries the notice
-beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`).
+The CUDA pieces are NVIDIA's, and their use is governed by NVIDIA's CUDA
+Toolkit license rather than datalib's MIT license; the image carries the
+notice beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`), with
+NVIDIA's own license text for each.
 
 ## Checking who built the image
 

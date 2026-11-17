@@ -799,8 +799,8 @@ would make a document say who a handle is on its own: readable as a
 plain file, findable by `grep`, and searchable by its words under the name
 you gave the person. It would cost what the paragraph above saves:
 render would read the contacts store, and a link would render again
-every document naming the handle and send each back through the
-search index's `keyword_index` and `embed`. The
+every document naming the handle and send each back through
+`grid_index`'s keyword pass and the source's `embed`. The
 search terms name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.

@@ -126,7 +126,7 @@ fn golden_page() -> (Vec<Piece>, Facts) {
         },
     ];
     let facts = Facts {
-        provider: "calendar".into(),
+        source_name: "Calendar".into(),
         front: [
             ("markdown_uuid", "00000000-0000-8000-8000-000000000001"),
             ("provider", "calendar"),
@@ -162,7 +162,7 @@ fn a_page_opens_with_its_facts_and_reads_as_its_words() {
     let drawn = draw(&page, &facts);
     assert_eq!(
         drawn[0].text,
-        "Source: calendar\nKind: Recurring Event\nCalendar: Bridge\n\n\
+        "Source: Calendar\nKind: Recurring Event\nCalendar: Bridge\n\n\
          Senior staff\n\n\
          | When | Tue Mar 3rd, 2026 at 09:00 |\n\
          | Organizer | Will Riker <riker@enterprise.test> |\n\n\
@@ -197,7 +197,7 @@ fn the_facts_open_the_first_piece_with_words() {
     let drawn = draw(&page, &facts);
     assert_eq!(drawn[0].text, "");
     assert!(
-        drawn[1].text.starts_with("Source: calendar\n"),
+        drawn[1].text.starts_with("Source: Calendar\n"),
         "{}",
         drawn[1].text
     );
@@ -232,7 +232,7 @@ fn a_page_has_a_head_and_a_conversation_does_not() {
     let (page, facts) = golden_page();
     assert_eq!(
         head(&page, &facts).as_deref(),
-        Some("Source: calendar\nKind: Recurring Event\nCalendar: Bridge")
+        Some("Source: Calendar\nKind: Recurring Event\nCalendar: Bridge")
     );
     assert!(draw(&page, &facts)[0]
         .text
@@ -255,12 +255,31 @@ fn only_an_html_element_is_a_tag() {
     }
 }
 
-/// The source is named as its renderer labels it, else by its provider
-/// tag; a fact with no value, and one not worth reading, says nothing.
+/// A link whose text spans lines, as a mail's HTML converts to
+/// (`[[\n\nFollow](…)](…)`), was left as written, its addresses and all,
+/// since links were found one line at a time.
+#[test]
+fn a_link_whose_text_spans_lines_is_drawn_as_its_text() {
+    assert_eq!(
+        flatten("[[ \n\n Follow](https://x.test/follow?id=1701)](https://x.test/track?u=2)\nnext"),
+        " \n\n Follow\nnext"
+    );
+    assert_eq!(
+        flatten("a [ bracket that\nnever closes\nand more"),
+        "a [ bracket that\nnever closes\nand more",
+        "an unclosed bracket stays as written"
+    );
+}
+
+/// The source is named as its renderer labels it, else as the source a
+/// page is about (a storage report's), else by the product's name; a fact
+/// with no value, and one not worth reading, says nothing. Storage reports
+/// all said `Source: datalib`, and names were spelled two ways (`Notion`,
+/// `github`).
 #[test]
 fn the_facts_line_names_the_source_and_the_facts_worth_reading() {
-    let facts = |provider: &str, front: &[(&str, &str)]| Facts {
-        provider: provider.into(),
+    let facts = |name: &str, front: &[(&str, &str)]| Facts {
+        source_name: name.into(),
         front: front
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -268,7 +287,7 @@ fn the_facts_line_names_the_source_and_the_facts_worth_reading() {
     };
     assert_eq!(
         facts_line(&facts(
-            "github",
+            "GitHub",
             &[
                 ("head_sha", "68ed9dc7"),
                 ("repo", "ncc-1701/engineering"),
@@ -279,17 +298,32 @@ fn the_facts_line_names_the_source_and_the_facts_worth_reading() {
                 ("base_ref", "main"),
             ]
         )),
-        "Source: github\nRepository: ncc-1701/engineering\nPull request: 1701\n\
+        "Source: GitHub\nRepository: ncc-1701/engineering\nPull request: 1701\n\
          State: merged\nAuthor: laforge\nBranch: warp-core\nInto: main"
     );
     assert_eq!(
         facts_line(&facts(
-            "google_drive",
+            "Google Drive",
             &[("source_label", "Google Drive"), ("group", " ")]
         )),
         "Source: Google Drive"
     );
-    assert_eq!(facts_line(&facts("pdf", &[])), "Source: pdf");
+    assert_eq!(
+        facts_line(&facts(
+            "datalib",
+            &[("source", "enterprise-mail"), ("measured_at", "x")]
+        )),
+        "Source: enterprise-mail",
+        "a storage report names the source it measures"
+    );
+    assert_eq!(
+        facts_line(&facts(
+            "PDF",
+            &[("source_path", "logs/2369/warp_core.pdf"), ("blake3", "ab")]
+        )),
+        "Source: PDF\nPath: logs/2369/warp_core.pdf",
+        "a file's path names the folders it sits in"
+    );
     assert_eq!(facts_line(&facts("", &[])), "");
 }
 
@@ -330,6 +364,13 @@ const DRAWN: &[(u32, &str)] = &[
     (
         7,
         "18d549e12746d78b7d2d99071a7de0b3416475eb593930abe37e5fbf66fc4537",
+    ),
+    // A page names its source by the product (`GitHub`), a storage report
+    // by the source it measures, a file by its path; a link's text may
+    // span lines.
+    (
+        8,
+        "9b930274f1097c64ce76c998d4199271038d8fef32fbdfb9d8267a86faa5b7fa",
     ),
 ];
 

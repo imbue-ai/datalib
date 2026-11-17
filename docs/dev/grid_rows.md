@@ -84,8 +84,8 @@ descending, a document row ahead of the rows inside it at the same
 moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
-(`#[col(…, search = "convo", uuid)]`, and `search(order = …, range = …,
-ranked)` on the struct), and the derive turns them into a `SearchTable`
+(`#[col(…, search = "datalib_document_id", uuid)]`, and `search(order = …, range = …,
+qmd)` on the struct), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
 map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
@@ -170,7 +170,7 @@ the new shape, and the grid index rebuilds itself from the stores.
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
    `grid_index`'s `inputs` (the wizard does this for a source it adds,
-   with the source's search steps); `grid_index` reads exactly the stores
+   with the source's `embed`); `grid_index` reads exactly the stores
    its inputs name.
 3. Give it an icon and a catalog entry (`datalib/ui/src/assets/README.md`)
    — the query path itself does not change.
@@ -278,8 +278,8 @@ in it, and on a document's own row its own title. The grid shows it as
 the Subject column (`subject_ref`, which on a contact's row is the
 card's chip and in a conversation named by its people a chip for each,
 from its `subject` terms), and `subject:` finds it by its whole name, `conversation:`
-being the same key; `convo:` names the conversation by id, and is what
-the cell's Keep only writes.
+being the same key; `datalib_document_id:` names the conversation by id, and is
+what the cell's Keep only writes. `id:` is the row's `upstream_id`.
 
 `channel` is where a row is filed when that is *not* its subject: a
 card's address book, an event's calendar, a sensor's device, LinkedIn's
@@ -462,7 +462,7 @@ caption is a `caption:` term.
 
 **A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and every source's `keyword_index` leaves
+its rows and opens like any other, and `grid_index`'s keyword pass leaves
 that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found

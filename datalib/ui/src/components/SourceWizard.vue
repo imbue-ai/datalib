@@ -168,9 +168,9 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null when rendering is off.
       renderId: string | null;
-      /// Which of its `keyword_index` and `embed` steps the source gets.
-      /// `none` leaves the markdown out of free-text search; the grid
-      /// index is not a choice.
+      /// How far into search the source goes: `none` lists it in the grid
+      /// step's `not_searched`, out of free-text search; the grid itself
+      /// is not a choice.
       searchIndexing: SearchIndexing;
       /// The built-in applet the source offers (`CatalogEntry.applet`),
       /// and whether it is to be on. Null when the entry offers none.
@@ -2538,10 +2538,8 @@ function submit() {
                     <span>
                       Keyword-index the markdown
                       <small class="wiz-help">
-                        Step <code>{{ `${groupId || "…"}/keyword_index` }}</code>. Off: the source
-                        stays in the grid, but the search bar will not find it.<template
-                          v-if="!renderWanted"
-                        >
+                        Done by <code>grid_index</code>. Off: the source stays in the grid, but the
+                        search bar will not find it.<template v-if="!renderWanted">
                           Nothing to index while rendering is off.</template
                         >
                       </small>

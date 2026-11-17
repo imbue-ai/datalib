@@ -350,6 +350,27 @@ shared_libraries(
     deps = ["@cuda//:cublas"],
 )
 
+# NVIDIA's license for the CUDA runtime the module links in and for
+# cuBLAS, verbatim from the archive each was fetched from, to ship beside
+# them (scripts/release/stage_cuda.sh).
+genrule(
+    name = "nvidia_licenses",
+    srcs = [
+        "@cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE",
+        "@cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE",
+    ],
+    outs = [
+        "nvidia/cudart/LICENSE",
+        "nvidia/cublas/LICENSE",
+    ],
+    cmd = " && ".join([
+        "cp $(location @cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE) $(location nvidia/cudart/LICENSE)",
+        "cp $(location @cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE) $(location nvidia/cublas/LICENSE)",
+    ]),
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+)
+
 cc_shared_library(
     name = "ggml_cuda_so",
     shared_lib_name = "libggml-cuda.so",

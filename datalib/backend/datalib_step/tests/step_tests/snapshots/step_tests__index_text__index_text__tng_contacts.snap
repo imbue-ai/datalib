@@ -4,7 +4,7 @@ expression: text
 ---
 === tng_contacts 00000000-0000-8140-88d9-42badf1b195b drone.4.of.12@unimatrix01.borg
 --- chunk 0
-title: drone.4.of.12@unimatrix01.borg | text: Source: contacts
+title: drone.4.of.12@unimatrix01.borg | text: Source: Contacts
 Group: Borg
 
 # drone.4.of.12@unimatrix01.borg
@@ -15,7 +15,7 @@ drone.4.of.12@unimatrix01.borg
 
 === tng_contacts 00000000-0000-81e2-8596-1ee8f9640d13 Jean-Luc Picard
 --- chunk 0
-title: Jean-Luc Picard | text: Source: contacts
+title: Jean-Luc Picard | text: Source: Contacts
 Group: Bridge
 
 Jean-Luc Picard
@@ -45,7 +45,7 @@ Note: Make it so.
 
 === tng_contacts 00000000-0000-829a-bb9d-4c1b203d3251 Senior Staff
 --- chunk 0
-title: Senior Staff | text: Source: contacts
+title: Senior Staff | text: Source: Contacts
 Group: Bridge
 
 # Senior Staff
@@ -57,7 +57,7 @@ Group: Bridge
 
 === tng_contacts 00000000-0000-85d8-ac4b-9c4472cee5ea Worf
 --- chunk 0
-title: Worf | text: Source: contacts
+title: Worf | text: Source: Contacts
 Group: Bridge
 
 Worf
@@ -78,7 +78,7 @@ Note: Son of Mogh. Prefers prune juice.
 
 === tng_contacts 00000000-0000-861c-8d00-be0043b71820 tng_contacts storage
 --- chunk 0
-title: tng_contacts storage | text: Source: datalib
+title: tng_contacts storage | text: Source: tng_contacts
 
 # tng_contacts — storage
 
@@ -100,7 +100,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 
 === tng_contacts 00000000-0000-8acb-9e72-ef58e1a96813 Seven of Nine
 --- chunk 0
-title: Seven of Nine | text: Source: contacts
+title: Seven of Nine | text: Source: Contacts
 Group: Borg
 
 # Seven of Nine <seven.of.nine@unimatrix01.borg>
@@ -117,7 +117,7 @@ Phone home: +1-555-TERTIARY
 
 === tng_contacts 00000000-0000-8b00-b38c-a2a290dad572 William T. Riker
 --- chunk 0
-title: William T. Riker | text: Source: contacts
+title: William T. Riker | text: Source: Contacts
 Group: Bridge
 
 William T. Riker
@@ -145,7 +145,7 @@ Note: Plays the trombone. Owns a beard.
 
 === tng_contacts 00000000-0000-8c51-a4b4-dde335468f6c Hugh
 --- chunk 0
-title: Hugh | text: Source: contacts
+title: Hugh | text: Source: Contacts
 Group: Borg
 
 # Hugh <third.of.five@unimatrix01.borg>
@@ -158,7 +158,7 @@ Phone work: +1-555-THIRD-OF-5
 
 === tng_contacts 00000000-0000-8d78-9232-e6b0deeebfb7 Geordi La Forge
 --- chunk 0
-title: Geordi La Forge | text: Source: contacts
+title: Geordi La Forge | text: Source: Contacts
 Group: Engineering
 
 Geordi La Forge
@@ -180,7 +180,7 @@ Note: If we modulate the deflector array we should be able to render this contac
 
 === tng_contacts 00000000-0000-8f5b-ab9b-f6b9fbf217b5 Locutus of Borg
 --- chunk 0
-title: Locutus of Borg | text: Source: contacts
+title: Locutus of Borg | text: Source: Contacts
 Group: Borg
 
 # Locutus of Borg <locutus@unicomplex.borg>

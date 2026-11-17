@@ -116,7 +116,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
 | `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
-| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
+| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (an `embed` step reports a hash of this as its version) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
@@ -659,10 +659,10 @@ rung, the additive DDL and an old blob store's conversion run, and each
 is sealed to `main`. A render step and the grid index compare their
 store's `_datalib_meta.schema_hash` with this build's and answer
 `needs_rerun` when it differs; a derived store is rebuilt, never
-migrated. A `keyword_index` answers `needs_rerun` when the search
-index is in another shape or its source's documents were drawn by
-another version; `embed`, `qmd_aggregator` and `embedding_map` have
-nothing to answer.
+migrated. The grid index also answers `needs_rerun` when the search
+index's keyword tables are in another shape or a source's documents
+were drawn by another version, which its keyword pass reads again;
+`embed` and `embedding_map` have nothing to answer.
 
 ## Compact and collect
 
@@ -806,7 +806,7 @@ emit({"event": "outcome",
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
 learn what to do — `ingest`, `render_markdown`, `render_time_series`,
-`keyword_index`, `embed`, `grid_index`, `qmd_aggregator`, `embedding_map`
+`embed`, `grid_index`, `embedding_map`
 or `time_series_index`; anything else is
 refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
 provider to run, which `ingest`, `render_markdown` and
@@ -875,5 +875,5 @@ Four things a hand run has to get right that the runner does for it:
   second time, beneath itself.
 
 The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
-the search steps share the grid index's file; the rules are in
+the search index's tables live in `grid_index`'s file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

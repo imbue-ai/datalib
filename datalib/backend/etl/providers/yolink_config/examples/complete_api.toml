@@ -56,11 +56,3 @@ group = "yolink"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["yolink/ingest"]
-
-# Free-text search by keyword (BM25). A time-series source takes no
-# `embed` step: its pages are summaries of numbers.
-[[steps]]
-group = "yolink"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["yolink/render_markdown"]
