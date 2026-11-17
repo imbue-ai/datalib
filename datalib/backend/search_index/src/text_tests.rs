@@ -108,8 +108,14 @@ const DRAWN: &[(u32, &str)] = &[
         2,
         "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
     ),
+    // The same text, chunked at each item.
     (
         3,
+        "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
+    ),
+    // A name that already carries its address is not given it twice.
+    (
+        4,
         "4f89acbbbfb514fefb9b523fbe5eb6e55db339e747b6560d6ee0151aa62f1d31",
     ),
 ];

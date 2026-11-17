@@ -25,8 +25,12 @@ names. Search for each separately. Free text looks for words in your documents:
 
 - **By their fields:** every word as the start of a value a row is filed
   under: a name, an address, an id, a title, a label.
-- **By their words:** the words themselves, ranked by how well each document
-  matches.
+- **By their words:** the words themselves. A conversation (a thread, a chat,
+  an agent session) matches when one of its messages holds every word, and
+  opens at that message. A page (a document, a calendar, a device's readings)
+  also matches when its parts hold the words between them, ranked below every
+  document that says them in one place. Words typed together in that order
+  rank first.
 - **By their meaning:** the documents closest in meaning, even with none of
   your words in them. With a key that keeps only some of a document's messages
   (`from:riker`, a day), the document is judged by those messages alone.
@@ -120,10 +124,10 @@ Anything else is refused, with a line saying why, rather than ignored.
 document (a thread, a chat, an agent session) by its last message. A
 chat that runs over several days is kept for any day it was active,
 and without free text you see only that day's messages. With free text, meaning
-ranks the chat by its messages in the window alone, while words rank the whole
-chat by every word in it, then open it at the message in the window holding the
-most of your words. So a chat can rank for words it said on another day, and
-open on a message that does not hold them.
+ranks the chat by its messages in the window alone, while words rank it by its
+best message holding every word, from any day, then open it at the message in
+the window holding the most of your words. So a chat can rank for words it said
+on another day, and open on a message that does not hold them.
 
 `GET …/search/keys` lists every key a root has, and
 `…/search/values?key=…&typed=…` the values one takes, most rows first.

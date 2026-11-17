@@ -301,7 +301,9 @@ pub async fn write_part_schema_hash(
     Ok(())
 }
 
-fn part_key(part: StoreKind) -> String {
+/// The `_datalib_meta` key a part's shape is kept under, for a reader
+/// that may not write the table [`part_schema_hash_in`] creates.
+pub fn part_key(part: StoreKind) -> String {
     format!("{}_{}", part.as_str(), Key::SchemaHash.as_str())
 }
 

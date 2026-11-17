@@ -62,6 +62,12 @@ pub struct IndexSection {
 }
 
 impl IndexDoc {
+    /// Whether its pieces are messages (items drawn with an envelope),
+    /// rather than the parts of one page.
+    pub fn is_conversation(&self) -> bool {
+        self.sections.iter().any(|s| s.lead.is_some())
+    }
+
     /// Its chunks with their hashes and prompts
     /// ([`chunk::prompted`]): what the keyword pass files and the embed
     /// pass embeds.

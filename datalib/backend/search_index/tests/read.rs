@@ -70,12 +70,11 @@ fn ids(hits: &[datalib_search_index::MessageHit]) -> Vec<&str> {
     hits.iter().map(|h| h.markdown_uuid.as_str()).collect()
 }
 
-/// A hit is a message holding every word, and lands on it by its bytes: a
+/// A hit is a message holding every word, and names that message: a
 /// thread that says the words in different messages is not one.
 #[tokio::test]
 async fn a_hit_is_a_message_holding_every_word() {
     let t = thread();
-    let text: String = t.sections.iter().map(|s| s.text.as_str()).collect();
     let both = doc(
         "mail",
         "both",
@@ -98,8 +97,9 @@ async fn a_hit_is_a_message_holding_every_word() {
         .unwrap();
     let thread_hit = one.iter().find(|h| h.markdown_uuid == "thread").unwrap();
     assert_eq!(
-        &text[thread_hit.start as usize..thread_hit.end as usize],
-        "deck twelve reports a coolant leak\n"
+        thread_hit.uuid.as_deref(),
+        Some("m2"),
+        "the message saying it"
     );
     f.reader.close().await;
 }
@@ -128,11 +128,7 @@ async fn a_document_answers_once_at_its_best_message() {
     found.sort();
     assert_eq!(found, ["many", "other"]);
     let best = hits.iter().find(|h| h.markdown_uuid == "many").unwrap();
-    let text: String = many.sections.iter().map(|s| s.text.as_str()).collect();
-    assert_eq!(
-        &text[best.start as usize..best.end as usize],
-        "warp warp warp\n"
-    );
+    assert_eq!(best.uuid.as_deref(), Some("m2"), "warp warp warp");
     assert_eq!(
         f.reader
             .words(&all_of(&["warp"]), None, None, 1)
@@ -252,4 +248,91 @@ async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
         .await
         .unwrap();
     assert!(reader.is_none());
+}
+
+fn page_term(word: &str) -> String {
+    format!("{{title body}} : (\"{word}\")")
+}
+
+fn page_terms(words: &[&str]) -> Vec<String> {
+    words.iter().map(|w| page_term(w)).collect()
+}
+
+/// A page's heading and its rows: no one piece says every word.
+fn page(uuid: &str) -> IndexDoc {
+    doc(
+        "airvisual",
+        uuid,
+        &[
+            (None, "# Air quality\n"),
+            (Some("kitchen"), "Kitchen: 12 µg/m³\n"),
+            (Some("bedroom"), "Bedroom: 8 µg/m³ air\n"),
+        ],
+    )
+}
+
+/// The same words said as messages, each with its envelope.
+fn conversation() -> IndexDoc {
+    let mut c = page("chat");
+    c.source_id = "slack".into();
+    for s in &mut c.sections {
+        s.lead = Some("Data — Tue 3 Mar 2026 14:05".into());
+    }
+    c
+}
+
+/// A page holds the words between its pieces, as qmd scored a whole
+/// document, and lands on the piece holding the most of them; a
+/// conversation that says them in different messages is not found.
+#[tokio::test]
+async fn a_page_holds_the_words_between_its_pieces() {
+    let f = fixture(&[page("page"), conversation()], &[]).await;
+    let hits = f
+        .reader
+        .page_words(
+            &page_terms(&["bedroom", "air", "quality"]),
+            &[],
+            None,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(&hits), ["page"]);
+    assert_eq!(hits[0].uuid.as_deref(), Some("bedroom"));
+    let missing = f
+        .reader
+        .page_words(&page_terms(&["bedroom", "tribble"]), &[], None, None, 10)
+        .await
+        .unwrap();
+    assert!(missing.is_empty(), "a page lacking a word: {missing:?}");
+    f.reader.close().await;
+}
+
+/// An excluded word anywhere on a page drops it; `sources` and `among`
+/// narrow what is read.
+#[tokio::test]
+async fn an_excluded_word_anywhere_drops_the_page() {
+    let f = fixture(&[page("page"), page("other")], &[]).await;
+    let terms = page_terms(&["bedroom", "quality"]);
+    let excluded = f
+        .reader
+        .page_words(&terms, &[page_term("kitchen")], None, None, 10)
+        .await
+        .unwrap();
+    assert!(excluded.is_empty(), "{excluded:?}");
+    let among: HashSet<String> = ["other".to_string()].into();
+    let narrowed = f
+        .reader
+        .page_words(&terms, &[], None, Some(&among), 10)
+        .await
+        .unwrap();
+    assert_eq!(ids(&narrowed), ["other"]);
+    let elsewhere = f
+        .reader
+        .page_words(&terms, &[], Some(&["slack".to_string()]), None, 10)
+        .await
+        .unwrap();
+    assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    f.reader.close().await;
 }
