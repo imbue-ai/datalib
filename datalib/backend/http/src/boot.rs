@@ -86,7 +86,7 @@ pub async fn build_state(
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
-            // No entries: nothing starts, and the unified_document_index applet
+            // No entries: nothing starts, and the unified_grid_and_search_index applet
             // never opens the index this build must not read as its own.
             applets: Arc::new(crate::applets::AppletRegistry::build(
                 Vec::new(),
@@ -364,9 +364,9 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !layout::unified_document_index_dir(root.path()).exists(),
+            !layout::unified_grid_and_search_index_dir(root.path()).exists(),
             "booting the server created {}, which belongs to the applet",
-            layout::unified_document_index_dir(root.path()).display()
+            layout::unified_grid_and_search_index_dir(root.path()).display()
         );
     }
 
@@ -389,7 +389,7 @@ mod tests {
         .unwrap();
 
         let feedback = layout::feedback_db(root.path());
-        let derived = layout::unified_document_index_dir(root.path());
+        let derived = layout::unified_grid_and_search_index_dir(root.path());
         assert!(!feedback.starts_with(&derived), "{}", feedback.display());
     }
 

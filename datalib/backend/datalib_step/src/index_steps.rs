@@ -1,6 +1,6 @@
 //! The search's steps: each source's `keyword_index` and `embed`, which
 //! fill its part of the search index (`search_index.rs`), and
-//! `unified_document_index/qmd_aggregator`, which reads every source's
+//! `unified_grid_and_search_index/qmd_aggregator`, which reads every source's
 //! pair, drops the sources it no longer reads, sweeps the inference cache
 //! and reports on the whole. The aggregator's id is qmd's, whose index
 //! this replaced; it deletes what qmd left in its directory.
@@ -16,11 +16,11 @@ use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
 /// The aggregator's id, which is also its directory under the
-/// unified document index.
+/// unified grid and search index.
 pub fn aggregator_rel() -> String {
     format!(
         "{}/{}",
-        datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         crate::function::Function::QmdAggregator.as_str()
     )
 }
@@ -78,7 +78,7 @@ fn retire_qmd(root: &Path) -> Result<()> {
     }
 }
 
-/// `unified_document_index/qmd_aggregator`: drop every source the search
+/// `unified_grid_and_search_index/qmd_aggregator`: drop every source the search
 /// index holds that this step no longer reads, keep only the vectors a
 /// chunk still names, and report what each source holds.
 pub async fn run_aggregator(
@@ -102,9 +102,9 @@ pub async fn run_aggregator(
     progress.set_message(&holdings_summary(&held));
     // The index rebuilds from the render stores, so cache-aware backups
     // (`restic --exclude-caches` etc.) may skip it.
-    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_document_index_dir(
-        data_root,
-    ));
+    datalib_core::layout::mark_derived_cache(
+        &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
+    );
     Ok(claim_reads(env))
 }
 

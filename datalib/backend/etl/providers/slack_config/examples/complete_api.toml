@@ -69,7 +69,7 @@ command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "slack"
 function = "keyword_index"

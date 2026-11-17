@@ -11,7 +11,7 @@ use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
 use datalib_obs::status_line;
-use datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR;
+use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
 use serde::Deserialize;
 
@@ -22,24 +22,28 @@ use crate::source_type::SourceType;
 /// Which index step reads a source step of each function, as
 /// `(source function, index group, index function)`.
 const FAN_INS: &[(&str, &str, &str)] = &[
-    ("render_markdown", UNIFIED_DOCUMENT_INDEX_DIR, "grid_index"),
+    (
+        "render_markdown",
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        "grid_index",
+    ),
     // For their problem rows alone.
     (
         "render_time_series",
-        UNIFIED_DOCUMENT_INDEX_DIR,
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         "grid_index",
     ),
     (
         "render_occurrences",
-        UNIFIED_DOCUMENT_INDEX_DIR,
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         "grid_index",
     ),
     (
         "keyword_index",
-        UNIFIED_DOCUMENT_INDEX_DIR,
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         "qmd_aggregator",
     ),
-    ("embed", UNIFIED_DOCUMENT_INDEX_DIR, "qmd_aggregator"),
+    ("embed", UNIFIED_GRID_AND_SEARCH_INDEX_DIR, "qmd_aggregator"),
     (
         "render_time_series",
         TIME_SERIES_INDEX_GROUP,
@@ -48,10 +52,10 @@ const FAN_INS: &[(&str, &str, &str)] = &[
 ];
 
 fn qmd_aggregator() -> String {
-    format!("{UNIFIED_DOCUMENT_INDEX_DIR}/qmd_aggregator")
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/qmd_aggregator")
 }
 
-const INDEX_GROUPS: &[&str] = &[UNIFIED_DOCUMENT_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
+const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
 
 #[derive(Deserialize)]
 struct View {
@@ -494,7 +498,7 @@ mod tests {
         let appended = append(starter, &stanza).unwrap();
         checks_clean(&appended.text);
         assert_eq!(
-            inputs_of(&appended.text, "unified_document_index/grid_index"),
+            inputs_of(&appended.text, "unified_grid_and_search_index/grid_index"),
             ["slack/render_markdown"]
         );
         assert!(
@@ -505,7 +509,7 @@ mod tests {
             appended.wired,
             [(
                 "slack/render_markdown".to_string(),
-                "unified_document_index/grid_index".to_string()
+                "unified_grid_and_search_index/grid_index".to_string()
             )]
         );
         // Above the index block, whose comments stay with it, and the
@@ -513,13 +517,13 @@ mod tests {
         let source_at = appended.text.find("[[groups]]\nid = \"slack\"").unwrap();
         let index_at = appended
             .text
-            .find("# ── the unified document index")
+            .find("# ── the unified grid and search index")
             .unwrap();
         assert!(source_at < index_at, "{}", appended.text);
         assert_eq!(
             appended.text.replace(
-                "inputs = [\"slack/render_markdown\"]\n\n[[steps]]\ngroup = \"unified_document_index\"",
-                "inputs = []\n\n[[steps]]\ngroup = \"unified_document_index\""
+                "inputs = [\"slack/render_markdown\"]\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\"",
+                "inputs = []\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\""
             )[index_at..],
             *starter
         );
@@ -545,10 +549,10 @@ function = \"render_markdown\"
 inputs = [\"slack/ingest\"]
 
 [[groups]]
-id = \"unified_document_index\"
+id = \"unified_grid_and_search_index\"
 
 [[steps]]
-group = \"unified_document_index\"
+group = \"unified_grid_and_search_index\"
 function = \"grid_index\"
 inputs = [
   \"slack/render_markdown\", # the work one

@@ -221,9 +221,9 @@ describe("a grid or table card", () => {
   /// the link chose.
   const hostile = [
     "/data/0123abcd",
-    "/applet/unified_document_index/chat/x",
-    "/applet/unified_document_index/problems/../../../data/x",
-    "/applet/unified_document_index/problems?q=x",
+    "/applet/unified_grid_and_search_index/chat/x",
+    "/applet/unified_grid_and_search_index/problems/../../../data/x",
+    "/applet/unified_grid_and_search_index/problems?q=x",
     "/api/manage/rows/../../data/x",
     "/api/remote_media?url=https://attacker.example/x.json",
     "//attacker.example/api/manage/rows",
@@ -244,8 +244,8 @@ describe("a grid or table card", () => {
 
   it("still opens each table the app itself opens", () => {
     for (const url of [
-      "/applet/unified_document_index/problems",
-      "/applet/unified_document_index/search",
+      "/applet/unified_grid_and_search_index/problems",
+      "/applet/unified_grid_and_search_index/search",
     ]) {
       expect(listedTable("gridView", url, GRID_TABLES), url).toBe(url);
     }
@@ -253,7 +253,7 @@ describe("a grid or table card", () => {
       "/api/manage/rows",
       "/api/remote_media/allow",
       "/api/remote_media/fetched",
-      "/applet/unified_document_index/problems",
+      "/applet/unified_grid_and_search_index/problems",
     ]) {
       expect(() => tableView({ url }), url).not.toThrow();
     }

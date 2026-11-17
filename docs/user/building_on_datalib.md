@@ -430,7 +430,7 @@ three things, in this order:
    where there is no library: outside Python on a musl tarball, or on an Intel
    Mac.
 3. **The app, over HTTP.** With the app up, `POST
-   /applet/unified_document_index/sql` runs one `SELECT` against any store,
+   /applet/unified_grid_and_search_index/sql` runs one `SELECT` against any store,
    its parameters bound by name (`:source`) or position, and answers a
    page of rows as JSON, behind the API token
    ([applets.md](applets.md#reading-any-store-with-sql)). It needs
@@ -443,13 +443,13 @@ three things, in this order:
 ## Showing a rendered document
 
 The rendered documents (an email thread, a Slack thread) are
-markdown, served by `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+markdown, served by `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}`.
 Two shapes in them are a contract your app can build on:
 
 - **A person** is a link whose href is their handle as a URI:
   `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`.
   Identify them by the href, never the text, and ask
-  `POST /applet/unified_document_index/people` who each handle is.
+  `POST /applet/unified_grid_and_search_index/people` who each handle is.
 - **A time** is `<time datetime="2026-01-05T09:00:00+01:00" …>…</time>`,
   on the sender's clock where the source knows it, and in `Z` where it
   does not. Format the `datetime` yourself, in your reader's zone.
@@ -605,16 +605,16 @@ Each source's problems travel with its data. The download writes them
 into its raw store's `problems` table, where `source_id` is empty. The
 render step copies them under the source's id, and `grid_index` copies
 every source's into one `problems` table in
-`unified_document_index/grid_index/db.sqlite`. That last copy is
+`unified_grid_and_search_index/grid_index/db.sqlite`. That last copy is
 the one to query, since it covers every source:
 
 ```sh
-datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite \
+datalib-doltlite -readonly unified_grid_and_search_index/grid_index/db.sqlite \
   "SELECT source_id, severity, outcome, reason, scope_key, sample
      FROM problems WHERE stage = 'fetch' ORDER BY changed_at_utc DESC LIMIT 20"
 ```
 
-With the app up, `GET /applet/unified_document_index/problems?q=…`
+With the app up, `GET /applet/unified_grid_and_search_index/problems?q=…`
 serves the same rows a page at a time, in the search bar's grammar:
 `source:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
 and `field:` too. Each step's counts are its `problems` series in the

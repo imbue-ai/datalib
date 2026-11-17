@@ -325,7 +325,7 @@ pub struct Collection {
 }
 
 /// A data root's qmd index: the one file every source's collection lives
-/// in, at `unified_document_index/qmd_aggregator/qmd/index.sqlite`.
+/// in, at `unified_grid_and_search_index/qmd_aggregator/qmd/index.sqlite`.
 #[derive(Debug, Clone)]
 pub struct Index {
     root: PathBuf,

@@ -30,23 +30,23 @@ command = "datalib-step"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
-id = "unified_document_index"       # no type: it mirrors nothing
+id = "unified_grid_and_search_index"       # no type: it mirrors nothing
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 ```
 
 **A group** is one thing on the Manage screen: an `id`, an optional
 `name`, an optional `type`, an optional `description`. A source is a
-group with a `type`; the unified document index is a group without one. `name`
+group with a `type`; the unified grid and search index is a group without one. `name`
 and `description` are display text — never forwarded to a step, never
 fingerprinted — so editing either re-runs nothing.
 
@@ -116,7 +116,7 @@ package's programs by its path under the data root, in its `command`;
   `embedding_map`, `time_series_index`
   (`datalib_step/src/function.rs`, tested against the layout constants
   the render and index crates use). `grid_index`, `qmd_aggregator` and
-  `embedding_map` write `unified_document_index/<function>`, and
+  `embedding_map` write `unified_grid_and_search_index/<function>`, and
   `time_series_index` writes `unified_time_series_index/time_series_index`,
   and nothing else, because the applet that reads each finds it from the
   data root alone.
@@ -134,7 +134,7 @@ package's programs by its path under the data root, in its `command`;
   `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - The qmd steps are the exception to "a step writes its own tree": a
   source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
-  the one qmd index file in `unified_document_index/qmd_aggregator`, the
+  the one qmd index file in `unified_grid_and_search_index/qmd_aggregator`, the
   aggregator's tree, each source's steps to its own collection. The
   runner cannot see that file as shared, so they hold one-slot locks
   instead (below).
@@ -387,7 +387,7 @@ fingerprint, so changing it re-runs the group.
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
 - `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
-  `unified_document_index`, and `time_series_index` under any but
+  `unified_grid_and_search_index`, and `time_series_index` under any but
   `unified_time_series_index`.
 
 A render reads its raw store from its first input; one that declares
@@ -503,7 +503,7 @@ nothing to render or search.
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_document_index` group, its qmd steps right
+the last one and above the `unified_grid_and_search_index` group, its qmd steps right
 after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.
@@ -562,19 +562,21 @@ the next would put the first back:
    them.
 2. The qmd steps' (`upgrade_qmd_steps`, `qmd_steps.rs`), which also
    leaves the file in data-flow order.
-3. The document index's name (`upgrade_document_index`,
-   `document_index.rs`): the untyped `unified_index` group, every step
-   filed under it or writing under it, every `inputs` entry naming one,
-   and the applet's `group`, `id` and `datalib-applet unified_index`
-   subcommand become `unified_document_index`. At boot the server then
-   moves `<root>/unified_index/` to `<root>/unified_document_index/` with
-   one rename, so the grid store and the qmd embeddings are kept, and
-   carries the loop's per-step rows in `system/supervisor.sqlite` (a step
-   turned off, its last success, its tree's version) to the new ids. If
-   both trees exist it leaves both and logs an error naming them.
-   `datalib-applet unified_index` still runs, and the gateway still
-   answers `/applet/unified_index/…`, for a config or a card script
-   written before the rename.
+3. The index's name (`upgrade_index_name`, `index_name.rs`): the
+   untyped group under one of its earlier names, `unified_index` or
+   `unified_document_index`, every step filed under it or writing under
+   it, every `inputs` entry naming one, the applet's `group`, `id` and
+   `datalib-applet` subcommand, and the name and banner comment the
+   scaffold gave it become `unified_grid_and_search_index`. At boot the
+   server then moves the old `<root>/<name>/` to
+   `<root>/unified_grid_and_search_index/` with one rename, so the grid
+   store and the search index's vectors are kept, and carries the loop's
+   per-step rows in `system/supervisor.sqlite` (a step turned off, its
+   last success, its tree's version) to the new ids. If both trees exist
+   it leaves both and logs an error naming them. `datalib-applet` still
+   runs under either old name, and the gateway still answers
+   `/applet/unified_index/…` and `/applet/unified_document_index/…`, for
+   a config, a card script or an agent written before the rename.
 4. The time-series steps (`upgrade_time_series_steps`,
    `time_series_steps.rs`): a config with no `unified_time_series_index`
    group and a source whose type has time series gets each such source's
@@ -613,7 +615,7 @@ the next would put the first back:
    sources' API settings now share their names. The loader refuses the
    old keys.
 
-A source may not take `unified_index`, `unified_document_index` or
-`unified_time_series_index` as its id
+A source may not take `unified_index`, `unified_document_index`,
+`unified_grid_and_search_index` or `unified_time_series_index` as its id
 (`datalib_dag::config::RESERVED_STANZA_NAMES`); only an index group,
 which has no `type`, may.

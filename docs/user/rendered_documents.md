@@ -13,12 +13,12 @@ private to it.
 
 ## Getting a document
 
-The `unified_document_index` applet serves the documents, and
+The `unified_grid_and_search_index` applet serves the documents, and
 [the applets](applets.md) says how to call one:
 
-- `GET /applet/unified_document_index/search?q=…` finds them. Each row
+- `GET /applet/unified_grid_and_search_index/search?q=…` finds them. Each row
   names its document by `markdown_uuid`.
-- `GET /applet/unified_document_index/chat/{markdown_uuid}` answers one,
+- `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}` answers one,
   as JSON. `body` is the markdown, without its front matter; beside it
   are what the index knows of the document (`name`, `created_at`,
   `source_url`, `problems`, its links to other documents).
@@ -115,7 +115,7 @@ text, such as a signature's.
 
 ### Who a handle is
 
-`POST /applet/unified_document_index/people` with
+`POST /applet/unified_grid_and_search_index/people` with
 `{"handles": ["email:riker@enterprise.org", "slack:T01/U02"]}` answers
 `{"people": {<handle>: [record, …]}}`: for each handle, every source's
 record of that person, best first: a source about people (an address

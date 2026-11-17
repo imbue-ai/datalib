@@ -44,7 +44,7 @@ pub struct Applet {
 
 pub const APPLETS: &[Applet] = &[
     Applet {
-        name: "unified_document_index",
+        name: "unified_grid_and_search_index",
         does: "search, the grid and the documents, and what each source knows about a handle",
         topic: "applets",
     },

@@ -26,7 +26,7 @@ test("a card's requests name the card and its type", async ({ page }) => {
   // The search itself: the field's `/search/keys` asks for the page, not
   // for a card.
   const search = page.waitForRequest((r) =>
-    r.url().includes("/applet/unified_document_index/search?"),
+    r.url().includes("/applet/unified_grid_and_search_index/search?"),
   );
   await page.goto(GRID);
   const headers = (await search).headers();

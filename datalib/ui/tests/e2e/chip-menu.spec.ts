@@ -24,7 +24,7 @@ async function openADocumentWithAChip(
   source = "slack",
 ) {
   const resp = await request.get(
-    `/applet/unified_document_index/search?q=source_id%3A${source}&limit=200`,
+    `/applet/unified_grid_and_search_index/search?q=source_id%3A${source}&limit=200`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };

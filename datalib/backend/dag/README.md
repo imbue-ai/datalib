@@ -301,10 +301,11 @@ update until it is dismissed. The pass is held in the server's memory
 (`/api/config`'s `upgrade`) and announced as `pass_changed` on
 `/api/sync/stream`; freeing disk space is drawn by the same pill
 (§"Resets and purges").
-Before any of that, the http server brings the document index from
-before its rename forward (`http/src/config_upgrade.rs`): it moves
-`<root>/unified_index/` to `<root>/unified_document_index/` and the
-record's rows for those steps to their new ids
+Before any of that, the http server brings the index from before its
+renames forward (`http/src/config_upgrade.rs`): it moves
+`<root>/unified_document_index/` or `<root>/unified_index/` to
+`<root>/unified_grid_and_search_index/` and the record's rows for those
+steps to their new ids
 (`Store::rename_group_steps`), and moves each folder an older config
 spelled with capitals to the lowercase spelling the config now uses
 (`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"

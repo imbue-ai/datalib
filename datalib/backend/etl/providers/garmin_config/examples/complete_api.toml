@@ -56,7 +56,7 @@ command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs.
+# `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "garmin"
 function = "keyword_index"

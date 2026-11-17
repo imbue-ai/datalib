@@ -1,5 +1,5 @@
 # Minimal config in the format `datalib-dag` runs: one source (claude.ai
-# conversations) — a group and its two steps — plus the unified document index
+# conversations) — a group and its two steps — plus the unified grid and search index
 # group with its two shared index steps. See configs/dag_example.toml
 # for a walkthrough of the format.
 
@@ -38,32 +38,32 @@ command = "datalib-step"
 inputs = ["claude_chats/keyword_index"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
 
-# The app's own surface: `unified_document_index` serves the grid, the document
+# The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"

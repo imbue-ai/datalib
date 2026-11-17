@@ -61,7 +61,7 @@ describe("a reference that is not a blob-store address", () => {
       "blobs/a.png",
       "./a.png",
       "../../api/config",
-      "/applet/unified_document_index/asset/u/blobs/a.png",
+      "/applet/unified_grid_and_search_index/asset/u/blobs/a.png",
     ]) {
       expect(blobAddress(s), s).toBeNull();
     }

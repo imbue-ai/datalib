@@ -17,7 +17,7 @@ import {
   type GridApi,
 } from "./grid-helpers";
 
-const PROBLEMS = "/applet/unified_document_index/problems";
+const PROBLEMS = "/applet/unified_grid_and_search_index/problems";
 
 type Problem = {
   problem_uuid: string;

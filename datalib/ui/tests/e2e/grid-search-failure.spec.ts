@@ -12,13 +12,13 @@ test("a timed-out search says so, marks the old rows, and retries", async ({ pag
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 10_000 });
 
   let fail = true;
-  await page.route("**/applet/unified_document_index/search**", (route) =>
+  await page.route("**/applet/unified_grid_and_search_index/search**", (route) =>
     fail
       ? route.fulfill({
           status: 504,
           contentType: "application/json",
           body: JSON.stringify({
-            error: 'applet "unified_document_index" did not answer within 30s',
+            error: 'applet "unified_grid_and_search_index" did not answer within 30s',
           }),
         })
       : route.fallback(),
@@ -27,12 +27,12 @@ test("a timed-out search says so, marks the old rows, and retries", async ({ pag
 
   const banner = page.getByRole("alert").filter({ hasText: "Search timed out" });
   await expect(banner).toContainText(
-    'Search timed out: applet "unified_document_index" did not answer within 30s.',
+    'Search timed out: applet "unified_grid_and_search_index" did not answer within 30s.',
   );
   await expect(banner).toContainText("The rows below are from the previous search.");
   await expect(page.locator(".grid--stale")).toHaveCount(1);
   await expect(
-    page.locator(".datalib-toast", { hasText: "unified_document_index/search" }),
+    page.locator(".datalib-toast", { hasText: "unified_grid_and_search_index/search" }),
   ).toHaveCount(0);
 
   fail = false;

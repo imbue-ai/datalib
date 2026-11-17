@@ -55,7 +55,7 @@ pub fn serve(port: u16) -> Result<()> {
         let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
         let app = routes(Arc::new(root)).layer(middleware::from_fn_with_state(
             gate,
-            crate::unified_document_index::require_gateway,
+            crate::unified_grid_and_search_index::require_gateway,
         ));
         tracing::info!(address = %bound, "listening");
         crate::announce_port(bound.port());
