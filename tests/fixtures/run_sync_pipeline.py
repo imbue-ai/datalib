@@ -114,6 +114,15 @@ duplicated across two `tests/fixtures/BUILD.bazel` call sites (the
 renumbering that lands in only one of them misaligns every argument
 after it. Appending can't disturb what already works. See the FIXME on
 the py_test's arg list.
+
+Environment:
+    INGESTED_TNG_EMBED_MODEL  the embedding model's GGUF, a Bazel input
+                      (`//third-party/embedding_models:embeddinggemma`).
+                      The `unified_grid_and_search_index` step reads
+                      its tokenizer to cut the search chunks; it is linked into the root's own
+                      `unified_grid_and_search_index/models/` and
+                      fetching is turned off, so no step reads `$HOME`
+                      or reaches HuggingFace.
 """
 
 from __future__ import annotations
@@ -208,6 +217,17 @@ class Prepared:
     playback_v2: Path
 
 
+def _stage_embed_model(workspace: Path) -> None:
+    model = Path(os.environ["INGESTED_TNG_EMBED_MODEL"]).resolve()
+    if not model.is_file():
+        raise SystemExit(f"INGESTED_TNG_EMBED_MODEL is not a file: {model}")
+    models = workspace / "unified_grid_and_search_index" / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    link = models / model.name
+    link.unlink(missing_ok=True)
+    link.symlink_to(model)
+
+
 def prepare(argv: list[str]) -> Prepared:
     """Everything a person has before they open the app: the export
     trees, the playback tapes that stand in for the services, the step
@@ -263,7 +283,9 @@ def prepare(argv: list[str]) -> Prepared:
     own_cache_env = {
         **os.environ,
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
+        "DATALIB_MODELS_NO_FETCH": "1",
     }
+    _stage_embed_model(workspace)
 
     # Contacts are ingested twice: once from the checked-in address
     # books, once after `carddav_tng_v2/` is copied over them, so the
@@ -568,14 +590,10 @@ params = {params}
             root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{group}/render_markdown"')
         # The fan-ins read every source by pattern, as the starter config
-        # and the app's config upgrade write them. `unified_grid_and_search_index` also reads
-        # each `render_time_series` and `render_occurrences`, for their
-        # problem rows.
+        # and the app's config upgrade write them.
         groups = [r.strip('"').split("/")[0] for r in rendered]
         series = [g for g in groups if g in time_series_groups]
-        grid_list = (
-            '"*/render_markdown", "*/render_time_series", "*/render_occurrences"'
-        )
+        grid_list = '"*/render_markdown"'
         blocks.append(
             f"""[[groups]]
 id = "unified_grid_and_search_index"

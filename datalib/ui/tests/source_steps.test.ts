@@ -1615,7 +1615,7 @@ function = "ingest"
     ]);
     expect(
       inputsOf(added, "unified_grid_and_search_index/unified_grid_and_search_index"),
-    ).toContain("riker/render_time_series");
+    ).not.toContain("riker/render_time_series");
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
     expect(
       listSteps(added).some((s) => s.kind === "applet" && s.id === "unified_time_series_index"),
@@ -1678,13 +1678,14 @@ function = "ingest"
     expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
   });
 
-  /// Its problem rows reach the problems list only through `unified_grid_and_search_index`.
-  it("is read by the index step for its problem rows", () => {
+  /// Its problems are read in its own store, so wiring it into the index
+  /// step would only run that step again after every occurrences run.
+  it("is not wired into the index step", () => {
     const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
-    const grid = listSteps(added).find(
+    const index = listSteps(added).find(
       (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
     );
-    expect(grid?.inputs).toContain("bridge/render_occurrences");
+    expect(index?.inputs).not.toContain("bridge/render_occurrences");
   });
 
   /// The wizard edits a source's render step; written first, the

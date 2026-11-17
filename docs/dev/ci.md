@@ -242,12 +242,16 @@ the gate's outputs live in `bazel-out/k8-opt`, apart from the fastbuild
 tree a plain `bazelisk test` uses, so a crate you just tested is
 compiled again for the gate.
 
-**The toolchains.** On Linux the C/C++ toolchain is the hermetic LLVM
-one `MODULE.bazel` registers and Rust's is pinned too, so neither
-depends on the machine's compiler: a cloud session, a Linux laptop and
-CI's runner build the same keys from the same flags (§"The caches, and
-what each is for"). A mac uses Apple's toolchain and never shares CI's
-entries, which is why the gate leaves it in fastbuild.
+**The toolchains and the environment.** On Linux the C/C++ toolchain is
+the hermetic LLVM one `MODULE.bazel` registers and Rust's is pinned
+too, so neither depends on the machine's compiler (§"The caches, and
+what each is for"). Nor does an action's environment carry the caller's
+`HOME`, which every C compile, genrule and test would otherwise hold in
+its key (`/root` in a cloud session, `/github/home` on CI); a test runs
+with `HOME` set to its own `TEST_TMPDIR` (`.bazelrc`). So a cloud
+session, a Linux laptop and CI's runner build the same keys from the
+same flags. A mac uses Apple's toolchain and its caller's `HOME`, never
+shares CI's entries, and is why the gate leaves it in fastbuild.
 
 ## The caches, and what each is for
 

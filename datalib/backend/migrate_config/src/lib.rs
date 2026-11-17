@@ -21,16 +21,16 @@
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
 //! step of datalib's own names `datalib-step` as its `command`; then
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
-//! `since`; then `problem_inputs.rs`: `grid_index` reads each
-//! `render_time_series` and `render_occurrences` step, for its problem
-//! rows; then `conversation_settings.rs`: the ChatGPT and Claude
+//! `since`; then `conversation_settings.rs`: the ChatGPT and Claude
 //! ingests' API settings take the names they share; then
 //! `keyword_fold.rs` and `aggregator_drop.rs`: the search's own steps
 //! fold into the index step; then `index_step_name.rs`: the index step's
 //! function, `grid_index`, becomes `unified_grid_and_search_index`; then
 //! `input_patterns.rs`: the index steps read every source by pattern,
-//! which finds them by their current functions. Those last
-//! thirteen rewrites are also the ones `datalib-http` makes by itself
+//! which finds them by their current functions; then `unread_inputs.rs`:
+//! the index step stops naming the `render_time_series` and
+//! `render_occurrences` steps it does not read. Every rewrite after
+//! `convert.rs` is also one `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
 pub mod aggregator_drop;
@@ -41,12 +41,12 @@ pub mod index_step_name;
 pub mod input_patterns;
 pub mod keyword_fold;
 pub mod lowercase_ids;
-pub mod problem_inputs;
 pub mod qmd_steps;
 pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
 pub mod todoist_since;
+pub mod unread_inputs;
 
 use std::path::{Path, PathBuf};
 
@@ -88,9 +88,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if todoist_since::is_retired(text)? {
         return Ok(LegacyFormat::TodoistCompletedSince);
     }
-    if problem_inputs::is_retired(text)? {
-        return Ok(LegacyFormat::UnreadProblems);
-    }
     if conversation_settings::is_retired(text)? {
         return Ok(LegacyFormat::ConversationSettingNames);
     }
@@ -102,6 +99,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     }
     if index_step_name::is_retired(text)? {
         return Ok(LegacyFormat::GridIndexStep);
+    }
+    if unread_inputs::is_retired(text)? {
+        return Ok(LegacyFormat::UnreadGridInputs);
     }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
@@ -115,11 +115,11 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand
         | LegacyFormat::TodoistCompletedSince
-        | LegacyFormat::UnreadProblems
         | LegacyFormat::ConversationSettingNames
         | LegacyFormat::KeywordIndexSteps
         | LegacyFormat::AggregatorStep
-        | LegacyFormat::GridIndexStep => text.to_string(),
+        | LegacyFormat::GridIndexStep
+        | LegacyFormat::UnreadGridInputs => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -133,12 +133,12 @@ pub fn convert(text: &str) -> Result<String> {
     let out = time_series_embeds::rewrite(&out)?;
     let out = step_commands::rewrite(&out)?;
     let out = todoist_since::rewrite(&out)?;
-    let out = problem_inputs::rewrite(&out)?;
     let out = conversation_settings::rewrite(&out)?;
     let out = keyword_fold::rewrite(&out)?;
     let out = aggregator_drop::rewrite(&out)?;
     let out = index_step_name::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
+    let out = unread_inputs::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -246,19 +246,6 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
-/// Add each `render_time_series` and `render_occurrences` step to
-/// `grid_index`'s `inputs` (`problem_inputs.rs`). Refused, as
-/// [`upgrade_qmd_steps`] is, when the result would not load every entry
-/// the original did.
-pub fn upgrade_problem_inputs(text: &str) -> Result<Option<String>> {
-    if !problem_inputs::is_retired(text).unwrap_or(false) {
-        return Ok(None);
-    }
-    let out = problem_inputs::rewrite(text)?;
-    refuse_a_loss(text, &out, str::to_string)?;
-    Ok(Some(out))
-}
-
 /// Fold each source's `keyword_index` into `grid_index`
 /// (`keyword_fold.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
 /// result would not load every entry the original did. The loader refuses
@@ -293,6 +280,18 @@ pub fn upgrade_input_patterns(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = input_patterns::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Take the `render_time_series` and `render_occurrences` inputs out of
+/// the index step (`unread_inputs.rs`). Refused, as [`upgrade_qmd_steps`]
+/// is, when the result would not load every entry the original did.
+pub fn upgrade_unread_inputs(text: &str) -> Result<Option<String>> {
+    if !unread_inputs::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = unread_inputs::rewrite(text)?;
     refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
@@ -395,12 +394,6 @@ pub const UNATTENDED: [Rewrite; 13] = [
         run: upgrade_todoist_since,
     },
     Rewrite {
-        why: "has a `grid_index` that does not read a time-series or occurrences step",
-        what: "`grid_index` reads each `render_time_series` and `render_occurrences` step, \
-               so their problem rows reach the problems list and the Manage counts",
-        run: upgrade_problem_inputs,
-    },
-    Rewrite {
         why: "has a ChatGPT or Claude source whose API settings have their old names",
         what: "ChatGPT's `max_pages`, `limit` and `sleep_between` are `max_listing_pages`, \
                `max_conversations_per_run` and `seconds_between_requests`, and Claude's \
@@ -433,6 +426,13 @@ pub const UNATTENDED: [Rewrite; 13] = [
         what: "an index step reads every source's step of a function by pattern \
                (`*/render_markdown`), so a source added later is read without editing it",
         run: upgrade_input_patterns,
+    },
+    Rewrite {
+        why: "has an index step that names a time-series or occurrences step",
+        what: "the index step no longer names the `render_time_series` and \
+               `render_occurrences` steps: their problems are read in their own stores, so \
+               the inputs only made it run again after each of them",
+        run: upgrade_unread_inputs,
     },
 ];
 
@@ -1183,6 +1183,51 @@ inputs = ["mail/render_markdown"]
         let second = upgrade_unattended(&first.text);
         assert!(second.done.is_empty() && second.refused.is_empty());
         assert_eq!(second.text, first.text);
+    }
+
+    /// A config from before #1766 had the index step name the time-series
+    /// and occurrences renders, by pattern or by id. The unattended pass
+    /// takes exactly those inputs out, leaves every other line alone, and
+    /// then has nothing left to do; the tool names the shape too. A config
+    /// whose index step is still `grid_index` is renamed first, and loses
+    /// the same inputs in the same pass.
+    #[test]
+    fn the_unattended_pass_takes_out_the_inputs_the_index_step_does_not_read() {
+        let current = "[[groups]]\nid = \"riker\"\ntype = \"garmin\"\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"render_markdown\"\n\
+                       command = \"datalib-step\"\ninputs = [\"riker/ingest\"]\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"render_time_series\"\n\
+                       command = \"datalib-step\"\ninputs = [\"riker/ingest\"]\n\n\
+                       [[groups]]\nid = \"unified_grid_and_search_index\"\n\n\
+                       [[steps]]\ngroup = \"unified_grid_and_search_index\"\n\
+                       function = \"unified_grid_and_search_index\"\n\
+                       command = \"datalib-step\"\ninputs = [\"*/render_markdown\"]\n\n\
+                       [[groups]]\nid = \"unified_time_series_index\"\n\n\
+                       [[steps]]\ngroup = \"unified_time_series_index\"\nfunction = \"time_series_index\"\n\
+                       command = \"datalib-step\"\ninputs = [\"*/render_time_series\"]\n";
+        let old = current.replace(
+            "inputs = [\"*/render_markdown\"]",
+            "inputs = [\"*/render_markdown\", \"riker/render_time_series\", \"*/render_occurrences\"]",
+        );
+        assert_eq!(detect(&old).unwrap(), LegacyFormat::UnreadGridInputs);
+        let first = upgrade_unattended(&old);
+        assert!(first.refused.is_empty());
+        assert_eq!(first.done, [UNATTENDED[12].what]);
+        assert_eq!(first.text, current);
+        assert_eq!(convert(&old).unwrap(), current);
+        let second = upgrade_unattended(&first.text);
+        assert!(second.done.is_empty() && second.refused.is_empty());
+
+        let older = old.replace(
+            "function = \"unified_grid_and_search_index\"",
+            "function = \"grid_index\"",
+        );
+        let both = upgrade_unattended(&older);
+        assert!(both.refused.is_empty(), "{:?}", both.refused);
+        assert_eq!(both.done, [UNATTENDED[10].what, UNATTENDED[12].what]);
+        assert_eq!(both.text, current);
+        assert_eq!(convert(&older).unwrap(), current);
     }
 
     #[test]

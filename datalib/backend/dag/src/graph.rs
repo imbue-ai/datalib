@@ -46,12 +46,15 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Ids of the source steps — those with no declared inputs. Their
-    /// real input is outside the graph (a remote service for a
-    /// download, the `path` of a file-backed method table for an
-    /// import), so the scheduler cannot version it and
-    /// always runs them. These are the valid targets for the runner's
-    /// subset-sync mode.
+    /// Ids of the steps that read nothing: what a sync of everything
+    /// starts from. Most are sources, whose real input is outside the
+    /// graph (a remote service for a download, the `path` of a
+    /// file-backed method table for an import), so the scheduler cannot
+    /// version it and runs them on every request
+    /// ([`StepSpec::is_source`](crate::step::StepSpec::is_source)). The
+    /// rest are fan-ins whose patterns match nothing yet; they run only
+    /// when out of date, and are here so that a fan-in whose last input
+    /// went still runs once over nothing.
     pub fn fringe_ids(&self) -> Vec<&str> {
         self.steps
             .iter()

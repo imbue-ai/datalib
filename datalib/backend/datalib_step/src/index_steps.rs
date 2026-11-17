@@ -84,16 +84,23 @@ pub(crate) async fn open_model(
 pub async fn run_embed(
     data_root: &Path,
     env: &StepEnv,
+    params: serde_json::Value,
     models_dir: Option<PathBuf>,
     emitter: &Emitter,
     stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
+    let params = crate::modal::params(params)?;
+    let on_modal = params
+        .embed_on_modal_from_n_chunks
+        .map(crate::search_index::Modal::for_this_process);
     let progress = emitter.progress();
     progress.set_message("embedding");
     let (model, tokenizer) = open_model(data_root, models_dir).await?;
     let ends = |text: &str| tokenizer.ends(text);
-    let done =
-        crate::search_index::embed(data_root, &env.group, &model, &ends, &progress, stop).await?;
+    let done = crate::search_index::embed(
+        data_root, &env.group, &model, &ends, on_modal, &progress, stop,
+    )
+    .await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric(
         "search_chunks_not_embedded",

@@ -146,6 +146,15 @@ group = "slack"
 function = "embed"
 command = "datalib-step"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+# Optional: a run that owes at least this many chunks embeds them on your
+# own Modal account's GPUs instead of here (`modal setup` signs you in),
+# which turns a first embed of hours into minutes; a run that owes fewer
+# stays here. Leave it out and nothing of the source leaves this machine.
+# The text of each chunk goes to Modal: set it only on a source you would
+# let leave. docs/dev/security_posture.md § "What leaves the machine for
+# Modal".
+# [steps.params]
+# embed_on_modal_from_n_chunks = 5000
 
 # ── claude ─────────────────────────────────────────────────────────
 # Signs in through latchkey's `claude-ai` service with your browser's
@@ -251,7 +260,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 # The search's document embeddings laid out on a plane by UMAP, for the
 # map card (`umapView()`). It reads every source's `embed`, so it runs

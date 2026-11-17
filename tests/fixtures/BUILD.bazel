@@ -146,6 +146,10 @@ genrule(
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         # Reads the index back for check_ingested.py.
         "//third-party/doltlite:doltlite",
+        # The `unified_grid_and_search_index` step reads its tokenizer;
+        # run_sync_pipeline.py links it into the root
+        # (INGESTED_TNG_EMBED_MODEL).
+        "//third-party/embedding_models:embeddinggemma",
     ],
     outs = [
         "ingested/backend_index.sqlite",
@@ -167,6 +171,7 @@ genrule(
         " ".join([
             # The sync's event stream goes to a log, printed only on
             # failure; see quiet.sh.
+            "INGESTED_TNG_EMBED_MODEL=$(execpath //third-party/embedding_models:embeddinggemma)",
             "$(execpath quiet.sh) $(RULEDIR)/sync.log",
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //datalib/backend/dag:datalib_dag_bin)",
@@ -329,6 +334,12 @@ py_test(
     ],
 )
 
+# Where run_sync_pipeline.py finds the model the
+# `unified_grid_and_search_index` step reads.
+_TNG_EMBED_MODEL_ENV = {
+    "INGESTED_TNG_EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
+}
+
 # py_test that drives the same `run_sync_pipeline.py` invocation as
 # :ingested_tng. Three reasons it exists:
 #
@@ -370,7 +381,9 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
 )
 
 # The provider contract (one_mode.md, "Layer 2"): for every render
@@ -408,7 +421,9 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
     size = "large",
 )
 
@@ -562,7 +577,9 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
     shard_count = 4,
 )
 

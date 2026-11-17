@@ -306,9 +306,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              `unified_grid_and_search_index/embedding_map`'s.{}",
             if t.renders_time_series() {
                 " There `<id>/render_time_series` goes in \
-                 `unified_time_series_index/time_series_index`'s and `unified_grid_and_search_index`'s too."
-            } else if t.renders_occurrences() {
-                " There `<id>/render_occurrences` goes in `unified_grid_and_search_index`'s too."
+                 `unified_time_series_index/time_series_index`'s too."
             } else {
                 ""
             }

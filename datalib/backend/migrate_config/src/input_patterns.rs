@@ -170,7 +170,6 @@ command = "datalib-step"
 inputs = [
     "picard/render_markdown", # the captain's mail
     "riker/render_markdown",
-    "riker/render_time_series",
 ]
 
 [[steps]]
@@ -222,14 +221,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
         let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         let map = "unified_grid_and_search_index/embedding_map";
         let export = "exports/csv";
-        assert_eq!(
-            written_inputs(&after, grid),
-            [
-                "*/render_markdown",
-                "*/render_time_series",
-                "*/render_occurrences"
-            ]
-        );
+        assert_eq!(written_inputs(&after, grid), ["*/render_markdown"]);
         assert_eq!(written_inputs(&after, map), ["*/embed"]);
         assert_eq!(
             written_inputs(&after, export),
@@ -258,11 +250,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
                 &after,
                 "unified_grid_and_search_index/unified_grid_and_search_index"
             ),
-            [
-                "picard/render_markdown",
-                "*/render_time_series",
-                "*/render_occurrences"
-            ]
+            ["picard/render_markdown"]
         );
     }
 }

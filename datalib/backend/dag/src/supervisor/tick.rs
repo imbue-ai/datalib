@@ -41,6 +41,10 @@ pub struct Shape {
 #[derive(Debug, Clone)]
 pub struct StepShape {
     pub reads: Vec<SinkIx>,
+    /// Its real input is outside the graph, so every request that wants
+    /// it runs it once. A fan-in whose patterns match nothing reads
+    /// nothing too, and is not one.
+    pub source: bool,
     /// The hash of the step's own definition; a change makes it stale.
     pub fingerprint: String,
     /// The named locks it holds while it runs.
@@ -281,7 +285,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         let due = stale
             || live
                 .iter()
-                .any(|&r| step.reads.is_empty() && !started_since(f, intent.requests[r].opened));
+                .any(|&r| step.source && !started_since(f, intent.requests[r].opened));
         if !due {
             states[i] = StepState::Fresh;
             continue;
@@ -497,6 +501,7 @@ mod tests {
             .enumerate()
             .map(|(i, r)| StepShape {
                 reads: r.to_vec(),
+                source: r.is_empty(),
                 fingerprint: format!("fp{i}"),
                 locks: vec![(if r.is_empty() { NETWORK } else { CPU }, Hold::Shared)],
                 pins_reads: true,

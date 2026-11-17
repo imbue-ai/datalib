@@ -465,7 +465,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 [[applets]]
 group = "unified_grid_and_search_index"

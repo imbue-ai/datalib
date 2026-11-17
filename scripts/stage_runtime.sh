@@ -19,6 +19,10 @@
 #     node/bin/node                                    pinned Node
 #     node/LICENSE                                     its notice
 #     latchkey/<v>/node_modules/latchkey/dist/src/cli.js
+#     modal/<v>/node_modules/modal/dist/index.js       Modal's SDK, which the
+#                                                      embed step's Modal
+#                                                      driver imports
+#     modal/<v>/LICENSE                                its license
 #
 # `--no-symlinks` rewrites each JS tree into npm's flat layout
 # (scripts/hoist_node_modules.py), which has no links at all. The .app
@@ -39,6 +43,9 @@
 #                                            of the shipped notices)
 #   //third-party/latchkey/runtime:latchkey_tree  lockfile-pinned, sha512
 #                                                 per tarball
+#   //third-party/modal/runtime:modal_tree        likewise, Modal's SDK
+#   //third-party/modal:LICENSE                   its license, which the
+#                                                 npm package lacks
 #
 # The version pin is grepped out of the Rust source that spawns the
 # tool, because it names the staged DIRECTORY and the resolver looks
@@ -97,8 +104,10 @@ extract_pin() { # file, pattern of the const line
 
 latchkey_version="$(extract_pin "$backend_dir/runtime/src/node_runtime.rs" \
     '^pub const LATCHKEY_VERSION:')"
+modal_version="$(extract_pin "$backend_dir/runtime/src/node_runtime.rs" \
+    '^pub const MODAL_SDK_VERSION:')"
 
-log "pin: latchkey=$latchkey_version"
+log "pin: latchkey=$latchkey_version modal=$modal_version"
 
 # ---------------------------------------------------------------------------
 # Build the Bazel targets and locate their outputs.
@@ -120,7 +129,8 @@ else
     (cd "$repo_root" && "$bazel" build \
         //datalib/tauri:bundled_node \
         //third-party:bundled_licenses \
-        //third-party/latchkey/runtime:latchkey_tree >&2)
+        //third-party/latchkey/runtime:latchkey_tree \
+        //third-party/modal/runtime:modal_tree >&2)
     bin="$(cd "$repo_root" && "$bazel" info bazel-bin)"
 fi
 
@@ -156,6 +166,10 @@ rsync -aL "$bin/third-party/bundled_licenses/node/LICENSE" "$runtime_dir/node/LI
 chmod u+w "$runtime_dir/node/LICENSE"
 
 stage_tree latchkey "$latchkey_version" "$bin/third-party/latchkey/runtime/node_modules"
+stage_tree modal "$modal_version" "$bin/third-party/modal/runtime/node_modules"
+# The npm package carries no license file; the repository's goes beside it.
+rsync -aL "$repo_root/third-party/modal/LICENSE" "$runtime_dir/modal/$modal_version/LICENSE"
+chmod u+w "$runtime_dir/modal/$modal_version/LICENSE"
 
 # Drop trees whose version is no longer pinned (left behind by a bump),
 # so incremental build machines don't ship dead weight. Before the
@@ -171,6 +185,7 @@ prune_stale() { # kind, live version
     done
 }
 prune_stale latchkey "$latchkey_version"
+prune_stale modal "$modal_version"
 # A tree staged by a build that still bundled qmd.
 if [[ -d "$runtime_dir/qmd" ]]; then
     log "pruning qmd, which the runtime no longer carries"
@@ -181,6 +196,7 @@ fi
 # tree. The smoke test below then runs against the tree that ships.
 if [[ -n "$no_symlinks" ]]; then
     python3 "$script_dir/hoist_node_modules.py" "$runtime_dir/latchkey/$latchkey_version/node_modules"
+    python3 "$script_dir/hoist_node_modules.py" "$runtime_dir/modal/$modal_version/node_modules"
     links="$(find "$runtime_dir" -type l | wc -l | tr -d ' ')"
     [[ "$links" == 0 ]] || fail "$links symlinks survived --no-symlinks"
 fi
@@ -203,5 +219,14 @@ smoke_ok=1
 "$runtime_dir/node/bin/node" "$smoke" || smoke_ok=""
 rm -f "$smoke"
 [[ -n "$smoke_ok" ]] || fail "the staged latchkey tree cannot import playwright; browser logins would fail"
+
+# The embed step imports Modal's SDK by its entry's path, so that is
+# what the smoke imports.
+modal_entry="$runtime_dir/modal/$modal_version/node_modules/modal/dist/index.js"
+[[ -f "$modal_entry" ]] || fail "staged entry missing: $modal_entry"
+log "smoke: the modal SDK imports"
+"$runtime_dir/node/bin/node" --input-type=module \
+    -e "const m = await import('$modal_entry'); if (typeof m.ModalClient !== 'function') process.exit(1);" \
+    || fail "the staged modal SDK does not import; embedding on Modal would fail"
 
 log "runtime staged at $runtime_dir"

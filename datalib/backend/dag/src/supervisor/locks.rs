@@ -90,11 +90,12 @@ pub fn defaults() -> Vec<LockSpec> {
     .collect()
 }
 
-/// The lock a step holds when it names none: `network` for a step that
-/// reads nothing (a download), `cpu` for one in a group with a `type`
-/// (a source's render), `index` for any other step that reads something.
+/// The lock a step holds when it names none: `network` for a source (a
+/// download), `cpu` for one in a group with a `type` (a source's render),
+/// `index` for any other step, a fan-in whose patterns match nothing yet
+/// among them.
 pub fn default_for(spec: &StepSpec) -> &'static str {
-    if spec.inputs.is_empty() {
+    if spec.is_source() {
         NETWORK
     } else if spec.group_type.is_none() {
         INDEX

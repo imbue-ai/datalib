@@ -24,6 +24,7 @@ mod ingest;
 mod introspect;
 mod methods;
 mod migrate;
+mod modal;
 mod occurrences;
 mod probe;
 mod published;
@@ -320,6 +321,16 @@ enum Cmd {
         #[arg(long)]
         into: Option<PathBuf>,
     },
+    /// Utility (not a pipeline step): put the CUDA module in place — the
+    /// one in `lib/` beside the binary, else the release asset
+    /// `runtime.manifest` names, fetched sha256-verified into
+    /// `$XDG_CACHE_HOME/datalib/cuda` (`~/.cache/datalib/cuda` by default)
+    /// — and say where it is and whether this machine has the NVIDIA
+    /// driver to run it. What an `embed` on a machine with an NVIDIA GPU
+    /// does first, runnable ahead of time, and here even without the
+    /// driver, for which an embed never fetches. x86_64 gnu Linux only.
+    /// Needs no data root.
+    PullCuda,
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
     /// entries together — moving an entry only when it has to, and
@@ -463,6 +474,10 @@ async fn main() {
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.
     datalib_fetch::enable_runtime_fetch();
+    // And before the first embed: a gnu x86_64 tarball has no CUDA module
+    // beside its binaries, and fetches the one its manifest names where
+    // there is an NVIDIA driver.
+    datalib_fetch::enable_cuda_fetch();
 
     // `probe` is answered before any of the step machinery below: it
     // owns no tree, claims no outputs and must leave stdout holding
@@ -555,6 +570,21 @@ async fn main() {
         let out = tokio::task::spawn_blocking(move || pull_runtime(into.as_deref()))
             .await
             .expect("pull-runtime task panicked");
+        match out {
+            Ok(report) => {
+                datalib_obs::status_line!("{report}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Some(Cmd::PullCuda) = &cli.cmd {
+        let out = tokio::task::spawn_blocking(pull_cuda)
+            .await
+            .expect("pull-cuda task panicked");
         match out {
             Ok(report) => {
                 datalib_obs::status_line!("{report}");
@@ -732,6 +762,7 @@ async fn run(
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
         Some(Cmd::EmbedPrompts { .. }) => unreachable!("embed-prompts is answered in main"),
         Some(Cmd::PullRuntime { .. }) => unreachable!("pull-runtime is answered in main"),
+        Some(Cmd::PullCuda) => unreachable!("pull-cuda is answered in main"),
         Some(Cmd::TopoSortConfig { .. }) => {
             unreachable!("topo-sort-config is answered in main")
         }
@@ -834,7 +865,8 @@ async fn run_function(
             .await
         }
         Function::Embed => {
-            index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
+            index_steps::run_embed(data_root, &env, params, models_dir, emitter, &control.stop)
+                .await
         }
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
@@ -879,6 +911,24 @@ fn pull_runtime(into: Option<&Path>) -> Result<String> {
     Ok(format!(
         "runtime: {}\nnode --version: {node}\nlatchkey: {latchkey}",
         root.display()
+    ))
+}
+
+/// The CUDA module in place, as an embed on a machine with a driver finds
+/// it, but whether or not this one has the driver. Not loaded: without
+/// the driver and cuBLAS it cannot be.
+fn pull_cuda() -> Result<String> {
+    use datalib_runtime::cuda_module::{find, DRIVER_LIBRARY};
+    let module = find(true).map_err(anyhow::Error::msg)?;
+    let driver = if datalib_embedder::can_load(DRIVER_LIBRARY) {
+        "present"
+    } else {
+        "absent: an embed here runs on the CPU"
+    };
+    Ok(format!(
+        "cuda module: {}
+NVIDIA driver ({DRIVER_LIBRARY}): {driver}",
+        module.display()
     ))
 }
 

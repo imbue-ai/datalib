@@ -24,6 +24,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":embedder_shim",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
     ],
 )

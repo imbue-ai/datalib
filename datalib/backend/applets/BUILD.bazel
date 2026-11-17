@@ -76,6 +76,10 @@ rust_test(
     env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "INSTA_WORKSPACE_ROOT": ".",
+        # A test over a root with no model of its own (the problem tests')
+        # verifies the shared cache under `HOME`, which in a test is its
+        # writable TEST_TMPDIR: with fetching on, that is a 300 MB download.
+        "DATALIB_MODELS_NO_FETCH": "1",
         # Each search test loads the embedding model, which is large.
         "RUST_TEST_THREADS": "1",
     },

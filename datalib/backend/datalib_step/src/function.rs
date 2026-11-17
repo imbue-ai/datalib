@@ -76,7 +76,10 @@ impl Function {
                  search by meaning. The slow one: turn it off for a source with \
                  `datalib-dag turn-off <config> <group>/embed`, and keyword search still \
                  works. One per source searched by meaning; \
-                 inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]."
+                 inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]. Param \
+                 `embed_on_modal_from_n_chunks`: a run that owes at least that many \
+                 chunks embeds them on the person's own Modal account; absent, \
+                 nothing leaves the machine."
             }
             Function::EmbeddingMap => {
                 "Lay the search index's embeddings out on a plane, for the map card. Goes \
