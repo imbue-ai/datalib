@@ -5,6 +5,7 @@ mod calendar_split;
 mod check_params;
 mod clear_before_ingest;
 mod compact;
+mod embed_prompts;
 mod embedding_map;
 mod final_message;
 mod index_text;
