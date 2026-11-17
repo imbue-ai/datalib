@@ -3,4 +3,5 @@ exports_files([
     "embed_metal.py",
     "ggml_exports.dynlist",
     "llama_cpp.BUILD",
+    "shared_libraries.bzl",
 ])

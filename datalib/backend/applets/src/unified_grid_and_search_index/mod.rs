@@ -1,4 +1,4 @@
-//! `datalib-applet unified_grid_and_search_index` — the grid index, the qmd index and
+//! `datalib-applet unified_grid_and_search_index` — the grid index, the search index and
 //! the embedding map, served over HTTP.
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -43,10 +43,10 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::db::datalib_source_id;
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::Within;
-use datalib_unified_grid_and_search_index::qmd::index_state::{DocReport, IndexStamp};
-use datalib_unified_grid_and_search_index::qmd::vectors::Freshness;
-use datalib_unified_grid_and_search_index::qmd::{
-    display_snippet, CollectionScope, GridIndex, QmdIndexSummary,
+use datalib_unified_grid_and_search_index::hits::index_state::{DocReport, IndexStamp};
+use datalib_unified_grid_and_search_index::hits::vectors::Freshness;
+use datalib_unified_grid_and_search_index::hits::{
+    display_snippet, CollectionScope, GridIndex, IndexSummary,
 };
 use datalib_unified_grid_and_search_index::query::{parse_query, Field, ParsedQuery, Semantic};
 use datalib_unified_grid_and_search_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -155,7 +155,7 @@ async fn open_with_models_verified(root: PathBuf) -> Result<Index> {
     let gate = models.clone();
     tokio::task::spawn_blocking(move || gate.provision_now())
         .await
-        .context("provision qmd's embedding model")?;
+        .context("provision the embedding model")?;
     Index::open(root, models, ONE_SEARCH_DEADLINE).await
 }
 
@@ -208,7 +208,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/search/groups", get(groups_handler))
             .route("/search/keys", get(search_keys))
             .route("/search/values", get(search_values))
-            .route("/qmd_state", post(qmd_state))
+            .route("/index_state", post(index_state))
             .route("/docs", get(list_docs))
             .route("/people", post(people))
             .route("/embedding_map", get(map::handler))
@@ -267,7 +267,7 @@ pub struct SearchParams {
     /// previous page answered with. None is the first page.
     pub offset: Option<usize>,
     /// A grid column and direction, `created_at:desc` (see
-    /// `datalib_unified_grid_and_search_index::sort`). None is newest first, or qmd's rank
+    /// `datalib_unified_grid_and_search_index::sort`). None is newest first, or the search's rank
     /// for free text.
     pub sort: Option<String>,
     /// A row's uuid the page must reach, however far past `offset` it is:
@@ -355,7 +355,7 @@ impl SearchResponse {
 }
 
 /// Response shape for `/applet/unified_grid_and_search_index/chat/{markdown_uuid}`. The body is the raw
-/// QMD content minus the YAML frontmatter — the UI runs markdown-it on
+/// Rendered markdown minus the YAML frontmatter — the UI runs markdown-it on
 /// it, one section at a time where `sections` says where they lie. We do
 /// **not** ship a structured `messages[]` array; per-message scrolling
 /// uses the `<div id="m-{uuid}" data-section-uuid="…">` wrappers the
@@ -434,11 +434,11 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         }
     };
     // Structured terms alone are a SQL filter; free text is ranked within
-    // the rows they leave (`ranked`). A qmd failure is the answer —
-    // `query_echo.qmd_error`, no rows — not a quieter search in its place.
-    // No index yet is not a failure: `qmd_index_missing`, and no rows.
-    let mut qmd_error: Option<String> = None;
-    let mut qmd_index_missing = false;
+    // the rows they leave (`ranked`). A ranking failure is the answer —
+    // `query_echo.search_error`, no rows — not a quieter search in its place.
+    // No index yet is not a failure: `search_index_missing`, and no rows.
+    let mut search_error: Option<String> = None;
+    let mut search_index_missing = false;
     let offset = p.offset.unwrap_or(0);
     let through = p.through.as_deref();
     let within = match p
@@ -474,12 +474,12 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     let page = match answered {
         Ok(page) => page,
         Err(SearchFailure::NoIndex) => {
-            qmd_index_missing = true;
+            search_index_missing = true;
             Page::default()
         }
-        Err(SearchFailure::Qmd(e)) => {
-            tracing::error!(query = %q, error = %e, "a free-text search failed in qmd");
-            qmd_error = Some(e);
+        Err(SearchFailure::Ranking(e)) => {
+            tracing::error!(query = %q, error = %e, "a free-text search failed to rank");
+            search_error = Some(e);
             Page::default()
         }
         Err(SearchFailure::Index(e)) => {
@@ -532,8 +532,8 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
             "semantic_cutoff": parsed.semantic.cutoff(),
-            "qmd_error": qmd_error,
-            "qmd_index_missing": qmd_index_missing,
+            "search_error": search_error,
+            "search_index_missing": search_index_missing,
             "partial": page.partial,
             "without_vectors": without_vectors,
         }),
@@ -585,13 +585,13 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
         .map(|r| format!("refused: {r}"))
         .collect();
     why.extend(answer.errors.iter().cloned());
-    if let Some(e) = echo["qmd_error"].as_str() {
-        why.push(format!("qmd could not answer the free text: {e}"));
+    if let Some(e) = echo["search_error"].as_str() {
+        why.push(format!("the search could not rank the free text: {e}"));
     }
     if let Some(e) = echo["partial"].as_str() {
         why.push(e.to_string());
     }
-    if echo["qmd_index_missing"].as_bool() == Some(true) {
+    if echo["search_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
              words are searchable once `grid_index` has run after its render"
@@ -614,10 +614,10 @@ pub struct GroupsResponse {
     /// More groups than one answer carries: the rest are left out.
     pub truncated: bool,
     pub at: Option<String>,
-    /// Free text qmd could not rank: no groups, and why.
-    pub qmd_error: Option<String>,
-    /// Free text before the first sync has built a qmd index: no groups.
-    pub qmd_index_missing: bool,
+    /// Free text the search could not rank: no groups, and why.
+    pub search_error: Option<String>,
+    /// Free text before the first sync has built a search index: no groups.
+    pub search_index_missing: bool,
     pub errors: Vec<String>,
     /// As on `/search`: why the query cannot be read as typed.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -682,14 +682,14 @@ async fn groups_handler(
                 })
                 .collect();
         }
-        Err(SearchFailure::NoIndex) => out.qmd_index_missing = true,
-        Err(SearchFailure::Qmd(e)) => out.qmd_error = Some(e),
+        Err(SearchFailure::NoIndex) => out.search_index_missing = true,
+        Err(SearchFailure::Ranking(e)) => out.search_error = Some(e),
         Err(SearchFailure::Index(e)) => out.errors.push(format!("group the search: {e}")),
     }
     Json(out)
 }
 
-/// The groups of a search: over qmd's ranking for free text, else over
+/// The groups of a search: over the search's ranking for free text, else over
 /// every row its structured terms match.
 async fn group_list(
     s: &Index,
@@ -718,10 +718,10 @@ async fn group_list(
 
 #[derive(Debug)]
 enum SearchFailure {
-    /// No sync has built the qmd index yet, so free text has nothing to
+    /// No sync has built the search index yet, so free text has nothing to
     /// search. A state to show, not an error.
     NoIndex,
-    Qmd(String),
+    Ranking(String),
     Index(String),
 }
 
@@ -729,7 +729,7 @@ impl std::fmt::Display for SearchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SearchFailure::NoIndex => f.write_str("no search index yet"),
-            SearchFailure::Qmd(e) | SearchFailure::Index(e) => f.write_str(e),
+            SearchFailure::Ranking(e) | SearchFailure::Index(e) => f.write_str(e),
         }
     }
 }
@@ -749,7 +749,7 @@ struct Page {
     among: Option<Vec<String>>,
 }
 
-/// One page of the search, with qmd's score and matched words on each
+/// One page of the search, with the search's score and matched words on each
 /// row it ranked.
 async fn search_page(
     s: &Index,
@@ -858,7 +858,7 @@ async fn without_vectors(
     Ok(Some(counted))
 }
 
-/// qmd's score, and the words the hit matched in place of the row's
+/// the search's score, and the words the hit matched in place of the row's
 /// opening words. A hit that showed nothing readable keeps the preview.
 fn show_hit(row: &mut SearchRow, (score, context): (f64, &str)) {
     row.score = Some(score);
@@ -879,7 +879,7 @@ async fn land(
 ) -> Result<(), SearchFailure> {
     let todo: Vec<(
         &results::Entry,
-        &datalib_unified_grid_and_search_index::qmd::QmdHit,
+        &datalib_unified_grid_and_search_index::hits::SearchHit,
     )> = entries
         .iter()
         .filter_map(|e| Some((e, e.unlanded()?)))
@@ -929,7 +929,7 @@ async fn land(
     let filtered = started.elapsed();
     let n_refs = refs.len();
     let words =
-        datalib_unified_grid_and_search_index::qmd::lex::strip_lex_syntax(&parsed.free_text);
+        datalib_unified_grid_and_search_index::hits::lex::strip_lex_syntax(&parsed.free_text);
     let idx = GridIndex::new((*s.root).clone(), refs).with_terms(&words);
     let idx = match kept {
         Some(kept) => idx.within(kept),
@@ -959,7 +959,7 @@ async fn land(
         }
     })
     .await
-    .map_err(|e| SearchFailure::Qmd(format!("landing a page's hits: {e}")))?;
+    .map_err(|e| SearchFailure::Ranking(format!("landing a page's hits: {e}")))?;
     tracing::info!(
         landed = n,
         rows = n_refs,
@@ -1171,7 +1171,7 @@ async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking,
     let depth = if narrows_documents(parsed) {
         usize::MAX
     } else {
-        QMD_DEPTH
+        RANK_DEPTH
     };
     let found = search_terms::lookup(&s.root, &m, depth)
         .await
@@ -1236,7 +1236,7 @@ async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Answer, Search
     let mut rankings: [Ranking; 3] = [words, meaning, fields];
     for r in &mut rankings {
         // Each cut to the depth fused: a rank past it adds next to nothing.
-        r.truncate(QMD_DEPTH);
+        r.truncate(RANK_DEPTH);
     }
     let partial = match failed {
         Some(failure) if rankings.iter().all(Vec::is_empty) => return Err(failure),
@@ -1302,7 +1302,7 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
         }
     }
     fused.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
-    fused.truncate(QMD_DEPTH);
+    fused.truncate(RANK_DEPTH);
     fused
 }
 
@@ -1317,7 +1317,7 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
 type DocumentHit = datalib_unified_grid_and_search_index::search_index::DocumentHit;
 
 async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, SearchFailure> {
-    use datalib_unified_grid_and_search_index::qmd::lex;
+    use datalib_unified_grid_and_search_index::hits::lex;
     let Some(query) = lex::fts5_query(&parsed.free_text) else {
         return Ok(Vec::new());
     };
@@ -1336,14 +1336,14 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
             query,
             scope.names(),
             among,
-            QMD_DEPTH,
+            RANK_DEPTH,
         )
         .await
-        .map_err(|e| SearchFailure::Qmd(format!("the search index's words: {e:#}")))?
+        .map_err(|e| SearchFailure::Ranking(format!("the search index's words: {e:#}")))?
         .ok_or(SearchFailure::NoIndex)?;
         append_below(&mut hits, found);
     }
-    // Then pages holding the words between their pieces, as qmd scored a
+    // Then pages holding the words between their pieces, as qmd used to score a
     // whole document: a page's heading and its rows are parts of one
     // thing. A conversation's messages are each said on their own, so a
     // conversation is found only by a message holding every word.
@@ -1353,14 +1353,14 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
             &terms,
             scope.names(),
             among,
-            QMD_DEPTH,
+            RANK_DEPTH,
         )
         .await
-        .map_err(|e| SearchFailure::Qmd(format!("the search index's pages: {e:#}")))?
+        .map_err(|e| SearchFailure::Ranking(format!("the search index's pages: {e:#}")))?
         .ok_or(SearchFailure::NoIndex)?;
         append_below(&mut hits, found);
     }
-    hits.truncate(QMD_DEPTH);
+    hits.truncate(RANK_DEPTH);
     Ok(hits)
 }
 
@@ -1389,7 +1389,7 @@ fn append_below(hits: &mut Vec<DocumentHit>, found: Vec<DocumentHit>) {
 /// scored, so a filter never empties a ranking cut too shallow to hold its
 /// rows. The search index's vectors, with the query embedded here.
 async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
-    use datalib_unified_grid_and_search_index::qmd::lex::{has_lex_syntax, strip_lex_syntax};
+    use datalib_unified_grid_and_search_index::hits::lex::{has_lex_syntax, strip_lex_syntax};
     let Some(cutoff) = parsed.semantic.cutoff() else {
         return Ok(Vec::new());
     };
@@ -1414,7 +1414,7 @@ async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Sea
 }
 
 fn embedding_failed(e: anyhow::Error) -> SearchFailure {
-    SearchFailure::Qmd(format!("{e:#}"))
+    SearchFailure::Ranking(format!("{e:#}"))
 }
 
 async fn search_index_nearest(
@@ -1432,7 +1432,7 @@ async fn search_index_nearest(
     let embedder = s.local_embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
         .await
-        .map_err(|e| SearchFailure::Qmd(format!("query embedder task: {e}")))?
+        .map_err(|e| SearchFailure::Ranking(format!("query embedder task: {e}")))?
         .map_err(embedding_failed)?;
     let embedded = started.elapsed();
     let keyed = keyed(s, parsed).await?;
@@ -1441,7 +1441,7 @@ async fn search_index_nearest(
     let scope = search_scope(s, parsed).await?;
     let hits = s
         .held_vectors
-        .nearest(&s.root, &query, scope.names(), among, QMD_DEPTH, fresh)
+        .nearest(&s.root, &query, scope.names(), among, RANK_DEPTH, fresh)
         .await
         .map_err(embedding_failed)?
         .ok_or(SearchFailure::NoIndex)?;
@@ -1462,8 +1462,8 @@ async fn search_index_nearest(
 /// row too, and that must not bring back its other days.
 fn kept_of(
     rows: Vec<(String, String, bool)>,
-) -> std::collections::HashMap<String, datalib_unified_grid_and_search_index::qmd::vectors::Kept> {
-    use datalib_unified_grid_and_search_index::qmd::vectors::Kept;
+) -> std::collections::HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept> {
+    use datalib_unified_grid_and_search_index::hits::vectors::Kept;
     let mut sections: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
     for (uuid, document, is_document) in rows {
@@ -1528,11 +1528,11 @@ fn narrows_documents(parsed: &ParsedQuery) -> bool {
     })
 }
 
-/// How many hits qmd ranks for one free-text search: every page of it is
+/// How many hits the search ranks for one free-text search: every page of it is
 /// cut from these.
-const QMD_DEPTH: usize = 1_000;
+const RANK_DEPTH: usize = 1_000;
 
-/// How long the qmd index must sit still before a search reads what
+/// How long the search index must sit still before a search reads what
 /// changed in it. A sync's embed step commits every few seconds, and on a
 /// large library reading the documents again at each commit took a search
 /// past its deadline; until then a search answers from what it last read,
@@ -1620,7 +1620,7 @@ async fn grid_sources(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {
 
 /// What a ranking reads: what the query names, of the sources the grid holds.
 ///
-/// The qmd index can hold a source the grid does not: one turned off keeps
+/// The search index can hold a source the grid does not: one turned off keeps
 /// its collection, so its embeddings survive, while the grid leaves out a
 /// render store it can no longer read. A hit there has no row to show, yet
 /// it would take a place in the ranking's cut and its vectors would be held
@@ -1633,7 +1633,7 @@ async fn search_scope(s: &Index, parsed: &ParsedQuery) -> Result<CollectionScope
     }))
 }
 
-/// The qmd collections a parsed query asks for.
+/// The sources a parsed query asks for.
 ///
 /// There is one collection per group, named after it, and
 /// `source:` names a group — so a scoped query becomes a scoped
@@ -1670,26 +1670,26 @@ fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
     }
 }
 
-/// Cap on how many documents one `/qmd_state` call may ask about, which
+/// Cap on how many documents one `/index_state` call may ask about, which
 /// bounds the work a single request can trigger. The grid's default
 /// result limit is 200; a client wanting more chunks its requests.
-const QMD_STATE_MAX_DOCS: usize = 2_000;
+const INDEX_STATE_MAX_DOCS: usize = 2_000;
 
 #[derive(Debug, Deserialize)]
-pub struct QmdStateRequest {
+pub struct IndexStateRequest {
     /// The markdowns to report on. Duplicates are fine — they collapse.
     pub markdown_uuids: Vec<String>,
 }
 
 /// Which documents the search index holds and has embedded. The route and
-/// its fields keep the names they had when qmd's index answered them.
+/// its fields keep the names they had when the search index answered them.
 #[derive(Debug, Serialize)]
-pub struct QmdStateResponse {
+pub struct IndexStateResponse {
     /// False when no `grid_index` keyword pass has written the search index
     /// yet, so every document is legitimately un-indexed rather than
     /// unknown.
     pub index_present: bool,
-    pub summary: QmdIndexSummary,
+    pub summary: IndexSummary,
     /// markdown_uuid → state. Every requested uuid appears.
     pub docs: std::collections::HashMap<String, DocReport>,
     /// Same contract as `/search`: errors the user should see even
@@ -1698,22 +1698,22 @@ pub struct QmdStateResponse {
     pub errors: Vec<String>,
 }
 
-async fn qmd_state(
+async fn index_state(
     State(s): State<Index>,
-    Json(req): Json<QmdStateRequest>,
-) -> Json<QmdStateResponse> {
+    Json(req): Json<IndexStateRequest>,
+) -> Json<IndexStateResponse> {
     let mut errors: Vec<String> = Vec::new();
     // Dedupe first: many grid rows share one markdown, and the caller
     // is not required to have collapsed them.
     let mut uuids: Vec<String> = req.markdown_uuids;
     uuids.sort();
     uuids.dedup();
-    if uuids.len() > QMD_STATE_MAX_DOCS {
+    if uuids.len() > INDEX_STATE_MAX_DOCS {
         errors.push(format!(
-            "qmd_state: asked about {} documents, answering the first {QMD_STATE_MAX_DOCS}",
+            "index_state: asked about {} documents, answering the first {INDEX_STATE_MAX_DOCS}",
             uuids.len()
         ));
-        uuids.truncate(QMD_STATE_MAX_DOCS);
+        uuids.truncate(INDEX_STATE_MAX_DOCS);
     }
     let every = |report: DocReport| -> std::collections::HashMap<String, DocReport> {
         uuids.iter().map(|u| (u.clone(), report.clone())).collect()
@@ -1726,9 +1726,9 @@ async fn qmd_state(
     let reader = match opened {
         Ok(Some(reader)) => reader,
         Ok(None) => {
-            return Json(QmdStateResponse {
+            return Json(IndexStateResponse {
                 index_present: false,
-                summary: QmdIndexSummary::default(),
+                summary: IndexSummary::default(),
                 docs: every(DocReport {
                     indexed: Some(false),
                     embedded: Some(false),
@@ -1739,9 +1739,9 @@ async fn qmd_state(
         }
         Err(e) => {
             errors.push(format!("search index: {e:#}"));
-            return Json(QmdStateResponse {
+            return Json(IndexStateResponse {
                 index_present: false,
-                summary: QmdIndexSummary::default(),
+                summary: IndexSummary::default(),
                 docs: every(DocReport {
                     indexed: None,
                     embedded: None,
@@ -1779,7 +1779,7 @@ async fn qmd_state(
                     (u.clone(), report)
                 })
                 .collect(),
-            QmdIndexSummary {
+            IndexSummary {
                 documents,
                 embedded,
             },
@@ -1792,11 +1792,11 @@ async fn qmd_state(
                     embedded: None,
                     note: Some("index state could not be read".to_string()),
                 }),
-                QmdIndexSummary::default(),
+                IndexSummary::default(),
             )
         }
     };
-    Json(QmdStateResponse {
+    Json(IndexStateResponse {
         index_present: true,
         summary,
         docs,
@@ -1966,7 +1966,7 @@ async fn search_keys() -> Json<Vec<datalib_columns::SearchKeySpec>> {
 
 /// `GET /search/values?key=…&typed=…&q=…`: what the search bar suggests
 /// for one key's value. The rest of the query narrows it by its
-/// structured terms; its free text does not, which would be a qmd search
+/// structured terms; its free text does not, which would be a ranked search
 /// per keystroke.
 async fn search_values(
     State(s): State<Index>,
@@ -2028,7 +2028,7 @@ async fn chat(
     State(s): State<Index>,
     Path(markdown_uuid): Path<String>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    // QMDs are write-only output. We read the file just to ship its body
+    // Rendered markdown is write-only output. We read the file just to ship its body
     // to the UI as-is; structured metadata comes from grid_rows. Per-section
     // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
     // let the UI scroll-and-highlight without a structured chat schema.
@@ -2171,7 +2171,7 @@ fn strip_frontmatter(text: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// A search reads what changed in the qmd index only once the index has
+    /// A search reads what changed in the search index only once the index has
     /// sat still for `INDEX_SETTLE`: during a sync it answers from what it
     /// holds rather than re-reading the index at every embed commit.
     #[test]
@@ -2211,10 +2211,10 @@ mod tests {
         );
     }
 
-    /// What `source:` hands qmd: every positive id; nothing for a
+    /// What `source:` hands the search: every positive id; nothing for a
     /// negated one or for `datalib`, which has no collection.
     #[test]
-    fn source_ids_become_the_collections_qmd_searches() {
+    fn source_ids_become_the_search_scope() {
         let scope = |q: &str| collection_scope(&parse_query(q));
         let only =
             |names: &[&str]| CollectionScope::Only(names.iter().map(|n| n.to_string()).collect());
@@ -2234,7 +2234,7 @@ mod tests {
     /// messages, not by every day of it.
     #[test]
     fn a_kept_document_row_counts_whole_only_without_kept_messages() {
-        use datalib_unified_grid_and_search_index::qmd::vectors::Kept;
+        use datalib_unified_grid_and_search_index::hits::vectors::Kept;
         let row = |uuid: &str, document: &str, is_document| {
             (uuid.to_string(), document.to_string(), is_document)
         };
@@ -2604,9 +2604,9 @@ mod tests {
     }
 
     /// A pasted uuid or address is answered from the search terms, never by
-    /// qmd, which this root has no index for.
+    /// the search index, which this root does not have yet.
     #[tokio::test]
-    async fn an_identifier_search_is_answered_from_the_terms_without_qmd() {
+    async fn an_identifier_search_is_answered_from_the_terms_without_ranking() {
         let tmp = tempfile::tempdir().unwrap();
         let (a, b) = (
             "00000000-0000-4000-8000-0000000000a1",
@@ -2626,10 +2626,10 @@ mod tests {
             ],
         )
         .await;
-        let qmd_missing = |r: &SearchResponse| r.query_echo["qmd_index_missing"] == true;
+        let index_missing = |r: &SearchResponse| r.query_echo["search_index_missing"] == true;
         let s = index_over(tmp.path()).await;
         let by_id = search(&s, a, None, 10, None).await;
-        assert!(!qmd_missing(&by_id), "{:?}", by_id.query_echo);
+        assert!(!index_missing(&by_id), "{:?}", by_id.query_echo);
         assert_eq!(uuids(&by_id), [a]);
         assert_eq!(by_id.rows[0].snippet, format!("id: {a}"));
 
@@ -3123,7 +3123,7 @@ mod tests {
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
         open_with_models_verified(root.to_path_buf())
             .await
-            .expect("open an index with qmd's embedding model verified")
+            .expect("open an index with the embedding model verified")
     }
 
     pub(super) async fn search(
@@ -3187,11 +3187,11 @@ mod tests {
                 rows,
                 total: total as u64,
                 next_offset,
-                query_echo: serde_json::json!({ "qmd_error": null }),
+                query_echo: serde_json::json!({ "search_error": null }),
                 ..SearchResponse::unread(Vec::new())
             },
             Err(e) => SearchResponse {
-                query_echo: serde_json::json!({ "qmd_error": e.to_string() }),
+                query_echo: serde_json::json!({ "search_error": e.to_string() }),
                 ..SearchResponse::unread(Vec::new())
             },
         }

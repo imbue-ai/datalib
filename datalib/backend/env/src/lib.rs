@@ -121,6 +121,7 @@ const EVERY_CHILD: &[&str] = &[
     "NPX_BIN",
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
+    "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
     // Bazel's, so a child of a test finds its runfiles and keeps out of

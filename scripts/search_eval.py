@@ -14,7 +14,9 @@ since each answer leaves the others cached. `first-pages` times the eval set's
 rows really come in that order.
 
 The eval set is JSON: {"targets": [{"id", "uuid", "markdown_uuid", "note",
-"queries": [{"q", "style"}]}], "orderings": [{"q", "sort"}]}. A row counts as the target when it is the
+"queries": [{"q", "style"}]}], "orderings": [{"q", "sort"}]}; a target may
+add "at" (where it sits in its page, 0 to 1) and "region" (a passage copied
+from its page, for a page that is one long section). A row counts as the target when it is the
 target or another row of the same document (same `markdown_uuid`), since a
 search answers with the message it landed on. An optional "tz" (an IANA
 zone) is the zone the applet runs in, so a bare date in a query
@@ -34,6 +36,7 @@ import argparse
 import concurrent.futures
 import datetime
 import hashlib
+import html
 import json
 import os
 import platform
@@ -144,10 +147,10 @@ def read_answer(get: Callable[[str], Any], path: str) -> dict[str, Any]:
     took = ms_since(started)
     echo = answer.get("query_echo") or {}
     problems = [*answer.get("refused", []), *answer.get("errors", [])]
-    if echo.get("qmd_error"):
-        problems.append(f"qmd: {echo['qmd_error']}")
-    if echo.get("qmd_index_missing"):
-        problems.append("no qmd index")
+    if echo.get("search_error"):
+        problems.append(f"search: {echo['search_error']}")
+    if echo.get("search_index_missing"):
+        problems.append("no search index")
     rows = [
         {
             "uuid": r["uuid"],
@@ -196,15 +199,22 @@ def section_of(row: dict[str, Any]) -> str:
     return row["uuid"]
 
 
+TAG_RE = re.compile(r"</?[A-Za-z!][^>]*>")
+
+
+def plain(html_text: str) -> str:
+    return " ".join(html.unescape(TAG_RE.sub(" ", html_text)).lower().split())
+
+
 class Pages:
-    """Each target page's sections in order, and each section's text, read
-    once from the applet's `/chat/<page>`."""
+    """Each target page's sections in order, each section's text, and the
+    whole page's text, read once from the applet's `/chat/<page>`."""
 
     def __init__(self, get: Callable[[str], Any]):
         self.get = get
-        self.read: dict[str, tuple[list[str], dict[str, str]]] = {}
+        self.read: dict[str, tuple[list[str], dict[str, str], str]] = {}
 
-    def of(self, page: str) -> tuple[list[str], dict[str, str]]:
+    def of(self, page: str) -> tuple[list[str], dict[str, str], str]:
         if page not in self.read:
             try:
                 body = self.get(f"/chat/{urllib.parse.quote(page)}").get("body", "")
@@ -213,34 +223,92 @@ class Pages:
             marks = list(SECTION_RE.finditer(body))
             order = [m.group(1) for m in marks]
             text = {
-                m.group(1): re.sub(
-                    r"<[^>]+>", " ", body[m.end() : nxt.start() if nxt else len(body)]
-                ).lower()
+                m.group(1): plain(body[m.end() : nxt.start() if nxt else len(body)])
                 for m, nxt in zip(marks, [*marks[1:], None])
             }
-            self.read[page] = (order, text)
+            self.read[page] = (order, text, plain(body))
         return self.read[page]
+
+
+# How far either side of a target passage the words shown may come from and
+# still count as showing it: about a screen of text.
+REGION_REACH = 1500
+
+
+def from_there(shown: set[str], there: str) -> bool | None:
+    """Whether the words shown came from `there`, judged only when enough
+    words were shown to tell."""
+    if len(shown) < 3:
+        return None
+    return len(shown & set(WORD_RE.findall(there))) / len(shown) >= 0.6
+
+
+def shown_at(shown: set[str], whole: str) -> int | None:
+    """Where in the page the words shown most likely came from: the middle
+    of the stretch, REGION_REACH wide, that holds the most of them."""
+    if not shown:
+        return None
+    hits = [
+        (m.start(), m.group(0)) for m in WORD_RE.finditer(whole) if m.group(0) in shown
+    ]
+    best, best_at, lo, held = 0, None, 0, {}
+    for pos, word in hits:
+        held[word] = held.get(word, 0) + 1
+        while pos - hits[lo][0] > REGION_REACH:
+            gone = hits[lo][1]
+            held[gone] -= 1
+            if not held[gone]:
+                del held[gone]
+            lo += 1
+        if len(held) > best:
+            best, best_at = len(held), (hits[lo][0] + pos) // 2
+    return best_at
 
 
 def landing(
     target: dict[str, Any], row: dict[str, Any], pages: Pages
 ) -> dict[str, Any] | None:
     """Where a hit on the target's page landed, for a target that is a
-    section of its page: on the target section or not, how many sections
-    off, and whether the words shown came from the target section."""
-    if target["uuid"] == target.get("markdown_uuid"):
+    section of its page or a passage (`region`) of it: on the target
+    section or not, how many sections off, and whether the words shown came
+    from the target section, or from near the passage."""
+    region = target.get("region")
+    whole_page = target["uuid"] == target.get("markdown_uuid")
+    if whole_page and not region:
         return None
-    order, text = pages.of(target["markdown_uuid"])
-    section = section_of(row)
-    off = (
-        abs(order.index(section) - order.index(target["uuid"]))
-        if section in order and target["uuid"] in order
-        else None
-    )
+    order, text, whole = pages.of(target["markdown_uuid"])
     shown = set(WORD_RE.findall(row["snippet"].lower()))
-    there = set(WORD_RE.findall(text.get(target["uuid"], "")))
-    snippet = len(shown & there) / len(shown) >= 0.6 if len(shown) >= 3 else None
-    return {"section": section == target["uuid"], "off": off, "snippet": snippet}
+    out: dict[str, Any] = {"section": None, "off": None}
+    if not whole_page:
+        section = section_of(row)
+        out["section"] = section == target["uuid"]
+        out["off"] = (
+            abs(order.index(section) - order.index(target["uuid"]))
+            if section in order and target["uuid"] in order
+            else None
+        )
+    if not region:
+        return {**out, "snippet": from_there(shown, text.get(target["uuid"], ""))}
+    at = whole.find(plain(region))
+    if at < 0:
+        print(f"{target['id']}: its region is not on its page", file=sys.stderr)
+        return {**out, "snippet": None}
+    # A page's title is often all a hit on a one-section page shows, and its
+    # words recur all through the page: the words shown count as the passage
+    # only where they best match the page near it, and a snippet too short to
+    # place shows nothing of it.
+    near = whole[max(0, at - REGION_REACH) : at + len(region) + REGION_REACH]
+    seen = shown_at(shown, whole)
+    close = (
+        seen is not None
+        and at - REGION_REACH <= seen <= at + len(region) + REGION_REACH
+    )
+    return {
+        **out,
+        "snippet": bool(close and from_there(shown, near)),
+        "region_at": round(at / len(whole), 3),
+        "shown_at": None if seen is None else round(seen / len(whole), 3),
+    }
 
 
 # The list a search opens on asks for this many rows (`PAGE` in
@@ -340,6 +408,7 @@ def run(args: argparse.Namespace) -> None:
                         "q": query["q"],
                         "asked": q,
                         "style": query.get("style", ""),
+                        "at": t.get("at"),
                         "modes": by_mode,
                     }
                 )
@@ -632,22 +701,19 @@ def report(record: dict[str, Any]) -> str:
         "|---|---|---|---|---|---|",
     ]
     for m in modes:
-        landed = [
-            r["modes"][m]["landing"]
-            for r in results
-            if r["modes"].get(m, {}).get("landing")
-        ]
+        landed = [x for x in landings(results, m) if x["section"] is not None]
         if not landed:
             continue
         offs = [x["off"] for x in landed if x["off"] is not None]
-        judged = [x["snippet"] for x in landed if x["snippet"] is not None]
         n = len(landed)
-        snippet = f"{sum(judged) / len(judged):.0%} of {len(judged)}" if judged else "-"
         lines.append(
             f"| {m} | {n} | {sum(x['section'] for x in landed) / n:.0%} | "
             f"{sum(1 for o in offs if o <= 2) / n:.0%} | "
-            f"{f'{statistics.median(offs):g}' if offs else '-'} | {snippet} |"
+            f"{f'{statistics.median(offs):g}' if offs else '-'} | "
+            f"{share([x['snippet'] for x in landed])} |"
         )
+    lines += region_table(results, modes)
+    lines += position_table(results, modes)
     for split in ("style", "source_id"):
         lines += ["", f"found in the top 10, by {split}:", ""]
         lines.append("| " + split + " | n | " + " | ".join(modes) + " |")
@@ -660,6 +726,88 @@ def report(record: dict[str, Any]) -> str:
                 cells.append("" if s is None else f"{s['@10']:.0%}")
             lines.append(f"| {value} | {len(subset)} | " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def landings(results: list[dict[str, Any]], mode: str) -> list[dict[str, Any]]:
+    return [
+        r["modes"][mode]["landing"]
+        for r in results
+        if r["modes"].get(mode, {}).get("landing")
+    ]
+
+
+def share(judged: list[bool | None]) -> str:
+    told = [x for x in judged if x is not None]
+    return f"{sum(told) / len(told):.0%} of {len(told)}" if told else "-"
+
+
+def region_table(results: list[dict[str, Any]], modes: list[str]) -> list[str]:
+    """For targets that are a passage of a long page: whether the words a
+    hit shows came from near that passage, and how far off they were."""
+    lines = [
+        "",
+        "where the words shown come from, for targets that are a passage of a page:",
+        "",
+        "| answer | hits | from near the passage | median distance, share of page |",
+        "|---|---|---|---|",
+    ]
+    rows = 0
+    for m in modes:
+        landed = [x for x in landings(results, m) if "region_at" in x]
+        if not landed:
+            continue
+        rows += 1
+        apart = [
+            abs(x["shown_at"] - x["region_at"])
+            for x in landed
+            if x.get("shown_at") is not None
+        ]
+        lines.append(
+            f"| {m} | {len(landed)} | {share([x['snippet'] for x in landed])} | "
+            f"{f'{statistics.median(apart):.0%}' if apart else '-'} |"
+        )
+    return lines if rows else []
+
+
+POSITIONS = (("start", 0.0), ("middle", 1 / 3), ("end", 2 / 3))
+
+
+def position_of(at: float) -> str:
+    return [name for name, lo in POSITIONS if at >= lo][-1]
+
+
+def position_table(results: list[dict[str, Any]], modes: list[str]) -> list[str]:
+    """For targets that say where they sit in their page (`at`): found, and
+    landed where the target is, by the page's first, middle and last third.
+    Landed means on the target section, or for a passage of a one-section
+    page, words shown from near it."""
+    placed = [r for r in results if r.get("at") is not None]
+    if not placed:
+        return []
+    lines = [
+        "",
+        "by where the target sits in its page (found in the top 10 · landed on it, of hits):",
+        "",
+        "| third | n | " + " | ".join(modes) + " |",
+        "|---" * (len(modes) + 2) + "|",
+    ]
+    for name, _ in POSITIONS:
+        subset = [r for r in placed if position_of(r["at"]) == name]
+        if not subset:
+            continue
+        cells = []
+        for m in modes:
+            s = scores(subset, m)
+            if s is None:
+                cells.append("")
+                continue
+            landed = [
+                x["section"] if x["section"] is not None else x["snippet"]
+                for x in landings(subset, m)
+            ]
+            cells.append(f"{s['@10']:.0%} · {share(landed)}")
+        lines.append(f"| {name} | {len(subset)} | " + " | ".join(cells) + " |")
+    return lines
 
 
 def requests_table(results: list[dict[str, Any]]) -> list[str]:
@@ -738,7 +886,10 @@ def keep(args: argparse.Namespace) -> None:
         },
         "results": [
             {
-                **{k: r.get(k) for k in ("id", "source_id", "q", "asked", "style")},
+                **{
+                    k: r.get(k)
+                    for k in ("id", "source_id", "q", "asked", "style", "at")
+                },
                 "modes": {
                     m: {k: a[k] for k in KEPT_ANSWER_KEYS if k in a}
                     for m, a in r["modes"].items()

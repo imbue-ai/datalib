@@ -14,8 +14,9 @@ because publishing locks whatever is there.
 
 <artifacts dir> holds one directory per artifact. `subjects` prints, in
 `shasum`'s format, every asset but the sidecars; <subjects sha256> is the hash
-of that text. `verify` checks each of those assets, and <image> by its digest,
-has an attestation from this workflow at this run's tag and commit, read from
+of that text. `verify` checks that each of those assets, and both images
+(the plain one and its `-cuda` variant) by their digests, have an
+attestation from this workflow at this run's tag and commit, read from
 GITHUB_REPOSITORY, GITHUB_REF and GITHUB_SHA. GH_REPO names the repository.
 """
 
@@ -46,8 +47,12 @@ RUNTIME_TRIPLES = (
     "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
 )
+# What CUDA adds (scripts/release/stage_cuda.sh): the module, for these only.
+CUDA_TRIPLES = ("x86_64-unknown-linux-gnu",)
 DMG = "Datalib-aarch64-apple-darwin.dmg"
 IMAGE_DIGEST = "docker-image.digest"
+CUDA_IMAGE_DIGEST = "docker-image-cuda.digest"
+IMAGE_DIGESTS = (IMAGE_DIGEST, CUDA_IMAGE_DIGEST)
 IMAGE_DIGEST_SHAPE = re.compile(r"sha256:[0-9a-f]{64}\n?")
 SHA256_SHAPE = re.compile(r"[0-9a-f]{64}")
 AFTER_PUBLISH_TRIES = 5
@@ -77,8 +82,15 @@ def expected_artifacts() -> dict[str, set[str]]:
             for triple in RUNTIME_TRIPLES
         }
     )
+    expected.update(
+        {
+            f"cuda-{triple}": with_sidecar(f"ggml-cuda-{triple}.tar.gz")
+            for triple in CUDA_TRIPLES
+        }
+    )
     expected["macos-app-dmg"] = with_sidecar(DMG)
     expected["docker-image-digest"] = {IMAGE_DIGEST}
+    expected["docker-image-cuda-digest"] = {CUDA_IMAGE_DIGEST}
     return expected
 
 
@@ -125,10 +137,9 @@ def content_problems(
         problems.append(
             f"{DMG}: {hashes[DMG]} is not the dmg macos-app-verify checked ({dmg_sha256})"
         )
-    if not IMAGE_DIGEST_SHAPE.fullmatch(
-        assets[IMAGE_DIGEST].read_text(errors="replace")
-    ):
-        problems.append(f"{IMAGE_DIGEST}: not one image digest")
+    for name in IMAGE_DIGESTS:
+        if not IMAGE_DIGEST_SHAPE.fullmatch(assets[name].read_text(errors="replace")):
+            problems.append(f"{name}: not one image digest")
     return problems
 
 
@@ -200,19 +211,21 @@ def attestation_identity(repo: str, ref: str, commit: str) -> list[str]:
 def attestation_checks(
     assets: dict[str, Path], image: str, env: dict[str, str]
 ) -> list[list[str]]:
-    """The `gh attestation verify` calls that show each asset and the image came from this run's workflow."""
+    """The `gh attestation verify` calls that show each asset and each image came from this run's workflow."""
     identity = attestation_identity(
         env["GITHUB_REPOSITORY"], env["GITHUB_REF"], env["GITHUB_SHA"]
     )
-    image_digest = assets[IMAGE_DIGEST].read_text().strip()
-    image_ref = f"oci://{image}@{image_digest}"
     checks = [
         ["attestation", "verify", str(assets[name]), *identity]
         for name in sorted(assets)
         if not name.endswith(".sha256")
     ]
-    checks.append(["attestation", "verify", image_ref, *identity])
-    checks.append(["attestation", "verify", image_ref, "--bundle-from-oci", *identity])
+    for name in IMAGE_DIGESTS:
+        image_ref = f"oci://{image}@{assets[name].read_text().strip()}"
+        checks.append(["attestation", "verify", image_ref, *identity])
+        checks.append(
+            ["attestation", "verify", image_ref, "--bundle-from-oci", *identity]
+        )
     return checks
 
 

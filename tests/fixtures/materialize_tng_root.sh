@@ -118,16 +118,16 @@ EOF
 } > "$OUT_ROOT/config.toml"
 
 # The embedding model, where a search of this root looks for it
-# (`datalib_qmd_models::models_dir_for`): every search by meaning embeds
+# (`datalib_embedding_models::models_dir_for`): every search by meaning embeds
 # the query. A link INTO the runfiles tree rather than a copy in every
 # root, the same assumption the applet `command` above already makes.
 MODELS_DIR="$OUT_ROOT/unified_grid_and_search_index/models"
 mkdir -p "$MODELS_DIR"
-EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
+EMBED_MODEL="_main/third-party/embedding_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""
 if [[ -z "$src" || ! -s "$src" ]]; then
   echo "ERROR: embedding model not found in runfiles: $EMBED_MODEL" >&2
-  echo "  (is //third-party/qmd_models:embeddinggemma still in this target's \`data\`?)" >&2
+  echo "  (is //third-party/embedding_models:embeddinggemma still in this target's \`data\`?)" >&2
   exit 3
 fi
 ln -sfn "$src" "$MODELS_DIR/$(basename "$EMBED_MODEL")"

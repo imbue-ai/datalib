@@ -314,6 +314,32 @@ Add the same `-v "$LATCHKEY_DIR:/root/.latchkey:ro"` to the
 `datalib-http` command in step 2 and **Sync everything** in the app
 works too.
 
+## With an NVIDIA GPU
+
+Search by meaning embeds every chunk of your data once, which takes
+hours on a CPU. On a Linux machine with an NVIDIA GPU, run the `-cuda`
+variant of the image instead: the same image plus NVIDIA's cuBLAS and
+datalib's CUDA module, x86_64 only. It needs NVIDIA's driver and the
+NVIDIA Container Toolkit on the host, and `--gpus all` on every `docker
+run`. Each release publishes its digest beside the plain image's:
+
+```sh
+IMG=ghcr.io/imbue-ai/datalib@$(curl -fsSL https://github.com/imbue-ai/datalib/releases/latest/download/docker-image-cuda.digest)
+echo '{"hash": "h", "prompt": "hello"}' \
+  | docker run --rm -i --gpus all "$IMG" datalib-step embed-prompts > /dev/null
+```
+
+The second command embeds one line and says on stderr what it ran on:
+`embedding on CUDA0` on a GPU. Without one it says why the module did
+not load and runs on the CPU, as the plain image does. Everything else
+on this page works the same with this `$IMG` and `--gpus all` added.
+No release machine has a GPU, so unlike sections 1 and 2 this is not
+run against each release. Releases after v0.54.1 publish the variant.
+
+The CUDA pieces are NVIDIA's, redistributed under NVIDIA's CUDA Toolkit
+license rather than datalib's MIT license; the image carries the notice
+beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`).
+
 ## Checking who built the image
 
 The digest says which image you run, and this page names the one the

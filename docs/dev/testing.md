@@ -243,13 +243,13 @@ suite gates merges like everything else. Two things make it work in the
 CI image:
 
 * **The qmd GGUFs are bazel inputs.** A build action
-  (`//third-party/qmd_models`) fetches them into the remote cache, and
+  (`//third-party/embedding_models`) fetches them into the remote cache, and
   they reach the materializer and the fixture's index genrule as
   runfiles; the image has no `/root/.cache/qmd/models`. The e2e suite
   runs on the runner itself, so its runfiles *are* downloaded before it
   starts — which is why it uses `materialize_tng_root_embed_only`: the
   embedding model is all it loads, and the other two are 1.8 GB. The
-  suite sets `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them
+  suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports them
   absent instead of fetching them into the fixture root.
 * **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
   GitHub forces `HOME=/github/home` for container steps, while the image
@@ -382,7 +382,7 @@ each backend answer by a random 0–400 ms shows many at once: export a `test`
 from a scratch file with `base.extend`, give it an `auto` fixture that does
 `context.route(/\/(api|applet|data)\//, …)` with the delay and then
 `route.fallback()`, and point the specs' imports at that file. Leave
-`qmd-warmup.setup.ts` as it is, or its timeout stops the run. A routed
+`search-warmup.setup.ts` as it is, or its timeout stops the run. A routed
 request loses its `sec-fetch-*` headers, so `links-from-elsewhere` and
 `document-sandbox` fail for that reason alone. This found a real bug as well
 as loose specs: Add source writing a config that held nothing but the new
@@ -606,7 +606,13 @@ reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. For a
 target that is one message of a page, it also says where the hit on that
 page lands, read from the row's `link`: on the message, how many
-messages off, and whether the snippet shown came from it.
+messages off, and whether the snippet shown came from it. A target may
+also name a `region`, a passage copied from its page, for a page that is
+one long section (a Notion page of weekly notes): the report then says
+whether the words shown came from within about a screen of that passage,
+and how far off they were. A target's `at`, where it sits in its page as a
+fraction, splits the scores by the page's first, middle and last third, so
+a search that finds the start of a long page but not its end shows up.
 
 `--modes app` asks each query the way the search card does, and is the
 number to quote for how long a search takes. The card sends two requests
@@ -687,7 +693,7 @@ A root last synced by an older build may have no index this build can
 read; `run` refuses a root with no rows rather than score an empty one.
 
 **Across languages.** Measured 2026-11-04 on a real library of 450,000 rows,
-with the embedding model pinned in `runtime/src/qmd.rs` (EmbeddingGemma,
+with the embedding model pinned in `runtime/src/models.rs` (EmbeddingGemma,
 which is multilingual). German and Italian wordings of English
 descriptions the Meaning tab already found: 28 of 28 in its top 10 and 27
 in its top 3, against 14 of 14 at top 3 for the English. Two-to-four-word

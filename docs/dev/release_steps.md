@@ -26,13 +26,15 @@ shape or `RENDER_VERSION`. So: a change that moves the
 
 ## The steps are scripts
 
-The two steps that assemble what a release ships are scripts, and the
+The steps that assemble what a release ships are scripts, and the
 workflow's `run:` blocks are one line each:
 
 | step | script | what it makes |
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple>` | `runtime-<triple>.tar.gz` and its `.sha256` sidecar, from `scripts/stage_runtime.sh` |
 | `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `cuda` job, "Build and stage" | `scripts/release/build_cuda.sh <bazel flag>…`, which runs `stage_cuda.sh` | `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` (`lib/libggml-cuda.so` and its notices) and, for the `-cuda` image only, `cuda-libs-x86_64-unknown-linux-gnu.tar.gz` (cuBLAS), each with its sidecar; it refuses a module that needs a symbol `datalib-step` does not export, or a library besides NVIDIA's driver that the staged cuBLAS lacks |
+| the image jobs, "Stage … into docker build context" | `scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets> [<cuda>]` | the build context `datalib/docker/Dockerfile` expects |
 
 Each script writes into the current directory, prints what it wrote,
 and takes what a test cannot supply through environment variables
@@ -61,12 +63,13 @@ will hold:
    reported, because a later upload can replace an artifact but cannot change
    another job's output.
 2. **Signs a build provenance attestation** for every asset but the `.sha256`
-   sidecars, listed in `shasum`'s format, and one for the image by the digest
-   `docker-publish` tagged, pushed beside it on ghcr.io. Each is a SLSA
+   sidecars, listed in `shasum`'s format, and one for each image by the
+   digest `docker-publish` and `docker-publish-cuda` tagged, pushed beside it
+   on ghcr.io. Each is a SLSA
    statement signed through Sigstore with the job's OIDC identity: this
    workflow, this tag, this commit, this run.
 3. **Runs the check a person would**, `gh attestation verify` with this
-   workflow, tag and commit, on every asset and on the image, both from GitHub
+   workflow, tag and commit, on every asset and on both images, both from GitHub
    and from ghcr.io. The commands are in
    [`first_time_user.md`](../user/first_time_user.md) and
    [`docker.md`](../user/docker.md).
@@ -139,11 +142,15 @@ missing asset can never be added.
 | a musl leg of `build` | tagged | previous release |
 | a gnu leg of `build` or `runtime` | not tagged | previous release |
 | a `macos-app-*` job | tagged | previous release |
+| `cuda`, or the x86_64 gnu leg of `build` or `runtime` | `-cuda` not tagged | previous release |
 
 The Docker image does not wait for the release. It carries its own runtime, and
 `docker-publish` checks the tagged image against the walkthrough. So
 `ghcr.io/…:latest` can be a version ahead of `releases/latest` until the release
 is published. An image needs both gnu legs, so losing either tags nothing.
+The `-cuda` variant (`docker-image-cuda`, `docker-publish-cuda`) needs the
+x86_64 gnu legs and the `cuda` job, and the plain image does not wait for it
+or fail with it; the release needs both.
 
 ### What a re-run does
 
@@ -153,7 +160,8 @@ a matrix job that failed runs only its failed legs.
 
 | what failed | what runs again |
 |---|---|
-| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `attest`, `publish-release` |
+| a `build` leg | that leg, both `docker-image` legs, `docker-image-cuda`, both publish jobs, `attest`, `publish-release` |
+| `cuda` | it, `docker-image-cuda`, `docker-publish-cuda`, `attest`, `publish-release` |
 | a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
 | a `macos-app-*` job | the rest of that chain, `attest`, `publish-release` |
 | `attest` | it and `publish-release`. It signs again, which adds a second attestation for the same bytes |
@@ -163,7 +171,8 @@ So re-running a failed `build` leg rebuilds both images, and the version tag
 and `:latest` move to the new ones. A job that a re-run repeats also uploads
 its artifact again, and `download-artifact` takes the same-named artifact
 with the highest id, which is not always the newest. So the uploads a re-run
-can repeat, `tarball-*`, `docker-digest-*` and `docker-image-digest`, say
+can repeat, `tarball-*`, the two `cuda-*`, `docker-digest-*`,
+`docker-image-digest` and `docker-image-cuda-digest`, say
 `overwrite: true`.
 
 ### Trying the job graph on a branch
@@ -266,14 +275,14 @@ files.
 
 | job | runs on it | holds |
 |---|---|---|
-| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
+| `runtime`, `build`, `cuda` | Bazel, crate build scripts, the staged Node runtime, NVIDIA's toolkit | `contents: read` |
 | `attest` | `actions/attest-build-provenance`, `gh`, nothing built | `id-token: write`, `attestations: write`, `packages: write` |
 | `publish-release` | `gh`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
 | `macos-app-verify` | the signed app: its Node, latchkey | `contents: read` |
-| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
-| `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
+| `docker-image`, `docker-image-cuda` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
+| `docker-publish`, `docker-publish-cuda` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
 | `reader-wheels.yml`'s `wheels` | Bazel fetching and, on a Mac, compiling doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
 | `reader-wheels.yml`'s `publish` | `pypa/gh-action-pypi-publish`, no checkout | `id-token: write`, which only PyPI takes |
 
@@ -395,12 +404,14 @@ What holds it:
   pinned runner**, `ubuntu-24.04` or `ubuntu-24.04-arm`, never
   `ubuntu-latest`: `runtime`, every Linux `build` leg (the musl ones
   too, so their build scripts run where the gnu ones do),
-  `docker-image`, and `reader-wheels.yml`'s Linux legs. The wheels
+  `cuda`, `docker-image` and `docker-image-cuda`, and
+  `reader-wheels.yml`'s Linux legs. The wheels
   compile inside manylinux and musllinux images, so their libc is the
   image's, and `check_reader_wheels.sh` loads them on glibc 2.17
   (§"The reader wheels").
 - **`check_glibc_floor.sh`** reads every ELF file in the tarball (the
-  `build` job) and in each runtime asset (the `runtime` job), and fails on any glibc version above
+  `build` job), in each runtime asset (the `runtime` job) and in the CUDA
+  module's asset (the `cuda` job), and fails on any glibc version above
   `GLIBC_FLOOR`. Node and the npm prebuilds in the runtime were built by
   someone else, so the runner pin does nothing for them; this is what
   notices one that moved. The version names are whole strings in an ELF
@@ -511,6 +522,12 @@ matches.
   the image's attestation going to ghcr.io and the check passing on our own
   first happen on a tag. A failure there holds the release back, as any job's
   does.
+- The `cuda` job's stamped build and the `-cuda` image's push. On a PR,
+  `.github/workflows/cuda.yml` runs `build_cuda.sh` unstamped and builds
+  the `-cuda` image, up to its demo, over the latest release's binaries, so the
+  scripts and the Dockerfile's CUDA stage are tried; the release
+  runner without a cache (about 1 GB of NVIDIA's toolkit, and the GPU
+  code compiled cold) and the push first happen on a tag.
 - Publishing and `releases/latest` moving to it: these need a real release,
   and a tag's run is the only one this workflow makes. A mistake there fails
   `publish-release`, and since a tag's run executes the tag's own tree, the fix

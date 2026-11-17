@@ -12,6 +12,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load("@@//third-party/llama_cpp:shared_libraries.bzl", "shared_libraries")
 
 GGML_VERSION = "0.19.0"
 
@@ -338,6 +339,15 @@ cuda_library(
         "@cuda//:cublas",
         "@cuda//:cuda",
     ],
+)
+
+# The cuBLAS libraries the module links, as files, for the `-cuda` image
+# (scripts/release/stage_cuda.sh).
+shared_libraries(
+    name = "cublas_libs",
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+    deps = ["@cuda//:cublas"],
 )
 
 cc_shared_library(

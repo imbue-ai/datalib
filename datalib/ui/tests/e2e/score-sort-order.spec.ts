@@ -1,22 +1,22 @@
 import { test, expect } from "@playwright/test";
 import { GRID, searchAndSettle } from "./grid-helpers";
 
-// Two contracts a single qmd-routed query has to satisfy. They share
-// the same setup (open page → type free-text → qmd routes → score
-// column appears), so they ride one test to avoid paying for qmd
+// Two contracts a single ranked query has to satisfy. They share
+// the same setup (open page → type free-text → the search ranks it → score
+// column appears), so they ride one test to avoid paying for the model
 // warm-up twice.
 //
-// 1. **Score sort**: when a search routes through qmd the grid must
+// 1. **Score sort**: when a search is ranked by the search index the grid must
 //    be sorted by the Score column descending. We used to ship a
-//    Time-desc default that hid the qmd rank — searching for the
+//    Time-desc default that hid the search's rank — searching for the
 //    photography note returned chat-glenn rows at the top because
-//    they were newer, even though qmd's top hit was an older note.
+//    they were newer, even though the search's top hit was an older note.
 //    The fix added a Score column with `sort: "desc", sortIndex: 0`;
 //    this assertion reads the visible Score cells in DOM order and
 //    asserts non-increasing.
 
-test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
-  // The `warmup` project pays the qmd cold start before any spec runs,
+test.describe("ranked search: score-desc sort + scroll-to-top", () => {
+  // The `warmup` project pays the search model's cold start before any spec runs,
   // but the applet restarts on config changes and `data-sources-sync`
   // (which sorts earlier) rewrites config.toml — so this may still land
   // on a freshly respawned daemon and pay the model load again. See
@@ -37,15 +37,15 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
       "fixture must have enough rows that the time-asc default scrolls past the top",
     ).toBeGreaterThan(0);
 
-    // 2. Type a free-text query — qmd routes it.
+    // 2. Type a free-text query — the search ranks it.
     //
     // `searchAndSettle` absorbs the search latency, so the two
     // assertions below are about the *result*, not about waiting: the
-    // score column exists only on qmd-routed rows, so once the grid is
+    // score column exists only on ranked rows, so once the grid is
     // painting this query, its presence is the proof that the query
     // routed. Gating on the header with a 90s timeout used to conflate
     // those two things — a slow daemon and a query that never reached
-    // qmd failed identically.
+    // the search failed identically.
     await searchAndSettle(page, "grey earl");
 
     const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
@@ -59,7 +59,7 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
     await expect
       .poll(async () => viewport.evaluate((el) => el.scrollTop), {
         timeout: 5_000,
-        message: "qmd result viewport should land at the top",
+        message: "ranked result viewport should land at the top",
       })
       .toBeLessThan(5);
 
@@ -78,11 +78,11 @@ test.describe("qmd-routed search: score-desc sort + scroll-to-top", () => {
         .sort((a, b) => a.row - b.row)
         .map((c) => c.text),
     );
-    expect(texts.length, "expected qmd-routed search to surface score cells").toBeGreaterThan(1);
+    expect(texts.length, "expected ranked search to surface score cells").toBeGreaterThan(1);
 
     const values: number[] = [];
     texts.forEach((txt, i) => {
-      // Skip rows with no score (shouldn't happen on a qmd query, but
+      // Skip rows with no score (shouldn't happen on a ranked query, but
       // be defensive about empty cells while data streams in).
       if (txt.length === 0) return;
       const n = Number(txt);

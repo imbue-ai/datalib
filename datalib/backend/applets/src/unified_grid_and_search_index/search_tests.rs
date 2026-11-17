@@ -30,14 +30,14 @@ fn scores(r: &SearchResponse) -> Vec<f64> {
         .collect()
 }
 
-fn qmd_error(r: &SearchResponse) -> Option<&str> {
-    r.query_echo["qmd_error"].as_str()
+fn search_error(r: &SearchResponse) -> Option<&str> {
+    r.query_echo["search_error"].as_str()
 }
 
-fn qmd_index_missing(r: &SearchResponse) -> bool {
-    r.query_echo["qmd_index_missing"]
+fn search_index_missing(r: &SearchResponse) -> bool {
+    r.query_echo["search_index_missing"]
         .as_bool()
-        .expect("query_echo always says whether the qmd index is missing")
+        .expect("query_echo always says whether the search index is missing")
 }
 
 /// A free-text search comes best first by its score, and its pages are
@@ -49,8 +49,8 @@ async fn free_text_pages_follow_the_rank_and_show_the_matched_words() {
     let s = index_over(root.path()).await;
 
     let whole = search(&s, QUERY, None, 1_000, None).await;
-    assert_eq!(qmd_error(&whole), None);
-    assert!(!qmd_index_missing(&whole));
+    assert_eq!(search_error(&whole), None);
+    assert!(!search_index_missing(&whole));
     assert!(whole.errors.is_empty(), "{:?}", whole.errors);
     let ranked = scores(&whole);
     assert!(
@@ -198,7 +198,7 @@ async fn free_text_groups_the_ranked_rows() {
     let ranked = search(&s, QUERY, None, 1_000, None).await;
 
     let by_source = groups(&s, QUERY, "source_ref").await;
-    assert_eq!(by_source.qmd_error, None);
+    assert_eq!(by_source.search_error, None);
     assert!(by_source.groups.len() > 1, "the hits span sources");
     let counted: u64 = by_source.groups.iter().map(|g| g.count).sum();
     assert_eq!(counted, ranked.total);
@@ -255,7 +255,7 @@ async fn the_old_spellings_of_free_text_answer_as_free_text() {
     let bare = search(&s, word, None, 1_000, None).await;
     for q in [format!("qmd_vsearch:{word}"), format!("qmd:{word}")] {
         let r = search(&s, &q, None, 1_000, None).await;
-        assert_eq!(qmd_error(&r), None, "{q}");
+        assert_eq!(search_error(&r), None, "{q}");
         assert_eq!(uuids(&r), uuids(&bare), "{q}");
     }
 }
@@ -277,7 +277,7 @@ async fn the_map_matches_structured_terms_without_a_search_index() {
 
 /// A root no sync has built a search index for still answers what the grid's
 /// own terms hold, and says the rest is missing. Words the terms do not hold
-/// get no rows and `qmd_index_missing`, on the grid and its groups: a state
+/// get no rows and `search_index_missing`, on the grid and its groups: a state
 /// the grid explains, not a failure it shows as an error, and not an empty
 /// result that reads as "no matches". The map says why in its errors.
 #[tokio::test]
@@ -299,17 +299,17 @@ async fn free_text_without_a_search_index_says_it_is_not_built() {
     const NOWHERE: &str = "xyzzyplugh";
     let r = search(&s, NOWHERE, None, 10, None).await;
     assert!(r.rows.is_empty());
-    assert!(qmd_index_missing(&r), "{:?}", r.query_echo);
-    assert_eq!(qmd_error(&r), None);
+    assert!(search_index_missing(&r), "{:?}", r.query_echo);
+    assert_eq!(search_error(&r), None);
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     let g = groups(&s, NOWHERE, "kind").await;
     assert!(g.groups.is_empty());
-    assert!(g.qmd_index_missing);
-    assert_eq!(g.qmd_error, None);
+    assert!(g.search_index_missing);
+    assert_eq!(g.search_error, None);
 
     let structured = search(&s, "is:document", None, 10, None).await;
     assert!(!structured.rows.is_empty());
-    assert!(!qmd_index_missing(&structured));
+    assert!(!search_index_missing(&structured));
 
     let params = map::MatchParams {
         q: Some(NOWHERE.to_string()),
@@ -352,7 +352,7 @@ async fn each_part_answers_free_text_its_own_way() {
     }
 
     let words = search_part(&s, QUERY, Part::Words, 0, 1_000).await;
-    assert_eq!(qmd_error(&words), None);
+    assert_eq!(search_error(&words), None);
     let ranked = scores(&words);
     assert!(
         ranked.windows(2).all(|w| w[0] >= w[1]),
@@ -364,7 +364,7 @@ async fn each_part_answers_free_text_its_own_way() {
     );
 
     let meaning = search_part(&s, QUERY, Part::Meaning, 0, 1_000).await;
-    assert_eq!(qmd_error(&meaning), None);
+    assert_eq!(search_error(&meaning), None);
     assert!(!meaning.rows.is_empty());
     assert_ne!(uuids(&words), uuids(&meaning), "two parts gave one answer");
 }
@@ -507,7 +507,7 @@ async fn the_cutoff_decides_what_meaning_adds_to_the_words() {
         let s = &s;
         async move {
             let r = search(s, &q, None, 1_000, None).await;
-            assert_eq!(qmd_error(&r), None, "{q}");
+            assert_eq!(search_error(&r), None, "{q}");
             assert!(r.refused.is_empty(), "{q}: {:?}", r.refused);
             r.total
         }
@@ -664,7 +664,7 @@ async fn a_search_keeps_its_words_when_meaning_cannot_answer_and_says_so() {
     ));
 
     let r = search(&s, QUERY, None, 1_000, None).await;
-    assert_eq!(qmd_error(&r), None);
+    assert_eq!(search_error(&r), None);
     assert!(!r.rows.is_empty(), "the words still answer");
     let partial = r.query_echo["partial"].as_str().expect("and it says so");
     assert!(partial.contains("could not answer"), "{partial}");

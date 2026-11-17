@@ -1,9 +1,9 @@
 #!/usr/bin/env -S uv run python
 """The qmd model pins exist twice; make them agree.
 
-`third-party/qmd_models/BUILD.bazel` fetches the build's copies of the
+`third-party/embedding_models/BUILD.bazel` fetches the build's copies of the
 three GGUFs (repo, revision, file, sha256), and
-`datalib/backend/runtime/src/qmd.rs` carries the same table for the
+`datalib/backend/runtime/src/models.rs` carries the same table for the
 shipped binaries, which provision and verify the files at run time.
 Bazel cannot read a Rust constant and Rust cannot read Starlark, so the
 table is written down in both — and a bump that moves one of them
@@ -17,8 +17,8 @@ import re
 import sys
 from pathlib import Path
 
-BUILD = Path("third-party/qmd_models/BUILD.bazel")
-RUST = Path("datalib/backend/runtime/src/qmd.rs")
+BUILD = Path("third-party/embedding_models/BUILD.bazel")
+RUST = Path("datalib/backend/runtime/src/models.rs")
 
 Row = tuple[str, str, str, str]
 

@@ -1,4 +1,4 @@
-//! `datalib-etl-chat-common` — shared QMD-and-grid-rows rendering
+//! `datalib-etl-chat-common` — shared markdown-and-grid-rows rendering
 //! for chat-style providers (Signal, WhatsApp, Beeper, …).
 
 pub mod account;

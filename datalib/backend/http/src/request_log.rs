@@ -43,7 +43,7 @@ const ROUTINE_POSTS: [&str; 9] = [
     "/api/remote_media/check",
     "/api/ui/events",
     "/applet/unified_grid_and_search_index/people",
-    "/applet/unified_grid_and_search_index/qmd_state",
+    "/applet/unified_grid_and_search_index/index_state",
     "/applet/unified_grid_and_search_index/sql",
 ];
 

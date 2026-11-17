@@ -190,7 +190,7 @@ _E2E_ENV = {
     # this keeps anything from fetching a model the root lacks, so a
     # missing one fails rather than downloads. Inherited by everything
     # run_e2e.sh spawns.
-    "DATALIB_QMD_MODELS_NO_FETCH": "1",
+    "DATALIB_MODELS_NO_FETCH": "1",
     "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
 }
 

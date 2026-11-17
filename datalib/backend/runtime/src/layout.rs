@@ -10,7 +10,7 @@ pub const SYSTEM_DIR: &str = "system";
 
 /// A folder under a source's `render_markdown/`: a document filed here is
 /// in the grid and opens like any other, and free-text search skips it,
-/// because each source's qmd collection ignores this folder.
+/// because each source's part of the search index ignores this folder.
 pub const UNINDEXED_DIR: &str = "unindexed";
 
 /// The top-level tree holding the grid index and the search index. Owned
@@ -47,10 +47,10 @@ pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
 /// The file the grid's search terms were kept in before the index held
 /// them. The `grid_index` step deletes it when it opens the index.
 pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
-/// The qmd index's directory, relative to [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: the
+/// The search index's directory, relative to [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: the
 /// `qmd_aggregator` step's tree, so its size is counted against that
-/// step. Every qmd step writes the one index under it, which qmd lays
-/// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
+/// step. qmd kept its index under it as `qmd/index.sqlite`, which the
+/// aggregator deletes (`crate::models::qmd_state_dir`).
 pub const QMD_DIR: &str = "qmd_aggregator";
 /// The inference cache's directory, relative to
 /// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it, the

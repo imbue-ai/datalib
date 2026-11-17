@@ -242,7 +242,7 @@ A render that wants a chart on a page writes
 naming the time series to draw (`time_series_chart` in
 `datalib/backend/etl/timeseries_render/src/time_series.rs`). The page
 stays markdown with an inert element in it; the backend never parses it
-back (AGENTS.md §"QMDs are write-only").
+back (AGENTS.md §"Rendered markdown is write-only").
 
 The document view draws it. After each paint of a document's body,
 `mountTimeSeries` (`datalib/ui/src/cards/timeSeriesEmbed.ts`) mounts a

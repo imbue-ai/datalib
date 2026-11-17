@@ -112,7 +112,7 @@ export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
   if (t.func === "qmd_aggregator" || t.func === "embed") {
-    return "The QMD index keeps no doltlite store";
+    return "The search index keeps no doltlite store";
   }
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
   if (t.func === "grid_index") return "The grid index is plain SQLite, with no commit history";

@@ -16,7 +16,7 @@ use crate::config::{owner_only_options, root_config_path};
 pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source feeds these two — the grid reads its rendered markdown
-# and puts it in the keyword search, the qmd aggregator sweeps after
+# and puts it in the keyword search, the search aggregator sweeps after
 # each source's embeddings. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id, or every step of one function at once:

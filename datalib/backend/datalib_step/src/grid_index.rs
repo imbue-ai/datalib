@@ -126,7 +126,7 @@ pub(crate) async fn run_with(
         // directory: every index under it is rebuilt from the sidecar
         // trees, so cache-aware backups (`restic --exclude-caches` etc.)
         // may skip all of it. Tagging the parent also means the tag is
-        // right before the qmd step has ever run. Nothing precious lives
+        // right before the search step has ever run. Nothing precious lives
         // here — feedback and the loop's record are under `system/`, which is
         // never tagged.
         datalib_core::layout::mark_derived_cache(
@@ -136,7 +136,7 @@ pub(crate) async fn run_with(
     let pool = open_index(&db_path).await?;
 
     // The stores to read come from the graph, not from a directory scan:
-    // the same rule the qmd step follows, so the two indexes agree on
+    // the same rule the search step follows, so the two indexes agree on
     // what a source is. A `render_time_series` or `render_occurrences`
     // input is read for its problem rows alone.
     let (render_inputs, own_stores) = split_inputs(data_root, &env.inputs);

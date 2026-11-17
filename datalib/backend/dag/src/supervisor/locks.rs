@@ -66,12 +66,12 @@ pub const INDEX: &str = "index";
 /// writer at a time, and a writer left to wait inside SQLite behind a long
 /// run of another's transactions times out.
 pub const QMD_KEYWORD: &str = "qmd_keyword";
-/// Whatever embeds into qmd's index. One slot: two embeds race on qmd's
+/// Whatever embeds into the search index. One slot: two embeds race on the cache's
 /// vector table, and share one GPU besides.
 pub const QMD_EMBED: &str = "qmd_embed";
 
 /// The locks every config has, whether or not it declares them: the three
-/// budgets, as `--parallelism 4` sizes them, and the two qmd writers'. A
+/// budgets, as `--parallelism 4` sizes them, and the two search writers'. A
 /// config's `[[locks]]` entry of the same name resizes one;
 /// `--parallelism N` sets `network` and `cpu` to N, over the config.
 pub fn defaults() -> Vec<LockSpec> {

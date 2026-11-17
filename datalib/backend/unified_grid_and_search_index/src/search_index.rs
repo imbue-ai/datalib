@@ -1,9 +1,7 @@
-//! Words and Meaning read from our own search index
-//! (`datalib_search_index`, its tables in the grid index's file) rather
-//! than qmd's: the same hits, each placed by
-//! its bytes in the document, so landing, the other terms and fusion treat
-//! them as they treat qmd's. A hit names its document; its path is left
-//! for the page that shows it to look up.
+//! Words and Meaning read from the search index (`datalib_search_index`,
+//! its tables in the grid index's file): hits for landing, the other
+//! terms and fusion to work on. A hit names its document; its path is
+//! left for the page that shows it to look up.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -13,14 +11,14 @@ use anyhow::{bail, Result};
 use datalib_runtime::layout;
 use datalib_search_index::{Held, HeldDoc, Reader};
 
-use crate::qmd::index_state::IndexStamp;
-use crate::qmd::lex::{Fts5Query, PageTerms};
-use crate::qmd::mapping::Place;
-use crate::qmd::vectors::{dot_and_norm, Freshness, Kept};
-use crate::qmd::QmdHit;
+use crate::hits::index_state::IndexStamp;
+use crate::hits::lex::{Fts5Query, PageTerms};
+use crate::hits::mapping::Place;
+use crate::hits::vectors::{dot_and_norm, Freshness, Kept};
+use crate::hits::SearchHit;
 
 /// A ranked document and its hit.
-pub type DocumentHit = (String, QmdHit);
+pub type DocumentHit = (String, SearchHit);
 
 async fn open(root: &Path) -> Result<Option<Reader>> {
     Reader::open(
@@ -101,8 +99,8 @@ async fn read_unless_held(
     Ok(Some((now, Arc::new(vectors))))
 }
 
-fn hit(score: f64, place: Place) -> QmdHit {
-    QmdHit {
+fn hit(score: f64, place: Place) -> SearchHit {
+    SearchHit {
         path: String::new(),
         score,
         snippet: String::new(),

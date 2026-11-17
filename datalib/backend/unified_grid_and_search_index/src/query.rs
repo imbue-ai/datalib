@@ -1,7 +1,7 @@
 //! A table's reading of the shared search-bar grammar (`datalib_query`):
 //! which keys are its columns (declared on the table's schema, see
 //! `datalib_query::table`), what `is:` and `before:`/`after:` mean, and,
-//! for a table qmd indexes, `semantic:`, which says how free text is searched.
+//! for a table search indexes, `semantic:`, which says how free text is searched.
 
 use datalib_query::table::{self, Column, FreeText, SearchKey, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
@@ -135,7 +135,7 @@ impl<C: Column> ParsedQuery<C> {
     /// `parse`, reading `terms` as keys too: the grid's search, whose
     /// reader has the search terms attached.
     pub fn parse_with(s: &str, terms_keys: &'static [TermsKey]) -> Self {
-        let qmd = matches!(<C::Table as SearchTable>::FREE_TEXT, FreeText::Qmd);
+        let ranked = matches!(<C::Table as SearchTable>::FREE_TEXT, FreeText::Ranked);
         let mut terms: Vec<FilterTerm<C>> = Vec::new();
         let mut free_terms: Vec<String> = Vec::new();
         let mut refusal: Option<String> = None;
@@ -143,7 +143,7 @@ impl<C: Column> ParsedQuery<C> {
         let mut semantic = Semantic::DEFAULT;
         for tok in datalib_query::parse(s) {
             match tok {
-                datalib_query::Token::Term(t) if qmd && t.key == "semantic" => {
+                datalib_query::Token::Term(t) if ranked && t.key == "semantic" => {
                     match Semantic::parse(&t.value, t.negate) {
                         Ok(asked) => semantic = asked,
                         Err(why) => {
@@ -155,9 +155,9 @@ impl<C: Column> ParsedQuery<C> {
                 // be spelled as, kept for the saved searches that do. A
                 // search now has one answer, so both are plain free text.
                 datalib_query::Token::Term(t)
-                    if qmd && !t.negate && (t.key == "qmd" || t.key == "qmd_vsearch") =>
+                    if ranked && !t.negate && (t.key == "qmd" || t.key == "qmd_vsearch") =>
                 {
-                    // Re-quote multi-word values so the daemon can route
+                    // Re-quote multi-word values so the search can route
                     // them as a single lex phrase. `qmd:"earl grey"` and
                     // `qmd:earl` both work; quotes survive into free_text
                     // only when the user actually typed a phrase.
@@ -182,9 +182,9 @@ impl<C: Column> ParsedQuery<C> {
                 },
                 // Bare term: surrounding quotes and a leading `-` stay
                 // verbatim so the daemon can forward lex-meaningful syntax to
-                // qmd. `"earl grey"` → qmd exact-phrase match; `-foo` → qmd
-                // term exclusion; `-"earl grey"` → qmd phrase exclusion. See
-                // `qmd::lex`. Plain words pass through too.
+                // the search. `"earl grey"` → exact-phrase match; `-foo` →
+                // term exclusion; `-"earl grey"` → phrase exclusion. See
+                // `hits::lex`. Plain words pass through too.
                 datalib_query::Token::Free(raw) => free_terms.push(raw),
             }
         }
@@ -369,7 +369,7 @@ fn within_vocabulary<C>(typed: &str, key: &SearchKey<C>, value: &str) -> Result<
 }
 
 /// The grid's query: `grid_rows`, its keys, the search terms' keys, and
-/// qmd for free text.
+/// the search index for free text.
 pub fn parse_query(s: &str) -> ParsedQuery {
     ParsedQuery::parse_with(s, TERMS_KEYS)
 }
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn quoted_free_text_preserves_quotes() {
-        // Quotes survive into free_text so the daemon can send qmd a
+        // Quotes survive into free_text so the search can take a
         // lex sub-query for exact-phrase matching.
         let q = parse_query("\"hello world\" channel:bridge");
         assert_eq!(q.free_text, "\"hello world\"");
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn qmd_predicate_recognized_as_hybrid() {
         let q = parse_query("qmd:\"earl grey\"");
-        // Multi-word qmd: value is re-quoted so the daemon can route
+        // Multi-word qmd: value is re-quoted so the search can route
         // it as a single lex phrase.
         assert_eq!(q.free_text, "\"earl grey\"");
         // qmd: is NOT a Field — it doesn't show up as a structured filter.

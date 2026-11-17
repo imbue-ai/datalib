@@ -148,7 +148,7 @@ pub fn rows_spec() -> RowsSpec {
 
 pub fn free_text_of<T: SearchTable>() -> FreeTextMatch {
     match T::FREE_TEXT {
-        FreeText::Qmd => FreeTextMatch::Qmd,
+        FreeText::Ranked => FreeTextMatch::Ranked,
         FreeText::Like(_) => FreeTextMatch::Like,
     }
 }
@@ -188,7 +188,7 @@ pub fn keys_of<T: SearchTable>() -> Vec<SearchKeySpec> {
         let words = T::FLAGS.iter().map(|(word, _)| *word).collect();
         keys.push(key("is", KeyValues::Words { words }));
     }
-    if matches!(T::FREE_TEXT, FreeText::Qmd) {
+    if matches!(T::FREE_TEXT, FreeText::Ranked) {
         keys.push(key(
             "semantic",
             KeyValues::Words {
@@ -232,7 +232,7 @@ pub enum ValueSource<C> {
     Words(Vec<&'static str>),
     /// The column's values among the rows.
     Column(C),
-    /// Nothing to offer: a date, the words free text routes to qmd, a key
+    /// Nothing to offer: a date, the words free text ranks by, a key
     /// the table does not have.
     Nothing,
 }

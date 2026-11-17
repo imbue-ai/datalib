@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Renders a chat conversation. The backend serves the QMD body verbatim
+// Renders a chat conversation. The backend serves the markdown body verbatim
 // (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
 // wrappers emitted by the ingest renderer — one wrapper per message,
 // plus nested ones for tool_use / tool_result / thinking blocks);
