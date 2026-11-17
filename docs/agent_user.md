@@ -162,9 +162,10 @@ were dropped or some step's params would be refused.
 for every way into the source, a minimal one (the least that syncs) and
 a complete one (every option set, each with a comment). With
 `--append <config>` it adds the minimal one to the config instead,
-above the index groups, and puts the source's steps in the `inputs` of
-the index steps that read them (`grid_index`, and the time-series
-index, which it adds when a time-series source is the first). A
+above the index groups, where the index steps read it by pattern
+(`*/render_markdown`); in a config that names their inputs one by one
+it adds the source's steps there, and it adds the time-series index
+when a time-series source is the first. A
 source reached more than one way names the method (`--method gmail`),
 and `--id` gives the group an id of its own, for a second account. It
 refuses an id the config already has, and a result `datalib-dag

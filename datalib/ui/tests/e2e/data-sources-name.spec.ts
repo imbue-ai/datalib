@@ -48,6 +48,12 @@ function fanInInputs(config: string, fn: string): string[] {
     .map((t) => t.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
 }
+/// Whether the fan-in reads `id`, by its id or by a pattern
+/// (`*/render_markdown`) that names it.
+function fanInReads(config: string, fn: string, id: string): boolean {
+  const own = id.split("/")[1];
+  return fanInInputs(config, fn).some((i) => i === id || i === `*/${own}`);
+}
 /// A step's own table in the config text. Its id is never written — it is
 /// composed from these two keys — so the id alone appears only where
 /// another step names it as an input.
@@ -322,10 +328,9 @@ test("free-text search is a choice, and only the search steps feel it", async ({
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Rows Only.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/rows-only\/render_markdown/);
+  await expect(editor).toHaveValue(/group = "rows-only"\nfunction = "render_markdown"/);
   const added = await editor.inputValue();
-  expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
-  expect(fanInInputs(added, "qmd_aggregator")).not.toContain("rows-only/keyword_index");
+  expect(fanInReads(added, "grid_index", "rows-only/render_markdown")).toBe(true);
   expect(added).not.toMatch(stepBlock("rows-only", "keyword_index"));
 
   // Reopening reads the answer back off the config, not off a default.
@@ -352,8 +357,7 @@ test("free-text search is a choice, and only the search steps feel it", async ({
   await expect(editor).toHaveValue(stepBlock("rows-only", "keyword_index"));
   const keywordOnly = await editor.inputValue();
   expect(keywordOnly).not.toMatch(stepBlock("rows-only", "embed"));
-  expect(fanInInputs(keywordOnly, "qmd_aggregator")).toContain("rows-only/keyword_index");
-  expect(fanInInputs(keywordOnly, "qmd_aggregator")).not.toContain("rows-only/embed");
+  expect(fanInReads(keywordOnly, "qmd_aggregator", "rows-only/keyword_index")).toBe(true);
 
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
@@ -365,18 +369,17 @@ test("free-text search is a choice, and only the search steps feel it", async ({
   // Not the toast: the first save's may still be on screen.
   await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
-  expect(fanInInputs(saved, "qmd_aggregator")).toEqual(
-    expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
-  );
+  expect(fanInReads(saved, "qmd_aggregator", "rows-only/keyword_index")).toBe(true);
+  expect(fanInReads(saved, "qmd_aggregator", "rows-only/embed")).toBe(true);
   expect(saved).toContain(
     'group = "rows-only"\nfunction = "keyword_index"\ncommand = "datalib-step"\ninputs = ["rows-only/render_markdown"]',
   );
   expect(saved).toContain(
     'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["rows-only/keyword_index"]',
   );
-  // Added once, however many times the source is saved: in the grid
-  // index and as the keyword index's input.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
+  // Added once, however many times the source is saved: as the keyword
+  // index's input. The grid reads it by pattern.
+  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(1);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({

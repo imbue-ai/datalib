@@ -31,6 +31,7 @@
 pub mod conversation_settings;
 pub mod convert;
 pub mod index_name;
+pub mod input_patterns;
 pub mod lowercase_ids;
 pub mod problem_inputs;
 pub mod qmd_steps;
@@ -234,6 +235,19 @@ pub fn upgrade_problem_inputs(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Write a pattern (`*/render_markdown`) in each index step's `inputs`
+/// where it names every step of that function (`input_patterns.rs`).
+/// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
+/// every entry the original did.
+pub fn upgrade_input_patterns(text: &str) -> Result<Option<String>> {
+    if !input_patterns::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = input_patterns::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Give the ChatGPT and Claude ingests' API settings the names they
 /// share (`conversation_settings.rs`). Refused, as [`upgrade_qmd_steps`]
 /// is, when the result would not load every entry the original did.
@@ -263,7 +277,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 9] = [
+pub const UNATTENDED: [Rewrite; 10] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -319,6 +333,12 @@ pub const UNATTENDED: [Rewrite; 9] = [
                `refresh_most_recent_n_chat_count` is `refetch_newest_conversations`, \
                the names both sources share",
         run: upgrade_conversation_settings,
+    },
+    Rewrite {
+        why: "has an index step that names every source's step by id",
+        what: "an index step reads every source's step of a function by pattern \
+               (`*/render_markdown`), so a source added later is read without editing it",
+        run: upgrade_input_patterns,
     },
 ];
 

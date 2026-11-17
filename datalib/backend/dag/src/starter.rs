@@ -9,9 +9,8 @@ use std::path::Path;
 use crate::config::{owner_only_options, root_config_path};
 
 /// Non-empty on purpose: the two index steps are source-independent and
-/// belong in every pipeline. Adding a source adds its render step's id to
-/// their `inputs` (the app's "Add a source" and `datalib-step examples
-/// --append` both do) and writes the source above this block.
+/// belong in every pipeline. They read every source by pattern, so adding
+/// a source only writes it above this block.
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.
 pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
@@ -19,8 +18,10 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index 
 # Every source feeds these two — the grid reads its rendered markdown,
 # the search aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
-# steps it reads by that id. `command` is the program a step runs;
-# `datalib-step` is the one datalib ships.
+# steps it reads by that id, or every step of one function at once:
+# `*/render_markdown` is each source's render, those added later too.
+# `command` is the program a step runs; `datalib-step` is the one
+# datalib ships.
 #
 # Sources go above this block: a [[groups]] entry with a `type`, then
 # its steps. The file then reads in the order data flows, each step
@@ -38,13 +39,13 @@ name = "Grid and Search Index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = []
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = []
+inputs = ["*/keyword_index", "*/embed"]
 
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any

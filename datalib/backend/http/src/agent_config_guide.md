@@ -74,8 +74,8 @@ command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # The source's own part of free-text search: its keyword index, then
-# its embeddings (the slow one). Leave both out, here and in
-# `qmd_aggregator` below, to keep it out of search.
+# its embeddings (the slow one). Leave both out to keep it out of
+# search.
 [[steps]]
 group = "slack"
 function = "keyword_index"
@@ -88,10 +88,11 @@ function = "embed"
 command = "datalib-step"
 inputs = ["slack/keyword_index"]
 
-# The shared fan-in steps. Add a source's render step id to
-# `grid_index`'s inputs, and its `keyword_index` and `embed` to
-# `qmd_aggregator`'s, which runs after them and drops from search any
-# source it does not name.
+# The shared fan-in steps. Each reads every source's steps of one
+# function by pattern, so a source added above needs no edit here:
+# `*/render_markdown` is every source's render. `qmd_aggregator` runs
+# after the search steps and drops from search any source it does not
+# read. Name steps one by one instead to leave a source out on purpose.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -99,13 +100,13 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["slack/render_markdown"]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["slack/keyword_index", "slack/embed"]
+inputs = ["*/keyword_index", "*/embed"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*

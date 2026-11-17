@@ -36,7 +36,8 @@ id = "unified_grid_and_search_index"       # no type: it mirrors nothing
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["work-slack/render_markdown"]
+# every source's render, and its time-series and occurrences steps
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -123,7 +124,7 @@ package's programs by its path under the data root, in its `command`;
 - A source whose type has time series (`TIME_SERIES_SOURCE_TYPES` in
   `dag/src/config.rs`: `garmin`, `yolink`, `airvisual`) has a `render_time_series` step beside
   its `render_markdown`, reading its ingest, and the
-  `time_series_index` names every such step in its `inputs`.
+  `time_series_index` reads every such step (`*/render_time_series`).
   `docs/dev/time_series.md` is the design.
 - A `calendar` source may have a `render_occurrences` step beside its
   `render_markdown`, reading its ingest: every occurrence of every event
@@ -416,11 +417,25 @@ fingerprint. The rules are the dag README's "What keeps steps apart";
 
 ## The fan-ins read exactly their `inputs`
 
-`grid_index` and `qmd_aggregator` take the groups they index from the
-`inputs` they declare — `<group>/render_markdown` for the grid,
-`<group>/keyword_index` and `<group>/embed` for the aggregator — and
-the group is each input's first segment (`index_steps::groups_from_inputs`,
-shared by `grid_index.rs`). `grid_index` also reads each source's
+An input is a step id, or a pattern that names every step of one
+function: `*/render_markdown` is `<group>/render_markdown` for every
+group that has one, those added later included. The loader expands a
+pattern to the ids it names, in the file's order, and never to the step
+itself (`dag/src/input_pattern.rs`); everything past the loader, the
+step's own `--inputs` included, sees ids only. A pattern names the steps
+that can run: a source whose step the loader drops (its ingest has a bad
+key, say) drops out of the pattern, where an input naming it by id
+blocks the step that names it. `datalib-dag --check` prints what each
+pattern stood for.
+
+The index steps read by pattern: `grid_index` reads
+`*/render_markdown`, `*/render_time_series` and `*/render_occurrences`,
+`qmd_aggregator` reads `*/keyword_index` and `*/embed`, and
+`time_series_index` reads `*/render_time_series`
+(`datalib_dag::config::FAN_INS`). `grid_index` and `qmd_aggregator` take
+the groups they index from those inputs, the group being each input's
+first segment (`index_steps::groups_from_inputs`, shared by
+`grid_index.rs`). `grid_index` also reads each source's
 `render_time_series` and `render_occurrences`, for their problem rows
 alone (`etl/README.md` §"Problems flow downstream with the data").
 Nothing scans the root. A source removed
@@ -450,7 +465,10 @@ a file, at boot or on any change to it, keeping the old text as
 `config.toml.bak` (`http/src/config_upgrade.rs`).
 `datalib-migrate-config` makes the same rewrite from a terminal.
 
-So the lists are what decides which indexes a source reaches. A render
+So the inputs are what decide which indexes a source reaches. With the
+patterns, every source reaches the grid, and a source reaches search
+when it has a `keyword_index`. To leave a source out of an index on
+purpose, name the others one by one instead of the pattern. A render
 step named by neither fan-in renders and reaches nothing. Named by
 `grid_index` alone, its rows are in the grid and its documents open and
 filter, but free text will not find it by its words or its meaning, which
@@ -459,16 +477,17 @@ source out costs keyword search as well as semantic. Which is still a reasonable
 to want, because embedding is the slow part of a sync — though turning
 off just its `embed` step keeps keyword search.
 
-The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
-`wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
-render step is removed, and `setSearchSteps` for the two qmd tickboxes
-under Rendering in Advanced options. "Keyword-index the markdown" adds or removes the
-source's `keyword_index` and its edge into `qmd_aggregator`; "Embed it
-for search by meaning", which needs the first, does the same for its
-`embed`. Removing any step takes every step that reads it (a fan-in loses
-the input instead), and removing the aggregator every source's qmd
-steps (`removedWith`). A hand edit has
-to remember, and the Manage screen flags a render step nothing consumes.
+The wizard maintains the rest (`ui/src/config/sourceSteps.ts`):
+`wireIntoFanIns` on create, which adds nothing where a pattern already
+names the step, `unwireFromFanIns` on delete and when a render step is
+removed, and `setSearchSteps` for the two search tickboxes under Rendering in
+Advanced options. "Keyword-index the markdown" adds or removes the
+source's `keyword_index`; "Embed it for search by meaning", which needs
+the first, does the same for its `embed`. Removing any step takes every
+step that reads it (a fan-in loses the input instead), and removing the
+aggregator every source's search steps (`removedWith`). A fan-in that
+names its inputs one by one has to be edited by hand, and the Manage
+screen flags a render step nothing consumes.
 
 ## What the Manage screen and the wizard make of it
 
@@ -615,6 +634,12 @@ the next would put the first back:
    `api.refetch_newest_conversations`, each value as it was. The two
    sources' API settings now share their names. The loader refuses the
    old keys.
+10. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
+   an index step whose `inputs` name every step of a function it reads
+   (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
+   every render, so it reads the same steps and, from then on, every
+   source added. A list that leaves a step out is left as written, since
+   whoever wrote it may have meant it. The loader still reads the lists.
 
 A source may not take `unified_index`, `unified_document_index`,
 `unified_grid_and_search_index` or `unified_time_series_index` as its id

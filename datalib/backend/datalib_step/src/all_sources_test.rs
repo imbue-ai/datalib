@@ -27,8 +27,8 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
 # pulled off a phone, or an export on disk; `datalib-step help <type>` says
-# how to sign one in or where its data comes from. Copy the groups you want,
-# and the index groups' inputs that name them.
+# how to sign one in or where its data comes from. Copy the groups you want:
+# the index groups read every source by pattern (`*/render_markdown`).
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps under
 # it, each declared as `group` + `function`. `ingest` brings the data into
@@ -62,7 +62,6 @@ const TIME_SERIES_INDEX: &str = "unified_time_series_index";
 struct Source {
     title: String,
     text: String,
-    steps: Vec<(String, String)>,
 }
 
 fn sources() -> Vec<Source> {
@@ -79,31 +78,20 @@ fn sources() -> Vec<Source> {
             } else {
                 format!("{t}-{}", m.path)
             };
-            let text = with_group_id(example.toml, t.as_str(), &id);
-            let steps = datalib_dag::config::check_text(&text)
-                .cfg
-                .steps
-                .iter()
-                .filter_map(|s| Some((s.id.clone(), s.function.clone()?)))
-                .collect();
             out.push(Source {
                 title: format!("{t} by `{}`", m.path),
-                text,
-                steps,
+                text: with_group_id(example.toml, t.as_str(), &id),
             });
         }
     }
     out
 }
 
-fn inputs(sources: &[Source], functions: &[&str]) -> String {
-    let ids: Vec<String> = sources
-        .iter()
-        .flat_map(|s| &s.steps)
-        .filter(|(_, f)| functions.contains(&f.as_str()))
-        .map(|(id, _)| format!("  \"{id}\",\n"))
-        .collect();
-    format!("inputs = [\n{}]\n", ids.concat())
+/// An index step's `inputs`: every source's steps of each function, by
+/// pattern.
+fn inputs(functions: &[&str]) -> String {
+    let patterns: Vec<String> = functions.iter().map(|f| format!("\"*/{f}\"")).collect();
+    format!("inputs = [{}]\n", patterns.join(", "))
 }
 
 fn rule(title: &str) -> String {
@@ -140,12 +128,9 @@ fn generate() -> String {
          [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
-        inputs(
-            &sources,
-            &["render_markdown", "render_time_series", "render_occurrences"]
-        ),
-        inputs(&sources, &["keyword_index", "embed"]),
-        inputs(&sources, &["render_time_series"]),
+        inputs(&["render_markdown", "render_time_series", "render_occurrences"]),
+        inputs(&["keyword_index", "embed"]),
+        inputs(&["render_time_series"]),
     ));
     for s in &sources {
         out.push('\n');

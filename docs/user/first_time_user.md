@@ -471,13 +471,13 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["claude/render_markdown"]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["claude/keyword_index", "claude/embed"]
+inputs = ["*/keyword_index", "*/embed"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
