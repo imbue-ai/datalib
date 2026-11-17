@@ -51,9 +51,15 @@ fn provision_embed_model(
     models_dir: Option<PathBuf>,
     fetch: datalib_embedding_models::Fetch,
 ) -> Result<PathBuf> {
-    let models = datalib_runtime::models::EMBED_MODELS;
     let dir = models_dir.unwrap_or_else(|| datalib_embedding_models::models_dir_for(root));
-    let outcomes = datalib_embedding_models::ensure_models(&dir, models, fetch)
+    ensure_embed_model(&dir, fetch)?;
+    Ok(dir)
+}
+
+/// [`provision_embed_model`] into exactly `dir`.
+pub(crate) fn ensure_embed_model(dir: &Path, fetch: datalib_embedding_models::Fetch) -> Result<()> {
+    let models = datalib_runtime::models::EMBED_MODELS;
+    let outcomes = datalib_embedding_models::ensure_models(dir, models, fetch)
         .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
     let missing = datalib_embedding_models::missing(models, &outcomes);
     if !missing.is_empty() {
@@ -64,7 +70,7 @@ fn provision_embed_model(
             missing.join(", ")
         );
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// What qmd kept under the aggregator's directory: its index, the
@@ -73,7 +79,7 @@ fn retire_qmd(root: &Path) -> Result<()> {
     let dir = datalib_runtime::models::qmd_state_dir(root);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {
-            tracing::info!(path = %dir.display(), "removed the search index; search reads its own");
+            tracing::info!(path = %dir.display(), "removed qmd's index; search reads its own");
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
