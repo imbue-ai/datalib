@@ -1297,10 +1297,20 @@ export function setQmdSteps(text: string, group: string, asked: QmdIndexing): st
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
-/// them ([`readersOf`]). Each `embed` reads the grid step, so the grid
-/// step takes them with it.
+/// them ([`readersOf`]), and a source's `embed` when its render goes: it
+/// embeds that render's documents, though it reads the grid step. Each
+/// `embed` reads the grid step, so the grid step takes them all with it.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
-  return readersOf(ids, all);
+  const readers = readersOf(ids, all);
+  const going = new Set([...ids, ...readers.map((s) => s.id)]);
+  const unrendered = all.filter(
+    (s) =>
+      s.kind === "step" &&
+      s.function === "embed" &&
+      !going.has(s.id) &&
+      going.has(`${s.group}/render_markdown`),
+  );
+  return [...readers, ...unrendered];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other
@@ -1482,7 +1492,10 @@ function declaredEntries(text: string): string {
 /// The group a move would put on the wrong side of it, when it would:
 /// above a group whose steps it reads, or below one that reads it. The
 /// file reads in the order data flows (`datalib_dag::config_order`, which
-/// `datalib-step topo-sort-config` restores), and a drag keeps it so.
+/// `datalib-step topo-sort-config` restores), and a drag keeps it so. A
+/// source's `embed` reads the index group that reads the source, so a
+/// source group's reads of an index group are left out, or no source
+/// could move.
 export function moveAgainstDataFlow(
   text: string,
   groupId: string,
@@ -1490,12 +1503,14 @@ export function moveAgainstDataFlow(
 ): { reads: string } | { readBy: string } | null {
   const steps = listSteps(text).filter((s) => s.kind === "step");
   const groupOfStep = new Map(steps.map((s) => [s.id, s.group]));
+  const fanInGroups = new Set(steps.filter((s) => fanInFunctionOf(s) !== null).map((s) => s.group));
   const reads = (id: string) =>
     new Set(
       steps
         .filter((s) => s.group === id)
         .flatMap((s) => s.inputs.map((i) => groupOfStep.get(i)))
-        .filter((g): g is string => !!g && g !== id),
+        .filter((g): g is string => !!g && g !== id)
+        .filter((g) => fanInGroups.has(id) || !fanInGroups.has(g)),
     );
   const order = listGroups(text)
     .map((g) => g.id)

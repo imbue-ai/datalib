@@ -1189,6 +1189,16 @@ inputs = ["slack/embed"]
       ["slack/embed"],
     );
   });
+
+  /// A source's embed reads the grid step, not its render, but it embeds
+  /// that render's documents: it goes when the render does.
+  it("takes a source's embed with its render", () => {
+    const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
+    expect(removedWith(["slack/ingest"], all).map((s) => s.id)).toEqual([
+      "slack/render_markdown",
+      "slack/embed",
+    ]);
+  });
 });
 
 describe("where the wizard writes", () => {
@@ -1545,6 +1555,22 @@ command = "datalib-applet slack_view"
     expect(moveAgainstDataFlow(CONFIG, "claude", "slack")).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "claude", null)).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "slack", "unified_grid_and_search_index")).toBeNull();
+  });
+
+  /// A source's embed reads the index group, which reads the source; that
+  /// edge alone must not pin every source below the index.
+  it("lets a source with an embed move among the sources", () => {
+    const embedded = `${CONFIG}
+[[steps]]
+group = "slack"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/grid_index"]
+`;
+    expect(moveAgainstDataFlow(embedded, "slack", "claude")).toBeNull();
+    expect(moveAgainstDataFlow(embedded, "slack", null)).toEqual({
+      readBy: "unified_grid_and_search_index",
+    });
   });
 });
 
