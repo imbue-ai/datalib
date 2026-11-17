@@ -2508,7 +2508,7 @@ mod tests {
             checked.render(std::path::Path::new("scaffold"))
         );
         // The grid step has no source to read yet, so on a scaffolded
-        // root it *is* the fringe, and the aggregator reads it. It is what
+        // root it *is* the fringe. It is what
         // `--sync` can target until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(

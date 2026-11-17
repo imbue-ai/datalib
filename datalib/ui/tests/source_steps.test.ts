@@ -60,7 +60,7 @@ inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 inputs = []
 
 # ── slack ─────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ describe("listSteps", () => {
   it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index/embedding_map",
       "slack/ingest",
       "slack/render_markdown",
     ]);
@@ -99,7 +99,7 @@ describe("listSteps", () => {
     expect(by.get("slack/ingest")).toBe("ingest");
     expect(by.get("slack/render_markdown")).toBe("render");
     expect(by.get("unified_grid_and_search_index/grid_index")).toBe("index");
-    expect(by.get("unified_grid_and_search_index/qmd_aggregator")).toBe("index");
+    expect(by.get("unified_grid_and_search_index/embedding_map")).toBe("index");
     const qmd = new Map(
       listSteps(setQmdSteps(PAIR, "slack", "keyword_and_embed")).map((s) => [s.id, s]),
     );
@@ -590,7 +590,7 @@ describe("removeSteps / patchSource", () => {
     expect(after).not.toContain("slack");
     expect(listSteps(after).map((s) => s.id)).toEqual([
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index/embedding_map",
     ]);
     expect(listGroups(after).map((g) => g.id)).toEqual(["unified_grid_and_search_index"]);
   });
@@ -610,8 +610,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
+      "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -634,8 +634,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
+      "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -656,8 +656,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
+      "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -766,21 +766,21 @@ describe("fan-in wiring", () => {
     const both = wireIntoFanIns(
       wireIntoFanIns(PAIR, "email/render_markdown"),
       "email/keyword_index",
-      "qmd_aggregator",
+      "embedding_map",
     );
     const steps = (text: string, id: string) => listSteps(text).find((s) => s.id === id)!.inputs;
-    expect(steps(both, "unified_grid_and_search_index/qmd_aggregator")).toEqual([
+    expect(steps(both, "unified_grid_and_search_index/embedding_map")).toEqual([
       "email/keyword_index",
     ]);
     expect(steps(both, "unified_grid_and_search_index/grid_index")).not.toContain(
       "email/keyword_index",
     );
 
-    const gridOnly = unwireFromFanIns(both, "email/keyword_index", "qmd_aggregator");
+    const gridOnly = unwireFromFanIns(both, "email/keyword_index", "embedding_map");
     expect(steps(gridOnly, "unified_grid_and_search_index/grid_index")).toContain(
       "email/render_markdown",
     );
-    expect(steps(gridOnly, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
+    expect(steps(gridOnly, "unified_grid_and_search_index/embedding_map")).toEqual([]);
   });
 
   /// Which fan-in a step is comes off its `function`, not off the order
@@ -788,12 +788,12 @@ describe("fan-in wiring", () => {
   it("finds a fan-in whose keys are in an unusual order", () => {
     const odd = `[[steps]]
 inputs = []
-function = "qmd_aggregator"
+function = "embedding_map"
 group = "unified_grid_and_search_index"
 `;
-    const wired = wireIntoFanIns(odd, "pdfs/keyword_index", "qmd_aggregator");
+    const wired = wireIntoFanIns(odd, "pdfs/keyword_index", "embedding_map");
     expect(
-      listSteps(wired).find((s) => s.id === "unified_grid_and_search_index/qmd_aggregator")!.inputs,
+      listSteps(wired).find((s) => s.id === "unified_grid_and_search_index/embedding_map")!.inputs,
     ).toEqual(["pdfs/keyword_index"]);
   });
 
@@ -826,7 +826,7 @@ inputs = ${inputs}
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 inputs = ["bridge/keyword_index"]
 `;
 
@@ -1088,25 +1088,17 @@ describe("the ChatGPT descriptor", () => {
 });
 
 describe("a source's qmd steps", () => {
-  const MAPPED = `${PAIR}
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "embedding_map"
-inputs = ["unified_grid_and_search_index/qmd_aggregator"]
-`;
+  const MAPPED = PAIR;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
 
   /// The grid step puts the source in the keyword search; its embed reads
   /// the grid step, and the aggregator reads the embed. Nothing of the
-  /// source's reads the aggregator: a step downstream of a fan-in that
-  /// waits on every source would finish only when the slowest does.
-  it("adds the embed, reading the grid step, and wires it into the aggregator", () => {
+  /// source's reads the map: a step downstream of a fan-in that waits on
+  /// every source would finish only when the slowest does.
+  it("adds the embed, reading the grid step, and wires it into the map", () => {
     const next = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
     expect(inputsOf(next, "slack/embed")).toEqual(["unified_grid_and_search_index/grid_index"]);
-    expect(inputsOf(next, "unified_grid_and_search_index/qmd_aggregator")).toEqual(["slack/embed"]);
-    expect(inputsOf(next, "unified_grid_and_search_index/embedding_map")).toEqual([
-      "unified_grid_and_search_index/qmd_aggregator",
-    ]);
+    expect(inputsOf(next, "unified_grid_and_search_index/embedding_map")).toEqual(["slack/embed"]);
     expect(next).not.toContain("not_searched");
     expect(setQmdSteps(next, "slack", "keyword_and_embed")).toBe(next);
     expect(qmdIndexingOf(listSteps(next), "slack")).toBe("keyword_and_embed");
@@ -1119,13 +1111,13 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
     const both = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
     const keyword = setQmdSteps(both, "slack", "keyword");
     expect(inputsOf(keyword, "slack/embed")).toBeUndefined();
-    expect(inputsOf(keyword, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
+    expect(inputsOf(keyword, "unified_grid_and_search_index/embedding_map")).toEqual([]);
     expect(keyword).not.toContain("not_searched");
     expect(qmdIndexingOf(listSteps(keyword), "slack")).toBe("keyword");
     expect(setQmdSteps(keyword, "slack", "keyword")).toBe(keyword);
     const back = setQmdSteps(keyword, "slack", "keyword_and_embed");
     expect(inputsOf(back, "slack/embed")).toEqual(["unified_grid_and_search_index/grid_index"]);
-    expect(inputsOf(back, "unified_grid_and_search_index/qmd_aggregator")).toEqual(["slack/embed"]);
+    expect(inputsOf(back, "unified_grid_and_search_index/embedding_map")).toEqual(["slack/embed"]);
   });
 
   /// A step reading the embeddings would name an input that no longer
@@ -1153,39 +1145,32 @@ inputs = ["slack/embed"]
         ?.not_searched,
     ).toEqual(["slack"]);
     expect(inputsOf(off, "slack/embed")).toBeUndefined();
-    expect(inputsOf(off, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
-    expect(inputsOf(off, "unified_grid_and_search_index/embedding_map")).toEqual([
-      "unified_grid_and_search_index/qmd_aggregator",
-    ]);
+    expect(inputsOf(off, "unified_grid_and_search_index/embedding_map")).toEqual([]);
     expect(inputsOf(off, "unified_grid_and_search_index/grid_index")).toEqual([
       "slack/render_markdown",
     ]);
     expect(qmdIndexingOf(listSteps(off), "slack")).toBe("none");
   });
 
-  /// Without the aggregator search by meaning is off, and nothing would
-  /// sweep what an embed writes, so none is written.
-  it("writes no embed where the config has no aggregator", () => {
+  /// An embed reads the grid step, so without one none is written: its
+  /// input would name nothing.
+  it("writes no embed where the config has no grid step", () => {
     const noQmd = removeSteps(
       PAIR,
-      listSteps(PAIR).filter((s) => s.id === "unified_grid_and_search_index/qmd_aggregator"),
+      listSteps(PAIR).filter((s) => s.id === "unified_grid_and_search_index/grid_index"),
     );
     expect(
       inputsOf(setQmdSteps(noQmd, "slack", "keyword_and_embed"), "slack/embed"),
     ).toBeUndefined();
   });
 
-  /// A render is wired into the grid index and never into the aggregator
-  /// or the map.
+  /// A render is wired into the grid index and never into the map.
   it("wires a render into the grid index only", () => {
     const wired = wireIntoFanIns(MAPPED, "email/render_markdown");
     expect(inputsOf(wired, "unified_grid_and_search_index/grid_index")).toContain(
       "email/render_markdown",
     );
-    expect(inputsOf(wired, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
-    expect(inputsOf(wired, "unified_grid_and_search_index/embedding_map")).toEqual([
-      "unified_grid_and_search_index/qmd_aggregator",
-    ]);
+    expect(inputsOf(wired, "unified_grid_and_search_index/embedding_map")).toEqual([]);
   });
 
   /// Removing a source's ingest takes everything that reads it, however
@@ -1195,14 +1180,14 @@ inputs = ["slack/embed"]
     expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual(["slack/render_markdown"]);
   });
 
-  /// Removing the aggregator turns search by meaning off, so every
-  /// source's embed goes with it — though none of them reads it.
-  it("takes every source's embed with the aggregator", () => {
+  /// Every embed reads the grid step, so removing it takes them; removing
+  /// the map, which reads them, takes nothing.
+  it("takes every source's embed with the grid step", () => {
     const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
-    expect(readersOf(["unified_grid_and_search_index/qmd_aggregator"], all)).toEqual([]);
-    expect(
-      removedWith(["unified_grid_and_search_index/qmd_aggregator"], all).map((s) => s.id),
-    ).toEqual(["slack/embed"]);
+    expect(removedWith(["unified_grid_and_search_index/embedding_map"], all)).toEqual([]);
+    expect(removedWith(["unified_grid_and_search_index/grid_index"], all).map((s) => s.id)).toEqual(
+      ["slack/embed"],
+    );
   });
 });
 
@@ -1254,7 +1239,7 @@ inputs = ["slack/render_markdown", "notes/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 inputs = []
 
 [[applets]]
@@ -1298,7 +1283,7 @@ command = "datalib-applet unified_grid_and_search_index"
       "extra/render_markdown",
       "unified_grid_and_search_index/grid_index",
       "extra/embed",
-      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index",
     ]);
     expect(flowsDown(next)).toEqual([]);
@@ -1311,7 +1296,7 @@ command = "datalib-applet unified_grid_and_search_index"
       next.indexOf('function = "grid_index"'),
     );
     expect(next.indexOf('function = "embed"')).toBeLessThan(
-      next.indexOf('function = "qmd_aggregator"'),
+      next.indexOf('function = "embedding_map"'),
     );
   });
 
@@ -1339,7 +1324,7 @@ command = "datalib-applet unified_grid_and_search_index"
       "notes/render_markdown",
       "unified_grid_and_search_index/grid_index",
       "slack/embed",
-      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index",
     ]);
     expect(flowsDown(both)).toEqual([]);
@@ -1391,7 +1376,7 @@ inputs = ["slack/render_markdown"]
 
 `;
     const swapped = `${PAIR.replace(grid, "").replace("# ── slack", `${grid}# ── slack`)}`;
-    expect(swapped.indexOf("qmd_aggregator")).toBeLessThan(swapped.indexOf("grid_index"));
+    expect(swapped.indexOf("embedding_map")).toBeLessThan(swapped.indexOf("grid_index"));
     const next = setQmdSteps(swapped, "slack", "keyword_and_embed");
     expect(
       listSteps(next)

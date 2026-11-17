@@ -171,12 +171,6 @@ command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
-
-[[steps]]
 group = "gmail"
 function = "embed"
 command = "datalib-step"

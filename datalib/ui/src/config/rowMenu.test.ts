@@ -65,9 +65,7 @@ describe("rowMenu", () => {
     expect(
       has(rowMenu([target({ kind: "applet", dashboardGroup: null })], opts), "dashboard"),
     ).toBe(false);
-    expect(has(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history")).toBe(
-      false,
-    );
+    expect(has(rowMenu([target({ kind: "step", func: "embed" })], opts), "history")).toBe(false);
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
     ).toBe("Not in the pipeline");
@@ -122,13 +120,13 @@ describe("rowMenu", () => {
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
-    const qmd = target({
-      id: "unified_grid_and_search_index/qmd_aggregator",
+    const grid = target({
+      id: "unified_grid_and_search_index/grid_index",
       kind: "step",
       type: null,
-      func: "qmd_aggregator",
+      func: "grid_index",
     });
-    expect(has(rowMenu([qmd], opts), "reset")).toBe(false);
+    expect(has(rowMenu([grid], opts), "reset")).toBe(false);
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {

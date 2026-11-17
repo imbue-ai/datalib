@@ -161,12 +161,6 @@ group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
-
 # Each source's embeddings, over the keywords baked into the image.
 [[steps]]
 group = "claude-export"

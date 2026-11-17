@@ -94,7 +94,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expandGroup(page, "slack");
   await expandGroup(page, "unified_grid_and_search_index");
   const render = pipelineRow(page, "slack/render_markdown");
-  const qmd = pipelineRow(page, "unified_grid_and_search_index/qmd_aggregator");
+  const qmd = pipelineRow(page, "unified_grid_and_search_index/grid_index");
   await expect(render).toBeVisible();
   await render.locator('[col-id="status"]').click();
   await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -109,7 +109,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD aggregator: The QMD index keeps no doltlite store/,
+    /Grid index: The grid index is plain SQLite, with no commit history/,
   );
   await page.keyboard.press("Escape");
 

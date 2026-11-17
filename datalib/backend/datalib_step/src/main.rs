@@ -831,10 +831,6 @@ async fn run_function(
             )
             .await
         }
-        Function::QmdAggregator => {
-            writes_the_index_tree(&env, &index_steps::aggregator_rel())?;
-            index_steps::run_aggregator(data_root, &env, emitter, &control.stop).await
-        }
         Function::Embed => {
             index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
         }

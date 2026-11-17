@@ -4,7 +4,7 @@
 //! each built-in `keyword_index` out, with its comments; lists in
 //! `not_searched` each source `grid_index` reads that had none, so
 //! nothing that was out of search comes into it; and points every input
-//! that named a keyword step (an `embed`, the aggregator) at `grid_index`
+//! that named a keyword step (an `embed`, the embedding map) at `grid_index`
 //! instead. A config with no `grid_index` gets one, reading every
 //! source's render. Everything else stays as written.
 
@@ -277,7 +277,7 @@ inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 command = "datalib-step"
 inputs = ["*/keyword_index", "*/embed"]
 "#;
@@ -299,8 +299,8 @@ inputs = ["*/keyword_index", "*/embed"]
             .clone()
     }
 
-    /// The keyword step and its comment go; the embed and the aggregator
-    /// read the grid step; the source that had no keyword step is listed
+    /// The keyword step and its comment go; the embed, and the map that
+    /// read every keyword step, read the grid step; the source that had no keyword step is listed
     /// in `not_searched`, so it stays out of search; the result loads
     /// whole, and a second pass finds nothing to do.
     #[test]
@@ -312,9 +312,9 @@ inputs = ["*/keyword_index", "*/embed"]
         let check = check(&after);
         let grid = "unified_grid_and_search_index/grid_index";
         assert_eq!(inputs_of(&check, "picard/embed"), [grid]);
-        let mut aggregated = inputs_of(&check, "unified_grid_and_search_index/qmd_aggregator");
-        aggregated.sort();
-        assert_eq!(aggregated, ["picard/embed", grid]);
+        let mut mapped = inputs_of(&check, "unified_grid_and_search_index/embedding_map");
+        mapped.sort();
+        assert_eq!(mapped, ["picard/embed", grid]);
         let params = check
             .cfg
             .steps

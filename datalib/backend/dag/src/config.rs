@@ -773,7 +773,7 @@ pub const FAN_INS: &[(&str, &str, &str)] = &[
     (
         "embed",
         datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "qmd_aggregator",
+        "embedding_map",
     ),
     (
         "render_time_series",
@@ -1756,32 +1756,16 @@ fn accept_steps(
             );
             continue;
         }
-        if is_builtin(&c.entry, "qmd_index") {
+        if let Some((function, why)) = RETIRED_BUILTINS
+            .iter()
+            .find(|(function, _)| is_builtin(&c.entry, function))
+        {
             diags.push(
                 c.diag(
                     Severity::Rejected,
                     text,
                     Some("function"),
-                    "`qmd_index` is the shape from before `qmd_aggregator`, which reads each \
-                     source's `keyword_index` and `embed` rather than feeding them",
-                )
-                .with_help(
-                    "the app rewrites the file itself when it next reads it, keeping the old \
-                     one as `config.toml.bak`; from a terminal, \
-                     `datalib-migrate-config <data root> --force`",
-                ),
-            );
-            continue;
-        }
-        if is_builtin(&c.entry, "keyword_index") {
-            diags.push(
-                c.diag(
-                    Severity::Rejected,
-                    text,
-                    Some("function"),
-                    "`keyword_index` is the shape from before `grid_index` put each source in \
-                     the keyword search itself: it searches every source it reads but those its \
-                     `params.not_searched` names",
+                    format!("`{function}` is the shape from before {why}"),
                 )
                 .with_help(
                     "the app rewrites the file itself when it next reads it, keeping the old \
@@ -2002,6 +1986,25 @@ fn params_key_span(
     header
 }
 
+/// Built-in functions that no longer run, each with what took its place.
+/// The config upgrade rewrites each away (`datalib_migrate_config`).
+const RETIRED_BUILTINS: &[(&str, &str)] = &[
+    (
+        "qmd_index",
+        "each source's `embed` and `grid_index`'s keyword search did its work",
+    ),
+    (
+        "keyword_index",
+        "`grid_index` put each source in the keyword search itself: it searches every \
+         source it reads but those its `params.not_searched` names",
+    ),
+    (
+        "qmd_aggregator",
+        "`grid_index` kept the vector cache to what a chunk names and reported what search \
+         holds; `embedding_map` reads every `embed` itself",
+    ),
+];
+
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
     e.runs_datalib_step() && e.function.as_deref() == Some(function)
 }
@@ -2035,12 +2038,11 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 ];
 
 /// The lock a built-in step holds when it names none, where its shape's
-/// budget would not keep it safe: the grid's load with its keyword pass,
-/// and the aggregator's sweep, both write the grid index's file, which the
-/// runner cannot see as shared; every embed loads the model.
+/// budget would not keep it safe: the grid's load, its keyword pass and
+/// its sweep write the grid index's file and the inference cache, which
+/// the runner cannot see as shared; every embed loads the model.
 const BUILTIN_LOCKS: &[(&str, &str)] = &[
     ("grid_index", crate::supervisor::locks::QMD_KEYWORD),
-    ("qmd_aggregator", crate::supervisor::locks::QMD_KEYWORD),
     ("embed", crate::supervisor::locks::QMD_EMBED),
 ];
 
@@ -3046,13 +3048,8 @@ mod tests {
 
             [[steps]]
             group = "unified_grid_and_search_index"
-            function = "qmd_aggregator"
-            inputs = ["unified_grid_and_search_index/grid_index", "mail/embed"]
-
-            [[steps]]
-            group = "unified_grid_and_search_index"
             function = "embedding_map"
-            inputs = ["unified_grid_and_search_index/qmd_aggregator"]
+            inputs = ["*/embed"]
 
             [[steps]]
             id = "custom/qmd"
@@ -3798,10 +3795,6 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-
 [[applets]]
 group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
@@ -3809,7 +3802,7 @@ command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
-        assert_eq!(check.graph.steps.len(), 2);
+        assert_eq!(check.graph.steps.len(), 1);
     }
 
     /// Malformed TOML is the one shape with nothing to salvage.
@@ -4296,9 +4289,9 @@ inputs = ["*/render_markdown"]
         );
     }
 
-    /// The aggregator reads the grid step and every embed by pattern.
+    /// The map reads every embed by pattern.
     #[test]
-    fn the_aggregator_reads_the_grid_step_and_every_embed() {
+    fn the_embedding_map_reads_every_embed() {
         let text = format!(
             "{CONFIG}
 [[steps]]
@@ -4309,16 +4302,16 @@ inputs = [\"unified_grid_and_search_index/grid_index\"]
 
 [[steps]]
 group = \"unified_grid_and_search_index\"
-function = \"qmd_aggregator\"
+function = \"embedding_map\"
 command = \"datalib-step\"
-inputs = [\"unified_grid_and_search_index/grid_index\", \"*/embed\"]
+inputs = [\"*/embed\"]
 "
         );
         let check = check_text(&text);
         assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
         assert_eq!(
-            inputs_of(&check, "unified_grid_and_search_index/qmd_aggregator"),
-            ["unified_grid_and_search_index/grid_index", "slack/embed"]
+            inputs_of(&check, "unified_grid_and_search_index/embedding_map"),
+            ["slack/embed"]
         );
     }
 }
@@ -4882,11 +4875,6 @@ locks = ["cpu"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["unified_grid_and_search_index/grid_index", "mail/embed"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["mail/render_markdown"]
 
@@ -4905,10 +4893,6 @@ inputs = ["unified_grid_and_search_index/grid_index"]
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            held("unified_grid_and_search_index/qmd_aggregator"),
-            ["qmd_keyword"]
-        );
-        assert_eq!(
             held("unified_grid_and_search_index/grid_index"),
             ["qmd_keyword"]
         );
@@ -4922,9 +4906,10 @@ inputs = ["unified_grid_and_search_index/grid_index"]
         assert_eq!(slots(&check, "qmd_embed"), Some(1));
     }
 
-    /// `qmd_index` fed the per-source steps; `qmd_aggregator` reads them.
-    /// A config still naming the old step is refused, naming the tool that
-    /// rewrites it, and loses that entry alone.
+    /// `qmd_index` did the search's work in one fan-in. A config still
+    /// naming the old step is refused, naming the tool that rewrites it,
+    /// and loses that entry alone. `keyword_index` and `qmd_aggregator`
+    /// are refused the same way (`RETIRED_BUILTINS`).
     #[test]
     fn a_qmd_index_step_is_refused_and_names_the_migrator() {
         let check = check_text(
@@ -4998,6 +4983,37 @@ inputs = ["mail/render_markdown"]
             .any(|s| s.id == "mail/render_markdown"));
     }
 
+    /// `qmd_aggregator` swept the vectors and reported; `grid_index` does
+    /// both now. A config still naming it is refused, naming the tool that
+    /// rewrites it, and loses that entry alone.
+    #[test]
+    fn a_qmd_aggregator_step_is_refused_and_names_the_migrator() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "qmd_aggregator"
+inputs = ["unified_grid_and_search_index/grid_index"]
+"#,
+        );
+        let refused: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("unified_grid_and_search_index/qmd_aggregator"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
+        assert_eq!(check.graph.steps.len(), 1);
+    }
+
     /// A comparison is searched like any source, so its group may carry
     /// an embed beside its one render.
     #[test]
@@ -5029,11 +5045,6 @@ inputs = ["*/render_markdown"]
 group = "slack-diff"
 function = "embed"
 inputs = ["unified_grid_and_search_index/grid_index"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 "#,
         );
         let dropped: Vec<_> = check
@@ -5042,7 +5053,7 @@ inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
             .filter(|d| d.severity.drops_the_entry())
             .collect();
         assert!(dropped.is_empty(), "{dropped:?}");
-        assert_eq!(check.graph.steps.len(), 4);
+        assert_eq!(check.graph.steps.len(), 3);
     }
 
     /// When a step may run is not what it makes: neither re-runs anything.

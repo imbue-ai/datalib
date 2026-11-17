@@ -113,11 +113,10 @@ package's programs by its path under the data root, in its `command`;
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
-  `embed`, `grid_index`, `qmd_aggregator`, `embedding_map`,
-  `time_series_index`
+  `embed`, `grid_index`, `embedding_map`, `time_series_index`
   (`datalib_step/src/function.rs`, tested against the layout constants
-  the render and index crates use). `grid_index`, `qmd_aggregator` and
-  `embedding_map` write `unified_grid_and_search_index/<function>`, and
+  the render and index crates use). `grid_index` and `embedding_map`
+  write `unified_grid_and_search_index/<function>`, and
   `time_series_index` writes `unified_time_series_index/time_series_index`,
   and nothing else, because the applet that reads each finds it from the
   data root alone.
@@ -134,12 +133,13 @@ package's programs by its path under the data root, in its `command`;
   joins no index. The rows and their columns:
   `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
 - The search steps are the exception to "a step writes its own tree":
-  `grid_index`'s keyword pass and `qmd_aggregator`'s sweep both write
-  the search index's tables in the grid index's file, and each source's
-  `embed` writes its vectors to the one inference cache under
-  `unified_grid_and_search_index/search_index/`. The runner cannot see
-  those files as shared, so these steps hold one-slot locks instead
-  (below).
+  `grid_index`'s keyword pass writes the search index's tables in the
+  grid index's file, each source's `embed` writes its vectors to the
+  one inference cache under `unified_grid_and_search_index/search_index/`,
+  and `grid_index`'s sweep deletes the vectors no chunk names from it.
+  The runner cannot see those files as shared, so these steps hold
+  one-slot locks instead (below), and an `embed` reads `grid_index` off
+  disk, so the runner never runs the two at once.
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
   CardDAV or from `.vcf` files — and the product a person recognizes,
@@ -350,7 +350,7 @@ file runs.
 | any entry | it does not deserialize: an unknown key, a wrong type, both `id` and `group` |
 | a lock | its name is not one segment, it has no slots, or it is declared twice |
 | a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
-| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, the shape from before `qmd_aggregator` (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; it is a built-in `keyword_index`, the shape from before `grid_index` did its work (the message names `datalib-migrate-config`); under a `diff` group it is not `render_markdown` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
+| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, `keyword_index` or `qmd_aggregator`, shapes whose work other steps do now (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle or downstream of one |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate; its `command` is empty |
 
@@ -387,7 +387,7 @@ fingerprint, so changing it re-runs the group.
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
-- `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
+- `grid_index` or `embedding_map` under any group but
   `unified_grid_and_search_index`, and `time_series_index` under any but
   `unified_time_series_index`.
 
@@ -403,10 +403,8 @@ the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network`, `cpu` or `index`, the
 three budgets every config has — or, for the built-in index steps, one
 of the two one-slot locks every config has too: `qmd_keyword`, held by
-`grid_index` and `qmd_aggregator`, which both write the grid index's
-file, and `qmd_embed`, held by every `embed`, which only reads it. So an
-embed may run beside `grid_index`, but no two writers of the file run
-at once.
+`grid_index`, which writes the grid index's file, and `qmd_embed`, held
+by every `embed`, so one embedding model is loaded at a time.
 `reads = "files"` says a step reads its inputs off disk, so no writer of
 them runs beside it. `start = "after_inputs_settle"` says a step waits
 until nothing upstream of it is running or due, rather than starting on
@@ -430,7 +428,7 @@ pattern stood for.
 
 The index steps read by pattern: `grid_index` reads
 `*/render_markdown`, `*/render_time_series` and `*/render_occurrences`,
-`qmd_aggregator` reads `grid_index` and `*/embed`, and
+`embedding_map` reads `*/embed`, and
 `time_series_index` reads `*/render_time_series`
 (`datalib_dag::config::FAN_INS`). `grid_index` takes the groups it
 indexes from those inputs, the group being each input's first segment
@@ -452,17 +450,19 @@ alone still reaches the embeds. The pass cuts the chunks with the
 embedding model's tokenizer, so `grid_index` needs the model file when
 any source is searched. A source's `embed` (input: `grid_index`) loads
 the model and fills the vectors. Both fetch the model when it is
-missing. `qmd_aggregator` reads `grid_index` and
-every `embed`, so it runs after all of them: it sweeps the vectors no
-chunk names and reports each source's counts. Nothing of a source's
-reads the aggregator, and that is what lets each source's `embed`
-finish on its own: the runner holds a step's finish back while anything
-upstream of it is still running, so a step downstream of a fan-in would
-finish only when the slowest source did. Removing the aggregator turns
-search by meaning off; the Manage screen takes every source's `embed`
-with it. A `keyword_index` step is the shape from before `grid_index`
-did that work: the loader refuses it, and `datalib-http` rewrites it
-(below). A `qmd_index` step is the shape from before the aggregator,
+missing. After the keyword passes `grid_index` sweeps the vectors no
+chunk names from the inference cache, and reports each searched
+source's documents and chunks not yet embedded; each `embed` reports
+what it left of its own. Nothing of a source's reads a step that reads
+every source, and that is what lets each source's `embed` finish on its
+own: the runner holds a step's finish back while anything upstream of
+it is still running, so a step downstream of a fan-in would finish only
+when the slowest source did. Search by meaning is off for a source with
+no `embed`, or with its `embed` turned off; removing `grid_index` takes
+every `embed` with it. A `keyword_index` or `qmd_aggregator` step is
+the shape from before `grid_index` did that work: the loader refuses
+it, and `datalib-http` rewrites it (below). A `qmd_index` step is the
+shape from before the per-source steps,
 when that fan-in fed the per-source steps or did their work itself; the
 loader refuses it, and `datalib-http` rewrites it as soon as it reads such
 a file, at boot or on any change to it, keeping the old text as
@@ -487,7 +487,7 @@ in Advanced options. "Keyword-index the markdown" takes the source out of
 `grid_index`'s `not_searched`, or puts it in; "Embed it for search by
 meaning", which needs the first, adds or removes its `embed`. Removing
 any step takes every step that reads it (a fan-in loses the input
-instead), and removing the aggregator every source's `embed`
+instead), so removing `grid_index` takes every source's `embed`
 (`removedWith`). A fan-in that
 names its inputs one by one has to be edited by hand, and the Manage
 screen flags a render step nothing consumes.
@@ -639,12 +639,17 @@ the next would put the first back:
    old keys.
 10. The keyword fold (`upgrade_keyword_fold`, `keyword_fold.rs`): each
    built-in `keyword_index` step goes, with its comments; every input
-   that named one (an `embed`, the aggregator) reads `grid_index`
+   that named one (an `embed`, the embedding map) reads `grid_index`
    instead; and each source `grid_index` reads that had no
    `keyword_index` is listed in its `params.not_searched`, so nothing
    out of search comes into it. A config with no `grid_index` gets one
    reading every render. The loader refuses the old step.
-11. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
+11. The aggregator (`upgrade_aggregator_drop`, `aggregator_drop.rs`):
+   each built-in `qmd_aggregator` step goes, with its comments, and an
+   input that named one (the embedding map's) reads `*/embed`.
+   `grid_index` sweeps the vectors and reports what search holds. The
+   loader refuses the old step.
+12. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
    an index step whose `inputs` name every step of a function it reads
    (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
    every render, so it reads the same steps and, from then on, every

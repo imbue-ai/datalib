@@ -87,7 +87,6 @@ impl Phase {
             }
             Some("grid_index")
             | Some("time_series_index")
-            | Some("qmd_aggregator")
             | Some("embed")
             | Some("embedding_map") => Phase::Index,
             _ => Phase::Other,
@@ -580,7 +579,6 @@ impl Child for Entry<'_> {
 fn default_name(id: &str) -> String {
     match id {
         "unified_grid_and_search_index/grid_index" => "Grid and Search Index (table)",
-        "unified_grid_and_search_index/qmd_aggregator" => "Grid and Search Index (QMD)",
         "unified_grid_and_search_index/embedding_map" => "Grid and Search Index (map)",
         "unified_grid_and_search_index" => "Grid and Search Index (Applet)",
         "unified_time_series_index/time_series_index" => "Time Series Index",
@@ -618,7 +616,6 @@ fn child_label(step: &WrittenStep) -> String {
         Some("render_occurrences") => "Render occurrences",
         Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
-        Some("qmd_aggregator") => "QMD aggregator",
         Some("embed") => "Semantic indexing",
         Some("embedding_map") => "Embedding map",
         Some(other) => other,

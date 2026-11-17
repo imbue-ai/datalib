@@ -1,7 +1,8 @@
 //! The `grid_index` function: every source's render store, stacked into
 //! the unified grid table at `unified_grid_and_search_index/grid_index`,
 //! then each searched source's documents into the search index's keyword
-//! tables in the same file.
+//! tables in the same file. It keeps the inference cache to the vectors a
+//! chunk still names, and reports what search holds of each source.
 
 use std::path::Path;
 
@@ -231,6 +232,20 @@ pub(crate) async fn run_with(
                 "documents of sources no longer searched left the search index"
             );
         }
+        // No embed runs beside this step: each reads it, off disk, so the
+        // runner keeps this step waiting while one does.
+        let swept = crate::search_index::sweep(data_root).await?;
+        if swept > 0 {
+            tracing::info!(swept, "vectors no chunk names left the inference cache");
+        }
+        let held = datalib_search_index::holdings(data_root, &searched).await?;
+        for h in &held {
+            let labels = [("source", h.source.as_str())];
+            progress.metric("search_documents", &labels, h.documents as i64);
+            progress.metric("search_chunks_not_embedded", &labels, h.not_embedded as i64);
+        }
+        progress.set_message(&holdings_summary(&held));
+        retire_aggregator_tree(data_root)?;
     }
 
     // The version, whether or not this pass changed anything: a pass that
@@ -260,6 +275,31 @@ pub(crate) async fn run_with(
             rows: None,
         }]),
         None => Ok(vec![]),
+    }
+}
+
+/// The step's one-line account of what search holds.
+fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
+    let documents: usize = held.iter().map(|h| h.documents).sum();
+    let left: usize = held.iter().map(|h| h.not_embedded).sum();
+    format!(
+        "{documents} documents in {} searched sources; {left} chunks not embedded",
+        held.len()
+    )
+}
+
+/// What the retired `qmd_aggregator` step kept under its tree: qmd's index,
+/// its config and its link to the models. Nothing reads any of it; the
+/// models the link names stay where they are.
+fn retire_aggregator_tree(root: &Path) -> Result<()> {
+    let dir = datalib_core::layout::qmd_dir(root);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {
+            tracing::info!(path = %dir.display(), "removed the retired aggregator's tree");
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("remove {}", dir.display())),
     }
 }
 
@@ -300,6 +340,39 @@ pub async fn version(data_root: &Path) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the step's Manage row says about the whole search index.
+    #[test]
+    fn the_summary_adds_up_every_source() {
+        let h = |source: &str, documents, not_embedded| datalib_search_index::Holding {
+            source: source.to_string(),
+            documents,
+            not_embedded,
+        };
+        assert_eq!(
+            holdings_summary(&[h("mail", 12, 0), h("notes", 3, 7)]),
+            "15 documents in 2 searched sources; 7 chunks not embedded"
+        );
+    }
+
+    /// The retired aggregator's tree goes, qmd's index and its link to the
+    /// shared models with it; the models the link pointed at stay.
+    #[test]
+    fn the_aggregators_tree_goes_and_the_models_it_linked_stay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let models = tmp.path().join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("m.gguf"), b"weights").unwrap();
+        let qmd = datalib_runtime::qmd::qmd_state_dir(root);
+        std::fs::create_dir_all(&qmd).unwrap();
+        std::fs::write(qmd.join("index.sqlite"), b"x").unwrap();
+        std::os::unix::fs::symlink(&models, qmd.join("models")).unwrap();
+        retire_aggregator_tree(root).unwrap();
+        assert!(!datalib_core::layout::qmd_dir(root).exists());
+        assert!(models.join("m.gguf").exists());
+        retire_aggregator_tree(root).unwrap();
+    }
 
     /// The step marks the whole `unified_grid_and_search_index/` tree as derived cache, and
     /// leaves `system/` alone.

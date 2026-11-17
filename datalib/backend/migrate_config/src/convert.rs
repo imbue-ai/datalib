@@ -143,6 +143,9 @@ pub enum Retired {
     /// A source's own `keyword_index` step, from before `grid_index` did
     /// that work (`keyword_fold.rs`).
     KeywordIndexSteps,
+    /// A `qmd_aggregator` step, from before `grid_index` swept the vectors
+    /// and reported (`aggregator_drop.rs`).
+    AggregatorStep,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

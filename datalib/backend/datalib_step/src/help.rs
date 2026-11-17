@@ -303,7 +303,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              so a source appended by hand is read with no further edit. A config whose \
              index steps name their inputs one by one needs `<id>/render_markdown` added to \
              `unified_grid_and_search_index/grid_index`'s, and the stanza's `embed` to \
-             `unified_grid_and_search_index/qmd_aggregator`'s.{}",
+             `unified_grid_and_search_index/embedding_map`'s.{}",
             if t.renders_time_series() {
                 " There `<id>/render_time_series` goes in \
                  `unified_time_series_index/time_series_index`'s and `grid_index`'s too."
@@ -604,7 +604,7 @@ fn example_step_id(f: Function) -> String {
         Function::Ingest | Function::RenderMarkdown | Function::Embed => "slack",
         Function::RenderTimeSeries => "garmin",
         Function::RenderOccurrences => "calendar",
-        Function::GridIndex | Function::QmdAggregator | Function::EmbeddingMap => {
+        Function::GridIndex | Function::EmbeddingMap => {
             datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
         }
         Function::TimeSeriesIndex => datalib_runtime::layout::UNIFIED_TIME_SERIES_INDEX_DIR,

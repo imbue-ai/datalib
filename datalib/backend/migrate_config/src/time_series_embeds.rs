@@ -226,7 +226,6 @@ inputs = [
         let ids = step_ids(&after);
         assert!(!ids.contains(&"riker/embed".to_string()), "{after}");
         assert!(ids.contains(&"troi-mail/embed".to_string()), "{after}");
-        assert!(ids.contains(&"unified_grid_and_search_index/qmd_aggregator".to_string()));
         assert!(!after.contains("riker's embeddings"), "{after}");
         assert!(
             after.contains(

@@ -47,14 +47,13 @@ pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
 /// The file the grid's search terms were kept in before the index held
 /// them. The `grid_index` step deletes it when it opens the index.
 pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
-/// The qmd index's directory, relative to [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: the
-/// `qmd_aggregator` step's tree, so its size is counted against that
-/// step. Every qmd step writes the one index under it, which qmd lays
-/// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
+/// The retired `qmd_aggregator` step's tree, relative to
+/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`], where qmd kept its index as
+/// `qmd/index.sqlite`. Nothing writes it now; `grid_index` deletes it.
 pub const QMD_DIR: &str = "qmd_aggregator";
 /// The inference cache's directory, relative to
-/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it, the
-/// aggregator sweeps it. The search index's tables are in the grid
+/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it,
+/// `grid_index` sweeps it. The search index's tables are in the grid
 /// index's file.
 pub const SEARCH_INDEX_DIR: &str = "search_index";
 

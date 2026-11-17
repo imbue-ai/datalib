@@ -21,7 +21,7 @@ export type MenuTarget = {
   kind: MenuKind;
   /// The source type, or null for the index group and its steps.
   type: string | null;
-  /// The step's function (`ingest`, `qmd_aggregator`, …); null off a step.
+  /// The step's function (`ingest`, `grid_index`, …); null off a step.
   func: string | null;
   runBlocked: string | null;
   editBlocked: string | null;
@@ -111,9 +111,7 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_aggregator" || t.func === "embed") {
-    return "The QMD index keeps no doltlite store";
-  }
+  if (t.func === "embed") return "An embed writes vectors to a cache, with no commit history";
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
   if (t.func === "grid_index") return "The grid index is plain SQLite, with no commit history";
   if (t.kind === "group" && t.id === "unified_grid_and_search_index") {
@@ -132,7 +130,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "step" && t.func === "embedding_map") return null;
-  if (!t.type || t.func === "grid_index" || t.func === "qmd_aggregator" || t.func === "embed") {
+  if (!t.type || t.func === "grid_index" || t.func === "embed") {
     return "Reset a source; the index follows it";
   }
   return null;

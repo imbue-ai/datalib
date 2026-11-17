@@ -146,7 +146,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
-    // are the table's whole content; the scaffold's four entries are
+    // are the table's whole content; the scaffold's three entries are
     // under it.
     await expect(nameCell(page, "group:unified_grid_and_search_index")).toContainText(
       "Grid and Search Index",
@@ -156,33 +156,17 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expandGroup(page, "unified_grid_and_search_index");
     for (const id of [
       "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
       "unified_grid_and_search_index",
       "datalib_contacts",
     ]) {
       await expect(row(page, id)).toHaveCount(1);
     }
-    // The two index steps are labelled by their function, not by the
-    // generic "Index" the label map falls through to when a key is
-    // stale — which is what happened when the functions were renamed.
+    // The index step is labelled by its function, not by the generic
+    // "Index" the label map falls through to when a key is stale —
+    // which is what happened when the functions were renamed.
     await expect(nameCell(page, "unified_grid_and_search_index/grid_index")).toContainText(
       "Grid index",
     );
-    await expect(nameCell(page, "unified_grid_and_search_index/qmd_aggregator")).toContainText(
-      "QMD aggregator",
-    );
-
-    // The qmd aggregator, removed before the source is added: without it
-    // the wizard writes no qmd steps, whose embedding is real work this
-    // test cannot afford, and the delete action is the honest way to not
-    // run it.
-    const remove = await rowMenuEntry(
-      page,
-      row(page, "unified_grid_and_search_index/qmd_aggregator"),
-      /^Remove from config$/,
-    ).open();
-    await remove.click();
-    await expect(row(page, "unified_grid_and_search_index/qmd_aggregator")).toHaveCount(0);
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "Add source" }).click();

@@ -19,9 +19,9 @@
 # markdown), `embed` (the embeddings of a source's part of the search
 # index, for search by meaning), and three under the unified grid and
 # search index: `grid_index` over every render_markdown tree, which also
-# puts each source in the keyword search, `qmd_aggregator` after every
-# `embed`, and `embedding_map`, which lays out what the `embed` steps
-# embedded.
+# puts each source in the keyword search and keeps the vector cache to
+# what a chunk still names, and `embedding_map`, which lays out what the
+# `embed` steps embedded.
 # `params` is per-function — the ingest
 # step carries the provider's config, with where the data comes from
 # as one table whose name is read under the group's type (`api` is
@@ -211,9 +211,8 @@ inputs = ["unified_grid_and_search_index/grid_index"]
 # config has three budgets, `network` (4 slots), `cpu` (4) and `index`
 # (2), and a step that names none holds one of them by its shape: a
 # download `network`, a render `cpu`, an index `index`. The search steps
-# hold one of two locks of one slot instead: `qmd_keyword` (`grid_index`
-# and `qmd_aggregator`, which both write the grid index's file) and
-# `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
+# hold one of two locks of one slot instead: `qmd_keyword` (`grid_index`,
+# which writes the grid index's file) and `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
 # own and name it on the steps that hold it:
 #
 #   [[locks]]
@@ -242,9 +241,8 @@ inputs = ["unified_grid_and_search_index/grid_index"]
 # nothing, it indexes what the others mirrored. `grid_index` puts every
 # source it reads in the keyword search but those `params.not_searched`
 # lists (`params.not_searched = ["slack-diff"]`), and drops from search
-# any source it no longer reads. `qmd_aggregator` runs after every
-# `embed`, keeps only the vectors the index still names, and reports
-# what the index holds. Removing it turns search by meaning off.
+# any source it no longer reads. It also keeps only the vectors a chunk
+# still names, and reports what search holds of each source.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -254,22 +252,16 @@ function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
-
-# qmd's document embeddings laid out on a plane by UMAP, for the map
-# card (`umapView()`). It reads the vectors every source's `embed` wrote,
-# so it runs after the aggregator, which runs after them. Each run starts from the last map, so
+# The search's document embeddings laid out on a plane by UMAP, for the
+# map card (`umapView()`). It reads every source's `embed`, so it runs
+# after them. Each run starts from the last map, so
 # documents stay put as more arrive; resetting the step lays the map out
 # afresh.
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "embedding_map"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/qmd_aggregator"]
+inputs = ["*/embed"]
 
 # ── applets ────────────────────────────────────────────────────────
 # An applet is the third kind of config entry: a long-lived server the

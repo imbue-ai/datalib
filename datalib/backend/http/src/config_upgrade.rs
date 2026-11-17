@@ -1,24 +1,9 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, on a save
-//! through the API, and whenever the file changes. Eight rewrites, in
-//! order: an id that names a folder and has capitals in it
-//! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
-//! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
-//! the index group under an earlier name, `unified_index` or
-//! `unified_document_index` (`datalib_migrate_config::upgrade_index_name`),
-//! a config with
-//! time-series sources and no time-series index
-//! (`datalib_migrate_config::upgrade_time_series_steps`), a
-//! time-series source with an `embed` step
-//! (`datalib_migrate_config::upgrade_time_series_embeds`), and a step of
-//! datalib's own that does not name `datalib-step` as its `command`
-//! (`datalib_migrate_config::upgrade_step_commands`), and a Todoist
-//! ingest whose window is still named `completed_since`
-//! (`datalib_migrate_config::upgrade_todoist_since`), and a `grid_index`
-//! that does not read a `render_time_series` or `render_occurrences` step
-//! (`datalib_migrate_config::upgrade_problem_inputs`), all listed once in
-//! `datalib_migrate_config::UNATTENDED`. The text they replaced is kept
-//! as `config.toml.bak`.
+//! through the API, and whenever the file changes. The rewrites are
+//! `datalib_migrate_config::UNATTENDED`, made in its order;
+//! `docs/dev/config_model.md` §"The retired shapes" says what each does.
+//! The text they replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the index's tree and the
 //! loop's record of its steps over to the current name, and
