@@ -104,13 +104,16 @@ impl Batching {
     };
 
     /// What a device runs best with, by the name [`device_for`] gives.
-    /// The CPU and Metal gain nothing from sharing a call; CUDA does.
+    /// Metal gained nothing from sharing a call, and more tokens per call
+    /// only took more memory; CUDA ran 15% (T4) to 80% (A100) faster at 8
+    /// prompts in one context's tokens, and slower at any larger budget
+    /// (docs/dev/plans/embed_on_modal.md § "Measured on Modal").
     pub fn for_device(device: &str) -> Batching {
         if device == "CPU" || device.starts_with("MTL") {
             Batching::ONE
         } else {
             Batching {
-                prompts: 16,
+                prompts: 8,
                 tokens: CONTEXT_TOKENS as usize,
             }
         }

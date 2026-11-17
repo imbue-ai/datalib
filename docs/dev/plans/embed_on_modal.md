@@ -143,8 +143,9 @@ TNG fixture's 484 prompts (117,839 tokens) and the CPU over the first
 | M-series Mac, Metal | 20.6–27.6 | 5,000–6,700 | — |
 | Modal's x86 CPU, in the GPU container | 2.0–3.1 | 470–700 | — |
 
-The price is Modal's list price per GPU-second over tokens per second,
-CPU and memory left out. An L4 was asked for and not given within 40
+One prompt per call, the first call's start included. The price is
+Modal's list price per GPU-second over tokens per second, CPU and memory
+left out. An L4 was asked for and not given within 40
 minutes, so it is not here.
 
 **Agreement.** CUDA against Metal: worst cosine 0.99913, mean 0.99973,
@@ -153,14 +154,38 @@ Mac's CPU: 0.99936). CUDA against either CPU: 0.9983 on one 26-token
 prompt, 0.9993 or better on every other, the same on all three GPUs.
 `gpu_check` holds CUDA to the CPU at 0.998.
 
-**Cheapest is the smallest GPU, for now.** The embedder evaluates one
-prompt per call, which leaves a large GPU mostly idle, so the T4 is a
-third the cost per token of an A100 or H100. Batching several prompts
-into one call (`n_seq_max` above 1) would raise every GPU's rate, the
-large ones' most, and could change which is cheapest; measure again
-after that. A library of 710k chunks at ~560 tokens each (12 chunks a
-second at Metal's rate above; _to check_ on the library itself) is
-about 400M tokens: some $6 of T4 time, 11 GPU-hours.
+**Several prompts per call.** embeddinggemma keeps no cache in
+llama.cpp, so one call attends over every token in it, each prompt
+masked from the others: a call's time and scratch memory grow with the
+square of its tokens. The embedder packs prompts in order into calls of
+at most a count and a token budget (`Batching` in
+`datalib/backend/embedder/src/lib.rs`), and a prompt's vector does not
+depend on its neighbours (`tests/parity.rs`). Over the same 484 prompts,
+the first call left out of the rate:
+
+| device | 1 per call | 8 per call, 2,048 tokens | 16 per call, 4,096 | 128 per call, 32,768 |
+|---|---|---|---|---|
+| T4 | 44.3/s | 51.0/s | 29.5/s | 6.9/s |
+| A100 40 GB | 81.3/s | 146.5/s | 82.0/s | 26.4/s |
+| H100 | 97.1/s | 145.7/s | 82.2/s | 25.1/s |
+| Metal (M-series) | 25.6/s | 27.1/s | 23.2/s (8 per call) | 26.2/s (32 per call, 8,192) |
+
+So the default is 8 prompts in one context's tokens (2,048) on CUDA,
+and one per call on the CPU and Metal. On Metal a call of 2,048 tokens
+peaks at 2.3 GB however many prompts share it, 4,096 at 4.5 GB and 8,192
+at 8 to 9 GB, none faster: what made qmd's batching cost memory for
+nothing. The A100 and H100 tie, so at this size something other than the
+GPU's arithmetic bounds them (_to check_: the host side of each call).
+CUDA against the CPU did not move with the batching (worst cosine
+0.9992 to 0.9995 over 64 prompts).
+
+**Cheapest per token is still the T4, but barely.** At 8 per call: T4
+$0.013 per million tokens, A100 $0.016, H100 $0.031. A library of 710k
+chunks at ~560 tokens each (12 chunks a second at Metal's rate above;
+_to check_ on the library itself) is about 400M tokens: some $5 on T4s
+(9 GPU-hours) or $7 on A100s (3 GPU-hours). These prompts average 243
+tokens, so 8 share a call; a library's longer chunks share less, and
+gain less.
 
 **Spread across containers.** Each prompt is embedded alone and stored
 under its own hash, so one source's missing prompts split into slices,
