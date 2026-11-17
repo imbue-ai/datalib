@@ -476,7 +476,8 @@ The rules, none optional. How our code enforces them is in
   per-file lock refuses it. `datalib-http` owns feedback, usage and
   remote media; the applet only reads. (The grid index is not doltlite:
   it is plain SQLite in WAL mode, which keeps no history and needs none
-  of these rules, and the `grid_index` step is its one writer.) A download takes its store as an input
+  of these rules. `grid_index`, every `keyword_index` and `qmd_aggregator`
+  write it, one at a time under the runner's `qmd_keyword` lock.) A download takes its store as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
