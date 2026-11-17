@@ -32,13 +32,13 @@
     "toml-eslint-parser": "^1.0.3",
     "uplot": "^1.6.32",
     "vue": "^3.5.45",
-    "vue-router": "5.5.0"
+    "vue-router": "5.5.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@vitejs/plugin-vue": "^6.0.11",
     "@vue/test-utils": "^2.5.1",
-    "jsdom": "^31.0.0",
+    "jsdom": "^31.0.1",
     "prettier": "^3.10.1",
     "typescript": "^6.0.3",
     "vite": "8.3.8",
