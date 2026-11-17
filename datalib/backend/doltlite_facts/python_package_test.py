@@ -203,9 +203,9 @@ class StartingPython(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
 
     @unittest.skipUnless(sys.platform == "darwin", "the shim is macOS's")
-    def test_macos_copies_the_library_on_every_start(self) -> None:
-        """dolthub/doltlite-python#2. When this fails, upstream reuses the
-        copy: drop the caveat from doltlite.md."""
+    def test_macos_reuses_its_copy_of_the_library(self) -> None:
+        """dolthub/doltlite-python#2: a second start reuses the first one's
+        copy rather than leaving another in $TMPDIR."""
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "one.py"
             script.write_text("import doltlite\nimport sqlite3\n")
@@ -214,7 +214,7 @@ class StartingPython(unittest.TestCase):
             for _ in range(2):
                 done = self.run_python(str(script), TMPDIR=str(shims))
                 self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(len(list(shims.glob("doltlite-shim-*"))), 2)
+            self.assertEqual(len(list(shims.glob("doltlite-shim-*"))), 1)
 
 
 if __name__ == "__main__":

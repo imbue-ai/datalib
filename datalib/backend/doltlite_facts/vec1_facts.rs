@@ -167,7 +167,7 @@ fn the_shipped_build_has_no_vec1() {
 #[test]
 fn the_vec1_shell_builds_vec1_with_simd_on_this_platform() {
     let out = Db::plain_sqlite().run("SELECT vec1_info();");
-    assert!(out.starts_with("version 0.7"), "{out}");
+    assert!(out.starts_with("version 0.8"), "{out}");
 }
 
 #[test]
