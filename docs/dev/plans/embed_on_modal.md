@@ -4,7 +4,9 @@
 under Bazel (#1750), the embedder loading it (#1752), the module run on
 Modal's T4, A100 and H100 in the published image with several prompts
 per call (#1801, § "Measured on Modal"), and `datalib-step
-embed-prompts`. The rest is not. Facts marked _to check_ have not been
+embed-prompts`; of step 3, the module as a release asset and the `-cuda`
+image (docs/dev/docker.md § "The CUDA variant"), not yet tried by a tag.
+The rest is not. Facts marked _to check_ have not been
 measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
@@ -288,6 +290,12 @@ supported"; the issue says what to check for in a new SDK release.
    `tests/step_tests/embed_prompts.rs` against the TNG fixture's cache.
 3. The module as a release asset, its license notices, the fetch for a
    tarball install, and the `-cuda` image with the module and cuBLAS.
+   Built, but for the fetch: the release's `cuda`, `docker-image-cuda`
+   and `docker-publish-cuda` jobs, `scripts/release/build_cuda.sh` and
+   `stage_cuda.sh`, the Dockerfile's `CUDA` stage, and
+   `third-party/llama_cpp/CUDA-NOTICE.md`. The fetch is a follow-up: a
+   `cuda` line in `runtime.manifest` and the embedder looking in the
+   fetched tree as well as `lib/`.
 4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
    the `-cuda` image driven by the JavaScript SDK, measured on one small
    source of a real library, then a large one.

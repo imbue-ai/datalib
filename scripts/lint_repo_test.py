@@ -167,7 +167,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+  docker-image-cuda:
+    permissions:
+      contents: read
+      packages: write
   docker-publish:
+    permissions:
+      contents: read
+      packages: write
+  docker-publish-cuda:
     permissions:
       contents: read
       packages: write

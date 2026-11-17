@@ -20,7 +20,9 @@ from typing import Any
 import publish_release
 from publish_release import (
     DMG,
+    CUDA_IMAGE_DIGEST,
     IMAGE_DIGEST,
+    IMAGE_DIGESTS,
     Refused,
     attestation_checks,
     content_problems,
@@ -117,7 +119,7 @@ class ArtifactsCase(unittest.TestCase):
                     continue
                 data = (
                     f"sha256:{'a' * 64}\n".encode()
-                    if file == IMAGE_DIGEST
+                    if file in IMAGE_DIGESTS
                     else file.encode()
                 )
                 (self.root / artifact / file).write_bytes(data)
@@ -140,7 +142,7 @@ class WhatIsTakenTest(ArtifactsCase):
         self.assertEqual(self.problems(), [])
 
     def test_every_asset_a_release_shipped_is_expected(self) -> None:
-        """v0.50.0's twenty assets, read from GitHub, plus the image digest."""
+        """v0.50.0's twenty assets, read from GitHub, plus the image digest; then the CUDA module and the -cuda image's digest."""
         shipped = {
             f"{stem}{suffix}"
             for stem in [
@@ -156,8 +158,13 @@ class WhatIsTakenTest(ArtifactsCase):
             ]
             for suffix in ["", ".sha256"]
         }
+        cuda = {
+            "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz",
+            "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz.sha256",
+            CUDA_IMAGE_DIGEST,
+        }
         expected = {f for files in expected_artifacts().values() for f in files}
-        self.assertEqual(expected, shipped | {IMAGE_DIGEST})
+        self.assertEqual(expected, shipped | {IMAGE_DIGEST} | cuda)
 
     def test_a_build_cannot_carry_the_dmg_in_its_own_artifact(self) -> None:
         """A file named like another job's would otherwise replace it on the release."""
@@ -203,6 +210,20 @@ class WhatIsTakenTest(ArtifactsCase):
     def test_a_bad_image_digest_is_refused(self) -> None:
         (self.root / "docker-image-digest" / IMAGE_DIGEST).write_text("latest\n")
         self.assertEqual(self.problems(), [f"{IMAGE_DIGEST}: not one image digest"])
+
+    def test_a_bad_cuda_image_digest_is_refused(self) -> None:
+        (self.root / "docker-image-cuda-digest" / CUDA_IMAGE_DIGEST).write_text("")
+        self.assertEqual(
+            self.problems(), [f"{CUDA_IMAGE_DIGEST}: not one image digest"]
+        )
+
+    def test_the_cuda_module_comes_only_from_the_cuda_artifact(self) -> None:
+        name = "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz"
+        (self.root / "tarball-x86_64-unknown-linux-gnu" / name).write_bytes(b"evil")
+        self.assertEqual(
+            self.problems(),
+            [f"artifact tarball-x86_64-unknown-linux-gnu: {name} unexpected"],
+        )
 
 
 class AttestTest(ArtifactsCase):
@@ -267,8 +288,11 @@ class AttestTest(ArtifactsCase):
             if not n.endswith(".sha256")
         ]
         image = f"oci://ghcr.io/imbue-ai/datalib@sha256:{'a' * 64}"
-        self.assertEqual([check[2] for check in checks], [*files, image, image])
+        self.assertEqual(
+            [check[2] for check in checks], [*files, image, image, image, image]
+        )
         self.assertIn("--bundle-from-oci", checks[-1])
+        self.assertIn("--bundle-from-oci", checks[-3])
         for check in checks:
             with self.subTest(subject=check[2]):
                 self.assertEqual(check[:2], ["attestation", "verify"])

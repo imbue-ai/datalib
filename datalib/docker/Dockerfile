@@ -195,6 +195,7 @@ RUN set -eux; \
         missing="$(ldd /opt/datalib/lib/libggml-cuda.so | awk '/not found/ {print $1}' | sort -u)"; \
         echo "libggml-cuda.so lacks: ${missing:-nothing}"; \
         test -z "$missing" || test "$missing" = libcuda.so.1; \
+        test -s /opt/datalib/licenses/CUDA-NOTICE.md; \
     fi; \
     # The demo library is the one place under /opt the app writes.
     install -d -o datalib -g datalib /opt/datalib/demo
