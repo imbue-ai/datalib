@@ -11,7 +11,8 @@ whose CUDA layers keep their digests from one release to the next
 fetching the module on first use (docs/dev/runtime_fetch.md § "The CUDA
 module"). Step 4 is built and tested against a stand-in for Modal's
 SDK, not yet run against Modal: `embed_on_modal_from_n_chunks`, and the
-driver in `datalib/backend/datalib_step/src/modal/`. Step 5 is not done.
+driver in `datalib/backend/datalib_step/src/modal/`. Step 5 is done:
+docs/dev/security_posture.md § "What leaves the machine for Modal".
 Facts marked _to check_ have not been measured or read from source
 yet.**
 
@@ -73,9 +74,12 @@ crosses Modal's TLS connection into a container that lives for the run
 and is gone after it; whether Modal keeps a container's stdin or logs is
 _to check_, and the step prints nothing of a chunk.
 
-`docs/dev/security_posture.md` gains a section for this: who sees the
-text (Modal, as the person's processor), what guards it (the per-source
-parameter, absent by default, nothing written there), and what is open (Modal's own retention).
+`docs/dev/security_posture.md` § "What leaves the machine for Modal" is
+the section for this: who sees the text (Modal, as the person's
+processor), what guards it (the per-source parameter, absent by default,
+the driver's named environment, nothing written there), and what is open
+(Modal's own retention, a killed driver's Sandboxes, the image pulled by
+tag).
 
 ## What runs there: our image, our code
 
@@ -332,5 +336,5 @@ supported"; the issue says what to check for in a new SDK release.
    against a stand-in for the SDK whose Sandboxes run locally; to be
    measured on one small source of a real library, then a large one,
    which is where the _to check_ items above get answered.
-5. The security posture section, and `docs/dev/config_model.md` and
-   `configs/dag_example.toml` for the parameter.
+5. ~~The security posture section, and `docs/dev/config_model.md` and
+   `configs/dag_example.toml` for the parameter.~~ Done.
