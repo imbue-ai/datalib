@@ -34,7 +34,13 @@ Artifacts (`--zip_undeclared_test_outputs` in `.bazelrc`). Green or red, the job
 the `e2e-test-log` artifact (two weeks): Playwright's list of every
 test with its duration, and the specs' `[e2e]` lines. That is where to
 look when the question is what the suite spends its minutes on, not
-what broke — bazel prints one number for the whole target. If the job's
+what broke — bazel prints one number for the whole target.
+
+The zip also holds `diagnostics/`: `cpu.tsv`, the machine's busy
+percentage and load once a second for the whole run (Linux only), and
+`servers/<name>.log`, what each backend the suite started wrote. Lay a
+failure's trace against `cpu.tsv` to tell a page that was slow from one
+that was starved of CPU. If the job's
 test step says `(cached) PASSED` for `//datalib/ui:e2e_test`, the suite
 did not run in that job and the log is from the run that did.
 

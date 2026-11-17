@@ -183,8 +183,10 @@ one binary would be indistinguishable.
   `data-sources-*` specs and a few more), each against a backend and
   root of its own, so no two specs ever share a queue.
 * **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
-* **`warmup`** — the search model's cold load, paid once before `chromium`
-  and `webkit` start.
+* **`warmup`** — the search model's cold load, paid once before every
+  other project starts. The load and the first search take 20–26 s of
+  heavy CPU on a 4-vCPU CI runner, and a page opened meanwhile has frozen
+  for seconds, past an expect's 5 s; so nothing runs beside it.
 
 The `webkit` project exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a

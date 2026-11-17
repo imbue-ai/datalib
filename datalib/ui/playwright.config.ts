@@ -529,11 +529,14 @@ export default defineConfig({
     },
     // One project per config-mutating spec, doing one job: pointing
     // `baseURL` at that spec's own backend, so the spec itself can go
-    // on saying `page.goto("/data_sources")`.
+    // on saying `page.goto("/data_sources")`. After the warmup like the
+    // rest: docs/dev/testing.md §"The Playwright suite runs in two
+    // engines" says why.
     ...SANDBOXES.map((s) => ({
       name: `chromium-${s.spec}`,
       testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
       use: { browserName: "chromium" as const, baseURL: s.url },
+      dependencies: ["warmup"],
     })),
     {
       // The desktop app runs in a WKWebView, and WebKit's layout has twice
