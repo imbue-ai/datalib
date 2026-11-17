@@ -12,7 +12,7 @@ use crate::IndexSection;
 /// document was drawn with and draws it again when this moves;
 /// `text_tests::the_golden_draw_is_this_versions` fails when the drawing
 /// changes and this does not.
-pub const INDEX_TEXT_VERSION: u32 = 3;
+pub const INDEX_TEXT_VERSION: u32 = 4;
 
 /// What ends the key the index files a document under: the version it was
 /// drawn and chunked with.
@@ -131,8 +131,12 @@ fn person(name: &str, handle: Option<&str>) -> Option<String> {
         })
         .map(|h| h.value().to_string());
     let name = name.trim();
+    let carries = |t: &str| {
+        name.to_lowercase()
+            .ends_with(&format!("<{}>", t.to_lowercase()))
+    };
     match (name.is_empty(), typed) {
-        (false, Some(t)) if t != name => Some(format!("{name} <{t}>")),
+        (false, Some(t)) if t != name && !carries(&t) => Some(format!("{name} <{t}>")),
         (false, _) => Some(name.to_string()),
         (true, Some(t)) => Some(t),
         (true, None) => None,

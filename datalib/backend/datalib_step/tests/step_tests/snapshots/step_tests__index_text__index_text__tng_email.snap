@@ -4,7 +4,7 @@ expression: text
 ---
 === tng_email 00000000-0000-80b3-8c56-6d41b85ab9c6 Captain's Log — Stardate 80124.1
 --- 019b98c1-db00-89bf-8e74-14d9155da327
-Jean-Luc Picard <picard@enterprise.starfleet> <picard@enterprise.starfleet> to Starfleet Command <command@starfleet.gov>; bcc Deanna Troi <troi@enterprise.starfleet> — Wed 7 Jan 2026 14:00
+Jean-Luc Picard <picard@enterprise.starfleet> to Starfleet Command <command@starfleet.gov>; bcc Deanna Troi <troi@enterprise.starfleet> — Wed 7 Jan 2026 14:00
 
 Labels: Important, Sent
 
@@ -19,7 +19,7 @@ We continue our investigation.
 
 === tng_email 00000000-0000-85ec-8481-370bffc3afe9 You've won a holosuite upgrade!
 --- 019b9cd5-8e80-8562-98ed-abfb7e8a4cac
-Quark's Bar <prizes@quarks.example> <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Thu 8 Jan 2026 09:00
+Quark's Bar <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Thu 8 Jan 2026 09:00
 
 Labels: Category Promotions, Inbox
 
@@ -70,7 +70,7 @@ Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 U
 
 === tng_email 00000000-0000-89ac-8ef1-ba5e79d09b76 Your bar tab
 --- 019ba48f-1880-8caa-a85b-c2355321c4d0
-Quark's Bar <prizes@quarks.example> <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Fri 9 Jan 2026 21:00
+Quark's Bar <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Fri 9 Jan 2026 21:00
 
 Labels: Inbox
 
@@ -84,7 +84,7 @@ Captain, your tab is attached. Prompt payment is appreciated.
 
 === tng_email 00000000-0000-8a58-a8a4-0d3e51a39a59 Your shore leave awaits!
 --- 019b9251-e800-8ca5-8cdf-3cd10603d0f3
-Risa Tourism Board <hello@risa.tourism> <hello@risa.tourism> to Jean-Luc Picard <picard@enterprise.starfleet> — Tue 6 Jan 2026 08:00
+Risa Tourism Board <hello@risa.tourism> to Jean-Luc Picard <picard@enterprise.starfleet> — Tue 6 Jan 2026 08:00
 
 Labels: Category Promotions, Inbox
 
@@ -100,7 +100,7 @@ Redeem your offer
 
 === tng_email 00000000-0000-8ce7-94d1-18948b029452 Mission Briefing — Sector 001
 --- 019b8d62-7a80-88c2-8062-f1b656c84835
-Starfleet Command <command@starfleet.gov> <command@starfleet.gov> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 09:00
+Starfleet Command <command@starfleet.gov> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 09:00
 
 Labels: Starred, Important, Inbox
 
@@ -114,7 +114,7 @@ Per General Order 12, you have full discretion. Make it so.
 — Admiral Hayes
 
 --- 019b8db4-e040-88dc-8f8b-9e73422dcff3
-Jean-Luc Picard <picard@enterprise.starfleet> <picard@enterprise.starfleet> to William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 10:30
+Jean-Luc Picard <picard@enterprise.starfleet> to William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 10:30
 
 Labels: Inbox, Sent
 
@@ -129,7 +129,7 @@ Engage.
 — Picard
 
 --- 019b8dde-1320-86d3-965a-083aad10c428
-Geordi La Forge <laforge@enterprise.starfleet> <laforge@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 11:15
+Geordi La Forge <laforge@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 11:15
 
 Labels: Inbox
 
@@ -147,7 +147,7 @@ recommend a brief stop at Starbase 173 if the mission allows.
 
 === tng_email 00000000-0000-8e37-8bef-9f0edb66b8be Bridge status display
 --- 019b97af-3280-8f16-979e-afe19c268630
-LCARS Status <lcars@enterprise.starfleet> <lcars@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet> — Wed 7 Jan 2026 09:00
+LCARS Status <lcars@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet> — Wed 7 Jan 2026 09:00
 
 Labels: Inbox
 
