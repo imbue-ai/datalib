@@ -14,7 +14,7 @@ use datalib_runtime::layout;
 use datalib_search_index::{Held, HeldDoc, Reader};
 
 use crate::qmd::index_state::IndexStamp;
-use crate::qmd::lex::Fts5Query;
+use crate::qmd::lex::{Fts5Query, PageTerms};
 use crate::qmd::mapping::Place;
 use crate::qmd::vectors::{dot_and_norm, Freshness, Kept};
 use crate::qmd::QmdHit;
@@ -44,6 +44,33 @@ pub async fn word_hits(
         return Ok(None);
     };
     let found = reader.words(&query.expr, sources, among, limit).await;
+    reader.close().await;
+    Ok(Some(
+        found?
+            .into_iter()
+            .map(|h| {
+                let place = Place::Item { uuid: h.uuid };
+                (h.markdown_uuid, hit(h.score, place))
+            })
+            .collect(),
+    ))
+}
+
+/// Pages holding every one of `terms` between their pieces and none of
+/// `excluded` ([`Reader::page_words`]); `None` with no index yet.
+pub async fn page_word_hits(
+    root: &Path,
+    terms: &PageTerms,
+    sources: Option<&[String]>,
+    among: Option<&HashSet<String>>,
+    limit: usize,
+) -> Result<Option<Vec<DocumentHit>>> {
+    let Some(reader) = open(root).await? else {
+        return Ok(None);
+    };
+    let found = reader
+        .page_words(&terms.required, &terms.excluded, sources, among, limit)
+        .await;
     reader.close().await;
     Ok(Some(
         found?

@@ -266,7 +266,7 @@ async fn an_index_in_another_shape_empties_only_its_own_tables() {
     )
     .await
     .unwrap();
-    assert_eq!(recorded, Some(schema_hash()));
+    assert_eq!(recorded, Some(shape()));
     drop(conn);
     let file = datalib_store_meta::read(index.pool()).await.unwrap();
     assert_eq!(

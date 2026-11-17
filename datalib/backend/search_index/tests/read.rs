@@ -249,3 +249,90 @@ async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
         .unwrap();
     assert!(reader.is_none());
 }
+
+fn page_term(word: &str) -> String {
+    format!("{{title body}} : (\"{word}\")")
+}
+
+fn page_terms(words: &[&str]) -> Vec<String> {
+    words.iter().map(|w| page_term(w)).collect()
+}
+
+/// A page's heading and its rows: no one piece says every word.
+fn page(uuid: &str) -> IndexDoc {
+    doc(
+        "airvisual",
+        uuid,
+        &[
+            (None, "# Air quality\n"),
+            (Some("kitchen"), "Kitchen: 12 µg/m³\n"),
+            (Some("bedroom"), "Bedroom: 8 µg/m³ air\n"),
+        ],
+    )
+}
+
+/// The same words said as messages, each with its envelope.
+fn conversation() -> IndexDoc {
+    let mut c = page("chat");
+    c.source_id = "slack".into();
+    for s in &mut c.sections {
+        s.lead = Some("Data — Tue 3 Mar 2026 14:05".into());
+    }
+    c
+}
+
+/// A page holds the words between its pieces, as qmd scored a whole
+/// document, and lands on the piece holding the most of them; a
+/// conversation that says them in different messages is not found.
+#[tokio::test]
+async fn a_page_holds_the_words_between_its_pieces() {
+    let f = fixture(&[page("page"), conversation()], &[]).await;
+    let hits = f
+        .reader
+        .page_words(
+            &page_terms(&["bedroom", "air", "quality"]),
+            &[],
+            None,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(&hits), ["page"]);
+    assert_eq!(hits[0].uuid.as_deref(), Some("bedroom"));
+    let missing = f
+        .reader
+        .page_words(&page_terms(&["bedroom", "tribble"]), &[], None, None, 10)
+        .await
+        .unwrap();
+    assert!(missing.is_empty(), "a page lacking a word: {missing:?}");
+    f.reader.close().await;
+}
+
+/// An excluded word anywhere on a page drops it; `sources` and `among`
+/// narrow what is read.
+#[tokio::test]
+async fn an_excluded_word_anywhere_drops_the_page() {
+    let f = fixture(&[page("page"), page("other")], &[]).await;
+    let terms = page_terms(&["bedroom", "quality"]);
+    let excluded = f
+        .reader
+        .page_words(&terms, &[page_term("kitchen")], None, None, 10)
+        .await
+        .unwrap();
+    assert!(excluded.is_empty(), "{excluded:?}");
+    let among: HashSet<String> = ["other".to_string()].into();
+    let narrowed = f
+        .reader
+        .page_words(&terms, &[], None, Some(&among), 10)
+        .await
+        .unwrap();
+    assert_eq!(ids(&narrowed), ["other"]);
+    let elsewhere = f
+        .reader
+        .page_words(&terms, &[], Some(&["slack".to_string()]), None, 10)
+        .await
+        .unwrap();
+    assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    f.reader.close().await;
+}

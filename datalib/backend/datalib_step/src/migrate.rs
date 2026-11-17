@@ -66,12 +66,17 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             let index = datalib_core::layout::grid_index_db(data_root);
             let cache = datalib_core::layout::inference_cache_db(data_root);
             if let Some(reader) = datalib_search_index::Reader::open(&index, &cache).await? {
-                let stale = reader.drawn_by_another_version(&env.group).await;
+                let stale = match reader.in_this_shape().await {
+                    Ok(false) => Ok(true),
+                    Ok(true) => reader.drawn_by_another_version(&env.group).await,
+                    Err(e) => Err(e),
+                };
                 reader.close().await;
                 if stale? {
                     tracing::info!(
                         step = %env.step,
-                        "migrate: the search index was drawn by another version; it needs a rerun"
+                        "migrate: the search index is in another shape or was drawn by another \
+                         version; it needs a rerun"
                     );
                     emitter.needs_rerun();
                     return Ok(Vec::new());
@@ -621,7 +626,8 @@ mod tests {
     /// A new version of the index's drawing or chunking moves nothing the
     /// keyword pass reads, so the migrate pass asks for it: when the
     /// source's part of the index was drawn by another version, and not
-    /// before there is an index or once it is this build's.
+    /// before there is an index or once it is this build's; and when the
+    /// index's tables are in another shape, which its next writer empties.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {
         let root = tempfile::tempdir().unwrap();
@@ -652,6 +658,24 @@ mod tests {
         assert!(ask().await, "drawn by an older version");
         put(format!("h{}", datalib_search_index::text::key_suffix())).await;
         assert!(!ask().await, "this build's version");
+        let path = datalib_core::layout::grid_index_db(root.path());
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
+            .await
+            .unwrap();
+        let moved = sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = ?")
+            .bind(datalib_store_meta::part_key(
+                datalib_store_meta::StoreKind::SearchIndex,
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!(moved.rows_affected(), 1, "the index records its shape");
+        assert!(ask().await, "tables in an older shape");
     }
 
     /// A source that has never downloaded gets no store from a migrate:
