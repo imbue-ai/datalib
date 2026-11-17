@@ -15,8 +15,8 @@ use datalib_etl_render::inputs::Input;
 use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
 
-use super::ids;
 use super::render::CalendarInfo;
+use super::{html, ids};
 
 /// Every event of one calendar.
 pub fn normalize(
@@ -189,7 +189,7 @@ fn event(
         busy: Some(str_of(v, "transparency") != Some("transparent")),
         location: text(v, "location"),
         description: str_of(v, "description")
-            .map(html_to_text)
+            .map(html::html_to_text)
             .filter(|d| !d.trim().is_empty()),
         organizer: v.get("organizer").and_then(person),
         attendees: v
@@ -324,117 +324,6 @@ pub(crate) fn text(v: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Google stores a description as the HTML its editor wrote. Line
-/// breaks and list items become lines; a link keeps its address where
-/// the text did not already show it; every other tag goes.
-pub fn html_to_text(html: &str) -> String {
-    if !html.contains('<') && !html.contains('&') {
-        return html.to_string();
-    }
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    let mut href: Option<String> = None;
-    let mut link_text = String::new();
-    while let Some(i) = rest.find('<') {
-        let text = decode_entities(&rest[..i]);
-        out.push_str(&text);
-        if href.is_some() {
-            link_text.push_str(&text);
-        }
-        let Some(j) = rest[i..].find('>') else {
-            out.push_str(&decode_entities(&rest[i..]));
-            rest = "";
-            break;
-        };
-        let tag = &rest[i + 1..i + j];
-        rest = &rest[i + j + 1..];
-        let name = tag
-            .trim_start_matches('/')
-            .split(|c: char| c.is_whitespace() || c == '/')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let closing = tag.starts_with('/');
-        match (name.as_str(), closing) {
-            ("br", _) | ("p" | "div" | "tr" | "ul" | "ol", true) => out.push('\n'),
-            ("li", false) => out.push_str("\n- "),
-            ("a", false) => {
-                href = attr(tag, "href");
-                link_text.clear();
-            }
-            ("a", true) => {
-                if let Some(h) = href.take() {
-                    if !link_text.contains(h.trim_start_matches("mailto:")) {
-                        out.push_str(&format!(" ({h})"));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    out.push_str(&decode_entities(rest));
-    let lines: Vec<&str> = out.lines().map(str::trim_end).collect();
-    let mut joined = lines.join("\n");
-    while joined.contains("\n\n\n") {
-        joined = joined.replace("\n\n\n", "\n\n");
-    }
-    joined.trim().to_string()
-}
-
-fn attr(tag: &str, name: &str) -> Option<String> {
-    let at = tag.find(&format!("{name}="))? + name.len() + 1;
-    let rest = &tag[at..];
-    let (quote, body) = match rest.chars().next()? {
-        q @ ('"' | '\'') => (q, &rest[1..]),
-        _ => (' ', rest),
-    };
-    let end = body.find(quote).unwrap_or(body.len());
-    Some(decode_entities(&body[..end]))
-}
-
-fn decode_entities(s: &str) -> String {
-    if !s.contains('&') {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find('&') {
-        out.push_str(&rest[..i]);
-        let tail = &rest[i..];
-        let Some(end) = tail.find(';').filter(|e| *e <= 10) else {
-            out.push('&');
-            rest = &tail[1..];
-            continue;
-        };
-        let entity = &tail[1..end];
-        let decoded = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" | "#39" => Some('\''),
-            "nbsp" => Some(' '),
-            e if e.starts_with("#x") => u32::from_str_radix(&e[2..], 16)
-                .ok()
-                .and_then(char::from_u32),
-            e if e.starts_with('#') => e[1..].parse().ok().and_then(char::from_u32),
-            _ => None,
-        };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &tail[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,18 +428,5 @@ mod tests {
                 .to_rfc3339(),
             "2026-03-12T11:00:00-07:00"
         );
-    }
-
-    #[test]
-    fn descriptions_lose_their_markup_but_not_their_lines_or_links() {
-        assert_eq!(
-            html_to_text("Agenda:<br><ul><li>Saucer <b>separation</b></li><li>Drill</li></ul><a href=\"https://memory-alpha.test/x\">notes</a> &amp; more"),
-            "Agenda:\n\n- Saucer separation\n- Drill\nnotes (https://memory-alpha.test/x) & more"
-        );
-        assert_eq!(
-            html_to_text("<a href=\"https://meet.test/a\">https://meet.test/a</a>"),
-            "https://meet.test/a"
-        );
-        assert_eq!(html_to_text("plain\ntext"), "plain\ntext");
     }
 }
