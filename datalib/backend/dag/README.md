@@ -354,7 +354,7 @@ follows from it:
   no inputs, `cpu` for a step with inputs under a group with a `type`,
   `index` for any other step with inputs; so a download waiting out a
   rate limit never keeps a render from starting. The fourth,
-  `embedder` (1 slot), is held
+  `qmd_embed` (1 slot, named for the qmd index it once guarded), is held
   by every built-in `embed` that names no locks, so one embedding model
   is loaded at a time: each embed is a process of its own that loads the
   model and spreads over every core. A `[[locks]]`

@@ -149,9 +149,6 @@ pub enum Retired {
     /// The index step under its old function, `grid_index`
     /// (`index_step_name.rs`).
     GridIndexStep,
-    /// A lock under a name from when qmd did the search: `qmd_embed`, or
-    /// an undeclared `qmd_keyword` a step holds (`lock_names.rs`).
-    QmdLockNames,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

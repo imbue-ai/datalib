@@ -74,7 +74,7 @@ merge conflict waiting to happen.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd, which the model cache's path still rests on.
+- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd, which the `qmd_embed` lock and the model cache's path still rest on.
 - [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you. Add a paragraph when you learn one.
 - [`docs/dev/security_posture.md`](docs/dev/security_posture.md) — who we guard against, what stops them and what does not. **Start here** before changing a secret, a release job or a safety check, or adding anything a protected library writes outside its folder.
 

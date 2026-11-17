@@ -29,9 +29,9 @@
 //! fold into the index step; then `index_step_name.rs`: the index step's
 //! function, `grid_index`, becomes `unified_grid_and_search_index`; then
 //! `input_patterns.rs`: the index steps read every source by pattern,
-//! which finds them by their current functions; then `lock_names.rs`: the
-//! `qmd_embed` lock is `embedder`. Those last fourteen rewrites are also
-//! the ones `datalib-http` makes by itself ([`UNATTENDED`]).
+//! which finds them by their current functions. Those last
+//! thirteen rewrites are also the ones `datalib-http` makes by itself
+//! ([`UNATTENDED`]).
 
 pub mod aggregator_drop;
 pub mod conversation_settings;
@@ -40,7 +40,6 @@ pub mod index_name;
 pub mod index_step_name;
 pub mod input_patterns;
 pub mod keyword_fold;
-pub mod lock_names;
 pub mod lowercase_ids;
 pub mod problem_inputs;
 pub mod qmd_steps;
@@ -104,9 +103,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if index_step_name::is_retired(text)? {
         return Ok(LegacyFormat::GridIndexStep);
     }
-    if lock_names::is_retired(text)? {
-        return Ok(LegacyFormat::QmdLockNames);
-    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -123,8 +119,7 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::ConversationSettingNames
         | LegacyFormat::KeywordIndexSteps
         | LegacyFormat::AggregatorStep
-        | LegacyFormat::GridIndexStep
-        | LegacyFormat::QmdLockNames => text.to_string(),
+        | LegacyFormat::GridIndexStep => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -144,7 +139,6 @@ pub fn convert(text: &str) -> Result<String> {
     let out = aggregator_drop::rewrite(&out)?;
     let out = index_step_name::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
-    let out = lock_names::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -328,25 +322,6 @@ pub fn upgrade_index_step_name(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
-/// Rename the `qmd_embed` lock `embedder`, and declare a `qmd_keyword` a
-/// step still holds (`lock_names.rs`). Refused, as [`upgrade_qmd_steps`]
-/// is, when the result would not load every entry the original did, a
-/// lock under its new name.
-pub fn upgrade_lock_names(text: &str) -> Result<Option<String>> {
-    if !lock_names::is_retired(text).unwrap_or(false) {
-        return Ok(None);
-    }
-    let out = lock_names::rewrite(text)?;
-    refuse_a_loss(text, &out, |e| {
-        if e == "lock qmd_embed" {
-            "lock embedder".to_string()
-        } else {
-            e.to_string()
-        }
-    })?;
-    Ok(Some(out))
-}
-
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
@@ -355,16 +330,14 @@ fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Resu
 
 /// `text` as the later rewrites in [`UNATTENDED`] that take out a step the
 /// loader refuses leave it: its `keyword_index` steps folded into the
-/// index step, its `qmd_aggregator` taken out, its `grid_index` renamed
-/// and its old lock names brought forward, or as it is where one has
-/// nothing to do or refuses. A rewrite
+/// index step, its `qmd_aggregator` taken out and its `grid_index`
+/// renamed, or as it is where one has nothing to do or refuses. A rewrite
 /// of an older shape still writes those steps; whether it loses an entry
 /// is judged in the shape the chain ends in.
 pub(crate) fn folded(text: &str) -> String {
     let folded = keyword_fold::rewrite(text).unwrap_or_else(|_| text.to_string());
     let folded = aggregator_drop::rewrite(&folded).unwrap_or(folded);
-    let folded = index_step_name::rewrite(&folded).unwrap_or(folded);
-    lock_names::rewrite(&folded).unwrap_or(folded)
+    index_step_name::rewrite(&folded).unwrap_or(folded)
 }
 
 /// One rewrite `datalib-http` makes without asking: what the old shape
@@ -378,7 +351,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 14] = [
+pub const UNATTENDED: [Rewrite; 13] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -460,12 +433,6 @@ pub const UNATTENDED: [Rewrite; 14] = [
         what: "an index step reads every source's step of a function by pattern \
                (`*/render_markdown`), so a source added later is read without editing it",
         run: upgrade_input_patterns,
-    },
-    Rewrite {
-        why: "names a lock `qmd_embed`, or holds an undeclared `qmd_keyword`",
-        what: "the lock every `embed` holds is `embedder`; a `qmd_keyword` a step still \
-               holds is declared, since it is no longer a lock every config has",
-        run: upgrade_lock_names,
     },
 ];
 

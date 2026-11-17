@@ -2043,7 +2043,7 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 
 /// The lock a built-in step holds when it names none, where its shape's
 /// budget would be too wide: every embed loads the model.
-const BUILTIN_LOCKS: &[(&str, &str)] = &[("embed", crate::supervisor::locks::EMBEDDER)];
+const BUILTIN_LOCKS: &[(&str, &str)] = &[("embed", crate::supervisor::locks::QMD_EMBED)];
 
 fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
     BUILTIN_LOCKS
@@ -4845,12 +4845,12 @@ inputs = ["a"]
         let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
         assert!(check.is_clean(), "{:?}", check.diagnostics);
         let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["network", "cpu", "index", "embedder"]);
+        assert_eq!(names, ["network", "cpu", "index", "qmd_embed"]);
         assert_eq!(slots(&check, "network"), Some(1));
         assert_eq!(slots(&check, "cpu"), Some(4));
     }
 
-    /// An embed holds the one-slot `embedder` lock, so one model is
+    /// An embed holds the one-slot `qmd_embed` lock, so one model is
     /// loaded at a time. The index step holds the budget its shape gives
     /// it: it is the one writer of its file and never runs beside itself.
     /// A step that names its own locks, or runs its own command, keeps
@@ -4912,7 +4912,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
             held("unified_grid_and_search_index/unified_grid_and_search_index"),
             ["index"]
         );
-        assert_eq!(held("mail/embed"), ["embedder"]);
+        assert_eq!(held("mail/embed"), ["qmd_embed"]);
         assert_eq!(held("riker/embed"), ["cpu"], "named locks win");
         assert_eq!(
             held("custom/embed"),
@@ -4920,8 +4920,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
             "a custom command is not built in"
         );
         assert_eq!(slots(&check, "qmd_keyword"), None);
-        assert_eq!(slots(&check, "embedder"), Some(1));
-        assert_eq!(slots(&check, "qmd_embed"), None);
+        assert_eq!(slots(&check, "qmd_embed"), Some(1));
     }
 
     /// `qmd_index` did the search's work in one fan-in. A config still
