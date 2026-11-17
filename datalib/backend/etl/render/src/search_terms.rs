@@ -577,4 +577,184 @@ mod tests {
         g.seal(&[], &["c-a"]).await;
         assert_eq!(g.matching("email:bo@example.com").await, Vec::new());
     }
+
+    /// Repro for #1803 (throwaway): time `write_people` over a grid of
+    /// REPRO_ROWS rows (default 325k) of made-up authors.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    #[allow(clippy::disallowed_macros)]
+    async fn repro_1803_write_people_scans_the_grid() {
+        use std::time::Instant;
+        let target: i64 = std::env::var("REPRO_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(325_000);
+        let distinct_gens: i64 = std::env::var("REPRO_DISTINCT_GENS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let g = Grid::new().await;
+        let filler = "Captain's log, stardate 47634.4. ".repeat(12);
+        let seed: Vec<RenderedMarkdown> = (0..2000)
+            .map(|i| {
+                let mut d = doc(
+                    &g.root,
+                    &format!("c-{i}"),
+                    &format!("email:crew{}@enterprise.test", i % 1500),
+                    "Log",
+                );
+                d.rows[0].author = Some(format!("Crew Member {}", i % 1500));
+                d.rows[0].preview = filler.chars().take(240).collect();
+                d
+            })
+            .collect();
+        let t = Instant::now();
+        g.seal(&seed, &[]).await;
+        eprintln!(
+            "seeded 2000 docs through apply_one + seal in {:?}",
+            t.elapsed()
+        );
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('grid_rows')")
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        let mut gen = 0;
+        loop {
+            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+                .fetch_one(&g.pool)
+                .await
+                .unwrap();
+            if n >= target {
+                eprintln!("grid_rows: {n}");
+                break;
+            }
+            gen += 1;
+            let sel: Vec<String> = cols
+                .iter()
+                .map(|c| match c.as_str() {
+                    "uuid" | "markdown_uuid" | "conversation_uuid" => format!("{c} || '-g{gen}'"),
+                    "author_handle" if gen <= distinct_gens => format!("{c} || '-g{gen}'"),
+                    _ => c.clone(),
+                })
+                .collect();
+            let sql = format!(
+                "INSERT INTO grid_rows ({}) SELECT {} FROM grid_rows LIMIT {}",
+                cols.join(","),
+                sel.join(","),
+                target - n
+            );
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&g.pool)
+                .await
+                .unwrap();
+        }
+        let db = datalib_core::layout::grid_index_db(&g.root);
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&g.pool)
+            .await
+            .unwrap();
+        g.pool.close().await;
+        eprintln!(
+            "file size: {} MB",
+            std::fs::metadata(&db).unwrap().len() / 1_000_000
+        );
+
+        let pool = open_index(&db).await.unwrap();
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT DISTINCT author_handle, author FROM grid_rows \
+             WHERE author_handle IS NOT NULL AND author_handle != '' \
+             AND author IS NOT NULL AND author != ''",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        eprintln!(
+            "plan before: {:?}",
+            plan.iter().map(|p| &p.3).collect::<Vec<_>>()
+        );
+        let root = g.root.clone();
+        let time_people = |label: &'static str, pool: sqlx::SqlitePool| {
+            let root = root.clone();
+            async move {
+                for i in 0..3 {
+                    let lock = WriteLock::for_index(pool.clone());
+                    if std::env::var("REPRO_COLD").is_ok() {
+                        let db = datalib_core::layout::grid_index_db(&root);
+                        for f in [
+                            db.clone(),
+                            std::path::PathBuf::from(format!("{}-wal", db.display())),
+                        ] {
+                            let _ = std::process::Command::new("dd")
+                                .arg(format!("if={}", f.display()))
+                                .args(["iflag=nocache", "count=0", "status=none"])
+                                .status();
+                        }
+                    }
+                    let t = Instant::now();
+                    lock.begin_transaction().await.unwrap();
+                    {
+                        let mut guard = lock.acquire().await.unwrap();
+                        write_people(guard.conn()).await.unwrap();
+                    }
+                    lock.commit_transaction().await.unwrap();
+                    eprintln!("{label} write_people run {i}: {:?}", t.elapsed());
+                }
+                let t = Instant::now();
+                let c: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM (SELECT DISTINCT author_handle, author FROM grid_rows \
+                 WHERE author_handle IS NOT NULL AND author_handle != '' \
+                 AND author IS NOT NULL AND author != '')",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                eprintln!(
+                    "{label} DISTINCT counted in SQLite only: {c} pairs in {:?}",
+                    t.elapsed()
+                );
+                let t = Instant::now();
+                let n: Vec<(String, String)> = sqlx::query_as(
+                    "SELECT DISTINCT author_handle, author FROM grid_rows \
+                 WHERE author_handle IS NOT NULL AND author_handle != '' \
+                 AND author IS NOT NULL AND author != ''",
+                )
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+                eprintln!(
+                    "{label} DISTINCT alone: {} pairs in {:?}",
+                    n.len(),
+                    t.elapsed()
+                );
+            }
+        };
+        time_people("no index", pool.clone()).await;
+        let t = Instant::now();
+        sqlx::query("SELECT COUNT(*), SUM(LENGTH(preview)) FROM grid_rows")
+            .execute(&pool)
+            .await
+            .unwrap();
+        eprintln!("plain full scan touching preview: {:?}", t.elapsed());
+        let t = Instant::now();
+        sqlx::query("CREATE INDEX grid_rows_by_author ON grid_rows (author_handle, author)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        eprintln!("CREATE INDEX (author_handle, author): {:?}", t.elapsed());
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT DISTINCT author_handle, author FROM grid_rows \
+             WHERE author_handle IS NOT NULL AND author_handle != '' \
+             AND author IS NOT NULL AND author != ''",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        eprintln!(
+            "plan after: {:?}",
+            plan.iter().map(|p| &p.3).collect::<Vec<_>>()
+        );
+        time_people("with index", pool.clone()).await;
+        pool.close().await;
+    }
 }
