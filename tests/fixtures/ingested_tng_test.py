@@ -124,8 +124,8 @@ MAX_STAMP_MS = (1 << 48) - 1
 # account's Chat membership says of a space.
 #
 # A fetch row names only the raw record its download held, in the
-# download's own store; the grid row it is about is found when it is
-# read, not stored on it.
+# download's own store; render says which grid row that record belongs
+# to (`entity_items`), and the reader links the two when it reads them.
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -1039,6 +1039,34 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 out[source] = sorted(out.get(source, []) + rows)
         return out
 
+    def _linked_fetch_problems(self) -> dict[str, str]:
+        """`problem_uuid -> item_uuid` for each download problem its
+        source's render links to a grid row: the raw store's fetch rows
+        joined, by the record they name, to the render store's
+        `entity_items`, as the problems reader joins them."""
+        out: dict[str, str] = {}
+        for raw in sorted(self.workspace.glob("*/ingest/entities.doltlite_db")):
+            render = (
+                raw.parent.parent / "render_markdown" / "indexed_markdown.doltlite_db"
+            )
+            if not render.exists():
+                continue
+            items = dict(
+                line.split("|", 1)
+                for line in self._query(
+                    render, "SELECT entity_key, item_uuid FROM entity_items;"
+                )
+            )
+            for line in self._query(
+                raw,
+                "SELECT problem_uuid, scope_key FROM problems "
+                "WHERE stage = 'fetch' AND scope_kind = 'entity';",
+            ):
+                problem, scope_key = line.split("|", 1)
+                if scope_key in items:
+                    out[problem] = items[scope_key]
+        return out
+
     def _index_problems(self) -> list[str]:
         """The index's own problems, same columns: none of a source's."""
         return self._query(
@@ -1910,6 +1938,23 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._index_problems(),
             [],
             "grid_index copies no source's problems; each is read in its own store",
+        )
+        # A download names only its raw record; render says which grid row
+        # that record belongs to, and the reader links the two. These are
+        # the rows a person opens from the problem: the claude
+        # conversation (its uuid minted from the raw key) and Riker's
+        # Takeout message (found by its upstream id).
+        self.assertEqual(
+            self._linked_fetch_problems(),
+            {
+                CLAUDE_ATTACHMENT_WITHOUT_BYTES.split("|")[0]: (
+                    "00000000-0000-89b3-8bed-0eecc97d45ce"
+                ),
+                TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
+                    "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            },
+            "each download problem whose record has a row links to it",
         )
         self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 

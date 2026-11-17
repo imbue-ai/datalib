@@ -458,6 +458,13 @@ pub fn render_source(
     }
     store.commit_batch()?;
     let raw_commit = one_consumed_commit(&name, &consumed);
+    // The records the download could not fetch, at the commit this run
+    // rendered from, whose grid rows are looked up after the sweep.
+    let fetch_entities = raw_db
+        .as_deref()
+        .map(|raw_db| fetch_problem_entities(raw_db, raw_commit.as_deref()))
+        .transpose()
+        .with_context(|| format!("read the download's problems for {name}"))?;
 
     // A full render in which every processor read its store walked
     // everything, so whatever it did not produce is gone. A processor
@@ -573,10 +580,20 @@ pub fn render_source(
         );
     }
     // The download's problems are read in its own store; a copy an
-    // older build carried in here goes.
+    // older build carried in here goes. After the sweep, the grid row
+    // each of them is about, where this store still holds it, so a
+    // reader can link a problem the download could only name by its raw
+    // record.
     store
         .replace_stage_problems(Stage::Fetch, &[])
         .with_context(|| format!("drop the download's problems from {name}'s store"))?;
+    if let Some(entities) = fetch_entities {
+        let items = entity_items(&store, processors, &name, &entities)
+            .with_context(|| format!("find the rows {name}'s download problems are about"))?;
+        store
+            .replace_entity_items(&items)
+            .with_context(|| format!("record the rows {name}'s download problems are about"))?;
+    }
     if !endings.is_empty() {
         tracing::info!(
             source = %name,
@@ -1125,6 +1142,100 @@ fn emptied_table_evidence(
     Ok(Some(EmptiedTable { stale, left }))
 }
 
+/// `(entity_key, item_uuid)` for each of `entities` (a download's
+/// problem scopes, `<table>:<id>`) whose grid row this store holds: the
+/// uuid the first processor that knows the raw table mints for it
+/// (`item_of_entity`), else the row whose upstream key the processor
+/// names (`upstream_of_entity`).
+fn entity_items(
+    store: &IndexedMarkdownStore,
+    processors: &[Box<dyn RenderProcessor>],
+    source_id: &str,
+    entities: &[String],
+) -> Result<Vec<(String, String)>> {
+    let raw: Vec<Option<(&str, &str)>> = entities.iter().map(|e| raw_entity(e)).collect();
+    let mut items: Vec<Option<String>> = raw
+        .iter()
+        .map(|r| {
+            let (table, id) = (*r)?;
+            processors
+                .iter()
+                .find_map(|p| p.item_of_entity(source_id, table, id))
+        })
+        .collect();
+    let upstream: Vec<Option<(&'static str, String)>> = raw
+        .iter()
+        .zip(&items)
+        .map(|(r, item)| {
+            let (table, id) = (*r)?;
+            if item.is_some() {
+                return None;
+            }
+            processors
+                .iter()
+                .find_map(|p| p.upstream_of_entity(table, id))
+        })
+        .collect();
+    let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
+    let found = store.grid_rows_by_upstream(&keys)?;
+    for (item, key) in items.iter_mut().zip(upstream) {
+        if let Some((kind, id)) = key {
+            *item = found.get(&(kind.to_string(), id)).cloned();
+        }
+    }
+    let wanted: Vec<String> = items.iter().flatten().cloned().collect();
+    let held = store.grid_rows_among(&wanted)?;
+    Ok(entities
+        .iter()
+        .zip(items)
+        .filter_map(|(entity, item)| {
+            item.filter(|uuid| held.contains(uuid))
+                .map(|uuid| (entity.clone(), uuid))
+        })
+        .collect())
+}
+
+/// The raw `(table, id)` a download's problem names: `table:id` from a
+/// fetch attempt, `record:table:id` from a record it could not reach.
+fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
+    scope_key
+        .strip_prefix(datalib_etl::download_problems::RECORD_PREFIX)
+        .unwrap_or(scope_key)
+        .split_once(':')
+}
+
+/// The entity scopes of the raw store's fetch problems at `commit` (HEAD
+/// when the run consumed none). None when there is no store, nothing
+/// committed, or a store from before the table.
+fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<String>> {
+    if !raw_db.exists() {
+        return Ok(Vec::new());
+    }
+    let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(raw_db, commit))
+        .with_context(|| format!("open {} for its problems", raw_db.display()))?
+    else {
+        return Ok(Vec::new());
+    };
+    let pool = reader.pool().clone();
+    let result = blocking(async {
+        match sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? \
+             ORDER BY scope_key",
+        )
+        .bind(Stage::Fetch.as_str())
+        .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(keys) => Ok(keys),
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Ok(Vec::new()),
+            Err(e) => Err(e).context("read the raw store's problems"),
+        }
+    });
+    blocking(pool.close());
+    result
+}
+
 /// How many of a bucket's keys one lookup at the cursor tries: the first
 /// usually held, and a page bounds what a bucket of a million rows loads.
 const KEYS_PER_PAGE: usize = 64;
@@ -1446,6 +1557,71 @@ mod plan_tests {
             .unwrap();
         store.commit("fixture").unwrap();
         store.close();
+    }
+
+    /// Knows the rows of one raw table, each keyed by its raw id.
+    struct Resolves(&'static str);
+
+    #[async_trait::async_trait]
+    impl RenderProcessor for Resolves {
+        fn id(&self) -> &str {
+            "resolves"
+        }
+        async fn run(&self, _ctx: &RenderCtx<'_>) -> Result<String> {
+            Ok(String::new())
+        }
+        fn item_of_entity(&self, _source_id: &str, table: &str, id: &str) -> Option<String> {
+            (table == self.0).then(|| id.to_string())
+        }
+    }
+
+    /// A download's problem is linked to the grid row its raw record
+    /// belongs to only when the store holds that row after the sweep, so
+    /// a link always opens something; a record no processor knows, a
+    /// listing, and a row swept away are left unlinked.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_download_problem_is_linked_only_to_a_row_the_store_holds() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path().join("src/render_markdown");
+        write_doc(&root, "kept");
+        write_doc(&root, "swept");
+
+        let store = IndexedMarkdownStore::open(&root).unwrap();
+        let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
+        seal_run(
+            &store,
+            td.path(),
+            RunEnd {
+                source_id: "src",
+                sweep: true,
+                keep: &keep,
+                buckets: &BTreeMap::new(),
+                storage: None,
+                cursor: None,
+            },
+        )
+        .unwrap();
+        let entities: Vec<String> = [
+            "things:kept",
+            "record:things:kept",
+            "things:swept",
+            "things:never-rendered",
+            "others:kept",
+            "listing:things",
+        ]
+        .map(String::from)
+        .to_vec();
+        let processors: Vec<Box<dyn RenderProcessor>> =
+            vec![Box::new(Resolves("users")), Box::new(Resolves("things"))];
+        let items = entity_items(&store, &processors, "src", &entities).unwrap();
+        store.close();
+        assert_eq!(
+            items,
+            [
+                ("things:kept".to_string(), "kept".to_string()),
+                ("record:things:kept".to_string(), "kept".to_string()),
+            ]
+        );
     }
 
     /// A full render sweeps what the walk did not produce and records

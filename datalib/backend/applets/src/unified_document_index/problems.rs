@@ -713,17 +713,55 @@ mod tests {
 
     /// A download's problem is read where the download keeps it, in its
     /// raw store as last sealed, with nothing copying it on: the problems
-    /// grid lists it and the source's Download count holds it, before any
-    /// render or index pass has run over it.
+    /// grid lists it and the source's Download count holds it. It names
+    /// only its raw record; the reader links it to the message render
+    /// says that record belongs to, so the grid opens the message's
+    /// document and that document's banner lists the problem.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_downloads_problem_is_listed_and_counted_from_its_own_store() {
+    async fn a_downloads_problem_is_listed_counted_and_linked_from_its_own_store() {
         use datalib_problem_mutes::{counter_of, query};
         use datalib_problems::CountedBy;
+        use datalib_schema::grid_rows::GridRow;
+        use datalib_schema::providers::Provider;
         use datalib_table::BulkUpsertable;
 
         let tmp = tempfile::tempdir().unwrap();
-        index_problems(tmp.path(), &[]).await;
-        let raw = tmp.path().join("riker/ingest/entities.doltlite_db");
+        let root = tmp.path();
+
+        // The index holds the message the record belongs to, in its
+        // document.
+        let index = datalib_etl_render::grid_index::open_index(
+            &datalib_runtime::layout::grid_index_db(root),
+        )
+        .await
+        .unwrap();
+        GridRow::builder()
+            .uuid("msg-1")
+            .provider(Provider::Test)
+            .kind("Test")
+            .source_label("Test")
+            .conversation_uuid("doc-1")
+            .entire_chat("/chat/doc-1")
+            .body("hello")
+            .markdown_uuid(Some("doc-1".to_string()))
+            .build()
+            .unwrap()
+            .bind_into(sqlx::query(sqlx::AssertSqlSafe(
+                datalib_table::insert_sql::<GridRow>(),
+            )))
+            .execute(&index)
+            .await
+            .unwrap();
+        datalib_etl_render::grid_index::seal(
+            &datalib_etl_render::grid_index::WriteLock::for_index(index.clone()),
+        )
+        .await
+        .unwrap();
+        index.close().await;
+
+        // The download could not fetch the record, and says so in its own
+        // store, sealed.
+        let raw = root.join("riker/ingest/entities.doltlite_db");
         std::fs::create_dir_all(raw.parent().unwrap()).unwrap();
         let pool = datalib_etl::doltlite_raw::open(&raw, &[]).await.unwrap();
         let row = ProblemRow::new(
@@ -746,9 +784,20 @@ mod tests {
             .unwrap();
         pool.close().await;
 
-        let s = super::super::tests::index_over(tmp.path()).await;
+        // Render says which message that record belongs to.
+        let render = datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(
+            &root.join("riker/render_markdown"),
+        )
+        .unwrap();
+        render
+            .replace_entity_items(&[("messages:1".to_string(), "msg-1".to_string())])
+            .unwrap();
+        render.commit("render").unwrap();
+        render.close();
+
+        let s = super::super::tests::index_over(root).await;
         let download = counter_of("riker", CountedBy::Download);
-        let counts = datalib_problem_mutes::counts(tmp.path())
+        let counts = datalib_problem_mutes::counts(root)
             .await
             .unwrap()
             .expect("counted");
@@ -756,6 +805,18 @@ mod tests {
         let listed = ask(&s, q(&query(&download))).await;
         assert!(listed.errors.is_empty(), "{:?}", listed.errors);
         assert_eq!(ids(&listed), [row.problem_uuid.as_str()]);
+        assert_eq!(listed.rows[0].item_uuid.as_deref(), Some("msg-1"));
+        assert_eq!(listed.rows[0].markdown_uuid.as_deref(), Some("doc-1"));
+
+        let banner = s.repo.document_problems("doc-1").await.unwrap();
+        assert_eq!(
+            banner
+                .iter()
+                .map(|r| r.problem_uuid.as_str())
+                .collect::<Vec<_>>(),
+            [row.problem_uuid.as_str()],
+            "the document's banner lists the problem"
+        );
     }
 
     async fn ask(s: &Index, params: Params) -> Response {

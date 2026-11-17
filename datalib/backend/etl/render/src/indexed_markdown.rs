@@ -158,6 +158,15 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// Which grid row a raw record a download's problem names belongs to,
+/// where this store holds that row: `<table>:<id>` as the problem spells
+/// it, and the row's uuid. A reader joins a download's problems to it,
+/// since the download never sees the ids rows are minted under.
+pub const ENTITY_ITEMS_DDL: &[(&str, &str)] = &[(
+    "entity_items",
+    "CREATE TABLE IF NOT EXISTS entity_items (\n    entity_key TEXT PRIMARY KEY NOT NULL,\n    item_uuid TEXT NOT NULL\n)",
+)];
+
 /// `(table, CREATE TABLE)` for every table this store holds but
 /// `_datalib_meta`, in creation order.
 pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -172,6 +181,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
         .chain(PROBLEMS_DDL.iter())
+        .chain(ENTITY_ITEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
@@ -1206,11 +1216,29 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Make [`ENTITY_ITEMS_DDL`]'s table hold `items` and nothing else.
+    pub fn replace_entity_items(&self, items: &[(String, String)]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM entity_items")
+                .execute(&mut **conn)
+                .await
+                .context("clear the entity items")?;
+            for (entity_key, item_uuid) in items {
+                sqlx::query("INSERT INTO entity_items (entity_key, item_uuid) VALUES (?, ?)")
+                    .bind(entity_key)
+                    .bind(item_uuid)
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("record {entity_key}'s item"))?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replace every row of one stage with `rows`, stamps carried as
-    /// they are. How the fetch stage reaches this store: the render
-    /// step reads the raw store's `problems` at the commit it rendered
-    /// from — the complete truth about what the download could not do
-    /// — and hands them here whole, so there is nothing to sweep.
+    /// they are.
     pub fn replace_stage_problems(&self, stage: Stage, rows: &[ProblemRow]) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;

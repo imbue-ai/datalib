@@ -94,6 +94,15 @@ mints again, under it, the rows an older build wrote naming none
 only its raw entity (`<table>:<id>`) and, where it knows them, the
 upstream record (`upstream_entity_kind`, `upstream_id`,
 `upstream_account`); the grid row it is about is not stored on it.
+Render knows that row: for each record the download's problems name,
+it asks its processors which row the record is or belongs to
+(`RenderProcessor::item_of_entity`, else `upstream_of_entity` and the
+row with that upstream key) and, where its store holds that row, keeps
+the pair in its store's `entity_items`. A reader fills in a download
+problem's `item_uuid` from its source's `entity_items`
+(`datalib_step_problems::link`), so the problem opens the row's
+document and that document's banner lists it. Until render has run,
+the problem shows unlinked.
 
 Two steps besides the render keep problems of their own, each under a
 stage no other step writes (`datalib_problems::Stage::OWN_STORE`):

@@ -329,20 +329,24 @@ pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    read_with(path, datalib_sqlite_open::file(path).read_only(true)).await
-}
-
-/// A doltlite store's rows as its `main` commit has them: what its writer
-/// last sealed, read without waiting on the writer.
-async fn read_store(path: &Path) -> Result<Vec<ProblemRow>> {
-    read_with(
-        path,
-        datalib_sqlite_open::revision(path, "main").read_only(true),
+    Ok(
+        read_with(path, datalib_sqlite_open::file(path).read_only(true))
+            .await?
+            .rows,
     )
-    .await
 }
 
-async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Vec<ProblemRow>> {
+/// What one store holds that a reader of problems wants: its `problems`,
+/// and its `entity_items` (render's map from a raw record a download's
+/// problem names to the grid row it belongs to), each empty where the
+/// store has no such table.
+#[derive(Debug, Clone, Default)]
+struct Held {
+    rows: Vec<ProblemRow>,
+    items: Vec<(String, String)>,
+}
+
+async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -350,26 +354,41 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Vec<Proble
         .connect_with(opts)
         .await
         .with_context(|| format!("open {}", path.display()))?;
-    let has_table: Result<Option<(i64,)>, _> =
-        sqlx::query_as("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems'")
-            .fetch_optional(&pool)
-            .await;
-    let rows = match has_table {
-        Ok(None) => Ok(Vec::new()),
-        Ok(Some(_)) => sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
+    let held = async {
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' \
+             AND name IN ('problems', 'entity_items')",
+        )
+        .fetch_all(&pool)
+        .await?;
+        let has = |name: &str| tables.iter().any(|t| t == name);
+        let mut held = Held::default();
+        if has("problems") {
+            held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
+                .fetch_all(&pool)
+                .await?
+                .iter()
+                .map(ProblemRow::from_row)
+                .collect::<Result<_>>()?;
+        }
+        if has("entity_items") {
+            held.items = sqlx::query_as(
+                "SELECT entity_key, item_uuid FROM entity_items ORDER BY entity_key",
+            )
             .fetch_all(&pool)
-            .await
-            .map_err(anyhow::Error::from),
-        Err(e) => Err(e.into()),
+            .await?;
+        }
+        anyhow::Ok(held)
     }
+    .await
     .with_context(|| format!("read the problems in {}", path.display()));
     pool.close().await;
-    rows?.iter().map(ProblemRow::from_row).collect()
+    held
 }
 
-/// What a file looked like when its rows were read: its modification
-/// time and size, and its write-ahead log's, which a plain SQLite writer
-/// grows long before it touches the file itself.
+/// What a file looked like when it was read: its modification time and
+/// size, and its write-ahead log's, which a plain SQLite writer grows long
+/// before it touches the file itself.
 type Seen = Vec<(Option<std::time::SystemTime>, Option<u64>)>;
 
 fn seen(file: &Path) -> Seen {
@@ -384,27 +403,30 @@ fn seen(file: &Path) -> Seen {
         .collect()
 }
 
-/// The rows each file held when last read, so a reader asked again (the
+/// What each file held when last read, so a reader asked again (the
 /// Manage screen asks on every refresh) opens only the files that moved.
-static READ: std::sync::Mutex<std::collections::BTreeMap<PathBuf, (Seen, Vec<ProblemRow>)>> =
+static READ: std::sync::Mutex<std::collections::BTreeMap<PathBuf, (Seen, Held)>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
-async fn read_cached(file: &Path, plain: bool) -> Result<Vec<ProblemRow>> {
+async fn read_cached(file: &Path, plain: bool) -> Result<Held> {
     let before = seen(file);
-    if let Some((was, rows)) = READ.lock().expect("unpoisoned").get(file) {
+    if let Some((was, held)) = READ.lock().expect("unpoisoned").get(file) {
         if *was == before {
-            return Ok(rows.clone());
+            return Ok(held.clone());
         }
     }
-    let rows = if plain {
-        read(file).await?
+    let opts = if plain {
+        datalib_sqlite_open::file(file).read_only(true)
     } else {
-        read_store(file).await?
+        // A doltlite store as its `main` commit has it: what its writer
+        // last sealed, read without waiting on the writer.
+        datalib_sqlite_open::revision(file, "main").read_only(true)
     };
+    let held = read_with(file, opts).await?;
     READ.lock()
         .expect("unpoisoned")
-        .insert(file.to_path_buf(), (before, rows.clone()));
-    Ok(rows)
+        .insert(file.to_path_buf(), (before, held.clone()));
+    Ok(held)
 }
 
 /// One step's problems, or why they could not be read.
@@ -412,6 +434,9 @@ async fn read_cached(file: &Path, plain: bool) -> Result<Vec<ProblemRow>> {
 pub struct OfStep {
     pub step_id: String,
     pub rows: Vec<ProblemRow>,
+    /// `(entity_key, item_uuid)`: render's map from a raw record a
+    /// download's problem names to the grid row it belongs to.
+    pub items: Vec<(String, String)>,
     pub unread: Vec<String>,
 }
 
@@ -422,6 +447,7 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
     let mut out = OfStep {
         step_id: step_id.to_string(),
         rows: Vec::new(),
+        items: Vec::new(),
         unread: Vec::new(),
     };
     let dir = data_root.join(step_id);
@@ -439,7 +465,10 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
             _ => continue,
         };
         match read {
-            Ok(rows) => out.rows.extend(rows),
+            Ok(held) => {
+                out.rows.extend(held.rows);
+                out.items.extend(held.items);
+            }
             Err(e) => out.unread.push(format!("{e:#}")),
         }
     }
@@ -447,8 +476,9 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
 }
 
 /// Every step's problems under `data_root`: [`of_step`] for each
-/// `<group>/<function>` folder, in order. A folder with no store holding a
-/// `problems` table gives none.
+/// `<group>/<function>` folder, in order, each download's problem linked
+/// to the grid row its record belongs to ([`link`]). A folder with no
+/// store holding either table gives none.
 pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
     let mut steps = Vec::new();
     for group in sorted_dirs(data_root) {
@@ -465,11 +495,44 @@ pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
     let mut out = Vec::with_capacity(steps.len());
     for step in steps {
         let read = of_step(data_root, &step).await;
-        if !read.rows.is_empty() || !read.unread.is_empty() {
+        if !read.rows.is_empty() || !read.items.is_empty() || !read.unread.is_empty() {
             out.push(read);
         }
     }
+    link(&mut out);
     out
+}
+
+/// Fill in `item_uuid` on each download problem that names none, from
+/// the map a step of the same source keeps (`entity_items`, by the raw
+/// record the problem names). A record with no row stays unlinked.
+pub fn link(steps: &mut [OfStep]) {
+    let group = |step_id: &str| {
+        step_id
+            .rsplit_once('/')
+            .map_or(step_id, |(g, _)| g)
+            .to_string()
+    };
+    let items: std::collections::HashMap<(String, String), String> = steps
+        .iter()
+        .flat_map(|s| {
+            let g = group(&s.step_id);
+            s.items
+                .iter()
+                .map(move |(entity, item)| ((g.clone(), entity.clone()), item.clone()))
+        })
+        .collect();
+    for row in steps.iter_mut().flat_map(|s| s.rows.iter_mut()) {
+        if row.item_uuid.is_some()
+            || row.stage != Stage::Fetch
+            || row.scope_kind != ScopeKind::Entity
+        {
+            continue;
+        }
+        row.item_uuid = items
+            .get(&(row.source_id.clone(), row.scope_key.clone()))
+            .cloned();
+    }
 }
 
 fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
