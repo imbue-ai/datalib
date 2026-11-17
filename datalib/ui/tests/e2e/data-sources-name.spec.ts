@@ -56,7 +56,7 @@ function fanInReads(config: string, fn: string, id: string): boolean {
 }
 /// The sources the grid step keeps out of search.
 function notSearched(config: string): string[] {
-  const listed = /params\.not_searched = \[([^\]]*)\]/.exec(config);
+  const listed = /not_searched = \[([^\]]*)\]/.exec(config);
   return listed
     ? listed[1]
         .split(",")
@@ -578,11 +578,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the four steps under it —
-  // ingest, render, and the source's keyword index and embeddings.
+  // The confirm says what goes: the group and the three steps under it —
+  // ingest, render, and the source's embeddings.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("4 steps");
+    expect(d.message()).toContain("3 steps");
     void d.accept();
   });
   await pickRowMenu(

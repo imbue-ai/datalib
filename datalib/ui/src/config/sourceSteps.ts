@@ -1302,18 +1302,25 @@ export function setQmdSteps(text: string, group: string, asked: QmdIndexing): st
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
-/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
-/// source's `embed` — search by meaning is off without it, and nothing
-/// would sweep what they embed.
+/// them ([`readersOf`]); a source's `embed` when its render goes, since it
+/// embeds that render's documents though it reads the grid step; and,
+/// when the qmd aggregator is among them, every source's `embed` — search
+/// by meaning is off without it, and nothing would sweep what they embed.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
   const aggregatorGoes = all.some(
     (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
   );
-  const qmdSteps = aggregatorGoes
-    ? all.filter((s) => s.kind === "step" && !ids.includes(s.id) && s.function === "embed")
-    : [];
+  const isEmbed = (s: ConfiguredStep) =>
+    s.kind === "step" && s.function === "embed" && !ids.includes(s.id);
+  const qmdSteps = aggregatorGoes ? all.filter(isEmbed) : [];
   const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
-  return [...qmdSteps, ...readers];
+  const going = new Set(
+    [...ids, ...qmdSteps, ...readers].map((s) => (typeof s === "string" ? s : s.id)),
+  );
+  const unrendered = all.filter(
+    (s) => isEmbed(s) && !going.has(s.id) && going.has(`${s.group}/render_markdown`),
+  );
+  return [...qmdSteps, ...readers, ...unrendered];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other
@@ -1495,7 +1502,10 @@ function declaredEntries(text: string): string {
 /// The group a move would put on the wrong side of it, when it would:
 /// above a group whose steps it reads, or below one that reads it. The
 /// file reads in the order data flows (`datalib_dag::config_order`, which
-/// `datalib-step topo-sort-config` restores), and a drag keeps it so.
+/// `datalib-step topo-sort-config` restores), and a drag keeps it so. A
+/// source's `embed` reads the index group that reads the source, so a
+/// source group's reads of an index group are left out, or no source
+/// could move.
 export function moveAgainstDataFlow(
   text: string,
   groupId: string,
@@ -1503,12 +1513,14 @@ export function moveAgainstDataFlow(
 ): { reads: string } | { readBy: string } | null {
   const steps = listSteps(text).filter((s) => s.kind === "step");
   const groupOfStep = new Map(steps.map((s) => [s.id, s.group]));
+  const fanInGroups = new Set(steps.filter((s) => fanInFunctionOf(s) !== null).map((s) => s.group));
   const reads = (id: string) =>
     new Set(
       steps
         .filter((s) => s.group === id)
         .flatMap((s) => s.inputs.map((i) => groupOfStep.get(i)))
-        .filter((g): g is string => !!g && g !== id),
+        .filter((g): g is string => !!g && g !== id)
+        .filter((g) => fanInGroups.has(id) || !fanInGroups.has(g)),
     );
   const order = listGroups(text)
     .map((g) => g.id)
