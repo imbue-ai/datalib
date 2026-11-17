@@ -90,8 +90,7 @@ stage_linux() {
 
     "$bazel" build \
         //third-party/doltlite:rename_amalgamation \
-        //third-party/doltlite:library_copts \
-        //third-party/doltlite:blake3_kernel_sources >&2
+        //third-party/doltlite:library_copts >&2
     local bazel_bin
     bazel_bin="$("$bazel" info bazel-bin)"
 
@@ -101,7 +100,6 @@ stage_linux() {
     cp "$bazel_bin/third-party/doltlite/sqlite3.c" \
         "$bazel_bin/third-party/doltlite/library_copts.txt" \
         "$work/in/"
-    cp -R "$bazel_bin/third-party/doltlite/blake3_kernels" "$work/in/"
     chmod -R a+rX "$work"
 
     local libc image wheel tag verdict

@@ -2,12 +2,21 @@
 ** vectors (`test_vectors.json`: input byte i is i % 251, `hash` the first
 ** 131 bytes of output). blake3_hash_oneshot is what doltlite hashes a
 ** chunk with; the hasher is what it hashes a chunk with a zero tail with.
-** The declarations come from the kernels' blake3.h, whose struct and
-** version string must be the amalgamation's. */
+** The declarations come from @blake3_c's blake3.h, whose struct and
+** version string must be the amalgamation's. The amalgamation names every
+** BLAKE3 symbol `doltlite_<name>`, so the Rust blake3 crate's own kernels
+** never meet it in a static link. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define blake3_version doltlite_blake3_version
+#define blake3_simd_degree doltlite_blake3_simd_degree
+#define blake3_hash_oneshot doltlite_blake3_hash_oneshot
+#define blake3_hasher doltlite_blake3_hasher
+#define blake3_hasher_init doltlite_blake3_hasher_init
+#define blake3_hasher_update doltlite_blake3_hasher_update
+#define blake3_hasher_finalize doltlite_blake3_hasher_finalize
 #include "blake3.h"
 
 size_t blake3_simd_degree(void);

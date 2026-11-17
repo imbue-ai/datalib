@@ -57,7 +57,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 
-# doltlite v0.51.12: the amalgamation, a single-file `doltlite.c` with the
+# doltlite v0.51.13: the amalgamation, a single-file `doltlite.c` with the
 # SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
 # by `//third-party/doltlite:sqlite3` into every binary.
 #
@@ -66,15 +66,16 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.12/doltlite-amalgamation-0.51.12.zip"],
-    sha256 = "85782797b302ed54144565cf2adc15a4782498e5d8e333c80f28b3480350703a",
-    strip_prefix = "doltlite-amalgamation-0.51.12",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.13/doltlite-amalgamation-0.51.13.zip"],
+    sha256 = "5fc1cec33198b93214c54f8c16ca0d4d048677b6951a6be2a3db982fafc6e824",
+    strip_prefix = "doltlite-amalgamation-0.51.13",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
-# BLAKE3's C SIMD kernels, at the version the amalgamation embeds:
-# `//third-party/doltlite:blake3_kernels` compiles them for doltlite, and
-# `:blake3_kernels_test` fails if this and the embedded copy part ways.
+# BLAKE3's source, at the version the amalgamation embeds, for its header
+# and test vectors alone: `//third-party/doltlite:blake3_kernels_test`
+# checks doltlite's hashing against them, and fails if this and the
+# embedded copy part ways.
 http_archive(
     name = "blake3_c",
     urls = ["https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.5.tar.gz"],
@@ -141,9 +142,9 @@ http_archive(
 # `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.12/doltlite-autoconf-0.51.12.tar.gz"],
-    sha256 = "3d29aca3adfc85a1394adf7a03da159036467d135e421dffa1f08a4bce08ee03",
-    strip_prefix = "doltlite-autoconf-0.51.12",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.13/doltlite-autoconf-0.51.13.tar.gz"],
+    sha256 = "fe14167bbf61035f4111e676c7cc4f150c2cab7daade82bba8064703dd79009b",
+    strip_prefix = "doltlite-autoconf-0.51.13",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
