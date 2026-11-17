@@ -171,7 +171,9 @@ fn identity(h: &Handle, name: &str) -> Identity {
     Identity {
         id: h.to_uri(),
         label: name.to_string(),
-        icon: Some(crate::unified_document_index::columns::handle_mark(h.kind()).to_string()),
+        icon: Some(
+            crate::unified_grid_and_search_index::columns::handle_mark(h.kind()).to_string(),
+        ),
         detail: Some(h.describe(name)),
         entity: None,
     }

@@ -149,7 +149,7 @@ fn options() -> MirrorOptions {
 /// initialization commit.
 async fn log(pool: &SqlitePool) -> Vec<(String, String)> {
     let mut rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT message, date FROM dolt_log WHERE message != 'Initialize data repository'",
+        "SELECT message, date FROM dolt_log WHERE message NOT LIKE 'Initialize data repository%'",
     )
     .fetch_all(pool)
     .await

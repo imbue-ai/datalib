@@ -580,7 +580,7 @@ fn manual_e2e_live_sync_golden() {
     // Layout invariant: data_root is a flat set of group dirs plus the one
     // reserved `system/` dir — never the old top-level `raw/` or
     // `rendered_md/`, and the aggregate index DB lives under the
-    // `unified_document_index` group. Guards against a regression to the
+    // `unified_grid_and_search_index` group. Guards against a regression to the
     // pre-grouping layout.
     assert!(
         !data_root.join("raw").exists() && !data_root.join("rendered_md").exists(),
@@ -588,9 +588,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_document_index/grid_index/db.sqlite")
+            .join("unified_grid_and_search_index/grid_index/db.sqlite")
             .is_file(),
-        "backend index DB must live at unified_document_index/grid_index/db.sqlite"
+        "backend index DB must live at unified_grid_and_search_index/grid_index/db.sqlite"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -599,9 +599,9 @@ fn manual_e2e_live_sync_golden() {
     // history, not rebuildable from raw.
     assert!(
         data_root
-            .join("unified_document_index/CACHEDIR.TAG")
+            .join("unified_grid_and_search_index/CACHEDIR.TAG")
             .is_file(),
-        "unified_document_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
+        "unified_grid_and_search_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
     );
     assert!(
         !data_root.join("system/CACHEDIR.TAG").exists(),
@@ -609,7 +609,7 @@ fn manual_e2e_live_sync_golden() {
     );
 
     // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
-    // the on-disk per-group layout. `system/` and the `unified_document_index` group
+    // the on-disk per-group layout. `system/` and the `unified_grid_and_search_index` group
     // (the grid and search index) are skipped — see the module header.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
@@ -651,10 +651,10 @@ fn manual_e2e_live_sync_golden() {
     // with. The rest of the index is the union of the render stores
     // snapshotted above and is deliberately not dumped again.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_document_index/grid_index/db.sqlite#problems",
+        description => "unified_grid_and_search_index/grid_index/db.sqlite#problems",
     }, {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
@@ -662,7 +662,7 @@ fn manual_e2e_live_sync_golden() {
     // The search index: the per-source split the keyword_index and embed
     // steps exist for.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
         description => "the search index: documents and chunks left to embed, per source",
@@ -674,9 +674,9 @@ fn manual_e2e_live_sync_golden() {
     // pasted into the search. Derived from `grid_rows`, so a change here
     // with no change above is a change in the derivation.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_document_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
+        description => "unified_grid_and_search_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -1476,10 +1476,10 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
-/// The unified document index's `problems` table, volatile stamps redacted, ordered
+/// The unified grid and search index's `problems` table, volatile stamps redacted, ordered
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
+    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
     let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
@@ -1584,7 +1584,7 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
+    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

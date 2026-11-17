@@ -570,7 +570,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
     @property
     def _index_db(self) -> Path:
         """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "unified_document_index" / "grid_index" / "db.sqlite"
+        return (
+            self.workspace
+            / "unified_grid_and_search_index"
+            / "grid_index"
+            / "db.sqlite"
+        )
 
     @property
     def _signal_entities_db(self) -> Path:
@@ -764,7 +769,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_document_index/src/qmd/mapping.rs) keys grid
+        way: `GridIndex` (unified_grid_and_search_index/src/qmd/mapping.rs) keys grid
         rows by `norm_path(qmd_path)` and looks each qmd hit up by the
         hit's own data-root-relative path — the same spelling
         `apply_one` stores in `markdowns.md_path`. A provider that
@@ -953,7 +958,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         Each source's render step writes
         `<source>/render_markdown/indexed_markdown.doltlite_db` holding the
-        same rows that stack into the unified document index — same derived DDL,
+        same rows that stack into the unified grid and search index — same derived DDL,
         same writer (`grid_index::apply_one`). Asserted from the outside
         with the doltlite CLI, so a store that exists but is empty, or
         holds a shape the CLI cannot read, fails here rather than
@@ -1830,7 +1835,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ── the per-source render stores ────────────────────────
         # Each source's render step writes its rows into
         # `<source>/render_markdown/indexed_markdown.doltlite_db` — the same
-        # rows, same derived DDL and same writer as the unified document index,
+        # rows, same derived DDL and same writer as the unified grid and search index,
         # so "what stacks into the index" needs no second projection to
         # keep in step.
         #
@@ -2314,7 +2319,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # The fan-in reads every source, as the runner hands them over;
         # only this one has moved.
         self._run_step(
-            "unified_document_index",
+            "unified_grid_and_search_index",
             "grid_index",
             inputs=self._grid_index_inputs(),
         )
@@ -2341,7 +2346,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.assertFalse(
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
-                "longer lists it, but /applet/unified_document_index/chat/{uuid} "
+                "longer lists it, but /applet/unified_grid_and_search_index/chat/{uuid} "
                 "still resolves and qmd still finds it — a deletion the "
                 "user can read",
             )
@@ -2397,7 +2402,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
-            "unified_document_index", "grid_index", inputs=self._grid_index_inputs()
+            "unified_grid_and_search_index",
+            "grid_index",
+            inputs=self._grid_index_inputs(),
         )
 
         github_docs_after = set(

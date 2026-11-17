@@ -605,7 +605,7 @@ async fn a_config_the_loop_cannot_read_refuses_the_request_and_says_why() {
     // A top-level key the loader does not know is a fatal diagnostic.
     std::fs::write(
         root.join("config.toml"),
-        "no_such_key = 1\n\n[[groups]]\nid = \"unified_document_index\"\n",
+        "no_such_key = 1\n\n[[groups]]\nid = \"unified_grid_and_search_index\"\n",
     )
     .unwrap();
     let state = server(&root).await;

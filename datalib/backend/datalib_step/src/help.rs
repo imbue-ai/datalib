@@ -91,7 +91,7 @@ const SETUP: &[SetupStep] = &[
               and get JSON back: `datalib-applet search <data_root> 'from:picard \
               after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
               the flags). For SQL, `datalib-doltlite -readonly \
-              <data_root>/unified_document_index/grid_index/db.sqlite \"SELECT provider, \
+              <data_root>/unified_grid_and_search_index/grid_index/db.sqlite \"SELECT provider, \
               count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 opens it read-only only \
               while its writer is running). Or serve \
               the app with `datalib-http <data_root>`. `datalib-step help search` has the \
@@ -300,16 +300,16 @@ fn examples_intro(t: SourceType) -> Vec<String> {
         format!(
             "A source's documents reach the grid and search only through the index groups, \
              which name the steps they read. After appending by hand, add \
-             `<id>/render_markdown` to the `inputs` of `unified_document_index/grid_index`, \
+             `<id>/render_markdown` to the `inputs` of `unified_grid_and_search_index/grid_index`, \
              and if the stanza has `keyword_index` and `embed` steps, add both to the \
-             `inputs` of `unified_document_index/qmd_aggregator`.{}",
+             `inputs` of `unified_grid_and_search_index/qmd_aggregator`.{}",
             if t.renders_time_series() {
                 " Add `<id>/render_time_series` to the `inputs` of \
                  `unified_time_series_index/time_series_index`, and of \
-                 `unified_document_index/grid_index`, which copies its problem rows."
+                 `unified_grid_and_search_index/grid_index`, which copies its problem rows."
             } else if t.renders_occurrences() {
                 " Add `<id>/render_occurrences` to the `inputs` of \
-                 `unified_document_index/grid_index`, which copies its problem rows."
+                 `unified_grid_and_search_index/grid_index`, which copies its problem rows."
             } else {
                 ""
             }
@@ -608,7 +608,7 @@ fn example_step_id(f: Function) -> String {
         Function::RenderTimeSeries => "garmin",
         Function::RenderOccurrences => "calendar",
         Function::GridIndex | Function::QmdAggregator | Function::EmbeddingMap => {
-            datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR
+            datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
         }
         Function::TimeSeriesIndex => datalib_runtime::layout::UNIFIED_TIME_SERIES_INDEX_DIR,
     };

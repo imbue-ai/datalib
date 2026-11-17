@@ -35,7 +35,7 @@ sibling `.update` target (via the `insta_update` macro in
 [`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
 
 ```bash
-bazel run //datalib/backend/unified_document_index:unified_document_index_tests.update
+bazel run //datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests.update
 bazel run //datalib/backend/etl/providers/slack:slack_tests.update
 ```
 
@@ -99,7 +99,7 @@ Two things follow from sharing a process:
 * **Anything process-global is now shared.** An environment variable
   one test sets is every test's. A binary whose tests need one runs
   them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
-  beside it: `DATALIB_RUNTIME_DIR` in `unified_document_index_tests` and
+  beside it: `DATALIB_RUNTIME_DIR` in `unified_grid_and_search_index_tests` and
   `applet_unittests`). Playback is not one: a test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
@@ -472,7 +472,7 @@ with `[checkpoint_cadence] at_most_every_secs = 2` at the top of that
 config and a `chatgpt` group whose ingest step's params are
 `[steps.params.api]`. The NDJSON on stderr shows the chain: a
 `checkpoint` from the ingest, a `step_start` for its render within
-milliseconds, and one for `unified_document_index/grid_index` right after.
+milliseconds, and one for `unified_grid_and_search_index/grid_index` right after.
 
 ## Bazel-fetched test data (`lightroom`)
 
@@ -672,7 +672,7 @@ uv run python scripts/search_eval.py keep after.json --history <dir> --note "wha
 uv run python scripts/search_eval.py history <dir>
 ```
 
-Without `--http` it starts its own `datalib-applet unified_document_index`
+Without `--http` it starts its own `datalib-applet unified_grid_and_search_index`
 and asks it directly, which skips the gateway. Either way it times the
 answers warm, after one query of each kind. A plain `bazelisk build`
 compiles Rust unoptimized; time what ships with binaries built `-c opt`.

@@ -14,7 +14,7 @@ use crate::config::{owner_only_options, root_config_path};
 /// --append` both do) and writes the source above this block.
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.
-pub const STARTER_CONFIG: &str = r##"# ── the unified document index ─────────────────────────────────────────
+pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source feeds these two — the grid reads its rendered markdown,
 # the qmd aggregator its search steps. A step's id is
@@ -31,17 +31,17 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified document index ──�
 # `datalib-step help config-model`.
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = []
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = []
@@ -49,13 +49,13 @@ inputs = []
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any
 # other — a server the gateway spawns and proxies at
-# `/applet/unified_document_index/` — which is why it is written here rather
+# `/applet/unified_grid_and_search_index/` — which is why it is written here rather
 # than compiled into the backend.
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: the contacts a person makes and the handles they
 # link to them, which the person chips and search read. Without it the
@@ -63,7 +63,7 @@ command = "datalib-applet unified_document_index"
 # to link. Its store is `datalib_curated/datalib_contacts/`.
 
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 "##;

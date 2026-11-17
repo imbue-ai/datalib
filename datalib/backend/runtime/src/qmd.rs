@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 /// Where qmd kept its index, its config and its link to the models:
-/// `<root>/unified_document_index/qmd_aggregator/qmd`.
+/// `<root>/unified_grid_and_search_index/qmd_aggregator/qmd`.
 pub fn qmd_state_dir(root: &Path) -> PathBuf {
     crate::layout::qmd_dir(root).join("qmd")
 }

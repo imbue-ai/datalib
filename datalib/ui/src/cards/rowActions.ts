@@ -231,7 +231,7 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_document_index"
+      sourceId === "unified_grid_and_search_index"
         ? "Problems: the index"
         : `Problems: ${source?.name.label ?? sourceId}`;
     h.host.openCards(problemsSource(problemsUrl, row.problems_query, name));

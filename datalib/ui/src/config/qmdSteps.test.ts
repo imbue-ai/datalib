@@ -19,10 +19,10 @@ function = "render_markdown"
 inputs = ["away-team/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = []
 `;

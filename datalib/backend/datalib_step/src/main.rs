@@ -932,7 +932,7 @@ fn print_page(page: Result<String, String>) -> i32 {
     }
 }
 
-/// The index steps have one reader each — the `unified_document_index` applet
+/// The index steps have one reader each — the `unified_grid_and_search_index` applet
 /// — which finds them from the data root alone, so their trees are
 /// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
@@ -940,7 +940,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(
         env.step == expected,
         "`{}` writes {expected:?} and nothing else, but this step's id is {:?}: declare it \
-         under the `unified_document_index` group",
+         under the `unified_grid_and_search_index` group",
         env.function,
         env.step
     );

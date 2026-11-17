@@ -33,7 +33,7 @@
 #                                  may be RO for `datalib-dag`).
 #   /data                          the user's data root: config.toml, one
 #                                  directory per source, the indexes under
-#                                  unified_document_index/, the server's state
+#                                  unified_grid_and_search_index/, the server's state
 #                                  under system/.
 #   /import                        (convention, not required) whatever
 #                                  local export a file-backed source
@@ -206,9 +206,9 @@ RUN set -eux; \
     mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
     datalib-dag /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
         "SELECT count(*) FROM search_documents;" | grep -qv '^0$'; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
 

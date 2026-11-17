@@ -465,24 +465,24 @@ command = "datalib-step"
 inputs = ["claude/keyword_index"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["claude/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = ["claude/keyword_index", "claude/embed"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 ```
 
 Each step says which group it belongs to and what it does there, and
@@ -545,9 +545,10 @@ from the old file don't carry over, so review the result. A config whose
 search is still one shared `qmd_index` step needs none of this: the app
 gives each source its own search steps the first time it reads the
 file, and keeps the old one as `config.toml.bak`. The same is true of a
-config whose index is still called `unified_index`: the app renames it
-`unified_document_index`, and moves the index's folder to match rather
-than rebuilding it. A much older root with
+config whose index is still called `unified_index` or
+`unified_document_index`: the app renames it
+`unified_grid_and_search_index`, and moves the index's folder to match
+rather than rebuilding it. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 
@@ -608,7 +609,7 @@ faster.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_document_index/grid_index/db.sqlite`.
+  the SQL store at `<data_root>/unified_grid_and_search_index/grid_index/db.sqlite`.
 - A `keyword_index` and an `embed` step per source: that source's part
   of free-text search — its words, then its embeddings, which let a
   search match on meaning. The first `embed` downloads its model once.
@@ -639,7 +640,7 @@ faster.
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
-├── unified_document_index/                  # the shared indexes, rebuildable
+├── unified_grid_and_search_index/                  # the shared indexes, rebuildable
 │   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges + the search index
 │   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
 └── system/                         # everything that isn't a source
@@ -654,7 +655,7 @@ faster.
 ```
 
 > **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_document_index/` — are rebuilt from your raw
+> and `unified_grid_and_search_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -765,7 +766,7 @@ are already in open formats you can read with no datalib at all:
   Attachments are not in those: their bytes live beside them in
   `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
   opens as it is. So is the grid's table,
-  `unified_document_index/grid_index/db.sqlite`, which is rebuilt from
+  `unified_grid_and_search_index/grid_index/db.sqlite`, which is rebuilt from
   the stores and keeps no history; the same pipe makes a copy of it
   that opens anywhere.
 
