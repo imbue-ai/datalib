@@ -1,11 +1,11 @@
 //! Provision the pinned GGUF models
 //! (`datalib_runtime::models::PINNED_MODELS`): verify what is on disk by
 //! sha256, fetch what is missing or wrong from the pinned revision, and
-//! leave the files under the names node-llama-cpp looks for — so qmd
-//! finds every model already in place and never talks to HuggingFace.
+//! leave the files under the names node-llama-cpp gave them, where the
+//! copies qmd downloaded already are.
 //!
 //! A root where something else staged the models sets
-//! `DATALIB_QMD_MODELS_NO_FETCH=1` (`Fetch::from_env`), and an absent
+//! `DATALIB_MODELS_NO_FETCH=1` (`Fetch::from_env`), and an absent
 //! model is then reported rather than downloaded. The e2e fixture is
 //! the case: it stages the embedding model alone, because that is all
 //! the suite loads, and the other two are 1.8 GB.
@@ -79,14 +79,24 @@ pub enum Fetch {
     Never,
 }
 
-pub const NO_FETCH_ENV: &str = "DATALIB_QMD_MODELS_NO_FETCH";
+pub const NO_FETCH_ENV: &str = "DATALIB_MODELS_NO_FETCH";
+/// [`NO_FETCH_ENV`]'s name while qmd loaded the models, still honoured
+/// for a script or a test runner that sets it.
+pub const RETIRED_NO_FETCH_ENV: &str = "DATALIB_QMD_MODELS_NO_FETCH";
 
 impl Fetch {
-    /// `Never` when `DATALIB_QMD_MODELS_NO_FETCH` is set to anything but
-    /// empty or `0`.
     pub fn from_env() -> Self {
-        match std::env::var(NO_FETCH_ENV) {
-            Ok(v) if !v.is_empty() && v != "0" => Fetch::Never,
+        Self::from_values(
+            std::env::var(NO_FETCH_ENV).ok().as_deref(),
+            std::env::var(RETIRED_NO_FETCH_ENV).ok().as_deref(),
+        )
+    }
+
+    /// `Never` when the switch is set to anything but empty or `0`; its
+    /// current name wins over its retired one when both are set.
+    fn from_values(current: Option<&str>, retired: Option<&str>) -> Self {
+        match current.or(retired) {
+            Some(v) if !v.is_empty() && v != "0" => Fetch::Never,
             _ => Fetch::Allowed,
         }
     }
@@ -251,6 +261,19 @@ fn write_stamp(path: &Path, sha: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test runner or script that still sets the switch's old name keeps
+    /// the models from being fetched; the new name, set either way, wins.
+    #[test]
+    fn the_no_fetch_switch_reads_its_old_name_too() {
+        let fetch = Fetch::from_values;
+        assert_eq!(fetch(None, None), Fetch::Allowed);
+        assert_eq!(fetch(Some("1"), None), Fetch::Never);
+        assert_eq!(fetch(None, Some("1")), Fetch::Never);
+        assert_eq!(fetch(Some("0"), Some("1")), Fetch::Allowed);
+        assert_eq!(fetch(Some("1"), Some("0")), Fetch::Never);
+        assert_eq!(fetch(Some(""), None), Fetch::Allowed);
+    }
 
     /// The shared cache is where qmd kept its models, so the ones it
     /// downloaded are reused: `$XDG_CACHE_HOME` first, then `$HOME`.

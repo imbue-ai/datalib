@@ -249,7 +249,7 @@ CI image:
   runs on the runner itself, so its runfiles *are* downloaded before it
   starts — which is why it uses `materialize_tng_root_embed_only`: the
   embedding model is all it loads, and the other two are 1.8 GB. The
-  suite sets `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them
+  suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports them
   absent instead of fetching them into the fixture root.
 * **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
   GitHub forces `HOME=/github/home` for container steps, while the image
