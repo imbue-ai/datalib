@@ -18,8 +18,8 @@ pub fn datalib_source_id() -> &'static str {
 }
 
 /// Per-conversation header data read from `grid_rows`. The chat preview
-/// renders the QMD body verbatim and pulls the page header from here —
-/// no QMD parsing.
+/// renders the markdown body verbatim and pulls the page header from here —
+/// no markdown parsing.
 #[derive(Debug, Default, Clone)]
 pub struct ChatMeta {
     /// The configured source's id (`grid_rows.source_id`); what the
@@ -44,8 +44,8 @@ pub const ANY_VALUE: &str = "*";
 
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
 /// parameter list for a parsed query's terms, and for its free text when
-/// the table matches free text with `LIKE`; a qmd table's free text is
-/// qmd's.
+/// the table matches free text with `LIKE`; a ranked table's free text is
+/// the search index's.
 pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -142,6 +142,52 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
         format!(" WHERE {}", clauses.join(" AND "))
     };
     (where_sql, params)
+}
+
+/// The index a narrowing to documents reads alone, which holds each
+/// document's id and source beside the flag. Fetching those from the
+/// table instead took seconds a search on a cold disk: one random read
+/// for each of a library's documents.
+pub const DOCUMENTS_INDEX: &str = "grid_rows_by_is_document";
+
+/// What [`matching_sql`] reads of each row kept: the row, its document and
+/// whether it is the document's own; or each document once.
+pub const KEPT_ROWS: &str = "uuid, markdown_uuid, is_document";
+pub const KEPT_DOCUMENTS: &str = "DISTINCT markdown_uuid";
+
+/// The `columns` of every row of a document that `q`'s terms keep, and
+/// the values to bind: what a search narrows by before it ranks. Names
+/// [`DOCUMENTS_INDEX`] when the terms are `is:document` and `source:`
+/// alone, so the plan cannot drift back to the table.
+pub fn matching_sql(
+    grid_rows: &str,
+    columns: &str,
+    q: &ParsedQuery<GridRowColumn>,
+) -> (String, Vec<String>) {
+    let (where_sql, params) = build_where(q);
+    let clause = if where_sql.is_empty() {
+        " WHERE markdown_uuid IS NOT NULL".to_string()
+    } else {
+        format!("{where_sql} AND markdown_uuid IS NOT NULL")
+    };
+    let indexed = if documents_and_sources_only(q) {
+        format!(" INDEXED BY {DOCUMENTS_INDEX}")
+    } else {
+        String::new()
+    };
+    (
+        format!("SELECT {columns} FROM {grid_rows}{indexed}{clause}"),
+        params,
+    )
+}
+
+fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
+    q.documents() == Some(true)
+        && q.terms.iter().all(|t| match t.field {
+            Field::Is(column) => column == GridRowColumn::IsDocument,
+            Field::Column(key) => key.column == GridRowColumn::SourceId,
+            Field::Before | Field::After | Field::Terms(_) => false,
+        })
 }
 
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
@@ -324,7 +370,7 @@ mod tests {
     }
 
     /// What a table does not have is refused by name: a range, a flag,
-    /// and qmd's predicates on a table qmd does not index.
+    /// and the ranked search's predicates on a table that is not ranked.
     #[test]
     fn a_table_refuses_the_keys_it_lacks() {
         for q in ["before:2025-01-01", "is:document", "qmd:tea", "author:worf"] {

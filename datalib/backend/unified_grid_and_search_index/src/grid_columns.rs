@@ -74,7 +74,7 @@ impl View for GridColumn {
             GridColumn::CreatedAt => same(G::CreatedAt),
             GridColumn::ModifiedAt => same(G::ModifiedAt),
             GridColumn::TouchedAt => same(G::TouchedAt),
-            // The cell shows qmd's matched words, or the preview: no value
+            // The cell shows the search's matched words, or the preview: no value
             // to match.
             GridColumn::Snippet => (SortBy::Column(G::Preview), None),
             GridColumn::Author => same(G::Author),

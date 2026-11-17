@@ -498,7 +498,7 @@ pub struct StepEntry {
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
     /// The named locks it holds while it runs. `None` holds one default:
-    /// a built-in qmd step's own lock, else the one its shape gives it
+    /// a built-in search step's own lock, else the one its shape gives it
     /// (`supervisor::locks::default_for`).
     pub locks: Option<StepLocks>,
     /// How it reads its inputs. `None` is at a pinned commit, but for the
@@ -597,7 +597,7 @@ impl TryFrom<StepTable> for StepEntry {
 impl StepEntry {
     /// Whether it runs `datalib-step`. The runner still does more for that
     /// program than for any other: the launch's migrate and compact
-    /// passes, the qmd locks and unpinned reads its functions default to,
+    /// passes, the search locks and unpinned reads its functions default to,
     /// and the params check against its sources' schemas.
     pub fn runs_datalib_step(&self) -> bool {
         names_datalib_step(self.command.as_deref())
@@ -1561,7 +1561,7 @@ fn accept_steps(
                     Some(group) => {
                         group_type = group.r#type.as_deref();
                         if group_type == Some(DIFF_GROUP_TYPE)
-                            && !QMD_SOURCE_FUNCTIONS.contains(&f.as_str())
+                            && !SEARCH_SOURCE_FUNCTIONS.contains(&f.as_str())
                         {
                             if f != DIFF_GROUP_FUNCTION {
                                 diags.push(
@@ -2067,7 +2067,7 @@ const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 /// A source's own search step, which embeds what the grid step's keyword
 /// pass cut of its `render_markdown` whoever wrote it — so a diff group
 /// may have it too.
-const QMD_SOURCE_FUNCTIONS: &[&str] = &["embed"];
+const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["embed"];
 
 fn spec_of(
     e: &StepEntry,

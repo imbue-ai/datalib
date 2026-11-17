@@ -781,7 +781,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_grid_and_search_index/src/qmd/mapping.rs) keys grid
+        way: `GridIndex` (unified_grid_and_search_index/src/hits/mapping.rs) keys grid
         rows by `norm_path(qmd_path)` and looks each qmd hit up by the
         hit's own data-root-relative path — the same spelling
         `apply_one` stores in `markdowns.md_path`. A provider that

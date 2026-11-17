@@ -225,7 +225,7 @@ export function encodeState(st: MapState): string {
 /// it reads every source's embeddings, so it runs after every `embed`.
 export function stepStanza(): string {
   return `
-# The search's document embeddings laid out on a plane, for the map card.
+# The search index's document embeddings laid out on a plane, for the map card.
 # Each run starts from the last map; resetting the step lays one out afresh.
 [[steps]]
 group = "unified_grid_and_search_index"

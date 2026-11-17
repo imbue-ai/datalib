@@ -57,7 +57,7 @@ import {
   type ConfiguredGroup,
   type FieldValues,
   type Layout,
-  type QmdIndexing,
+  type SearchIndexing,
   type Row,
   type SourceSteps,
 } from "@/config/sourceSteps";
@@ -129,9 +129,9 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Which of its own qmd steps this source has today — the config's
+    /// Which of its own search steps this source has today — the config's
     /// way of saying how free-text search reaches it.
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     /// The whole config as it was when the form opened.
     text: string;
   } | null;
@@ -171,7 +171,7 @@ const emit = defineEmits<{
       /// How far into search the source goes: `none` lists it in the grid
       /// step's `not_searched`, out of free-text search; the grid itself
       /// is not a choice.
-      qmdIndexing: QmdIndexing;
+      searchIndexing: SearchIndexing;
       /// The built-in applet the source offers (`CatalogEntry.applet`),
       /// and whether it is to be on. Null when the entry offers none.
       applet: { id: string; on: boolean } | null;
@@ -225,13 +225,15 @@ const renders = computed(
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
 /// source nobody can search is a surprise, not a saving. Editing seeds
-/// them from the qmd steps the source has.
-const keywordWanted = ref(props.editing ? props.editing.qmdIndexing !== "none" : true);
-const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_and_embed" : true);
+/// them from the search steps the source has.
+const keywordWanted = ref(props.editing ? props.editing.searchIndexing !== "none" : true);
+const embedWanted = ref(
+  props.editing ? props.editing.searchIndexing === "keyword_and_embed" : true,
+);
 
-/// How far into qmd this source goes: only as far as there is markdown to
+/// How far into the search index this source goes: only as far as there is markdown to
 /// index, and embeddings only on top of a keyword index.
-const qmdIndexing = computed<QmdIndexing>(() => {
+const searchIndexing = computed<SearchIndexing>(() => {
   if (!renders.value || !providerRenders.value || !keywordWanted.value) return "none";
   return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
@@ -1539,7 +1541,7 @@ function submit() {
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
-    qmdIndexing: qmdIndexing.value,
+    searchIndexing: searchIndexing.value,
     applet: offeredApplet.value ? { id: offeredApplet.value.id, on: appletWanted.value } : null,
   });
 }

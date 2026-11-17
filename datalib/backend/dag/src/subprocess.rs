@@ -377,7 +377,7 @@ pub(crate) async fn run_subprocess(
     let stderr = child.stderr().take().expect("stderr piped");
 
     // Drain stderr concurrently: every line is forwarded onto the
-    // event stream (so child chatter — tracing output, qmd noise — is
+    // event stream (so child chatter — tracing output, a tool's noise — is
     // captured somewhere instead of discarded), and a short tail is
     // kept for the error message on failure. stderr is where commands
     // put ordinary progress chatter, so the default level is `info`;
@@ -971,7 +971,7 @@ mod tests {
 
     /// A signal aimed at a step reaches what the step spawned, because
     /// the runner gives each step a process group of its own and
-    /// `signal_children` signals the group. Without it a `qmd embed`
+    /// `signal_children` signals the group. Without it a `latchkey curl`
     /// outlived the app that started it: the step never forwarded the
     /// signal, and nothing else ever signals a step.
     ///
@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     /// A step is told the version of each input it was started against, as
-    /// the runner recorded it — which is how the qmd index versions itself
+    /// the runner recorded it — which is how the search index versions itself
     /// by what it indexed.
     #[tokio::test]
     async fn a_step_is_told_the_versions_it_was_started_against() {

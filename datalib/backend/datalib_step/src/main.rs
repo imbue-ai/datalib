@@ -271,12 +271,12 @@ enum Cmd {
         /// The config file: `<data root>/config.toml`.
         path: PathBuf,
     },
-    /// Utility (not a pipeline step): put qmd's pinned GGUF models in
+    /// Utility (not a pipeline step): put the pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
     /// it embeds, runnable ahead of time (an image build, a first-run
     /// warmup). Needs no data root.
     PullModels {
-        /// Where the models go; default is qmd's own cache,
+        /// Where the models go; default is the shared cache qmd used,
         /// `$XDG_CACHE_HOME/qmd/models` or `~/.cache/qmd/models`.
         #[arg(long)]
         models_dir: Option<PathBuf>,
@@ -459,7 +459,7 @@ async fn main() {
         obs.log_level.get_or_insert_with(|| "warn".to_string());
     }
     let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
-    // Before the first `qmd` or `latchkey` spawn, wherever it comes
+    // Before the first `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.
     datalib_fetch::enable_runtime_fetch();
@@ -486,16 +486,16 @@ async fn main() {
     if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
         let dir = models_dir
             .clone()
-            .unwrap_or_else(datalib_qmd_models::shared_models_dir);
+            .unwrap_or_else(datalib_embedding_models::shared_models_dir);
         // Off the async runtime: the fetch is blocking I/O, and reqwest's
         // blocking client refuses to be dropped on a runtime thread.
         let ensure = {
             let dir = dir.clone();
             tokio::task::spawn_blocking(move || {
-                datalib_qmd_models::ensure_models(
+                datalib_embedding_models::ensure_models(
                     &dir,
-                    datalib_runtime::qmd::EMBED_MODELS,
-                    datalib_qmd_models::Fetch::from_env(),
+                    datalib_runtime::models::EMBED_MODELS,
+                    datalib_embedding_models::Fetch::from_env(),
                 )
             })
             .await
@@ -503,7 +503,8 @@ async fn main() {
         };
         match ensure {
             Ok(outcomes) => {
-                for (model, outcome) in datalib_runtime::qmd::EMBED_MODELS.iter().zip(&outcomes) {
+                for (model, outcome) in datalib_runtime::models::EMBED_MODELS.iter().zip(&outcomes)
+                {
                     datalib_obs::status_line!(
                         "{:?}: {}",
                         outcome,
@@ -512,7 +513,7 @@ async fn main() {
                 }
                 let all_present = outcomes
                     .iter()
-                    .all(|o| *o != datalib_qmd_models::Outcome::Missing);
+                    .all(|o| *o != datalib_embedding_models::Outcome::Missing);
                 std::process::exit(if all_present { 0 } else { 1 });
             }
             Err(e) => {
@@ -1006,7 +1007,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
 
 /// SIGINT this process' own group — itself and whatever it spawned,
 /// because the runner starts every step as its own group leader, so this
-/// reaches a `node qmd embed` the step would otherwise leave behind.
+/// reaches a `latchkey curl` the step would otherwise leave behind.
 fn interrupt_own_group() {
     // `report`, not `eprintln!`: by now stderr is a pipe to the dead
     // runner, and `eprintln!` panics on the failed write — which would
@@ -1044,8 +1045,8 @@ fn embed_prompts_cli(
         let model = match model {
             Some(file) => file,
             None => {
-                let dir = models_dir.unwrap_or_else(datalib_qmd_models::shared_models_dir);
-                index_steps::ensure_embed_model(&dir, datalib_qmd_models::Fetch::from_env())?;
+                let dir = models_dir.unwrap_or_else(datalib_embedding_models::shared_models_dir);
+                index_steps::ensure_embed_model(&dir, datalib_embedding_models::Fetch::from_env())?;
                 search_index::model_file(&dir)
             }
         };

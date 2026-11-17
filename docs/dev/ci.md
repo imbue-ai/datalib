@@ -260,7 +260,7 @@ what a run uses.
 downloads from BuildBuddy instead of the origin, so a repository added
 after the image was built never reaches crates.io or GitHub from a
 runner. The qmd GGUF models are build actions rather than repositories
-(`//third-party/qmd_models`, #499): fetched once per pin into the
+(`//third-party/embedding_models`, #499): fetched once per pin into the
 action cache, with retries on HuggingFace's 429, and never moved on a
 warm run.
 

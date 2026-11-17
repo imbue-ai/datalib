@@ -10,7 +10,7 @@ pub const SYSTEM_DIR: &str = "system";
 
 /// A folder under a source's `render_markdown/`: a document filed here is
 /// in the grid and opens like any other, and free-text search skips it,
-/// because each source's qmd collection ignores this folder.
+/// because each source's part of the search index ignores this folder.
 pub const UNINDEXED_DIR: &str = "unindexed";
 
 /// The top-level tree holding the grid index and the search index. Owned

@@ -287,7 +287,7 @@ Finding 15 is closed in `qmd_sdk.mjs`'s `pinModels`, before any verb
 runs: `resolveModel` answers only the files its caller names, by the
 name qmd asks for each (`PinnedModel::qmd_uri`), and fails on
 anything else; and `setLlamaDirWritableForTest(false)` turns the
-source build off. The files named are ones `datalib_qmd_models` has
+source build off. The files named are ones `datalib_embedding_models` has
 verified, and the search applet's query embedder asks for them before
 it starts qmd at all (`VerifiedModels`), so a search during the first
 download says the model is not in place yet. Both hooks are qmd

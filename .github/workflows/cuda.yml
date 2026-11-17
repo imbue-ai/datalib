@@ -1,11 +1,12 @@
-# Builds llama.cpp's CUDA backend, `libggml-cuda.so`
-# (third-party/llama_cpp/llama_cpp.BUILD), and the `datalib-step` and
-# `gpu_check` that would load it, when a change could move any of them,
-# and checks that every ggml symbol the module leaves undefined is one
-# both binaries export. Nothing here has a GPU: this proves the module
-# builds, links and would resolve; running it is a Modal GPU's job, with
-# the uploaded `gpu_check` (docs/dev/plans/embed_on_modal.md). Kept out of `test.yml` because the
-# toolkit is a ~1 GB fetch that no other target needs.
+# Builds and stages what CUDA adds to a release, as the release's `cuda`
+# job does (scripts/release/build_cuda.sh): llama.cpp's CUDA backend,
+# `libggml-cuda.so`, checked to resolve against the `datalib-step` it loads
+# into, and the cuBLAS the `-cuda` image carries, checked to leave the
+# module wanting nothing but NVIDIA's driver. Plus `gpu_check`, to run the
+# staged module on a rented GPU by hand (docs/dev/plans/embed_on_modal.md):
+# nothing here has a GPU. Then the `-cuda` image from those, over the latest
+# release's binaries: a tag is otherwise the first to build it. Kept out of `test.yml` because the toolkit is a
+# ~1 GB fetch that no other target needs.
 name: cuda
 
 on:
@@ -14,6 +15,10 @@ on:
       - .bazelrc
       - .github/workflows/cuda.yml
       - MODULE.bazel
+      - datalib/docker/Dockerfile
+      - scripts/release/build_cuda.sh
+      - scripts/release/stage_cuda.sh
+      - scripts/release/stage_docker_context.sh
       - datalib/backend/embedder/**
       - third-party/llama_cpp/**
   workflow_dispatch:
@@ -46,49 +51,36 @@ jobs:
               "$BUILDBUDDY_API_KEY" >> .bazelrc.user
           fi
 
-      # The shipped binary's build mode (release.yml's gnu legs).
-      - name: bazel build
+      # The shipped binaries' build mode (release.yml's gnu legs), unstamped.
+      - name: build and stage
+        run: |
+          mkdir -p "$RUNNER_TEMP/cuda" && cd "$RUNNER_TEMP/cuda"
+          "$GITHUB_WORKSPACE/scripts/release/build_cuda.sh" -c opt --config=release --nostamp
+          tar -xzf ggml-cuda-x86_64-unknown-linux-gnu.tar.gz
+          readelf -d lib/libggml-cuda.so | grep -E 'NEEDED|RUNPATH|RPATH'
+
+      # gpu_check, beside lib/ as it looks for the module there.
+      - name: build gpu_check
         run: |
           flags=(-c opt --config=release --config=cuda --nostamp)
-          targets=(@llama_cpp//:ggml_cuda_so //datalib/backend/datalib_step:datalib_step //datalib/backend/embedder:gpu_check)
-          bazelisk build "${flags[@]}" "${targets[@]}"
-          mkdir -p "$RUNNER_TEMP/cuda"
-          # A Rust target's files also list its rustfmt and clippy checks.
-          for t in "${targets[@]}"; do
-            bazelisk cquery "${flags[@]}" --output=files "$t" 2>/dev/null \
-              | grep -vE '\.(rustfmt|clippy)\.ok$' \
-              | xargs -I{} cp {} "$RUNNER_TEMP/cuda/"
-          done
-          ls -la "$RUNNER_TEMP/cuda"
-          readelf -d "$RUNNER_TEMP/cuda/libggml-cuda.so" | grep NEEDED
-          readelf -d "$RUNNER_TEMP/cuda/datalib_step" | grep NEEDED
-          readelf -d "$RUNNER_TEMP/cuda/gpu_check" | grep NEEDED
-
-      # The module's undefined symbols that no versioned system library,
-      # cuBLAS or the driver (cu*) provides must be ones datalib-step
-      # exports, or the module would not load into it.
-      - name: the module resolves against datalib-step
-        run: |
+          bazelisk build "${flags[@]}" //datalib/backend/embedder:gpu_check
+          bazelisk cquery "${flags[@]}" --output=files //datalib/backend/embedder:gpu_check 2>/dev/null \
+            | grep -vE '\.(rustfmt|clippy)\.ok$' | xargs -I{} cp {} "$RUNNER_TEMP/cuda/gpu_check"
           cd "$RUNNER_TEMP/cuda"
-          nm -D --undefined-only libggml-cuda.so | awk '$1 == "U" {print $2}' | sort -u > undefined.txt
-          grep -v '@' undefined.txt | grep -vE '^(cublas|cu[A-Z])' > from_step.txt || true
-          echo "$(wc -l < undefined.txt) undefined; $(wc -l < from_step.txt) wanted from the binary"
-          for bin in datalib_step gpu_check; do
-            nm -D --defined-only "$bin" | awk '{print $3}' | sort -u > exported.txt
-            comm -23 from_step.txt exported.txt > missing.txt
-            if [[ -s missing.txt ]]; then
-              echo "::error::libggml-cuda.so needs symbols $bin does not export:"
-              cat missing.txt
-              exit 1
-            fi
-          done
+          nm -D --undefined-only lib/libggml-cuda.so | awk '$1 == "U" {print $2}' \
+            | grep -v '@' | grep -vE '^(cublas|cu[A-Z])' | sort -u > from_step.txt || true
+          nm -D --defined-only gpu_check | awk '{print $3}' | sort -u > exported.txt
+          if comm -23 from_step.txt exported.txt | grep .; then
+            echo "::error::libggml-cuda.so needs symbols gpu_check does not export"
+            exit 1
+          fi
 
       # What the module's bytes are: each ELF section, the GPU code per GPU
       # model (uncompressed, so it sums past the file), and the file
       # stripped of host symbols.
       - name: measure
         run: |
-          so="$RUNNER_TEMP/cuda/libggml-cuda.so"
+          so="$RUNNER_TEMP/cuda/lib/libggml-cuda.so"
           size -A -d "$so" | sort -k2 -n -r | head -n 12
           bazelisk build --config=cuda @cuda_cuobjdump//:bin/cuobjdump
           cuobjdump="$(bazelisk info output_base)/external/+http_archive+cuda_cuobjdump/bin/cuobjdump"
@@ -104,10 +96,62 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ggml-cuda-linux-x86_64
-          # gpu_check beside lib/, as it looks for the module there.
+          name: cuda-linux-x86_64
           path: |
-            ${{ runner.temp }}/cuda/libggml-cuda.so
+            ${{ runner.temp }}/cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz*
+            ${{ runner.temp }}/cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz*
             ${{ runner.temp }}/cuda/gpu_check
           if-no-files-found: error
           retention-days: 7
+
+  # The `-cuda` image, up to its demo (`--target app`), from this run's CUDA
+  # assets and the latest release's binaries, which a PR builds no tarball
+  # of and which cannot run this tree's demo config: the CUDA stage's layers
+  # and the image's own check that the module lacks nothing but the driver.
+  image:
+    name: build the -cuda image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-linux-x86_64
+          path: ${{ runner.temp }}/cuda
+
+      - name: Stage the build context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" \
+              --pattern datalib-x86_64-unknown-linux-gnu.tar.gz \
+              --pattern 'runtime-x86_64-unknown-linux-gnu.tar.gz*'
+          scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu \
+              "$RUNNER_TEMP/release" "$RUNNER_TEMP/cuda"
+
+      # As release.yml's docker-image job sets it up.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          cache-binary: false
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Build it
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          docker buildx build --platform linux/amd64 --build-arg CUDA=12 \
+              --target app --tag datalib:cuda-first --load ctx
+          docker run --rm --entrypoint sh datalib:cuda-first -c \
+              'ls -la /opt/datalib/lib /usr/local/lib/datalib-cuda/cublas; ldd /opt/datalib/lib/libggml-cuda.so | grep -E "cublas|cuda"'
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' datalib:cuda-first | cut -c1-160

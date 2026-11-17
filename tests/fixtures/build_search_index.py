@@ -53,7 +53,7 @@ def main() -> int:
             "DATALIB_DAG_FUNCTION": "grid_index",
             "DATALIB_DAG_STEP": "unified_grid_and_search_index/grid_index",
             "DATALIB_DAG_INPUTS": "\n".join(f"{g}/render_markdown" for g in groups),
-            "DATALIB_QMD_MODELS_NO_FETCH": "1",
+            "DATALIB_MODELS_NO_FETCH": "1",
         }
         subprocess.run([step], env=env, check=True)
         subprocess.run([prompts_bin, str(root), model, out_prompts], check=True)

@@ -472,7 +472,7 @@ fn retire_separate_file(root: &Path) -> Result<()> {
 
 /// Where the pinned embedding model is, once provisioned.
 pub(crate) fn model_file(models_dir: &Path) -> PathBuf {
-    models_dir.join(datalib_runtime::qmd::EMBED_MODELS[0].cache_name())
+    models_dir.join(datalib_runtime::models::EMBED_MODELS[0].cache_name())
 }
 
 #[cfg(test)]

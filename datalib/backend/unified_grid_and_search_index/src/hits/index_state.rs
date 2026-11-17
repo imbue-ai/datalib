@@ -1,4 +1,4 @@
-//! What `/qmd_state` answers about the search index, and how an index
+//! What `/index_state` answers about the search index, and how an index
 //! file is seen to move.
 
 use std::path::Path;
@@ -7,7 +7,7 @@ use serde::Serialize;
 
 /// Index-wide totals, for the "N of M documents searchable" line.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct QmdIndexSummary {
+pub struct IndexSummary {
     /// Documents the search index holds.
     pub documents: u64,
     /// …of which have a vector for every chunk.

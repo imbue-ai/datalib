@@ -1244,7 +1244,7 @@ export function buildEmbedStep(group: string): { id: string; body: string } {
 /// How far into search a source goes: not at all, by its words, or by its
 /// words and its meaning. There is no meaning alone: the embeddings are
 /// of what the keyword pass cut.
-export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
+export type SearchIndexing = "none" | "keyword" | "keyword_and_embed";
 
 /// The sources the grid step keeps out of search (`params.not_searched`).
 function notSearched(steps: ConfiguredStep[]): string[] {
@@ -1252,8 +1252,8 @@ function notSearched(steps: ConfiguredStep[]): string[] {
   return Array.isArray(listed) ? listed.filter((g): g is string => typeof g === "string") : [];
 }
 
-/// How far into search the config puts a source, as a `QmdIndexing`.
-export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+/// How far into search the config puts a source, as a `SearchIndexing`.
+export function searchIndexingOf(steps: ConfiguredStep[], group: string): SearchIndexing {
   const grid = steps.some((s) => s.kind === "step" && s.id === GRID_ID);
   if (!grid || notSearched(steps).includes(group)) return "none";
   return steps.some((s) => s.id === `${group}/embed`) ? "keyword_and_embed" : "keyword";
@@ -1279,7 +1279,7 @@ function setNotSearched(text: string, group: string, out: boolean): string {
 /// back. Never an `embed` step for a type that may not have one
 /// (`embedAllowed`), nor where the config has no grid step for it to read;
 /// taking one away takes every step that reads it.
-export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
+export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
   const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
   let next = setNotSearched(text, group, indexing === "none");
@@ -1337,7 +1337,7 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 /// The group every source feeds.
 const INDEX_GROUP = "unified_grid_and_search_index";
 
-/// Add entries — a source, a comparison, a source's qmd steps — where the
+/// Add entries — a source, a comparison, a source's search steps — where the
 /// file keeps reading in the order data flows: each step below the steps
 /// it reads, a source's entries together. That is beside its own group's
 /// entries when the group is already in the file, and otherwise after the

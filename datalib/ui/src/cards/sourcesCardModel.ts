@@ -34,11 +34,11 @@ import {
   patchSource,
   sourceStepsOf,
   removedWith,
-  setQmdSteps,
+  setSearchSteps,
   setTimeSeriesStep,
   setOccurrencesStep,
-  qmdIndexingOf,
-  type QmdIndexing,
+  searchIndexingOf,
+  type SearchIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
   entryForStep,
@@ -273,7 +273,7 @@ export function useSourcesCard(ctx: CardCtx) {
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     /// The config as it was when the form opened, for the form to show
     /// what saving would change and what it would keep.
     text: string;
@@ -756,8 +756,10 @@ export function useSourcesCard(ctx: CardCtx) {
     const steps = sourceStepsOf(group.id, sources.value);
     const entry = groupEntry(group, steps);
     if (!entry) return;
-    const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
-    editing.value = { group, entry, steps, qmdIndexing, text: configText.value };
+    const searchIndexing = steps.render
+      ? searchIndexingOf(sources.value, group.id)
+      : "keyword_and_embed";
+    editing.value = { group, entry, steps, searchIndexing, text: configText.value };
     wizardKey.value++;
     wizardOpen.value = true;
   }
@@ -771,7 +773,7 @@ export function useSourcesCard(ctx: CardCtx) {
     groupBody: string | null;
     stepsBody: string;
     renderId: string | null;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     applet: { id: string; on: boolean } | null;
   }) {
     const text = await configToEdit();
@@ -816,9 +818,9 @@ export function useSourcesCard(ctx: CardCtx) {
     // `not_searched`, and its `embed`, added or taken out.
     if (payload.renderId) {
       next = wireIntoFanIns(next, payload.renderId);
-      next = setQmdSteps(next, payload.id, payload.qmdIndexing);
+      next = setSearchSteps(next, payload.id, payload.searchIndexing);
     } else {
-      next = setQmdSteps(next, payload.id, "none");
+      next = setSearchSteps(next, payload.id, "none");
     }
     next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
     next = setOccurrencesStep(next, payload.id, payload.entry.type);

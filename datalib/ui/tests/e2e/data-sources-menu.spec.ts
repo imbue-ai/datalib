@@ -94,13 +94,13 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expandGroup(page, "slack");
   await expandGroup(page, "unified_grid_and_search_index");
   const render = pipelineRow(page, "slack/render_markdown");
-  const qmd = pipelineRow(page, "unified_grid_and_search_index/grid_index");
+  const grid = pipelineRow(page, "unified_grid_and_search_index/grid_index");
   await expect(render).toBeVisible();
   await render.locator('[col-id="status"]').click();
-  await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
+  await grid.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
 
-  await qmd.locator('[col-id="status"]').click({ button: "right" });
+  await grid.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
   // The one-row actions are left out, and an entry only some rows take
   // is disabled with a reason naming the row it came from.

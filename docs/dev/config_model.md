@@ -482,7 +482,7 @@ of a sync.
 The wizard maintains the rest (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, which adds nothing where a pattern already
 names the step, `unwireFromFanIns` on delete and when a render step is
-removed, and `setQmdSteps` for the two search tickboxes under Rendering
+removed, and `setSearchSteps` for the two search tickboxes under Rendering
 in Advanced options. "Keyword-index the markdown" takes the source out of
 `grid_index`'s `not_searched`, or puts it in; "Embed it for search by
 meaning", which needs the first, adds or removes its `embed`. Removing
