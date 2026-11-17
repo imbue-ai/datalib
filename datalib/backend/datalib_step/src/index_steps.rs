@@ -170,11 +170,19 @@ pub async fn run_embed(
     let model = crate::search_index::model_file(&models);
     let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
+    progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
+    progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);
+    let (chunks_per_sec, kb_per_sec) = done.rate().unwrap_or_default();
     tracing::info!(
         embedded = done.embedded,
         unsettled = done.unsettled,
         truncated = done.truncated,
-        "the search index's embeddings are done"
+        prompt_bytes = done.prompt_bytes,
+        embed_secs = format!("{:.1}", done.embed_time.as_secs_f64()),
+        chunks_per_sec = format!("{chunks_per_sec:.1}"),
+        kb_per_sec = format!("{kb_per_sec:.1}"),
+        "the search index's embeddings are done: {chunks_per_sec:.1} chunks/s, \
+         {kb_per_sec:.1} KB/s of prompt text"
     );
     Ok(claim_reads(env))
 }

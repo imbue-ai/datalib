@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use datalib_embedder::{Device, Embedder};
@@ -32,6 +33,38 @@ pub(crate) struct Done {
     /// Chunks longer than the model's context, cut to fit before they were
     /// embedded: dense text, code or encoded data, whose tail is lost.
     pub(crate) truncated: usize,
+    /// The text the model read, and how long it took: the embed's speed.
+    pub(crate) prompt_bytes: usize,
+    pub(crate) embed_time: Duration,
+}
+
+impl Done {
+    fn add(&mut self, batch: &Embedded) {
+        self.embedded += batch.vectors.len();
+        self.truncated += batch.truncated;
+        self.prompt_bytes += batch.prompt_bytes;
+        self.embed_time += batch.took;
+    }
+
+    /// Chunks and kilobytes of prompt text a second of the model's time,
+    /// or `None` before it has embedded anything.
+    pub(crate) fn rate(&self) -> Option<(f64, f64)> {
+        let secs = self.embed_time.as_secs_f64();
+        (self.embedded > 0 && secs > 0.0).then(|| {
+            (
+                self.embedded as f64 / secs,
+                self.prompt_bytes as f64 / 1000.0 / secs,
+            )
+        })
+    }
+}
+
+/// One batch's vectors, and what it cost the model.
+struct Embedded {
+    vectors: Vec<(String, Vec<f32>)>,
+    truncated: usize,
+    prompt_bytes: usize,
+    took: Duration,
 }
 
 /// A document the search covers: one with a file, outside `unindexed/`.
@@ -232,11 +265,10 @@ async fn embed_into(
             while pending.len() >= CHUNK_BATCH || (!pending.is_empty() && stop.requested()) {
                 let batch: Vec<_> = pending.drain(..pending.len().min(CHUNK_BATCH)).collect();
                 match embed_batch(&mut embedder, batch).await {
-                    Ok((vectors, cut)) => {
-                        cache.put(&model, &vectors).await?;
-                        done.embedded += vectors.len();
-                        done.truncated += cut;
-                        progress.inc(vectors.len() as u64);
+                    Ok(batch) => {
+                        cache.put(&model, &batch.vectors).await?;
+                        done.add(&batch);
+                        progress.inc(batch.vectors.len() as u64);
                     }
                     Err(e) => {
                         result = Err(e);
@@ -254,11 +286,10 @@ async fn embed_into(
     }
     if result.is_ok() && !pending.is_empty() && !stop.requested() {
         result = match embed_batch(&mut embedder, std::mem::take(&mut pending)).await {
-            Ok((vectors, cut)) => {
-                let put = cache.put(&model, &vectors).await;
-                done.embedded += vectors.len();
-                done.truncated += cut;
-                progress.inc(vectors.len() as u64);
+            Ok(batch) => {
+                let put = cache.put(&model, &batch.vectors).await;
+                done.add(&batch);
+                progress.inc(batch.vectors.len() as u64);
                 put
             }
             Err(e) => Err(e),
@@ -286,8 +317,10 @@ fn prompts_for(doc: &IndexDoc, wanted: &HashSet<&str>) -> Option<Vec<(String, St
 async fn embed_batch(
     embedder: &mut Option<Embedder>,
     batch: Vec<(String, String)>,
-) -> Result<(Vec<(String, Vec<f32>)>, usize)> {
+) -> Result<Embedded> {
     let mut e = embedder.take().context("the embedder is gone")?;
+    let prompt_bytes = batch.iter().map(|(_, prompt)| prompt.len()).sum();
+    let started = Instant::now();
     let (e, out) = tokio::task::spawn_blocking(move || {
         let mut cut = 0;
         let out: Result<Vec<_>> = batch
@@ -302,8 +335,14 @@ async fn embed_batch(
     })
     .await
     .context("embedding panicked")?;
+    let took = started.elapsed();
     *embedder = Some(e);
-    out
+    out.map(|(vectors, truncated)| Embedded {
+        vectors,
+        truncated,
+        prompt_bytes,
+        took,
+    })
 }
 
 /// The aggregator's half: drop every source it no longer reads, then let
@@ -616,6 +655,20 @@ mod tests {
             ]
         );
         assert_eq!(update(root).await.put, 1);
+    }
+
+    /// The embed's speed is over the model's time alone, and a pass that
+    /// embedded nothing has none rather than a division by zero.
+    #[test]
+    fn the_rate_is_chunks_and_kilobytes_a_second_of_the_models_time() {
+        let done = Done {
+            embedded: 280,
+            prompt_bytes: 340_000,
+            embed_time: Duration::from_secs(20),
+            ..Done::default()
+        };
+        assert_eq!(done.rate(), Some((14.0, 17.0)));
+        assert_eq!(Done::default().rate(), None);
     }
 
     /// A chunk is embedded only while the document still draws it; else
