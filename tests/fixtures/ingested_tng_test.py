@@ -478,9 +478,9 @@ def _argv():
     [4]: whatsapp_make_fixture path
     [5]: doltlite CLI path
     [6]: --now stamp
-    [7..]: forwarded verbatim as run_sync_pipeline.py's args 7..31:
-           the fixture paths, the YoLink maker and the embedding model
-           (that script's docstring numbers them)
+    [7..]: fixture paths, forwarded verbatim as run_sync_pipeline.py's
+           args 7..22 (the last two being yolink-make-fixture + its
+           spec; see that script's docstring for why they're appended)
     """
     return sys.argv[1:]
 
