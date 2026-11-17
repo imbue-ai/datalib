@@ -116,10 +116,11 @@ ENV HOME=/root
 
 FROM os AS cuda-none
 
-# cuBLAS and the CUDA module, below everything a release changes, and
-# `--link`, so each layer is built apart from the ones under it: the same
-# staged bytes make the same layer whatever Ubuntu's packages did, and a
-# pull of the next release reuses the ~700 MB by digest. NVIDIA's container
+# cuBLAS and the CUDA module, below everything a release changes, with
+# `--link`, which builds each layer apart from the ones under it, so that a
+# pull of the next release can reuse the ~700 MB. Whether the pushed layers
+# keep their digests when Ubuntu's change is not yet shown
+# (docs/dev/docker.md § "The CUDA variant"). NVIDIA's container
 # runtime passes in the driver (libcuda.so.1) and nothing else, so cuBLAS
 # ships here; datalib-step finds the module in /opt/datalib/lib/.
 FROM os AS cuda-12

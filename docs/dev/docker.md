@@ -92,16 +92,19 @@ Toolkit EULA, not datalib's MIT license:
 [`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
 image carries in each of those directories' `licenses/`.
 
-**They sit below the release, so a pull of the next version reuses
-them.** The Dockerfile's `CUDA` build argument picks a stage between the
-OS layers and the tarball: `none`, or `12`, which adds the two archives
-with `ADD --link`. A `--link` layer is built apart from the layers under
-it, so the same staged archives (`scripts/release/stage_cuda.sh`, file
-times fixed) make byte-identical layers whatever Ubuntu's packages did
-that day. `.github/workflows/cuda.yml` builds the variant up to its demo
-(`--target app`) twice, the second time over another Ubuntu, and fails if either CUDA layer
-moved. A version upgrade then downloads the OS and release layers, not
-the 700 MB beneath them. A machine with no GPU runs the variant on the
+**They sit below the release, so that a pull of the next version can
+reuse them.** The Dockerfile's `CUDA` build argument picks a stage
+between the OS layers and the tarball: `none`, or `12`, which adds the
+two archives with `ADD --link`, which builds a layer apart from the
+layers under it, from archives whose file times are fixed
+(`scripts/release/stage_cuda.sh`). Whether that keeps the pushed CUDA
+layers' digests from one release to the next, when Ubuntu's packages
+have moved, is _not yet shown_: two builds over different Ubuntus,
+loaded into the local Docker store with `--load`, gave different CUDA
+layers, and what a registry holds after a push, which is what a pull
+sees, has not been compared. `.github/workflows/cuda.yml` builds the
+variant up to its demo (`--target app`) on every change that could move
+it. A machine with no GPU runs the variant on the
 CPU, as the plain image does: `docker-publish-cuda` checks the
 walkthrough against it on a runner that has none.
 

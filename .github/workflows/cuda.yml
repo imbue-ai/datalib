@@ -106,10 +106,8 @@ jobs:
 
   # The `-cuda` image, up to its demo (`--target app`), from this run's CUDA
   # assets and the latest release's binaries, which a PR builds no tarball
-  # of and which cannot run this tree's demo config: the CUDA stage's layers, the
-  # image's own check that the module lacks nothing but the driver, and the
-  # claim the Dockerfile makes for `ADD --link` — rebuilt over another
-  # Ubuntu, the two CUDA layers come out byte for byte the same.
+  # of and which cannot run this tree's demo config: the CUDA stage's layers
+  # and the image's own check that the module lacks nothing but the driver.
   image:
     name: build the -cuda image
     needs: build
@@ -157,26 +155,3 @@ jobs:
           docker run --rm --entrypoint sh datalib:cuda-first -c \
               'ls -la /opt/datalib/lib /usr/local/lib/datalib-cuda/cublas; ldd /opt/datalib/lib/libggml-cuda.so | grep -E "cublas|cuda"'
           docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' datalib:cuda-first | cut -c1-160
-
-      # Over another Ubuntu, so every OS layer moves for certain: BuildKit
-      # rebuilds an unchanged apt layer to the same bytes, so a rebuild alone
-      # shows nothing. The base is release.yml's floor image.
-      - name: Rebuilt over another Ubuntu, the CUDA layers are the same
-        env:
-          BUILDKIT_PROGRESS: plain
-        run: |
-          set -euo pipefail
-          docker buildx build --platform linux/amd64 --build-arg CUDA=12 --target app \
-              --build-context ubuntu:26.04=docker-image://mirror.gcr.io/library/ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5 \
-              --tag datalib:cuda-second --load ctx
-          layers() { docker image inspect "$1" --format '{{range .RootFS.Layers}}{{println .}}{{end}}'; }
-          layers datalib:cuda-first > first.txt
-          layers datalib:cuda-second > second.txt
-          paste first.txt second.txt | awk 'NF { print NR, ($1 == $2 ? "same" : "moved"), $1 }'
-          # Ubuntu (1), the OS stage's apt and user layers (2-3), then the
-          # two CUDA layers (4-5).
-          [[ "$(sed -n 1p first.txt)" != "$(sed -n 1p second.txt)" ]] || { echo "::error::the base did not change"; exit 1; }
-          for n in 4 5; do
-            [[ "$(sed -n "${n}p" first.txt)" == "$(sed -n "${n}p" second.txt)" ]] \
-              || { echo "::error::CUDA layer $n moved with the OS"; exit 1; }
-          done
