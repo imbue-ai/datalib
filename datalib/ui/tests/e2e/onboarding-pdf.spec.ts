@@ -217,11 +217,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
     await expect(row(page, "pdfs/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
 
-    // The render step was wired into the surviving fan-in, which is
-    // what gets these documents indexed rather than merely converted.
+    // The surviving fan-in reads every render by pattern, which is what
+    // gets these documents indexed rather than merely converted; the
+    // render step needs no edit there.
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
-    expect(wired.text).toContain('inputs = ["pdfs/render_markdown"]');
+    expect(wired.text).toContain('"*/render_markdown"');
+    expect(wired.text).not.toContain('"pdfs/render_markdown"');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
