@@ -2510,21 +2510,24 @@ mod tests {
                 .await
                 .unwrap();
         index
-            .put(&[IndexDoc {
-                source_id: doc.source_id.clone(),
-                markdown_uuid: uuid.into(),
-                content_hash: "h".into(),
-                title: "Engineering".into(),
-                head: None,
-                sections: sections
-                    .iter()
-                    .map(|s| IndexSection {
-                        uuid: s.uuid.clone(),
-                        text: s.md.clone(),
-                        lead: None,
-                    })
-                    .collect(),
-            }])
+            .put(
+                &[IndexDoc {
+                    source_id: doc.source_id.clone(),
+                    markdown_uuid: uuid.into(),
+                    content_hash: "h".into(),
+                    title: "Engineering".into(),
+                    head: None,
+                    sections: sections
+                        .iter()
+                        .map(|s| IndexSection {
+                            uuid: s.uuid.clone(),
+                            text: s.md.clone(),
+                            lead: None,
+                        })
+                        .collect(),
+                }],
+                &datalib_search_index::chunk::four_bytes_a_token,
+            )
             .await
             .unwrap();
         index.close().await;

@@ -86,6 +86,13 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
+
+--- chunk 1
+title: facebook storage | text: Source: datalib
+
+group_posts_and_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | `00000000` |

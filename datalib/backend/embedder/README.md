@@ -20,14 +20,23 @@ having no GPU, is in § "Measured by hand".
   adds.
 - **Text that spells a special token is plain text**: `<eos>` written in a
   message is not the end of the input.
+- **The tokenizer alone counts as the model does.** `Tokenizer` reads only
+  the vocabulary from the model file, without the weights, and gives each
+  token's end as a byte offset into the text; the offsets end at the
+  text's end, and there are two fewer than the model runs (no BOS, no
+  EOS). A token's piece spells a `▁` (U+2581, the mark SentencePiece
+  reads a space as) back as a space, so the offsets come from lining the
+  pieces up against the text, not from adding their lengths. The chunker
+  counts its budget with it.
 - **A vector is not unit length.** The model's pooling leaves it about
   1,100 long, varying by input. Search compares by cosine, which reads
   only its direction; anything comparing by dot product must normalize
   first.
 - **An input past the context is refused**; `fit` cuts it to the context,
   keeping its last token (EOS) last, and `embed_fitted` does that first.
-  A chunk of dense text can be over the context though it is within the
-  chunker's bytes.
+  The chunker's budget is counted in these tokens, so a chunk is well
+  inside the context; only an unusually long title or envelope in front
+  of it can still push a prompt over.
 - **The same input in the same call gives the same vector, to the bit**,
   on the CPU and on the best device. The inference cache keys a vector by
   its prompt alone and relies on this.

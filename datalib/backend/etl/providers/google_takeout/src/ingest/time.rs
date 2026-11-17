@@ -94,7 +94,7 @@ fn split_trailing_abbrev(s: &str) -> Option<(&str, &str)> {
 fn finalize(naive: NaiveDateTime, offset_minutes: i32) -> Option<String> {
     let offset = chrono::FixedOffset::east_opt(offset_minutes * 60)?;
     let dt = offset.from_local_datetime(&naive).single()?;
-    Some(IsoOffsetTimestamp::from(dt).to_rfc3339())
+    Some(IsoOffsetTimestamp::try_from(dt).ok()?.to_rfc3339())
 }
 
 pub fn parse_chat_long_form(s: &str) -> Option<String> {
@@ -170,7 +170,7 @@ pub fn parse_play_books_stamp(s: &str) -> Option<String> {
     let naive = rest.iter().find_map(|l| parse(l))?;
     if let Some(tz) = zone_named(zone) {
         let dt = tz.from_local(&naive).single()?;
-        return Some(IsoOffsetTimestamp::from(dt).to_rfc3339());
+        return Some(IsoOffsetTimestamp::try_from(dt).ok()?.to_rfc3339());
     }
     finalize(naive, tz_abbrev_offset_minutes(zone)?)
 }

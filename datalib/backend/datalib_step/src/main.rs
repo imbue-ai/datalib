@@ -183,7 +183,8 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `embed` only: directory holding the embedding model.
+    /// `keyword_index` and `embed`: the directory holding the embedding
+    /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty this part of what the step
@@ -826,7 +827,7 @@ async fn run_function(
             index_steps::run_aggregator(data_root, &env, emitter, &control.stop).await
         }
         Function::KeywordIndex => {
-            index_steps::run_keyword(data_root, &env, emitter, &control.stop).await
+            index_steps::run_keyword(data_root, &env, models_dir, emitter, &control.stop).await
         }
         Function::Embed => {
             index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await

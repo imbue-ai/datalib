@@ -2101,7 +2101,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         // Authors an earlier run named and did not look up, as a stopped
         // run does not: until they are, their messages show no one.
         mirror.look_up_authors(&mut writes).await?;
-        let checked_at = datalib_time::IsoOffsetTimestamp::from(now);
+        let checked_at = datalib_time::IsoOffsetTimestamp::try_from(now)?;
         let known: Vec<String> = targets
             .iter()
             .zip(&presents)

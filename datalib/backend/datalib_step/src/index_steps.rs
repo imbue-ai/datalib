@@ -127,17 +127,39 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
     )
 }
 
+/// The pinned model, provisioned, and its tokenizer, read without the
+/// weights: both passes cut chunks counted in its tokens.
+async fn open_model(
+    data_root: &Path,
+    models_dir: Option<PathBuf>,
+) -> Result<(PathBuf, datalib_embedder::Tokenizer)> {
+    let root = data_root.to_path_buf();
+    let fetch = datalib_embedding_models::Fetch::from_env();
+    tokio::task::spawn_blocking(move || {
+        let models = provision_embed_model(&root, models_dir, fetch)?;
+        let model = crate::search_index::model_file(&models);
+        let tokenizer = datalib_embedder::Tokenizer::open(&model)?;
+        Ok((model, tokenizer))
+    })
+    .await
+    .context("model provisioning panicked")?
+}
+
 /// `<group>/keyword_index`: this source's documents in the search index,
 /// brought in line with its render store.
 pub async fn run_keyword(
     data_root: &Path,
     env: &StepEnv,
+    models_dir: Option<PathBuf>,
     emitter: &Emitter,
     stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("keyword index");
-    let done = crate::search_index::update_keywords(data_root, &env.group, &progress, stop).await?;
+    let (_, tokenizer) = open_model(data_root, models_dir).await?;
+    let ends = |text: &str| tokenizer.ends(text);
+    let done =
+        crate::search_index::update_keywords(data_root, &env.group, &ends, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     tracing::info!(
         put = done.put,
@@ -172,14 +194,10 @@ pub async fn run_embed(
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("embedding");
-    let root = data_root.to_path_buf();
-    let fetch = datalib_embedding_models::Fetch::from_env();
-    let models =
-        tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir, fetch))
-            .await
-            .context("model provisioning panicked")??;
-    let model = crate::search_index::model_file(&models);
-    let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
+    let (model, tokenizer) = open_model(data_root, models_dir).await?;
+    let ends = |text: &str| tokenizer.ends(text);
+    let done =
+        crate::search_index::embed(data_root, &env.group, &model, &ends, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
     progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);

@@ -66,6 +66,10 @@ Relative humidity is already a dimensionless ratio — no conversion applies.
 title: AirVisual monitors — ship-air | text: Source: airvisual
 
 ## Devices
+
+--- chunk 2
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
 ### Sickbay
 
 *serial `SICKBAY01` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Denver · last sample Sun Sep 1st, 2024 at 11:25*
@@ -80,7 +84,17 @@ title: AirVisual monitors — ship-air | text: Source: airvisual
 | `pm10_ugm3` | µg/m³ | 34 | 1.9 | 254.5 | 24.9 | 1.9 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 | `pm1_ugm3` | µg/m³ | 34 | 1.0 | 145.4 | 14.2 | 1.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 | `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+
+--- chunk 3
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
+ Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 | `temperature_c` | °C | 35 | 22.0 | 22.3 | 22.2 | 22.1 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+
+--- chunk 4
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
 ### Ten Forward
 
 *serial `TENFWD10X` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Los_Angeles · last sample Sun Nov 3rd, 2024 at 11:45*
@@ -95,9 +109,15 @@ title: AirVisual monitors — ship-air | text: Source: airvisual
 | `pm10_ugm3` | µg/m³ | 38 | 2.0 | 14.2 | 6.1 | 2.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 | `pm1_ugm3` | µg/m³ | 38 | 1.0 | 6.2 | 2.7 | 1.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 | `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+
+--- chunk 5
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
+ Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 | `temperature_c` | °C | 38 | 21.0 | 23.5 | 22.0 | 21.5 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 
---- chunk 2
+--- chunk 6
 title: AirVisual monitors — ship-air | text: Source: airvisual
 
 ## Store

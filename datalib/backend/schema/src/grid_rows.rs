@@ -37,7 +37,9 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid",
+    // Its last two columns are what a search narrowed to documents reads,
+    // so it reads no row (`DOCUMENTS_INDEX` in unified_grid_and_search_index).
+    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid,source_id,markdown_uuid",
     // `place:<cell>` and `near:<cell>` are ranges of this column
     // (datalib/backend/h3/README.md).
     index = "grid_rows_by_h3:h3",

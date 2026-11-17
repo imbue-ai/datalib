@@ -12,12 +12,28 @@
 //! quarter of the budget: then it takes the heading in, so a document's
 //! front matter stays with its title.
 //!
-//! The budget is in bytes. qmd's is 900 tokens, which it reads as 3,600
-//! characters; counting bytes keeps text with many multi-byte characters
-//! (where a character is nearer a token) further inside the model's window.
+//! The budget is in the model's own tokens, counted by its tokenizer: 900,
+//! qmd's, with 135 of overlap. The model reads 2,048, so a chunk and the
+//! title, facts line or envelope in front of it fit however dense its text
+//! is. A budget in bytes let a chunk of links, codes or encoded data run
+//! past the model's window, which then read only its first part.
 
-pub const MAX_BYTES: usize = 3600;
-pub const OVERLAP_BYTES: usize = 540;
+use anyhow::Result;
+
+pub const MAX_TOKENS: usize = 900;
+pub const OVERLAP_TOKENS: usize = 135;
+
+/// Where each of a text's tokens ends, as a byte offset into it, the last
+/// at its end: the model's tokenizer (`datalib_embedder::Tokenizer::ends`).
+pub type TokenEnds<'a> = &'a (dyn Fn(&str) -> Result<Vec<usize>> + Sync);
+
+/// A stand-in for the model's tokenizer, for a test that needs one: a
+/// token every four bytes, about what English text costs.
+pub fn four_bytes_a_token(text: &str) -> Result<Vec<usize>> {
+    Ok((1..=text.len().div_ceil(4))
+        .map(|i| (i * 4).min(text.len()))
+        .collect())
+}
 
 /// A span of the document, its sections laid end to end, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +76,8 @@ pub fn prompted(
     title: &str,
     head: Option<&str>,
     sections: &[crate::IndexSection],
-) -> Vec<Prompted> {
+    ends: TokenEnds,
+) -> Result<Vec<Prompted>> {
     let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
     let items: Vec<bool> = sections.iter().map(|s| s.lead.is_some()).collect();
     let whole = texts.concat();
@@ -71,11 +88,11 @@ pub fn prompted(
         at += t.len();
     }
     let head = head.map(str::trim).filter(|h| !h.is_empty());
-    let mut chunks = chunks_within(&texts, &items, MAX_BYTES, OVERLAP_BYTES);
+    let mut chunks = chunks_within(&texts, &items, MAX_TOKENS, OVERLAP_TOKENS, ends)?;
     if chunks.len() > 1 {
         chunks.retain(|c| Some(whole[c.start..c.end].trim()) != head);
     }
-    chunks
+    Ok(chunks
         .into_iter()
         .map(|chunk| {
             let span = &whole[chunk.start..chunk.end];
@@ -95,18 +112,21 @@ pub fn prompted(
                 prompt: crate::prompt::document(&text, Some(title)),
             }
         })
-        .collect()
-}
-
-pub fn chunks(sections: &[&str]) -> Vec<Chunk> {
-    chunks_within(sections, &[], MAX_BYTES, OVERLAP_BYTES)
+        .collect())
 }
 
 /// `items[i]`: section `i` starts an item, which breaks a chunk as a
-/// heading does.
-fn chunks_within(sections: &[&str], items: &[bool], max: usize, overlap: usize) -> Vec<Chunk> {
+/// heading does. `max` and `overlap` are in tokens.
+fn chunks_within(
+    sections: &[&str],
+    items: &[bool],
+    max: usize,
+    overlap: usize,
+    ends: TokenEnds,
+) -> Result<Vec<Chunk>> {
     let mut out = Vec::new();
-    let mut open: Option<Chunk> = None;
+    // The chunk being packed, and its tokens so far.
+    let mut open: Option<(Chunk, usize)> = None;
     let mut at = 0;
     for (i, text) in sections.iter().enumerate() {
         let base = at;
@@ -119,36 +139,46 @@ fn chunks_within(sections: &[&str], items: &[bool], max: usize, overlap: usize) 
                 continue;
             }
             let new_item = std::mem::take(&mut item_start);
-            let full_enough = open.is_some_and(|c| c.end - c.start >= max / 4);
+            let full_enough = open.as_ref().is_some_and(|(_, t)| *t >= max / 4);
             if new_item || (heading && full_enough) {
-                out.extend(open.take());
+                out.extend(open.take().map(|(c, _)| c));
             }
-            if piece.len() > max {
-                out.extend(open.take());
-                out.extend(cut(piece, max, overlap).into_iter().map(|(ps, pe)| Chunk {
-                    start: start + ps,
-                    end: start + pe,
-                    first_section: i,
-                    last_section: i,
-                }));
+            let piece_ends = ends(piece)?;
+            let tokens = piece_ends.len();
+            if tokens > max {
+                out.extend(open.take().map(|(c, _)| c));
+                out.extend(
+                    cut(piece, &piece_ends, max, overlap)
+                        .into_iter()
+                        .map(|(ps, pe)| Chunk {
+                            start: start + ps,
+                            end: start + pe,
+                            first_section: i,
+                            last_section: i,
+                        }),
+                );
                 continue;
             }
-            if let Some(c) = open.as_mut().filter(|c| end - c.start <= max) {
+            if let Some((c, t)) = open.as_mut().filter(|(_, t)| *t + tokens <= max) {
                 c.end = end;
                 c.last_section = i;
+                *t += tokens;
                 continue;
             }
-            out.extend(open.take());
-            open = Some(Chunk {
-                start,
-                end,
-                first_section: i,
-                last_section: i,
-            });
+            out.extend(open.take().map(|(c, _)| c));
+            open = Some((
+                Chunk {
+                    start,
+                    end,
+                    first_section: i,
+                    last_section: i,
+                },
+                tokens,
+            ));
         }
     }
-    out.extend(open);
-    out
+    out.extend(open.map(|(c, _)| c));
+    Ok(out)
 }
 
 /// `text` split before each heading of level one or two outside a code
@@ -183,18 +213,28 @@ fn is_top_heading(line: &str) -> bool {
     ["# ", "## "].iter().any(|h| line.starts_with(h)) || line == "#" || line == "##"
 }
 
-/// `text` in pieces of at most `max` bytes, each starting `overlap` bytes
-/// before the last one ended, on character boundaries.
-fn cut(text: &str, max: usize, overlap: usize) -> Vec<(usize, usize)> {
+/// `text` in pieces of at most `max` of its tokens (`ends`, where each one
+/// ends), cut at a break in the last fifth before the limit, each starting
+/// `overlap` tokens before the last one ended, on character boundaries.
+fn cut(text: &str, ends: &[usize], max: usize, overlap: usize) -> Vec<(usize, usize)> {
     let mut pieces = Vec::new();
     let mut from = 0;
-    while text.len() - from > max {
-        let hi = floor_boundary(text, from + max);
-        let lo = floor_boundary(text, (hi - max / 5).max(from));
-        let to = break_in(text, lo, hi);
+    // The first token that ends past `from`.
+    let mut first = 0;
+    while ends.len() - first > max {
+        let limit = ends[first + max - 1];
+        let hi = floor_boundary(text, limit);
+        let lo = floor_boundary(text, ends[first + max - max / 5 - 1]).max(from);
+        let mut to = break_in(text, lo.min(hi), hi);
+        if to <= from {
+            to = ceil_boundary(text, limit);
+        }
         pieces.push((from, to));
-        let next = ceil_boundary(text, to.saturating_sub(overlap));
+        let reached = ends.partition_point(|&e| e <= to);
+        let back = reached.saturating_sub(overlap);
+        let next = ceil_boundary(text, if back == 0 { 0 } else { ends[back - 1] });
         from = if next > from { next } else { to };
+        first = ends.partition_point(|&e| e <= from);
     }
     pieces.push((from, text.len()));
     pieces
@@ -230,8 +270,14 @@ fn ceil_boundary(s: &str, i: usize) -> usize {
 mod tests {
     use super::*;
 
+    /// Every byte a token, so a budget here reads as bytes.
+    fn bytes(text: &str) -> Result<Vec<usize>> {
+        Ok((1..=text.len()).collect())
+    }
+
     fn spans(sections: &[&str], max: usize, overlap: usize) -> Vec<(usize, usize, usize, usize)> {
-        chunks_within(sections, &[], max, overlap)
+        chunks_within(sections, &[], max, overlap, &bytes)
+            .unwrap()
             .into_iter()
             .map(|c| (c.start, c.end, c.first_section, c.last_section))
             .collect()
@@ -248,7 +294,7 @@ mod tests {
             text: format!("{lead}\n\n{body}\n\n"),
             lead: Some(lead.clone()),
         }];
-        let got = prompted("Ten Forward", None, &sections);
+        let got = prompted("Ten Forward", None, &sections, &four_bytes_a_token).unwrap();
         assert!(got.len() > 1, "{} chunks", got.len());
         for (i, p) in got.iter().enumerate() {
             let text = p.prompt.split(" | text: ").nth(1).unwrap();
@@ -274,7 +320,13 @@ mod tests {
             text: format!("{head}\n\n{body}"),
             lead: None,
         }];
-        let got = prompted("Warp core tuning", Some(head), &sections);
+        let got = prompted(
+            "Warp core tuning",
+            Some(head),
+            &sections,
+            &four_bytes_a_token,
+        )
+        .unwrap();
         assert!(got.len() > 2, "{} chunks", got.len());
         for (i, p) in got.iter().enumerate() {
             let text = page_text(&p.prompt);
@@ -303,8 +355,14 @@ mod tests {
                 lead: None,
             },
         ];
-        let with_head = prompted("enterprise storage", Some(head), &sections);
-        let without = prompted("enterprise storage", None, &sections);
+        let with_head = prompted(
+            "enterprise storage",
+            Some(head),
+            &sections,
+            &four_bytes_a_token,
+        )
+        .unwrap();
+        let without = prompted("enterprise storage", None, &sections, &four_bytes_a_token).unwrap();
         assert_eq!(
             page_text(&without[0].prompt).trim(),
             head,
@@ -326,16 +384,42 @@ mod tests {
         let long = "a".repeat(400);
         let texts = [long.as_str(), long.as_str(), "b\n", "c\n"];
         let items = [true, true, true, true];
-        let got: Vec<(usize, usize)> = chunks_within(&texts, &items, 1000, 100)
+        let got: Vec<(usize, usize)> = chunks_within(&texts, &items, 1000, 100, &bytes)
+            .unwrap()
             .iter()
             .map(|c| (c.first_section, c.last_section))
             .collect();
         assert_eq!(got, [(0, 0), (1, 1), (2, 2), (3, 3)]);
-        let unbroken: Vec<(usize, usize)> = chunks_within(&texts, &[], 1000, 100)
+        let unbroken: Vec<(usize, usize)> = chunks_within(&texts, &[], 1000, 100, &bytes)
+            .unwrap()
             .iter()
             .map(|c| (c.first_section, c.last_section))
             .collect();
         assert_eq!(unbroken, [(0, 3)]);
+    }
+
+    /// A chunk of links and codes was within the old budget in bytes but
+    /// past the model's window, so the model read only its start. The
+    /// budget is the tokenizer's count now: text that costs a token a byte
+    /// is cut four times smaller than prose.
+    #[test]
+    fn dense_text_is_cut_by_its_tokens_not_its_bytes() {
+        let dense = "x1f/".repeat(1000);
+        let sections = [crate::IndexSection {
+            uuid: None,
+            text: dense.clone(),
+            lead: None,
+        }];
+        let got = prompted("Codes", None, &sections, &bytes).unwrap();
+        assert!(
+            got.len() >= dense.len() / MAX_TOKENS,
+            "{} chunks",
+            got.len()
+        );
+        for p in &got {
+            assert!(p.chunk.end - p.chunk.start <= MAX_TOKENS, "{:?}", p.chunk);
+        }
+        assert_eq!(got.last().unwrap().chunk.end, dense.len());
     }
 
     #[test]
@@ -381,7 +465,7 @@ mod tests {
     #[test]
     fn a_cut_never_splits_a_character() {
         let long = "é".repeat(300);
-        let pieces = cut(&long, 101, 15);
+        let pieces = cut(&long, &bytes(&long).unwrap(), 101, 15);
         assert!(pieces.len() > 1);
         for (s, e) in &pieces {
             assert!(long.is_char_boundary(*s) && long.is_char_boundary(*e));

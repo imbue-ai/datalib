@@ -144,6 +144,52 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     (where_sql, params)
 }
 
+/// The index a narrowing to documents reads alone, which holds each
+/// document's id and source beside the flag. Fetching those from the
+/// table instead took seconds a search on a cold disk: one random read
+/// for each of a library's documents.
+pub const DOCUMENTS_INDEX: &str = "grid_rows_by_is_document";
+
+/// What [`matching_sql`] reads of each row kept: the row, its document and
+/// whether it is the document's own; or each document once.
+pub const KEPT_ROWS: &str = "uuid, markdown_uuid, is_document";
+pub const KEPT_DOCUMENTS: &str = "DISTINCT markdown_uuid";
+
+/// The `columns` of every row of a document that `q`'s terms keep, and
+/// the values to bind: what a search narrows by before it ranks. Names
+/// [`DOCUMENTS_INDEX`] when the terms are `is:document` and `source:`
+/// alone, so the plan cannot drift back to the table.
+pub fn matching_sql(
+    grid_rows: &str,
+    columns: &str,
+    q: &ParsedQuery<GridRowColumn>,
+) -> (String, Vec<String>) {
+    let (where_sql, params) = build_where(q);
+    let clause = if where_sql.is_empty() {
+        " WHERE markdown_uuid IS NOT NULL".to_string()
+    } else {
+        format!("{where_sql} AND markdown_uuid IS NOT NULL")
+    };
+    let indexed = if documents_and_sources_only(q) {
+        format!(" INDEXED BY {DOCUMENTS_INDEX}")
+    } else {
+        String::new()
+    };
+    (
+        format!("SELECT {columns} FROM {grid_rows}{indexed}{clause}"),
+        params,
+    )
+}
+
+fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
+    q.documents() == Some(true)
+        && q.terms.iter().all(|t| match t.field {
+            Field::Is(column) => column == GridRowColumn::IsDocument,
+            Field::Column(key) => key.column == GridRowColumn::SourceId,
+            Field::Before | Field::After | Field::Terms(_) => false,
+        })
+}
+
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.

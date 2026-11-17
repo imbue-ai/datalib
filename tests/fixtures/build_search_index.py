@@ -8,8 +8,8 @@ The embedding is its own action so that Bazel reruns it only when a
 prompt changes: this one's inputs carry wall-clock stamps and change on
 every run (tar_qmd.py).
 
-Usage: build_search_index.py <datalib-step> <search_prompts> <qmd.tar>
-       <backend_index.sqlite> <out grid> <out prompts>
+Usage: build_search_index.py <datalib-step> <search_prompts> <model.gguf>
+       <qmd.tar> <backend_index.sqlite> <out grid> <out prompts>
 """
 
 import os
@@ -22,7 +22,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    step, prompts_bin, qmd_tar, grid, out_grid, out_prompts = sys.argv[1:]
+    step, prompts_bin, model, qmd_tar, grid, out_grid, out_prompts = sys.argv[1:]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "root"
         root.mkdir()
@@ -34,6 +34,14 @@ def main() -> int:
         db.parent.mkdir(parents=True)
         shutil.copyfile(grid, db)
         os.chmod(db, 0o644)
+        # Where the steps look for the model, which they read the tokenizer
+        # from to cut the chunks; fetching is off, so a missing one fails.
+        models = root / "unified_grid_and_search_index" / "models"
+        models.mkdir()
+        os.symlink(
+            os.path.abspath(model),
+            models / "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
+        )
         groups = sorted(
             p.name for p in root.iterdir() if (p / "render_markdown").is_dir()
         )
@@ -45,9 +53,10 @@ def main() -> int:
                 "DATALIB_DAG_FUNCTION": "keyword_index",
                 "DATALIB_DAG_STEP": f"{group}/keyword_index",
                 "DATALIB_DAG_INPUTS": f"{group}/render_markdown",
+                "DATALIB_MODELS_NO_FETCH": "1",
             }
             subprocess.run([step], env=env, check=True)
-        subprocess.run([prompts_bin, str(root), out_prompts], check=True)
+        subprocess.run([prompts_bin, str(root), model, out_prompts], check=True)
         # One file, no write-ahead log beside it.
         with sqlite3.connect(db) as conn:
             conn.execute("PRAGMA journal_mode=DELETE")

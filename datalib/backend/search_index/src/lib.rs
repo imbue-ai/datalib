@@ -75,8 +75,13 @@ impl IndexDoc {
     /// Its chunks with their hashes and prompts
     /// ([`chunk::prompted`]): what the keyword pass files and the embed
     /// pass embeds.
-    pub fn prompted(&self) -> Vec<chunk::Prompted> {
-        chunk::prompted(&self.title, self.head.as_deref(), &self.sections_or_one())
+    pub fn prompted(&self, ends: chunk::TokenEnds) -> anyhow::Result<Vec<chunk::Prompted>> {
+        chunk::prompted(
+            &self.title,
+            self.head.as_deref(),
+            &self.sections_or_one(),
+            ends,
+        )
     }
 
     /// The sections, or one empty one, so the title is indexed for a

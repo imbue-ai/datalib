@@ -196,9 +196,11 @@ insta_update(
     extra_data = [
         ":datalib_step",
         "//tests/fixtures:ingested/qmd.tar",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     extra_env = {
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+        "EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
         "INGESTED_QMD_TAR": "$(rootpath //tests/fixtures:ingested/qmd.tar)",
     },
     test = ":step_tests",
@@ -263,6 +265,7 @@ rust_test(
         "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",

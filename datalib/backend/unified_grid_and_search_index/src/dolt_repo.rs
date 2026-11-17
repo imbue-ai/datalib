@@ -13,7 +13,7 @@ use sqlx::Row;
 use crate::children::{
     self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, RowFacts, Side, Split, Via,
 };
-use crate::db::{build_where, vals_holding, ChatMeta};
+use crate::db::{build_where, matching_sql, vals_holding, ChatMeta, KEPT_DOCUMENTS, KEPT_ROWS};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
@@ -413,21 +413,14 @@ impl DoltRepo {
         q: &ParsedQuery,
         columns: &'static str,
     ) -> Result<Vec<sqlx::sqlite::SqliteRow>, RepoError> {
-        let (where_sql, params) = build_where(q);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let clause = if where_sql.is_empty() {
-            " WHERE markdown_uuid IS NOT NULL".to_string()
-        } else {
-            format!("{where_sql} AND markdown_uuid IS NOT NULL")
-        };
-        // Audited: as `search` — a literal table name, literal columns and
-        // `build_where`'s static column names; every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {columns} FROM {}{clause}",
-            at.grid_rows
-        )));
+        let (sql, params) = matching_sql(at.grid_rows, columns, q);
+        // Audited: as `search` — a literal table name, literal columns, a
+        // literal index name and `build_where`'s static column names;
+        // every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in &params {
             query = query.bind(p);
         }
@@ -1417,7 +1410,7 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let rows = self.matching(q, "DISTINCT markdown_uuid").await?;
+        let rows = self.matching(q, KEPT_DOCUMENTS).await?;
         rows.iter()
             .map(|r| r.try_get::<String, _>("markdown_uuid"))
             .collect::<Result<_, _>>()
@@ -1428,7 +1421,7 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<Vec<(String, String, bool)>, RepoError> {
-        let rows = self.matching(q, "uuid, markdown_uuid, is_document").await?;
+        let rows = self.matching(q, KEPT_ROWS).await?;
         rows.iter()
             .map(|r| {
                 Ok((
