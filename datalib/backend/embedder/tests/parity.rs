@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use datalib_embedder::{Device, Embedder};
+use datalib_embedder::{Batching, Device, Embedder, CONTEXT_TOKENS};
 use datalib_search_index::prompt as format;
 use serde_json::{json, Value};
 
@@ -278,6 +278,64 @@ fn the_best_device_agrees_with_the_cpu() {
     for (title, text) in docs() {
         let text = format::document(&text, title);
         let c = cosine(&gpu.embed(&text).unwrap(), &cpu.embed(&text).unwrap());
+        assert!(c > 0.999, "cosine {c} for {text:?}");
+    }
+}
+
+/// A prompt's vector does not depend on what shares its call: beside two
+/// different neighbours of the same length it comes out the same, so no
+/// prompt attends to another.
+#[test]
+fn a_prompt_takes_nothing_from_what_shares_its_call() {
+    let model = runfile("EMBED_MODEL_RLOC");
+    let shared = Batching {
+        prompts: 2,
+        tokens: CONTEXT_TOKENS as usize,
+    };
+    let mut e = Embedder::open_with(&model, Device::Cpu, 2, shared).unwrap();
+    let prompt = format::document("lunch on friday", Some("Planning"));
+    let red = format::document(&"red ".repeat(80), Some("Colours"));
+    let blue = format::document(&"blue ".repeat(80), Some("Colours"));
+    assert_eq!(
+        e.tokenize(&red).unwrap().len(),
+        e.tokenize(&blue).unwrap().len(),
+        "the neighbours must be the same length, or the call's shape differs"
+    );
+    let beside_red = e.embed_fitted_many(&[&prompt, &red]).unwrap();
+    let beside_blue = e.embed_fitted_many(&[&prompt, &blue]).unwrap();
+    assert!(cosine(&beside_red[1].0, &beside_blue[1].0) < 0.99);
+    assert_eq!(beside_red[0].0, beside_blue[0].0);
+}
+
+/// Prompts that share a call get the vectors they get alone, to rounding:
+/// each counts its positions from its own start. The CPU picks its kernels
+/// by the call's token count, so a call of many short prompts rounds as no
+/// one of them does alone (0.9995 at worst on arm64).
+#[test]
+fn prompts_that_share_a_call_embed_as_they_do_alone() {
+    let (docs, queries) = ours_formatted();
+    let texts: Vec<String> = docs.into_iter().chain(queries).collect();
+    let model = runfile("EMBED_MODEL_RLOC");
+    let shared = Batching {
+        prompts: 4,
+        tokens: CONTEXT_TOKENS as usize,
+    };
+    let mut alone = Embedder::open_with(&model, Device::Cpu, 2, Batching::ONE).unwrap();
+    let mut together = Embedder::open_with(&model, Device::Cpu, 2, shared).unwrap();
+    assert_eq!(together.batching(), shared);
+    let lens: Vec<usize> = texts
+        .iter()
+        .map(|t| together.tokenize(t).unwrap().len())
+        .collect();
+    let calls = datalib_embedder::pack(&lens, shared);
+    assert!(
+        calls.iter().filter(|run| run.len() > 1).count() >= 2,
+        "too few calls held more than one prompt: {calls:?}"
+    );
+    let one = alone.embed_fitted_many(&texts).unwrap();
+    let many = together.embed_fitted_many(&texts).unwrap();
+    for ((text, (a, _)), (b, _)) in texts.iter().zip(&one).zip(&many) {
+        let c = cosine(a, b);
         assert!(c > 0.999, "cosine {c} for {text:?}");
     }
 }
