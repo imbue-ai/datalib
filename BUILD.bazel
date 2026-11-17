@@ -8,6 +8,7 @@ exports_files([
     "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
+    "scripts/cloud_env_setup.sh",  # its bazelisk pin, read by //tools:version_pins_test
     # Run by //tools:install_test.
     "scripts/install.sh",
     "scripts/release/pin_release.py",

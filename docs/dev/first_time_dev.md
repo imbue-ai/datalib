@@ -38,6 +38,47 @@ devcontainer exec --workspace-folder . bazelisk build //datalib/backend:dist -c 
 Caches (bazel output base, disk cache, npm cache) live in named volumes
 so rebuilds aren't cold.
 
+### Claude Code cloud environments
+
+A Claude Code session on the web runs in a VM built from Anthropic's
+Ubuntu 24.04 image, which cannot be swapped for ours. What it lacks is
+installed by [`scripts/cloud_env_setup.sh`](../../scripts/cloud_env_setup.sh):
+bazelisk and the few packages the devcontainer adds. In the
+environment's settings on claude.ai/code:
+
+- **Setup script**: paste that file's text. The VM is snapshotted after
+  it runs, and the snapshot is reused until the pasted text changes, so
+  a change to the file reaches the environment only when it is pasted
+  again.
+- **Network access**: Limited, with "Allow package managers" on, and
+  these added to the allowed domains: `bcr.bazel.build`,
+  `releases.bazel.build`, `mirror.bazel.build`, `nodejs.org`,
+  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, and
+  `imbue.buildbuddy.io` for the cache. GitHub, crates.io, PyPI, npm and
+  `static.rust-lang.org` are allowed already. The list comes from the
+  URLs in `MODULE.bazel` and its lockfile. A fetch that fails naming
+  another host means that host belongs on the list.
+- **Environment variables**: `BUILDBUDDY_API_KEY=<your key>`, for the
+  contributor cache. At the start of every session the SessionStart hook
+  in [`.claude/settings.json`](../../.claude/settings.json) runs
+  [`scripts/cloud_session_start.sh`](../../scripts/cloud_session_start.sh),
+  which writes `.bazelrc.user` from it the way CI's `prepare-bazel`
+  does. Without the variable the hook does nothing, and the first build
+  in a session compiles everything on the VM's 4 vCPUs.
+
+**Keep an environment that holds a key to yourself.** Anyone who uses
+an environment can read its variables. One you create is personal; the
+"Who can use it" row is what shares it with the whole organization, so
+leave it alone. Inside the VM the key is as exposed as on a laptop: any
+build script can read `.bazelrc.user`
+([`security_posture.md`](security_posture.md)).
+
+The VM has about 4 vCPUs, 16 GB of memory and 30 GB of disk. The hook
+turns bazel's local disk cache off, since BuildBuddy is the cache and
+the disk is small.
+`//datalib/ui:e2e_test` needs Playwright's browsers, which the script
+does not install.
+
 ## What's in the repo
 
 Two coupled projects that mirror personal data into a queryable local store:

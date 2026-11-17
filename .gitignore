@@ -21,9 +21,11 @@ dolt_repo/
 playwright-report/
 test-results/
 # Per-user Claude Code state stays ignored, but project skills under
-# .claude/skills/ are shared and committed.
+# .claude/skills/ and the shared settings (the cloud SessionStart hook)
+# are committed. Personal settings go in .claude/settings.local.json.
 .claude/*
 !.claude/skills/
+!.claude/settings.json
 *.snap.new
 
 # Per-user bazel overrides — currently the BuildBuddy API key.
