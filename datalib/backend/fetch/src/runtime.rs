@@ -9,8 +9,7 @@
 //! ```text
 //! <cache>/CACHEDIR.TAG
 //! <cache>/.lock                  one fetch at a time, across processes
-//! <cache>/<sha12>/node/bin/node  the CPU asset, named by its sha256
-//! <cache>/<sha12>/.cuda-<sha12>  marker: the CUDA asset is overlaid
+//! <cache>/<sha12>/node/bin/node  the asset, named by its sha256
 //! <cache>/<sha12>.part-<pid>     an unpack in progress; renamed whole
 //! ```
 //!
@@ -69,7 +68,7 @@ pub fn ensure_runtime(manifest: &Manifest, cache_dir: &Path) -> Result<PathBuf> 
     if !root.is_dir() {
         refuse_musl_host()?;
         status_line!(
-            "{TAG} fetching the search runtime ({}, {} MB) — once per release, into {}",
+            "{TAG} fetching the Node runtime ({}, {} MB) — once per release, into {}",
             cpu.name,
             cpu.megabytes(),
             cache_dir.display()
@@ -78,19 +77,6 @@ pub fn ensure_runtime(manifest: &Manifest, cache_dir: &Path) -> Result<PathBuf> 
         fetch_and_unpack(cache_dir, cpu, &part)?;
         fs::rename(&part, &root)
             .with_context(|| format!("rename {} -> {}", part.display(), root.display()))?;
-    }
-    if let Some(cuda) = manifest.cuda() {
-        let marker = root.join(format!(".cuda-{}", cuda.dir_name()));
-        if !marker.exists() && cuda_wanted() {
-            status_line!(
-                "{TAG} an NVIDIA driver is present: fetching the CUDA runtime ({}, {} MB)",
-                cuda.name,
-                cuda.megabytes()
-            );
-            fetch_and_unpack(cache_dir, cuda, &root)?;
-            fs::write(&marker, format!("{}\n", cuda.sha256))
-                .with_context(|| format!("write {}", marker.display()))?;
-        }
     }
     prune(cache_dir, &root)?;
     Ok(root)
@@ -160,23 +146,6 @@ fn refuse_musl_host() -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The CUDA overlay is wanted when qmd is told to use CUDA, or when the
-/// driver's user-space library is on the loader path — the same test
-/// qmd's `auto` mode ends up making, only before the 500 MB download.
-fn cuda_wanted() -> bool {
-    if std::env::var("QMD_LLAMA_GPU").as_deref() == Ok("cuda") {
-        return true;
-    }
-    if !cfg!(target_os = "linux") {
-        return false;
-    }
-    std::process::Command::new("ldconfig")
-        .arg("-p")
-        .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).contains("libcuda.so.1"))
-        .unwrap_or(false)
 }
 
 /// A blocking `flock(2)` on the cache: the process that gets there

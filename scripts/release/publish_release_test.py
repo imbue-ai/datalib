@@ -152,7 +152,6 @@ class WhatIsTakenTest(ArtifactsCase):
                 "datalib-x86_64-unknown-linux-musl.tar.gz",
                 "runtime-aarch64-apple-darwin.tar.gz",
                 "runtime-aarch64-unknown-linux-gnu.tar.gz",
-                "runtime-x86_64-unknown-linux-gnu-cuda.tar.gz",
                 "runtime-x86_64-unknown-linux-gnu.tar.gz",
             ]
             for suffix in ["", ".sha256"]

@@ -7,12 +7,11 @@ for), `runtime_manifest.rs` (the manifest), `datalib/backend/fetch/`
 `runtime` and `publish-release` jobs in `.github/workflows/release.yml`
 (how it is published).
 
-`qmd` (semantic search) and `latchkey` (credentials) are Node programs.
-datalib runs them from a **runtime**: a pinned Node plus the two
-packages' full `node_modules` trees, built by Bazel from their lockfiles
-so nothing is resolved from the npm registry at install time and no
-package's install script ever runs on a user's machine. Every spawn of
-either tool goes through `datalib_runtime::node_runtime::tool_command`,
+`latchkey` (credentials) is a Node program. datalib runs it from a
+**runtime**: a pinned Node plus latchkey's full `node_modules` tree,
+built by Bazel from its lockfile so nothing is resolved from the npm
+registry at install time and no package's install script ever runs on
+a user's machine. Every spawn of it goes through `datalib_runtime::node_runtime::tool_command`,
 which finds the runtime in one of three places, in this order:
 
 | where | who |
@@ -21,15 +20,14 @@ which finds the runtime in one of three places, in this order:
 | `runtime/` beside the binaries, or one level up | the docker image (`/opt/datalib/runtime`), the .app (`Contents/Resources/runtime`) |
 | `~/.cache/datalib/runtime/<sha12>/`, fetched on first use | a release tarball install |
 
-The fourth option, `DATALIB_ALLOW_NPX=1`, runs the tool through
+The fourth option, `DATALIB_ALLOW_NPX=1`, runs latchkey through
 `npx -y` from the live registry. It is a dev escape hatch that warns
-once per process per package, so every step log shows it, and is never
+once per process, so every step log shows it, and is never
 a default.
 
 ## Why the tarballs fetch
 
-The runtime is about 100 MB compressed and the same for every user of a
-platform. Shipping it inside each binaries tarball took v0.34.1's
+The runtime is the same for every user of a platform. Shipping it inside each binaries tarball took v0.34.1's
 x86_64 tarball from 59 MB to 507 MB (the pnpm tree carried
 node-llama-cpp's CUDA and Vulkan backends and the foreign-arch packages
 along with everything else), made the release's upload take over an
@@ -37,7 +35,7 @@ hour, and still left the musl tarballs — what Minds installs — with no
 runtime at all, because the Node in it is a glibc build. A first-use
 fetch is as safe as a bundle when the bytes are pinned before they are
 fetched, nothing executes during the install, a miss fails loudly, and
-the bytes come from our own release. qmd's GGUF models work the same
+the bytes come from our own release. The embedding models work the same
 way (`datalib_qmd_models`).
 
 ## The assets
@@ -47,22 +45,16 @@ The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` (through
 each host platform, and `publish-release` publishes what it stages:
 
 ```
-runtime-aarch64-apple-darwin.tar.gz        node/ + qmd/<v>/ + latchkey/<v>/
-runtime-x86_64-unknown-linux-gnu.tar.gz    likewise, CPU binding only
-runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  the two CUDA packages, overlaid on the CPU tree
-runtime-aarch64-unknown-linux-gnu.tar.gz
+runtime-aarch64-apple-darwin.tar.gz        node/ + latchkey/<v>/
+runtime-x86_64-unknown-linux-gnu.tar.gz    likewise
+runtime-aarch64-unknown-linux-gnu.tar.gz   likewise
 ```
 
 each with a `.sha256` sidecar, under the same stable names as every
 other asset. The archive holds the tree's contents at its top, so it
-unpacks straight into a directory. `stage_runtime.sh` keeps only this
-platform's CPU binding of node-llama-cpp (`linux-x64`, `linux-arm64`,
-`mac-arm64-metal` — the Metal binding is the only one there is for
-Apple Silicon; qmd runs it with GPU offloading off when told to stay on
-CPU), moves the CUDA pair to the `-cuda` tree with `--cuda`, drops
-Vulkan and the foreign-arch packages, and then proves the binding it
-kept still loads by calling `getLlama({build: "never"})` through the
-staged Node.
+unpacks straight into a directory. `stage_runtime.sh` proves the staged
+latchkey can import playwright through the staged Node, and the
+release step then runs `node --version` from the tree.
 
 The musl tarballs have no runtime of their own: their manifest names
 the gnu asset of the same arch, which the glibc host they almost always
@@ -80,8 +72,7 @@ each asset's sha256 from its sidecar and its size from the file, in the
 `runtime` job's artifact. One asset per line:
 
 ```
-cpu  runtime-x86_64-unknown-linux-gnu.tar.gz       <sha256> <bytes> https://github.com/…/releases/download/v0.35.0/runtime-x86_64-unknown-linux-gnu.tar.gz
-cuda runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  <sha256> <bytes> https://…
+cpu  runtime-x86_64-unknown-linux-gnu.tar.gz  <sha256> <bytes> https://github.com/…/releases/download/v0.35.0/runtime-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 The binaries tarball is what `scripts/install.sh` verifies against the
@@ -100,16 +91,13 @@ once per process; a failed fetch is reported, not retried by the next
 
 1. takes a blocking `flock` on `~/.cache/datalib/runtime/.lock`, so
    parallel steps of one sync fetch once and the rest wait;
-2. downloads the CPU asset to a `.partial` file, hashing as it streams,
+2. downloads the asset to a `.partial` file, hashing as it streams,
    and refuses a mismatch with nothing kept;
 3. unpacks it into `<sha12>.part-<pid>/` and renames that to `<sha12>/`
    — the first twelve hex digits of the asset's sha256 — so a directory
    that exists was verified and unpacked whole, and a new release lands
    beside the old one rather than over it;
-4. with a `cuda` entry in the manifest, and `QMD_LLAMA_GPU=cuda` set or
-   `libcuda.so.1` on the loader path, overlays the CUDA asset the same
-   way and drops a `.cuda-<sha12>` marker in the tree;
-5. prunes everything else in the cache directory: earlier releases'
+4. prunes everything else in the cache directory: earlier releases'
    trees, and unpack directories a crash left behind.
 
 The cache directory is `$XDG_CACHE_HOME/datalib/runtime`, else
@@ -127,7 +115,7 @@ run. Running the other tree would mean running a different latchkey from
 the one this release pins.
 
 `datalib-step pull-runtime` runs the same path ahead of time and prints
-the tree it resolved, `qmd --version` through it, and the latchkey the
+the tree it resolved, `node --version` through it, and the latchkey the
 tree holds, read from its `package.json` rather than run: `latchkey
 --version` looks up its encryption key first, so it fails where there is
 none and, on a mac, makes one. `pull-runtime --into <dir>` puts the tree
@@ -136,8 +124,8 @@ there in one rename; `<dir>` as `runtime/` beside the binaries, or one
 level up, is where they look first. An install made by one user for
 another (root installing into a workspace, say) wants this: the cache is
 per `HOME`, and the user who runs the sync may not share it. `install.sh`
-suggests `pull-runtime`; an offline first sync fails the `qmd` and `latchkey` steps
-with the fetch error named and succeeds at everything else, the same as
+suggests `pull-runtime`; an offline first sync fails the steps that run
+latchkey with the fetch error named and succeeds at everything else, the same as
 the models.
 
 ## When anything may be fetched
@@ -159,34 +147,28 @@ loads.
 
 ## Who still bundles
 
-- **The docker image** unpacks the CPU asset into `/opt/datalib/runtime`
+- **The docker image** unpacks the asset into `/opt/datalib/runtime`
   at build time, after checking its sidecar; the manifest beside the
   binaries is never consulted because the sibling candidate wins.
 - **The .app** stages its own with `datalib/tauri/stage-runtime.sh` and
-  is signed as a unit. Its two JS trees are staged `--no-symlinks`:
+  is signed as a unit. Its JS tree is staged `--no-symlinks`:
   rewritten from the pnpm store layout into npm's flat one by
   `scripts/hoist_node_modules.py`, because Tauri's resource bundler
   copies regular files only and the store layout reaches every package
   through a link — a tree that lost them has every byte and no entry
   script. (Dereferencing the links instead does not work: Node looks
-  for a package's dependencies beside where it really lives.) The flat
-  tree is the same size, 299 MB against 307 MB. `datalib/tauri/check-app.sh`
+  for a package's dependencies beside where it really lives.)
+  `datalib/tauri/check-app.sh`
   runs the bundled `datalib-step pull-runtime` after every `tauri
   build`, so a bundle whose runtime cannot start fails the build
   instead of shipping.
 
-## Adding a platform, or a backend
+## Adding a platform
 
-A new host platform needs a `runtime` matrix entry in `release.yml`, a
-`case` arm in `stage_runtime.sh` naming its node-llama-cpp binding, and
-its triple in the binaries matrix. A new GPU backend (Vulkan, say) is a
-second overlay asset: a `cuda`-shaped `AssetKind`, one more line in the
-manifest, and a probe in `datalib_fetch::runtime` saying when it is
-wanted.
+A new host platform needs a `runtime` matrix entry in `release.yml` and
+its triple in the binaries matrix.
 
 ## Measured
 
-Staged on an M-series mac (Node 108 MB, the qmd tree 179 MB of which
-node-llama-cpp's llama.cpp source bundle is 33 MB, latchkey 11 MB):
-299 MB unpacked, 102 MB as `.tar.gz`. The Linux assets' sizes are on
-each release's page.
+Staged on an M-series mac, Node is 108 MB unpacked and the latchkey
+tree 11 MB. Each asset's compressed size is on its release's page.

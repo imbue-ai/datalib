@@ -4,27 +4,24 @@ load("@npm_latchkey//:defs.bzl", "npm_link_all_packages")
 exports_files(["package.json"])
 
 # The latchkey CLI and its 6 transitive packages, materialized from
-# pnpm-lock.yaml. Sibling of //third-party/qmd/runtime:qmd_tree, and the
-# same trade: every tarball is integrity-checked and no install script
-# runs. `scripts/stage_runtime.sh` copies this into the release
-# tarball's `runtime/` and the .app's `Contents/Resources/runtime/`, so
+# pnpm-lock.yaml: every tarball is integrity-checked and no install
+# script runs. `scripts/stage_runtime.sh` copies this into the release's
+# runtime asset and the .app's `Contents/Resources/runtime/`, so
 # what ships — and what gets codesigned and notarized under our
 # Developer ID — is exactly what the lockfile names.
 npm_link_all_packages(name = "node_modules")
 
 # The `latchkey` package dir inside the store: an anchor a launcher can
-# `rlocation` and walk up from to find the store root (same role as the
-# qmd sibling's `qmd_package_dir`).
+# `rlocation` and walk up from to find the store root.
 alias(
     name = "latchkey_package_dir",
     actual = "node_modules/latchkey/dir",
     visibility = ["//visibility:public"],
 )
 
-# The ENTIRE package store, for the same reason the qmd sibling exports
-# the whole thing: latchkey resolves its dependencies from directories
-# inside `node_modules/.aspect_rules_js/`, so a consumer that stages the
-# tree needs all of them, not just the `latchkey` link.
+# The ENTIRE package store: latchkey resolves its dependencies from
+# directories inside `node_modules/.aspect_rules_js/`, so a consumer that
+# stages the tree needs all of them, not just the `latchkey` link.
 alias(
     name = "latchkey_tree",
     actual = ":node_modules",

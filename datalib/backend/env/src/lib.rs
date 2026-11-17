@@ -123,7 +123,6 @@ const EVERY_CHILD: &[&str] = &[
     "DATALIB_POOL_ACQUIRE_SECS",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
-    "QMD_LLAMA_GPU",
     // Bazel's, so a child of a test finds its runfiles and keeps out of
     // the host's caches.
     "RUNFILES_DIR",

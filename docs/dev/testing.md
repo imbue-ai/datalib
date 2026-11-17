@@ -647,7 +647,6 @@ sync does not move the answers between two runs:
 
 ```bash
 bazelisk build //datalib/backend:bin
-export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
 DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
 uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
 uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json

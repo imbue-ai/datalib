@@ -5,8 +5,8 @@
 # `datalib-applet`, `datalib-doltlite`, `latchkey-curl-router`,
 # `curl-impersonate`) and the `latchkey` launcher — plus the
 # release's runtime asset unpacked beside them as `runtime/` (Node plus
-# the lockfile-pinned `qmd` and `latchkey` package trees the binaries
-# resolve beside themselves), so users register services and run syncs
+# the lockfile-pinned `latchkey` package tree the binaries resolve
+# beside themselves), so users register services and run syncs
 # from a single container with no Node, npm or npx in the image and
 # nothing fetched at run time — and a pre-baked demo data library to
 # try first.
@@ -60,8 +60,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                    `curl-impersonate`)
 #   tini             PID 1 that reaps zombies and forwards signals; the
 #                    Rust binaries don't fork, but the pipeline spawns
-#                    the bundled `node` for the qmd indexer and latchkey
-#                    and we want SIGTERM to flow through cleanly
+#                    the bundled `node` for latchkey and we want
+#                    SIGTERM to flow through cleanly
 #   openssl          used by datalib-entrypoint.sh to generate the
 #                    latchkey encryption key on first run
 #
@@ -206,7 +206,8 @@ RUN set -eux; \
     mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
     datalib-dag /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite; \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+        "SELECT count(*) FROM search_documents;" | grep -qv '^0$'; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
@@ -245,8 +246,8 @@ ENV DATALIB_BIND=0.0.0.0:8731
 # on first run — see the script header) so users don't have to remember
 # `-e LATCHKEY_ENCRYPTION_KEY=...` on every `docker run`.
 #
-# tini in front of it reaps zombie subprocesses (the qmd indexer and
-# latchkey run under the bundled `node`) and forwards SIGTERM cleanly to the long-lived
+# tini in front of it reaps zombie subprocesses (latchkey runs under the
+# bundled `node`) and forwards SIGTERM cleanly to the long-lived
 # `datalib-http` case. Cheap enough to keep for short-lived runs too.
 #
 # No default CMD: this image is multi-entrypoint (`datalib-dag`,

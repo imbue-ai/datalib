@@ -53,8 +53,8 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
           df -h /
 
-      # BuildKit and the Dockerfile's Docker Hub `FROM`s (ubuntu, node,
-      # bun) come through Google's pull-through mirror: anonymous Docker
+      # BuildKit and the Dockerfile's Docker Hub `FROM`s (ubuntu, node)
+      # come through Google's pull-through mirror: anonymous Docker
       # Hub pulls are rate-limited per IP, and a hosted runner shares its
       # IP with strangers' jobs. release.yml's docker-image does the same,
       # and says more, including how to move this pin.

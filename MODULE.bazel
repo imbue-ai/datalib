@@ -616,10 +616,8 @@ bazel_dep(name = "bazel_lib", version = "3.7.2")
 
 # rules_nodejs is already in the graph transitively (via aspect_rules_js);
 # declared explicitly so we can `use_repo` the host Node toolchain repo.
-# The e2e suite and the render preview need the node BINARY as a label:
-# the e2e suite stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the
-# qmd package tree) so `datalib_core::node_runtime::bundled_command`
-# resolves, which is what takes `npx` out of the build.
+# The runtime staging, the render preview and the runtime's own tests need
+# the node BINARY as a label.
 bazel_dep(name = "rules_nodejs", version = "6.7.7")
 
 # NODE_VERSION is the one Node pin in the repo, and it is read by
@@ -637,7 +635,7 @@ bazel_dep(name = "rules_nodejs", version = "6.7.7")
 # runs, fetched once by Bazel against rules_nodejs's own integrity
 # hashes. Bumping it is this one line.
 #
-# Must stay >= 22: qmd requires it (latchkey needs only >= 20).
+# Must stay >= 20: latchkey requires it.
 NODE_VERSION = "22.23.4"
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
@@ -671,22 +669,9 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_lint")
 
-# The qmd CLI and its 277-package transitive tree, replacing the
-# `npx -y @tobilu/qmd@<v>` fetch the fixture's qmd index build used to
-# perform on every cache miss. `npx -y` resolves that tree from
-# the live registry with no lockfile and no integrity checking, and runs
-# every package's install scripts while doing it; this gets the identical
-# tree from a checked-in lockfile where every tarball carries a sha512,
-# with lifecycle hooks disabled outright.
-npm.npm_translate_lock(
-    name = "npm_qmd",
-    pnpm_lock = "//third-party/qmd/runtime:pnpm-lock.yaml",
-    verify_node_modules_ignored = "//:.bazelignore",
-)
-use_repo(npm, "npm_qmd")
-
-# The latchkey CLI's 7-package tree, and the sibling of `npm_qmd` above.
-# Same reason, different consumer: this one replaces the `npm install
+# The latchkey CLI's 7-package tree, from a checked-in lockfile where
+# every tarball carries a sha512, with lifecycle hooks disabled. It
+# replaces the `npm install
 # latchkey@<v>` that `datalib/tauri/stage-runtime.sh` ran against the
 # live registry — with no lockfile, no integrity checking, and
 # `--ignore-scripts` as the only thing standing between us and
@@ -700,26 +685,6 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_latchkey")
 
-# better-sqlite3 needs no special handling here, and that is new as of
-# qmd 2.8.3. Until then it was the ONE package in the qmd tree the
-# lockfile could not deliver: 12.x published a tarball with `src/` +
-# `binding.gyp` and no `.node`, and got its binary from a
-# `prebuild-install` postinstall that downloaded a GitHub release asset
-# appearing in no lockfile and carrying no integrity hash. Closing that
-# hole cost an `npm_replace_package`, a re-packaged `better_sqlite3_src`,
-# four sha256-pinned `better_sqlite3_prebuilt_*` archives, and a
-# `node_abi_test` to catch the day a rules_nodejs bump silently
-# invalidated the `node-v<abi>` in their URLs.
-#
-# better-sqlite3 13 ships `prebuilds/<os>-<arch>.node` inside the npm
-# tarball for all eight platforms (including linuxmusl) and declares no
-# install script at all, so the lockfile's sha512 now covers the native
-# binary like everything else. All of the above is deleted, and the Node
-# ABI stops being a pin we have to track: prebuildify-style bindings are
-# selected by platform at require-time, not by NODE_MODULE_VERSION.
-#
-# `onlyBuiltDependencies: []` in third-party/qmd/runtime/package.json is
-# unchanged and still means what it said.
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for
 # refreshing the lockfile after editing datalib/ui/package.json.

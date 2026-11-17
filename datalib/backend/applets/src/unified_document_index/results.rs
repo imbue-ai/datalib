@@ -78,9 +78,9 @@ pub struct ResultCache {
 
 impl ResultCache {
     /// Held while one request lists `key`. A search card asks for a
-    /// query's rows and its groups at once, and qmd answers one search at
-    /// a time in seconds: without a turn, both miss the cache and qmd
-    /// ranks the same words twice, the second waiting behind the first.
+    /// query's rows and its groups at once, and ranking one can take
+    /// seconds: without a turn, both miss the cache and the same words are
+    /// ranked twice, the second waiting behind the first.
     /// Look in the cache again once the turn is yours.
     pub async fn turn(&self, key: &Key) -> tokio::sync::OwnedMutexGuard<()> {
         let gate = {
@@ -351,9 +351,8 @@ mod tests {
     }
 
     /// The search card's rows and groups arrive together for one query;
-    /// the second must wait for the first's list rather than run qmd
-    /// again (a demo search took 4–14 s, two qmd passes queued on one
-    /// daemon).
+    /// the second must wait for the first's list rather than rank the
+    /// words again.
     #[tokio::test]
     async fn a_second_ask_waits_for_the_list_being_made() {
         let cache = Arc::new(ResultCache::default());

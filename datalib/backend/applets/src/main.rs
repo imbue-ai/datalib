@@ -156,8 +156,8 @@ fn main() {
             None
         }
     };
-    // The unified_document_index applet runs qmd; from a release tarball that
-    // ships no `runtime/`, the first search fetches the manifest's.
+    // No applet spawns a Node tool, so nothing here triggers this fetch;
+    // it is set so one that did would find the runtime as the steps do.
     datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run(cli) {
         tracing::error!(error = %format!("{e:#}"), "the applet stopped");

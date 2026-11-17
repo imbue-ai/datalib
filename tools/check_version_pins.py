@@ -33,15 +33,7 @@ Deliberately NOT in scope
   exactly when it earns a family here.
 * Properties that need something built or run. `//third-party/doltlite:
   cli_version_test` runs the CLI and compares what it reports. Text
-  comparison can't do that, and it stays where it is. There used to be a
-  second one here, `//third-party/qmd/runtime:node_abi_test`, which
-  compared a live Node's ABI against the `node-v<abi>` in better-sqlite3
-  prebuilt URLs; qmd 2.8.3 moved to better-sqlite3 13, whose prebuilts
-  ship inside the npm tarball and are selected by platform rather than
-  by ABI, so both the URLs and the test are gone.
-* `.devcontainer/Dockerfile`'s qmd: the devcontainer does not install
-  it — Bazel's own tree (`//third-party/qmd/runtime`) is what the build
-  and the tests run, and the app's `npx` fallback names the pin itself.
+  comparison can't do that, and it stays where it is.
 """
 
 from __future__ import annotations
@@ -67,33 +59,6 @@ class Family:
 
 
 FAMILIES: list[Family] = [
-    Family(
-        name="qmd",
-        why=(
-            "qmd is invoked from several places that must agree, or "
-            "first-run behavior silently diverges between dev and prod. "
-            "A bump once updated one of two same-named Rust constants and "
-            "missed the other, so search ran qmd 2.1.0 against a "
-            "2.5.3-built index for six weeks. The Rust constant names the "
-            "directory scripts/stage_runtime.sh stages, and the resolver "
-            "looks the tree up by it."
-        ),
-        canonical="datalib/backend/runtime/src/qmd.rs",
-        sites=[
-            (
-                "datalib/backend/runtime/src/qmd.rs",
-                r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
-            ),
-            # The vendored upstream snapshot, read by
-            # //tools:qmd_model_cache_path_test for the cache-path check.
-            ("third-party/qmd/package.json", r'"version"\s*:\s*"([^"]+)"'),
-            # The Bazel-managed package tree that replaced `npx -y`.
-            (
-                "third-party/qmd/runtime/package.json",
-                r'"@tobilu/qmd"\s*:\s*"([^"]+)"',
-            ),
-        ],
-    ),
     Family(
         name="latchkey",
         why=(

@@ -36,8 +36,7 @@ else
     sign "$runtime/node/bin/node"
 fi
 
-# *.so: node-llama-cpp names its Mach-O dylibs libggml-*.so.
-find "$runtime/latchkey" "$runtime/qmd" \
+find "$runtime/latchkey" \
     \( -name '*.node' -o -name '*.dylib' -o -name '*.so' \) -type f -print0 |
     while IFS= read -r -d '' lib; do
         sign "$lib"

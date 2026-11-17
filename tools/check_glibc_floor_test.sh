@@ -70,9 +70,9 @@ expect fail "above the floor (v0.52.0's x86_64 build)" \
 
 fresh
 make_elf "$d/runtime/node/bin/node" GLIBC_2.28
-make_elf "$d/runtime/qmd/node_modules/x/build/binding.node" GLIBC_2.40
+make_elf "$d/runtime/latchkey/node_modules/x/build/binding.node" GLIBC_2.40
 expect fail "a library deep in a tree" \
-    'runtime:qmd/node_modules/x/build/binding.node needs GLIBC_2.40' "$d/runtime"
+    'runtime:latchkey/node_modules/x/build/binding.node needs GLIBC_2.40' "$d/runtime"
 
 fresh
 make_elf "$d/bin/datalib-step" GLIBC_3.1
