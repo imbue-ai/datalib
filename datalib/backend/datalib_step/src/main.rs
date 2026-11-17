@@ -737,6 +737,7 @@ async fn run(
         }
         None => {
             let env = StepEnv::from_env()?;
+            datalib_schema::problems::set_step_source(&env.group);
             if let Some(part) = &cli.reset {
                 return reset::run(&env, data_root, part, emitter).await;
             }

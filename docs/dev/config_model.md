@@ -432,9 +432,10 @@ The index steps read by pattern: `grid_index` reads
 `time_series_index` reads `*/render_time_series`
 (`datalib_dag::config::FAN_INS`). `grid_index` takes the groups it
 indexes from those inputs, the group being each input's first segment
-(`index_steps::groups_from_inputs`). `grid_index` also reads each source's
-`render_time_series` and `render_occurrences`, for their problem rows
-alone (`etl/README.md` §"Problems flow downstream with the data").
+(`index_steps::groups_from_inputs`). `grid_index` passes over the
+`render_time_series` and `render_occurrences` steps its patterns name:
+their problems are read in their own stores (`etl/README.md` §"Problems
+stay in the step that found them").
 Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
 rendered tree is still on disk.

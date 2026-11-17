@@ -253,6 +253,9 @@ document.
 | `changed_at_utc` | when it last changed, in UTC |
 | `tz_offset` | the offset for the two stamps |
 | `render_version` | empty here; set on rows a render records |
+| `upstream_entity_kind` | the kind of upstream record the problem is about, as a grid row names it, where the download said; empty otherwise |
+| `upstream_id` | that record's upstream id, likewise |
+| `upstream_account` | the upstream account it is in, likewise |
 
 ### `sync_runs`
 
