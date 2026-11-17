@@ -278,7 +278,9 @@ datalib/
                    (docs/dev/plans/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
-                   Metal on a mac. Tested against a golden of qmd's answers.
+                   Metal on a mac, CUDA as a module on gnu Linux. Tested
+                   against a golden of qmd's answers; README.md has the
+                   facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     sql_guard/     reads SQL a caller wrote, and nothing else: a
