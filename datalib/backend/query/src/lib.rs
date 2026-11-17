@@ -8,7 +8,7 @@
 //!
 //! What a key names, and what free text matches, belongs to whoever
 //! serves the rows: the unified grid maps keys to `grid_rows` columns and
-//! sends free text to qmd; the run log maps them to `log` columns and
+//! sends free text to the search index; the run log maps them to `log` columns and
 //! reads free text as a substring. A table can say so in its schema:
 //! `table` is the shape of that description.
 

@@ -85,7 +85,7 @@ moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
 (`#[col(…, search = "convo", uuid)]`, and `search(order = …, range = …,
-qmd)` on the struct), and the derive turns them into a `SearchTable`
+ranked)` on the struct), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
 map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
@@ -101,13 +101,15 @@ one reads and sorts the whole table
 index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.
 
-Free text never reaches SQL: the applet sends it to qmd, maps the hits
-to rows by `qmd_path` (below), keeps the ones the query's structured
+Free text never reaches `grid_rows`' SQL: the applet ranks it in the
+search index, by its words and by its meaning, maps the hits to rows by
+their document's id (below), keeps the ones the query's structured
 terms also match (`filter_uuids`), and shows each hit's own matched
 lines as its Contents cell. There is no weaker search in its place:
-before the first sync builds a qmd index, free text finds no rows and
-the answer says `search_index_missing`, which the grid shows as a note
-rather than an error.
+before the first sync builds the search index, free text finds only
+what the grid's own search terms hold, words they do not hold find no
+rows, and the answer says `search_index_missing`, which the grid shows
+as a note rather than an error.
 
 ## Adding a column
 
@@ -168,7 +170,7 @@ the new shape, and the grid index rebuilds itself from the stores.
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
    `grid_index`'s `inputs` (the wizard does this for a source it adds,
-   with the source's qmd steps); `grid_index` reads exactly the stores
+   with the source's search steps); `grid_index` reads exactly the stores
    its inputs name.
 3. Give it an icon and a catalog entry (`datalib/ui/src/assets/README.md`)
    — the query path itself does not change.
@@ -327,15 +329,15 @@ of it as plain text on one line (`PREVIEW_CHARS`), which is the grid's
 Contents cell; and
 `content_hash`, blake3 of the whole body, so a change past the preview
 still changes the row. The body itself is not stored — the rendered
-markdown holds it, and qmd's index of that markdown is how free text
-finds it.
+markdown holds it, and the search index of that markdown is how free
+text finds it.
 
 The body is markdown, and `datalib_schema::plain_text` turns it into
 what a person reads: tags, images, link targets, heading and quote
 marks, emphasis and code fences go, and a `<details>` block reads as
 its summary unless it is all the body there is. Text inside a code
 fence or a code span is kept as written, backslashes and `*` included,
-since that is what the page shows. A qmd hit's snippet
+since that is what the page shows. A search hit's snippet
 goes through the same pass. So what a producer puts in the body is
 what the row *says*, in the order that matters: a calendar event's
 description comes before its guest list, a chat's document row leaves
@@ -356,7 +358,7 @@ and would not. Every renderer gets the path from one function,
 document filed any other way, or a row naming another file
 (`misfiled` in `grid_index.rs`).
 
-So a qmd hit's path *is* its document's id
+So a search hit's path *is* its document's id
 (`grid_rows::markdown_uuid_of_path`): the search reads the id out of
 the path and finds the document's rows through `grid_rows_by_markdown`,
 with no lookup by path. Changing the layout is a bump of
@@ -455,7 +457,7 @@ never writes the file: the `photos` applet draws the photo from the
 (`datalib_photo_schema`), which the index copies the way it copies
 `source_contacts`. `/chat/<uuid>` answers such a document with its
 `image` and an empty body, and the document card hands it to the
-applet's card. qmd indexes nothing for it, which is why a photo's
+applet's card. The search index holds nothing for it, which is why a photo's
 caption is a `caption:` term.
 
 **A document can be in the grid and not in the search index.** One filed with

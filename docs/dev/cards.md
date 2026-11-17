@@ -586,7 +586,7 @@ besides components:
   `url` must be one of the tables `cards/tableUrls.ts` names in full
   (`GRID_TABLES`); any other is refused with a card error, before
   anything is fetched. Each answer says which field names a
-  row, which document a row opens and whether qmd ranks its free text
+  row, which document a row opens and whether the search index ranks its free text
   (`RowsSpec`). Persists `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_grid_and_search_index/chat/{markdownUuid}`), highlighting and scrolling to
@@ -617,7 +617,7 @@ besides components:
 - `sourceDagView()` — the sources' step graph, live while a sync runs.
 - `umapView(opts?: { q?: string; by?: string })` — the embedding map
   (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
-  document qmd embedded, placed by the `embedding_map` step. The search
+  document the `embed` steps embedded, placed by the `embedding_map` step. The search
   bar takes the grid's grammar and greys out what it does not match
   (`/embedding_map/matches`); a legend colours by one field and
   isolates on hover; hovering a point previews it, clicking opens

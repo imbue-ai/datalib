@@ -15,11 +15,12 @@ Every message starts with a line like:
 
 **Keep the `##`.** It is not there to be a heading on screen — the UI
 styles it down to a one-line "name, then a small grey time". It is
-there because qmd, the semantic index, cuts a chunk at the best break
-point near its size limit and scores an `h2` far above the blank line
-it would otherwise settle for. Replace the heading with a plain `<div>`
-and every chat's chunk boundaries quietly get worse, with nothing
-failing to tell you.
+there because the UI's styles find a message's header by it
+(`.msg h2` in `documentBody.css`, the sticky header of a long message
+among them), and because it is where a message starts for anyone
+reading the file. The search index does not read it: it draws each
+message from its body and its row, under a line naming who and when
+(`search_index/src/text.rs`).
 
 The visible time is short; the full instant is in the `title`
 attribute, one hover away. It is deliberately absolute rather than
@@ -132,8 +133,8 @@ A provider that knows the account has not read a message upstream sets
 `unread` on its item. The wrapper then carries an `unread` class, and
 the first unread item in the document also carries `first-unread`,
 which the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing
-reaches the text: the rule is CSS, so qmd's chunks are the same either
-way. `false` means read *or* unknown; a provider that cannot tell leaves
+reaches the text: the rule is CSS, so the file and the search's chunks
+are the same either way. `false` means read *or* unknown; a provider that cannot tell leaves
 it there.
 
 Read state has one shape, `ReadMark` (`datalib_etl::read_marks`):
@@ -186,8 +187,8 @@ item: what upstream counts and how many the mirror holds. The item
 then ends with one line, `<span class="msg-replies">12 replies · 9 not
 mirrored yet</span>`, the second half only while some are missing, so a
 reader can tell a thread nobody answered from one whose answers are
-still to be fetched. It is text, so qmd and an agent reading the file
-see it too; it is not in the item's grid text, which is what was said.
+still to be fetched. It is text, so an agent reading the file sees it
+too; it is not in the item's grid text, which is what was said.
 Slack is the one provider that sets it
 (`slack_render/TRANSLATE.md`).
 

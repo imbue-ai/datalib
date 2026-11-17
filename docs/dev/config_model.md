@@ -133,12 +133,14 @@ package's programs by its path under the data root, in its `command`;
   (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
   joins no index. The rows and their columns:
   `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
-- The qmd steps are the exception to "a step writes its own tree": a
-  source's `keyword_index` and `embed`, and `qmd_aggregator`, all write
-  the one qmd index file in `unified_grid_and_search_index/qmd_aggregator`, the
-  aggregator's tree, each source's steps to its own collection. The
-  runner cannot see that file as shared, so they hold one-slot locks
-  instead (below).
+- The search steps are the exception to "a step writes its own tree": a
+  source's `keyword_index`, `qmd_aggregator` and `grid_index` all write
+  the grid index's file (`unified_grid_and_search_index/grid_index`),
+  each source's `keyword_index` only its own rows in the `search_*`
+  tables; every `embed` and the aggregator write the inference cache
+  (`unified_grid_and_search_index/search_index/inference_cache.sqlite`).
+  The runner cannot see those files as shared, so they hold one-slot
+  locks instead (below).
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
   CardDAV or from `.vcf` files — and the product a person recognizes,
@@ -440,26 +442,26 @@ first segment (`index_steps::groups_from_inputs`, shared by
 alone (`etl/README.md` §"Problems flow downstream with the data").
 Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
-rendered tree is still on disk, and `qmd_aggregator` retires the
-collections no group claims.
+rendered tree is still on disk, and `qmd_aggregator` drops from the
+search index every source no group claims.
 
-A source's `keyword_index` (input: its render) registers its own
-collection and fills it with the keyword index, cutting the chunks with
+A source's `keyword_index` (input: its render) fills its part of the
+search index with its documents' words and chunks, cutting the chunks with
 the embedding model's tokenizer, so it needs the model file too; its
 `embed` (input: the `keyword_index`) loads the model and fills the
 vectors. Both fetch the model when it is missing.
 `qmd_aggregator` reads every source's pair, so it runs after all of
-them: it retires the collections of sources it does not name and
-reports each collection's counts. Nothing of a source's reads the
+them: it drops the sources it does not name, keeps only the vectors a
+chunk still names, and reports each source's counts. Nothing of a source's reads the
 aggregator, and that is what lets each source's steps finish on their
 own: the runner holds a step's finish back while anything upstream of
 it is still running, so a step downstream of a fan-in would finish
 only when the slowest source did. Each per-source step reports what it
-read as its version and lets qmd skip what it already has, so one source
+read as its version and skips what the index already has, so one source
 re-rendering reruns that source's two steps and nobody else's. A
 `keyword_index` the aggregator does not name is warned about: each
-aggregation retires what it indexed. Removing the aggregator turns
-free-text search off; the Manage screen takes every source's qmd steps
+aggregation drops what it indexed. Removing the aggregator turns
+free-text search off; the Manage screen takes every source's search steps
 with it. A `qmd_index` step is the shape from before the aggregator,
 when that fan-in fed the per-source steps or did their work itself; the
 loader refuses it, and `datalib-http` rewrites it as soon as it reads such
@@ -474,7 +476,7 @@ purpose, name the others one by one instead of the pattern. A render
 step named by neither fan-in renders and reaches nothing. Named by
 `grid_index` alone, its rows are in the grid and its documents open and
 filter, but free text will not find it by its words or its meaning, which
-are read from qmd's index, only by the fields the grid holds, so leaving a
+are read from the search index, only by the fields the grid holds, so leaving a
 source out costs keyword search as well as semantic. Which is still a reasonable thing
 to want, because embedding is the slow part of a sync — though turning
 off just its `embed` step keeps keyword search.
@@ -525,7 +527,7 @@ nothing to render or search.
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_grid_and_search_index` group, its qmd steps right
+the last one and above the `unified_grid_and_search_index` group, its search steps right
 after its render, and each step below the steps it reads. A file already
 out of that order where no place fits gets the new entries at the end.
 The runner itself reads only `inputs`.

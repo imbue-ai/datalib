@@ -37,9 +37,8 @@ They are separate **sources** because they answer different questions:
 processors — not a flag.
 
 There is no text to render. A small metadata card per item would let
-the qmd index answer "photos from the Yosemite trip", but it is not
-built, for two reasons: the qmd index's cost at 10⁵–10⁶ items is
-unmeasured, and a grid of text rows is the wrong surface for this data,
+search answer "photos from the Yosemite trip", but it is not built, for
+two reasons: the search index's cost at 10⁵–10⁶ items is unmeasured, and a grid of text rows is the wrong surface for this data,
 which wants thumbnails, a map, a time scrubber and an album view.
 
 Nothing here reaches `grid_rows`. Query the store directly; see

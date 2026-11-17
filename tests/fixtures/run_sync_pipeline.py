@@ -73,7 +73,7 @@ Args (positional):
                       manual, a scanned blueprint). File-backed; the
                       scanner walks its `path` directly. Unlike
                       file_inventory this source RENDERS, so its markdown
-                      reaches grid_index and the qmd index like any
+                      reaches grid_index and the search index like any
                       chat source — which is the whole point of
                       including it here.
     24: garmin_tng    JSON spec for the TNG Garmin account (the path is
@@ -465,7 +465,7 @@ def prepare(argv: list[str]) -> Prepared:
     )
 
     # ── DAG config: a download+render pair per source, plus the index
-    # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
+    # fan-in. The search steps are left out here:
     # `:ingested_tng_search_index` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
@@ -570,7 +570,7 @@ params = {params}
         # The fan-in names its inputs; there is no glob to stand in for
         # "every render step".
         groups = [r.strip('"').split("/")[0] for r in rendered]
-        qmd_list = ", ".join(
+        search_list = ", ".join(
             f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
         )
         # `grid_index` also reads each `render_time_series`, for its
@@ -622,10 +622,10 @@ inputs = [{grid_list}]
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
-inputs = [{qmd_list}]"""
+inputs = [{search_list}]"""
         )
-        # Each source fills its own qmd collection: a keyword index and
-        # its embeddings. The index arrives pre-built here too.
+        # Each source fills its own part of the search index: its keywords
+        # and their embeddings. The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)
         for group in groups:

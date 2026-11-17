@@ -1343,9 +1343,8 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
         .ok_or(SearchFailure::NoIndex)?;
         append_below(&mut hits, found);
     }
-    // Then pages holding the words between their pieces, as qmd used to score a
-    // whole document: a page's heading and its rows are parts of one
-    // thing. A conversation's messages are each said on their own, so a
+    // Then pages holding the words between their pieces: a page's heading
+    // and its rows are parts of one thing. A conversation's messages are each said on their own, so a
     // conversation is found only by a message holding every word.
     if let Some(terms) = lex::fts5_page_terms(&parsed.free_text) {
         let found = datalib_unified_grid_and_search_index::search_index::page_word_hits(

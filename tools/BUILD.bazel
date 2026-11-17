@@ -298,7 +298,7 @@ py_test(
     main = "step_protocol_example_test.py",
 )
 
-# The qmd model pins (repo, revision, file, sha256) live in the build's
+# The model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(
     name = "model_pins_test",

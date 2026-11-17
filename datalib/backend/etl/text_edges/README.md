@@ -50,7 +50,8 @@ per-message fragments, in
 - **`elements`**: how many more of each element the page has than the
   same path draws for the text `Engage.`.
 - **`finds`**: the phrase's words, in order and side by side, in the
-  `.md` file as qmd's keyword index splits it, and in the grid's text
+  `.md` file split into words as a keyword index splits them, and in
+  the grid's text
   (`plain_text`).
 - **Always**: the next message shows whole, outside any code, as the
   only element answering to its id; and no script, frame, form or `on…`

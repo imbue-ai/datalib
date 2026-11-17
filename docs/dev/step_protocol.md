@@ -659,7 +659,10 @@ rung, the additive DDL and an old blob store's conversion run, and each
 is sealed to `main`. A render step and the grid index compare their
 store's `_datalib_meta.schema_hash` with this build's and answer
 `needs_rerun` when it differs; a derived store is rebuilt, never
-migrated. The qmd steps have nothing to answer.
+migrated. A `keyword_index` answers `needs_rerun` when the search
+index is in another shape or its source's documents were drawn by
+another version; `embed`, `qmd_aggregator` and `embedding_map` have
+nothing to answer.
 
 ## Compact and collect
 
@@ -872,5 +875,5 @@ Four things a hand run has to get right that the runner does for it:
   second time, beneath itself.
 
 The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
-the qmd steps share one index file; the rules are in
+the search steps share the grid index's file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

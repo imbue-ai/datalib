@@ -24,11 +24,11 @@ security model the walkthrough's bind-mount rules rest on.
   nothing is fetched from a registry at build or run time, and the first-use fetch
   a tarball install does (`runtime_fetch.md`) never fires here.
   `DATALIB_NO_FETCH=1` is set, so nothing datalib would otherwise fetch
-  for itself (the runtime, qmd's models, a package) is fetched at run
+  for itself (the runtime, the embedding model, a package) is fetched at run
   time: a missing piece is a failed step naming it
   ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
   fetched");
-- qmd's embedding model (about 330 MB), the one model search loads,
+- the embedding model (about 330 MB), the one model search loads,
   put in `/root/.cache/qmd/models` by `datalib-step pull-models` at
   build time from its pinned HuggingFace revision and sha256-verified,
   so search by meaning works with nothing fetched. The query-expansion
@@ -220,9 +220,10 @@ credential store, the demo library and its own home. The binaries and
 the runtime under `/opt/datalib` are root's and read-only to it.
 
 Its home stays `/root`, which is only a path: every `docker run` a
-person has written mounts `/root/.latchkey`, and every data root an
-earlier image wrote links its qmd models at `/root/.cache/qmd/models`, a
-link the indexer never repoints.
+person has written mounts `/root/.latchkey`, and the image puts the
+embedding model in `/root/.cache/qmd/models`, the shared cache
+(`datalib_embedding_models::shared_models_dir`) every data root reads
+under that home.
 
 uid 1000 is the first user on most Linux desktops, so a folder such a
 user mounts is already writable. Docker Desktop on macOS maps ownership

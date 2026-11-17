@@ -67,8 +67,8 @@ npx playwright show-trace /tmp/e2e/playwright-report/data/<hash>.zip
 ## Why the suite has no CI job of its own
 
 Don't give it one. A second bazel invocation shares the gate's remote
-cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`, the qmd mount
-pair), and one that matches is redundant with the gate. The attempt
+cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`),
+and one that matches is redundant with the gate. The attempt
 that did not match rebuilt 2664 actions with no cache hits and took
 999s against the gate's 143s.
 

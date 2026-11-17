@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn qmd_predicate_recognized_as_hybrid() {
+    fn qmd_predicate_keeps_a_phrase_quoted() {
         let q = parse_query("qmd:\"earl grey\"");
         // Multi-word qmd: value is re-quoted so the search can route
         // it as a single lex phrase.

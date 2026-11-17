@@ -14,13 +14,11 @@
 # actions and the broken cache never healed. Routing the cache through
 # BuildBuddy instead sidesteps the GHA-cache-shape mismatch entirely.
 #
-# Why the devcontainer image: `bazel test //...` needs the full Bazel
-# build toolchain — lld, perl, pkg-config, libssl-dev — that the
-# prod image deliberately omits. The
-# devcontainer image carries that toolchain on top of the prod image's
-# qmd model cache, latchkey, doltlite CLI, etc. Re-installing it via apt
-# at the start of each job (the pattern `release.yml`'s build matrix
-# uses) would add ~3 min of apt + cold qmd model download to every run;
+# Why the devcontainer image: `bazel test //...` needs what Bazel does
+# not bring itself — a C/C++ toolchain, the libraries two build scripts
+# link, Playwright's browsers (`.devcontainer/Dockerfile` lists them).
+# Installing that via apt at the start of each job (the pattern
+# `release.yml`'s build matrix uses) would add minutes to every run;
 # pulling the pre-built image is closer to ~30s.
 #
 # The devcontainer image is published by `devcontainer.yml` — on every
@@ -473,9 +471,9 @@ jobs:
           # `.devcontainer/Dockerfile`), and two things the suite needs
           # are arranged here:
           #
-          #   1. The qmd GGUFs are not in the image; they are bazel
-          #      inputs (`//third-party/embedding_models`), so the suite brings
-          #      its own.
+          #   1. The embedding model is not in the image; it is a bazel
+          #      input (`//third-party/embedding_models`), so the suite
+          #      brings its own (below).
           #   2. `HOME=/github/home`, which GitHub forces for container
           #      steps, points every cache lookup away from the `/root`
           #      the image bakes into. That matters for Playwright's
@@ -517,22 +515,11 @@ jobs:
           # which it could only do by ignoring the flag. Redirecting the
           # specific lookup is the mechanism that actually works.
           #
-          # qmd models: nothing to arrange here any more, and the
-          # steps that used to arrange it are gone. The GGUFs are
-          # fetched by `//third-party/embedding_models` and reach their
-          # consumers as bazel inputs: the
-          # `//tests/fixtures:ingested_tng_vectors` genrule and
-          # `//tests/fixtures:materialize_tng_root`, which the e2e
-          # suite runs — the embedding model only, in both cases.
-          # Neither reads a host cache, so neither cares that
-          # the devcontainer image carries no `/root/.cache/qmd/models`.
-          #
-          # What this replaced: a `Cache the qmd models` + `Populate the
-          # qmd models` pair of steps that filled that directory from the
-          # GitHub Actions cache, plus a `qmd pull` on a cache miss. They
-          # existed because the two consumers downloaded models
-          # themselves, and on 2026-09-03 one of those downloads drew a
-          # 429 from HuggingFace and failed a merge-gating build.
+          # The embedding model reaches its consumers as a bazel input:
+          # the `//tests/fixtures:ingested_tng_vectors` genrule and
+          # `//tests/fixtures:materialize_tng_root`, which the e2e suite
+          # runs. Neither reads a host cache, so nothing here aims them
+          # at one.
           #
           # The fetch is a remote-cached build action. A run whose e2e
           # test is a cache hit never moves the bytes; one that executes
@@ -540,14 +527,6 @@ jobs:
           # action cache, before it can start — the reason the suite
           # carries one model and not three. HuggingFace is reached
           # only when that cache has lost them, with retries on a 429.
-          #
-          # Three flags went with those steps:
-          # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,
-          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root` and
-          # `--test_env=CLAUDE_MIRROR_HOST_HOME=/root` — between them
-          # what aimed the genrule and the e2e materializer at the
-          # image's cache, GitHub having forced HOME=/github/home for
-          # container steps. Nothing reads that variable now.
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
