@@ -54,7 +54,7 @@ function fanInReads(config: string, fn: string, id: string): boolean {
   const own = id.split("/")[1];
   return fanInInputs(config, fn).some((i) => i === id || i === `*/${own}`);
 }
-/// The sources the grid step keeps out of search.
+/// The sources the `grid_index` step keeps out of search.
 function notSearched(config: string): string[] {
   const listed = /not_searched = \[([^\]]*)\]/.exec(config);
   return listed

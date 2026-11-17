@@ -120,13 +120,13 @@ describe("rowMenu", () => {
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
-    const grid = target({
+    const gridIndexStep = target({
       id: "unified_grid_and_search_index/grid_index",
       kind: "step",
       type: null,
       func: "grid_index",
     });
-    expect(has(rowMenu([grid], opts), "reset")).toBe(false);
+    expect(has(rowMenu([gridIndexStep], opts), "reset")).toBe(false);
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {

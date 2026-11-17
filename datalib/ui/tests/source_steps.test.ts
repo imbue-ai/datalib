@@ -1091,11 +1091,11 @@ describe("a source's search steps", () => {
   const MAPPED = PAIR;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
 
-  /// The grid step puts the source in the keyword search; its embed reads
-  /// the grid step, and the aggregator reads the embed. Nothing of the
-  /// source's reads the map: a step downstream of a fan-in that waits on
-  /// every source would finish only when the slowest does.
-  it("adds the embed, reading the grid step, and wires it into the map", () => {
+  /// The `grid_index` step puts the source in the keyword search; its embed
+  /// reads the `grid_index` step, and the map reads the embed. Nothing of
+  /// the source's reads the map: a step downstream of a fan-in that waits
+  /// on every source would finish only when the slowest does.
+  it("adds the embed, reading the `grid_index` step, and wires it into the map", () => {
     const next = setSearchSteps(MAPPED, "slack", "keyword_and_embed");
     expect(inputsOf(next, "slack/embed")).toEqual(["unified_grid_and_search_index/grid_index"]);
     expect(inputsOf(next, "unified_grid_and_search_index/embedding_map")).toEqual(["slack/embed"]);
@@ -1135,7 +1135,7 @@ inputs = ["slack/embed"]
     expect(inputsOf(keyword, "slack/render_markdown")).toBeDefined();
   });
 
-  /// Turning search off for a source lists it in the grid step's
+  /// Turning search off for a source lists it in the `grid_index` step's
   /// `not_searched` and takes its embed and the aggregator's edge to it;
   /// the grid keeps the source.
   it("lists the source as not searched and takes its embed back out", () => {
@@ -1156,9 +1156,9 @@ inputs = ["slack/embed"]
     expect(searchIndexingOf(listSteps(off), "slack")).toBe("none");
   });
 
-  /// An embed reads the grid step, so without one none is written: its
+  /// An embed reads the `grid_index` step, so without one none is written: its
   /// input would name nothing.
-  it("writes no embed where the config has no grid step", () => {
+  it("writes no embed where the config has no `grid_index` step", () => {
     const noSearch = removeSteps(
       PAIR,
       listSteps(PAIR).filter((s) => s.id === "unified_grid_and_search_index/grid_index"),
@@ -1184,9 +1184,9 @@ inputs = ["slack/embed"]
     expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual(["slack/render_markdown"]);
   });
 
-  /// Every embed reads the grid step, so removing it takes them; removing
+  /// Every embed reads the `grid_index` step, so removing it takes them; removing
   /// the map, which reads them, takes nothing.
-  it("takes every source's embed with the grid step", () => {
+  it("takes every source's embed with the `grid_index` step", () => {
     const all = listSteps(setSearchSteps(MAPPED, "slack", "keyword_and_embed"));
     expect(removedWith(["unified_grid_and_search_index/embedding_map"], all)).toEqual([]);
     expect(removedWith(["unified_grid_and_search_index/grid_index"], all).map((s) => s.id)).toEqual(
@@ -1194,7 +1194,7 @@ inputs = ["slack/embed"]
     );
   });
 
-  /// A source's embed reads the grid step, not its render, but it embeds
+  /// A source's embed reads the `grid_index` step, not its render, but it embeds
   /// that render's documents: it goes when the render does.
   it("takes a source's embed with its render", () => {
     const all = listSteps(setSearchSteps(MAPPED, "slack", "keyword_and_embed"));
@@ -1303,7 +1303,7 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(flowsDown(next)).toEqual([]);
     expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
     // Its divider stays above its group, and the index's above the index.
-    // Its embed reads the grid step, so it sits below it, above the
+    // Its embed reads the `grid_index` step, so it sits below it, above the
     // aggregator that reads the embed.
     expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
     expect(next.indexOf('function = "embed"')).toBeGreaterThan(
@@ -1327,9 +1327,9 @@ command = "datalib-applet unified_grid_and_search_index"
   });
 
   /// Search by meaning turned on for a source that is not the last: its
-  /// embed reads the grid step, so it goes below that and above the
+  /// embed reads the `grid_index` step, so it goes below that and above the
   /// aggregator that reads it, whichever source it belongs to.
-  it("puts a source's embed between the grid step and the aggregator", () => {
+  it("puts a source's embed between the `grid_index` step and the aggregator", () => {
     const both = setSearchSteps(FLOWING, "slack", "keyword_and_embed");
     expect(listSteps(both).map((s) => s.id)).toEqual([
       "slack/ingest",
@@ -1379,17 +1379,17 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
   });
 
-  /// A file written with the aggregator above the grid step has no place
+  /// A file written with the aggregator above the `grid_index` step has no place
   /// below the one and above the other; the embed goes at the end, as
   /// entries always did there, and the file still loads.
   it("falls back to the end of a file already out of order", () => {
-    const grid = `[[steps]]
+    const gridIndexStep = `[[steps]]
 group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 `;
-    const swapped = `${PAIR.replace(grid, "").replace("# ── slack", `${grid}# ── slack`)}`;
+    const swapped = `${PAIR.replace(gridIndexStep, "").replace("# ── slack", `${gridIndexStep}# ── slack`)}`;
     expect(swapped.indexOf("embedding_map")).toBeLessThan(swapped.indexOf("grid_index"));
     const next = setSearchSteps(swapped, "slack", "keyword_and_embed");
     expect(

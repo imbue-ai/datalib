@@ -1230,14 +1230,14 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
 }
 
 /// The step that puts every source it reads in the keyword search.
-const GRID_ID = "unified_grid_and_search_index/grid_index";
+const GRID_INDEX_STEP = "unified_grid_and_search_index/grid_index";
 
 /// A source's own search step, as a `[[steps]]` block: its embeddings,
-/// which read the grid step, whose keyword pass cuts what they embed.
+/// which read the `grid_index` step, whose keyword pass cuts what they embed.
 export function buildEmbedStep(group: string): { id: string; body: string } {
   return {
     id: `${group}/embed`,
-    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = "embed"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(GRID_ID)}]`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = "embed"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(GRID_INDEX_STEP)}]`,
   };
 }
 
@@ -1246,23 +1246,24 @@ export function buildEmbedStep(group: string): { id: string; body: string } {
 /// of what the keyword pass cut.
 export type SearchIndexing = "none" | "keyword" | "keyword_and_embed";
 
-/// The sources the grid step keeps out of search (`params.not_searched`).
+/// The sources the `grid_index` step keeps out of search (`params.not_searched`).
 function notSearched(steps: ConfiguredStep[]): string[] {
-  const listed = steps.find((s) => s.kind === "step" && s.id === GRID_ID)?.params?.not_searched;
+  const listed = steps.find((s) => s.kind === "step" && s.id === GRID_INDEX_STEP)?.params
+    ?.not_searched;
   return Array.isArray(listed) ? listed.filter((g): g is string => typeof g === "string") : [];
 }
 
 /// How far into search the config puts a source, as a `SearchIndexing`.
 export function searchIndexingOf(steps: ConfiguredStep[], group: string): SearchIndexing {
-  const grid = steps.some((s) => s.kind === "step" && s.id === GRID_ID);
-  if (!grid || notSearched(steps).includes(group)) return "none";
+  const hasGridIndex = steps.some((s) => s.kind === "step" && s.id === GRID_INDEX_STEP);
+  if (!hasGridIndex || notSearched(steps).includes(group)) return "none";
   return steps.some((s) => s.id === `${group}/embed`) ? "keyword_and_embed" : "keyword";
 }
 
-/// Put `group` in the grid step's `not_searched`, or take it out.
+/// Put `group` in the `grid_index` step's `not_searched`, or take it out.
 function setNotSearched(text: string, group: string, out: boolean): string {
   const steps = listSteps(text).filter((s) => s.kind === "step");
-  const at = steps.findIndex((s) => s.id === GRID_ID);
+  const at = steps.findIndex((s) => s.id === GRID_INDEX_STEP);
   if (at < 0) return text;
   const had = notSearched(steps);
   const want = out ? (had.includes(group) ? had : [...had, group]) : had.filter((g) => g !== group);
@@ -1274,20 +1275,20 @@ function setNotSearched(text: string, group: string, out: boolean): string {
     : deleteIn(text, ref, path);
 }
 
-/// Put a source in search as far as `asked` says: out of the grid step's
+/// Put a source in search as far as `asked` says: out of the `grid_index` step's
 /// `not_searched` for its words, and an `embed` step for its meaning, or
 /// back. Never an `embed` step for a type that may not have one
-/// (`embedAllowed`), nor where the config has no grid step for it to read;
+/// (`embedAllowed`), nor where the config has no `grid_index` step for it to read;
 /// taking one away takes every step that reads it.
 export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
   const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
   let next = setNotSearched(text, group, indexing === "none");
   const steps = listSteps(next);
-  const gridded = steps.some((s) => s.kind === "step" && s.id === GRID_ID);
+  const hasGridIndex = steps.some((s) => s.kind === "step" && s.id === GRID_INDEX_STEP);
   const embed = buildEmbedStep(group);
   const has = steps.some((s) => s.id === embed.id);
-  if (gridded && indexing === "keyword_and_embed") {
+  if (hasGridIndex && indexing === "keyword_and_embed") {
     if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "embedding_map");
   } else if (has) {
     const gone = [...steps.filter((s) => s.id === embed.id), ...readersOf([embed.id], steps)];
@@ -1298,8 +1299,9 @@ export function setSearchSteps(text: string, group: string, asked: SearchIndexin
 
 /// What has to leave the config with `ids`: every step that reads one of
 /// them ([`readersOf`]), and a source's `embed` when its render goes: it
-/// embeds that render's documents, though it reads the grid step. Each
-/// `embed` reads the grid step, so the grid step takes them all with it.
+/// embeds that render's documents, though it reads the `grid_index` step.
+/// Each `embed` reads the `grid_index` step, so that step takes them all
+/// with it.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
   const readers = readersOf(ids, all);
   const going = new Set([...ids, ...readers.map((s) => s.id)]);
