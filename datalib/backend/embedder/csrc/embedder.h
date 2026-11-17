@@ -41,6 +41,8 @@ int32_t dl_embedder_n_embd(const dl_embedder *e);
 int32_t dl_embedder_n_ctx(const dl_embedder *e);
 int32_t dl_embedder_n_seq_max(const dl_embedder *e);
 int32_t dl_embedder_n_tokens(const dl_embedder *e);
+// Whether llama.cpp keeps a cache (KV or other memory) for this model.
+int32_t dl_embedder_keeps_cache(const dl_embedder *e);
 
 // The model's tokens for text, with its BOS and EOS added and special-token
 // text read as plain text. Returns the count; when it exceeds cap, nothing

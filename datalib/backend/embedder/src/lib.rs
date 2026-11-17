@@ -43,6 +43,7 @@ mod ffi {
         pub fn dl_embedder_n_ctx(e: *const Embedder) -> i32;
         pub fn dl_embedder_n_seq_max(e: *const Embedder) -> i32;
         pub fn dl_embedder_n_tokens(e: *const Embedder) -> i32;
+        pub fn dl_embedder_keeps_cache(e: *const Embedder) -> i32;
         pub fn dl_embedder_tokenize(
             e: *const Embedder,
             text: *const c_char,
@@ -265,6 +266,12 @@ impl Embedder {
                 tokens: usize::try_from(tokens)?,
             },
         })
+    }
+
+    /// Whether llama.cpp keeps a cache for the model. Without one, a call
+    /// attends over every token in it ([`Batching`]).
+    pub fn keeps_cache(&self) -> bool {
+        unsafe { ffi::dl_embedder_keeps_cache(self.raw.as_ptr()) != 0 }
     }
 
     /// The batching the context was made with, as llama.cpp took it.

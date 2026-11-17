@@ -64,6 +64,25 @@ rust_test(
     deps = ["@datalib_crates//:tempfile"],
 )
 
+# The embedding behaviour datalib depends on (README.md), one test per
+# fact. Run it after every llama.cpp or model bump; a fact that moved fails
+# by name.
+rust_test(
+    name = "embedding_facts",
+    size = "medium",
+    srcs = ["tests/embedding_facts.rs"],
+    data = ["//third-party/qmd_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
 # The embedder against qmd itself: the pinned qmd package run by the
 # pinned node, on the pinned model, on the same texts.
 rust_test(

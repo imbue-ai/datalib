@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-use datalib_embedder::{Batching, Device, Embedder, CONTEXT_TOKENS};
+use datalib_embedder::{Device, Embedder};
 use datalib_search_index::prompt as format;
 use serde_json::{json, Value};
 
@@ -241,102 +241,6 @@ fn the_vectors_match_qmd_on_its_default_backend() {
         let got = embedder.embed_in_batches(&tokens, QMD_BATCH).unwrap();
         let c = cosine(&got, &side.vector);
         assert!(c > 0.999, "cosine {c} for {:?}", side.formatted);
-    }
-}
-
-/// A chunk of dense text (code, an encoded blob) can hold more tokens than
-/// the model's context though it is within the chunker's bytes; it failed
-/// a whole source's embed. It is cut to fit, and its vector is the one of
-/// the cut input.
-#[test]
-fn an_input_past_the_context_is_cut_to_fit() {
-    let mut e = open(Device::Cpu);
-    let dense: String = (0..1500).map(|i| format!("x{i:x}/")).collect();
-    let tokens = e.tokenize(&dense).unwrap();
-    assert!(tokens.len() > e.context(), "{} tokens", tokens.len());
-    assert!(e.embed(&dense).is_err(), "the uncut input does not fit");
-    let (vector, cut) = e.embed_fitted(&dense).unwrap();
-    assert!(cut);
-    let (fitted, _) = datalib_embedder::fit(tokens, e.context());
-    assert_eq!(vector, e.embed_tokens(&fitted).unwrap());
-}
-
-/// A mac's build has Metal, and the best device on one is its GPU.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_mac_runs_the_model_on_metal() {
-    assert!(datalib_embedder::gpu_available());
-    assert!(open(Device::Best).device().starts_with("MTL"));
-    assert_eq!(open(Device::Cpu).device(), "CPU");
-}
-
-/// The GPU's vectors and the CPU's agree, whole inputs included.
-#[test]
-fn the_best_device_agrees_with_the_cpu() {
-    let mut gpu = open(Device::Best);
-    let mut cpu = open(Device::Cpu);
-    for (title, text) in docs() {
-        let text = format::document(&text, title);
-        let c = cosine(&gpu.embed(&text).unwrap(), &cpu.embed(&text).unwrap());
-        assert!(c > 0.999, "cosine {c} for {text:?}");
-    }
-}
-
-/// A prompt's vector does not depend on what shares its call: beside two
-/// different neighbours of the same length it comes out the same, so no
-/// prompt attends to another.
-#[test]
-fn a_prompt_takes_nothing_from_what_shares_its_call() {
-    let model = runfile("EMBED_MODEL_RLOC");
-    let shared = Batching {
-        prompts: 2,
-        tokens: CONTEXT_TOKENS as usize,
-    };
-    let mut e = Embedder::open_with(&model, Device::Cpu, 2, shared).unwrap();
-    let prompt = format::document("lunch on friday", Some("Planning"));
-    let red = format::document(&"red ".repeat(80), Some("Colours"));
-    let blue = format::document(&"blue ".repeat(80), Some("Colours"));
-    assert_eq!(
-        e.tokenize(&red).unwrap().len(),
-        e.tokenize(&blue).unwrap().len(),
-        "the neighbours must be the same length, or the call's shape differs"
-    );
-    let beside_red = e.embed_fitted_many(&[&prompt, &red]).unwrap();
-    let beside_blue = e.embed_fitted_many(&[&prompt, &blue]).unwrap();
-    assert!(cosine(&beside_red[1].0, &beside_blue[1].0) < 0.99);
-    assert_eq!(beside_red[0].0, beside_blue[0].0);
-}
-
-/// Prompts that share a call get the vectors they get alone, to rounding:
-/// each counts its positions from its own start. The CPU picks its kernels
-/// by the call's token count, so a call of many short prompts rounds as no
-/// one of them does alone (0.9995 at worst on arm64).
-#[test]
-fn prompts_that_share_a_call_embed_as_they_do_alone() {
-    let (docs, queries) = ours_formatted();
-    let texts: Vec<String> = docs.into_iter().chain(queries).collect();
-    let model = runfile("EMBED_MODEL_RLOC");
-    let shared = Batching {
-        prompts: 4,
-        tokens: CONTEXT_TOKENS as usize,
-    };
-    let mut alone = Embedder::open_with(&model, Device::Cpu, 2, Batching::ONE).unwrap();
-    let mut together = Embedder::open_with(&model, Device::Cpu, 2, shared).unwrap();
-    assert_eq!(together.batching(), shared);
-    let lens: Vec<usize> = texts
-        .iter()
-        .map(|t| together.tokenize(t).unwrap().len())
-        .collect();
-    let calls = datalib_embedder::pack(&lens, shared);
-    assert!(
-        calls.iter().filter(|run| run.len() > 1).count() >= 2,
-        "too few calls held more than one prompt: {calls:?}"
-    );
-    let one = alone.embed_fitted_many(&texts).unwrap();
-    let many = together.embed_fitted_many(&texts).unwrap();
-    for ((text, (a, _)), (b, _)) in texts.iter().zip(&one).zip(&many) {
-        let c = cosine(a, b);
-        assert!(c > 0.999, "cosine {c} for {text:?}");
     }
 }
 

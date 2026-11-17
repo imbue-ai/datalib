@@ -147,6 +147,8 @@ int32_t dl_embedder_n_ctx(const dl_embedder *e) { return (int32_t)llama_n_ctx_se
 
 int32_t dl_embedder_n_seq_max(const dl_embedder *e) { return (int32_t)llama_n_seq_max(e->ctx); }
 
+int32_t dl_embedder_keeps_cache(const dl_embedder *e) { return llama_get_memory(e->ctx) != nullptr; }
+
 int32_t dl_embedder_n_tokens(const dl_embedder *e) { return (int32_t)llama_n_ubatch(e->ctx); }
 
 int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t text_len,
