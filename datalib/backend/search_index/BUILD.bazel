@@ -50,6 +50,24 @@ rust_test(
     ],
 )
 
+# Every chunk of dense text fits the model, cut and counted by the
+# model's own tokenizer.
+rust_test(
+    name = "fits_the_model_test",
+    size = "medium",
+    srcs = ["tests/fits_the_model.rs"],
+    data = ["//third-party/qmd_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+    },
+    deps = [
+        ":datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
 rust_test(
     name = "read_test",
     size = "small",

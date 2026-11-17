@@ -265,6 +265,7 @@ rust_test(
         "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
