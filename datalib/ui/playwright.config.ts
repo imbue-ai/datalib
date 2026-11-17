@@ -441,8 +441,14 @@ function servers(): Server[] {
   const pending = [
     ...(onlySandboxes ? [] : [spawnBackend("fixture", fixtureRoot)]),
     ...(runs("chromium") ? spawnFirstRunBackends() : []),
+    // No sandbox spec searches by meaning, and every sandbox's applet
+    // loading the model at once kept a 4-vCPU runner at a load of 40 for
+    // the part's first two minutes, past the first specs' 5 s expects.
     ...SANDBOX_ROOTS.map((s) =>
-      spawnBackend(`sandbox-${s.spec}`, s.root, SANDBOX_ENV[s.spec] ?? {}),
+      spawnBackend(`sandbox-${s.spec}`, s.root, {
+        DATALIB_SEARCH_NO_WARM: "1",
+        ...(SANDBOX_ENV[s.spec] ?? {}),
+      }),
     ),
   ];
   let started: Server[];
