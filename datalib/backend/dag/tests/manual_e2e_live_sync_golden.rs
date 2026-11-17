@@ -593,9 +593,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_grid_and_search_index/grid_index/db.sqlite")
+            .join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite")
             .is_file(),
-        "backend index DB must live at unified_grid_and_search_index/grid_index/db.sqlite"
+        "backend index DB must live at unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -660,7 +660,7 @@ fn manual_e2e_live_sync_golden() {
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_grid_and_search_index/grid_index/db.sqlite#problems",
+        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#problems",
     }, {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
@@ -682,7 +682,7 @@ fn manual_e2e_live_sync_golden() {
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_grid_and_search_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
+        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#terms, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -1347,7 +1347,7 @@ fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<Str
         .collect()
 }
 
-/// The sources `grid_index` puts in the search: every one with a render,
+/// The sources `unified_grid_and_search_index` puts in the search: every one with a render,
 /// but those its `params.not_searched` lists.
 fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
     let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
@@ -1356,7 +1356,9 @@ fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
         .and_then(toml::Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some("grid_index"))
+        .filter(|s| {
+            s.get("function").and_then(toml::Value::as_str) == Some("unified_grid_and_search_index")
+        })
         .filter_map(|s| s.get("params")?.get("not_searched")?.as_array().cloned())
         .flatten()
         .filter_map(|v| v.as_str().map(str::to_string))
@@ -1458,7 +1460,8 @@ async fn latest_sync_run(path: &Path) -> Value {
 /// The unified grid and search index's `problems` table, volatile stamps redacted, ordered
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
+    let db =
+        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
@@ -1563,7 +1566,8 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
+    let db =
+        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1730,7 +1734,7 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 /// for the overall manifest assertion.
 /// Every searchable document's text as the search index embeds it, chunk
 /// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
-/// for each source `grid_index` searches.
+/// for each source `unified_grid_and_search_index` searches.
 /// Drawn by `datalib-step index-text --chunks`, the call the keyword and
 /// embed passes make, so a change to what search reads (the envelope line,
 /// a flattened link, where a chunk is cut, the prompt) is a diff here even

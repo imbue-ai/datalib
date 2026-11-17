@@ -32,7 +32,7 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. Every step names the program it runs in `command`.
 Datalib's own steps write `command = "datalib-step"` (the functions
-`ingest`, `render_markdown`, `embed`, `grid_index` and
+`ingest`, `render_markdown`, `embed`, `unified_grid_and_search_index` and
 `embedding_map`); a custom step names its own. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
@@ -73,18 +73,18 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["slack/ingest"]
 
-# The source's search by meaning: the embeddings of what `grid_index`
+# The source's search by meaning: the embeddings of what `unified_grid_and_search_index`
 # put in the keyword search (the slow one). Leave it out and keyword
 # search still finds the source.
 [[steps]]
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # The shared fan-in step. It reads every source's render by pattern, so
 # a source added above needs no edit here: `*/render_markdown` is every
-# source's render. `grid_index` puts every source it reads in the
+# source's render. `unified_grid_and_search_index` puts every source it reads in the
 # keyword search but those it lists in `params.not_searched`, and keeps
 # only the embeddings a chunk still names. Name renders one by one
 # instead to leave a source out of the grid on purpose.
@@ -93,7 +93,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
@@ -170,10 +170,10 @@ and you should not try to translate the file yourself. A `qmd_index`
 step is different: the server rewrites it into each source's own `embed`
 step as soon as it reads the file, keeping the old one as
 `config.toml.bak`, so re-read the config after writing one. So is a
-`keyword_index` step: `grid_index` does that work now, and the server
-takes the step out, listing in `grid_index`'s `not_searched` each
+`keyword_index` step: `unified_grid_and_search_index` does that work now, and the server
+takes the step out, listing in `unified_grid_and_search_index`'s `not_searched` each
 source that had none. And a `qmd_aggregator` step, whose work
-`grid_index` does too: the server takes it out, and the embedding map
+`unified_grid_and_search_index` does too: the server takes it out, and the embedding map
 reads every `embed` instead. The same goes for an index group under an earlier
 name, `unified_index` or `unified_document_index`: the server renames
 it, its steps and its applet to `unified_grid_and_search_index`. And for an id with capitals in it: every

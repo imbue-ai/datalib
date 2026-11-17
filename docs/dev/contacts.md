@@ -324,7 +324,7 @@ and the index hold them in two tables: `source_contacts`
 (`markdown_uuid`, `contact_key`, `source_id`, `name`, `seen_items`,
 `last_seen_at`, and the whole record as `contact_json`) and
 `source_contact_handles` (`markdown_uuid`, `contact_key`, `handle`;
-the index's copy is indexed by handle). `grid_index` loads them the way
+the index's copy is indexed by handle). `unified_grid_and_search_index` loads them the way
 it loads `grid_rows`.
 
 **`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
@@ -800,7 +800,7 @@ plain file, findable by `grep`, and searchable by its words under the name
 you gave the person. It would cost what the paragraph above saves:
 render would read the contacts store, and a link would render again
 every document naming the handle and send each back through
-`grid_index`'s keyword pass and the source's `embed`. The
+`unified_grid_and_search_index`'s keyword pass and the source's `embed`. The
 search terms name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.

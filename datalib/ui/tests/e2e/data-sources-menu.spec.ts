@@ -70,7 +70,7 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
 
   const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
   await expect(section("unified_grid_and_search_index")).toBeVisible();
-  const grid = section("unified_grid_and_search_index/grid_index");
+  const grid = section("unified_grid_and_search_index/unified_grid_and_search_index");
   await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
   await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
   await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
@@ -94,7 +94,10 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expandGroup(page, "slack");
   await expandGroup(page, "unified_grid_and_search_index");
   const render = pipelineRow(page, "slack/render_markdown");
-  const gridIndexRow = pipelineRow(page, "unified_grid_and_search_index/grid_index");
+  const gridIndexRow = pipelineRow(
+    page,
+    "unified_grid_and_search_index/unified_grid_and_search_index",
+  );
   await expect(render).toBeVisible();
   await render.locator('[col-id="status"]').click();
   await gridIndexRow.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
@@ -109,7 +112,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /Grid index: The grid index is plain SQLite, with no commit history/,
+    /Grid and search index: The grid index is plain SQLite, with no commit history/,
   );
   await page.keyboard.press("Escape");
 

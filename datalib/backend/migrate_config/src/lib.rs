@@ -24,14 +24,19 @@
 //! `since`; then `problem_inputs.rs`: `grid_index` reads each
 //! `render_time_series` and `render_occurrences` step, for its problem
 //! rows; then `conversation_settings.rs`: the ChatGPT and Claude
-//! ingests' API settings take the names they share. Those last nine
-//! rewrites are also the ones `datalib-http` makes by itself
+//! ingests' API settings take the names they share; then
+//! `keyword_fold.rs`, `aggregator_drop.rs` and `input_patterns.rs`: the
+//! search's own steps fold into the index step, which reads every source
+//! by pattern; then `index_step_name.rs`: the index step's function,
+//! `grid_index`, becomes `unified_grid_and_search_index`. Those last
+//! thirteen rewrites are also the ones `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
 pub mod aggregator_drop;
 pub mod conversation_settings;
 pub mod convert;
 pub mod index_name;
+pub mod index_step_name;
 pub mod input_patterns;
 pub mod keyword_fold;
 pub mod lowercase_ids;
@@ -94,6 +99,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if aggregator_drop::is_retired(text)? {
         return Ok(LegacyFormat::AggregatorStep);
     }
+    if index_step_name::is_retired(text)? {
+        return Ok(LegacyFormat::GridIndexStep);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -109,7 +117,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::UnreadProblems
         | LegacyFormat::ConversationSettingNames
         | LegacyFormat::KeywordIndexSteps
-        | LegacyFormat::AggregatorStep => text.to_string(),
+        | LegacyFormat::AggregatorStep
+        | LegacyFormat::GridIndexStep => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -128,6 +137,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = keyword_fold::rewrite(&out)?;
     let out = aggregator_drop::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
+    let out = index_step_name::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -298,20 +308,35 @@ pub fn upgrade_conversation_settings(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Give the index step its group's name, `unified_grid_and_search_index`
+/// (`index_step_name.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
+/// result would not load every entry the original did. The loader refuses
+/// a `grid_index` already, so the step it renames was not loaded.
+pub fn upgrade_index_step_name(text: &str) -> Result<Option<String>> {
+    if !index_step_name::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = index_step_name::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
     refuse_a_loss_but(text, out, follow, &[])
 }
 
-/// `text` with its `keyword_index` steps folded into `grid_index`, as the
-/// later rewrite in [`UNATTENDED`] leaves it, or as it is when that
-/// rewrite has nothing to do or refuses. A rewrite of an older shape still
-/// writes `keyword_index` steps, which the loader refuses; whether it
-/// loses an entry is judged in the shape the chain ends in.
+/// `text` as the later rewrites in [`UNATTENDED`] that take out a step the
+/// loader refuses leave it: its `keyword_index` steps folded into the
+/// index step, its `qmd_aggregator` taken out and its `grid_index`
+/// renamed, or as it is where one has nothing to do or refuses. A rewrite
+/// of an older shape still writes those steps; whether it loses an entry
+/// is judged in the shape the chain ends in.
 pub(crate) fn folded(text: &str) -> String {
     let folded = keyword_fold::rewrite(text).unwrap_or_else(|_| text.to_string());
-    aggregator_drop::rewrite(&folded).unwrap_or(folded)
+    let folded = aggregator_drop::rewrite(&folded).unwrap_or(folded);
+    index_step_name::rewrite(&folded).unwrap_or(folded)
 }
 
 /// One rewrite `datalib-http` makes without asking: what the old shape
@@ -325,7 +350,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 12] = [
+pub const UNATTENDED: [Rewrite; 13] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -401,6 +426,12 @@ pub const UNATTENDED: [Rewrite; 12] = [
         what: "an index step reads every source's step of a function by pattern \
                (`*/render_markdown`), so a source added later is read without editing it",
         run: upgrade_input_patterns,
+    },
+    Rewrite {
+        why: "has an index step whose function is `grid_index`",
+        what: "the index step is `unified_grid_and_search_index`, named for its group and \
+               the grid and the search it fills; each input that named it names the new id",
+        run: upgrade_index_step_name,
     },
 ];
 
@@ -872,7 +903,10 @@ inputs = ["slack/render_markdown"]
             "{out}"
         );
         assert!(
-            out.contains("group = \"unified_grid_and_search_index\"\nfunction = \"grid_index\""),
+            out.contains(
+                "group = \"unified_grid_and_search_index\"\n\
+                 function = \"unified_grid_and_search_index\""
+            ),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
@@ -1088,13 +1122,16 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_keyword_fold(&out).unwrap().unwrap();
         let out = upgrade_aggregator_drop(&out).unwrap().unwrap();
         let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
+        let out = upgrade_index_step_name(&out).unwrap().unwrap();
+        assert_eq!(upgrade_index_step_name(&out).unwrap(), None);
         let check = datalib_dag::config::check_text(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check
             .cfg
             .steps
             .iter()
-            .any(|s| s.id == "unified_grid_and_search_index/grid_index"));
+            .any(|s| s.id == "unified_grid_and_search_index/unified_grid_and_search_index"));
+        assert!(!out.contains("grid_index"), "{out}");
         assert!(!out.contains("qmd_aggregator"), "{out}");
         assert!(!out.contains("\"unified_index"), "{out}");
         assert_eq!(upgrade_index_name(&out).unwrap(), None);
@@ -1111,7 +1148,7 @@ inputs = ["mail/render_markdown"]
         let clash = format!(
             "{current}\n[[steps]]\ngroup = \"unified_index\"\nfunction = \"grid_index\"\n\
              inputs = [\"mail/render_markdown\"]\n\n\
-             [[steps]]\nid = \"unified_grid_and_search_index/grid_index\"\n\
+             [[steps]]\nid = \"unified_grid_and_search_index/unified_grid_and_search_index\"\n\
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
         let loads = |text: &str| {
@@ -1120,7 +1157,7 @@ inputs = ["mail/render_markdown"]
                 .cfg
                 .steps
                 .iter()
-                .any(|s| s.id == "unified_grid_and_search_index/grid_index")
+                .any(|s| s.id == "unified_grid_and_search_index/unified_grid_and_search_index")
         };
         assert!(loads(&clash), "the custom step runs before the rename");
         let err = upgrade_index_name(&clash).unwrap_err().to_string();

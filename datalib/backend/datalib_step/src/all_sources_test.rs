@@ -113,7 +113,7 @@ fn generate() -> String {
          # time-series and occurrences steps; `params.not_searched` would keep a\n\
          # source out of search.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
+         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"unified_grid_and_search_index\"\ncommand = \"datalib-step\"\n{}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\

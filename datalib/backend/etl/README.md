@@ -82,7 +82,7 @@ entity in a raw store — and each consumer that reads a store pinned
 copies that store's rows for the source **wholesale** into its own,
 then adds its own: render copies the raw store's fetch-stage rows
 (minting them again under the source's id, which a download does not
-know, and filling in `item_uuid` — see below), `grid_index` copies
+know, and filling in `item_uuid` — see below), `unified_grid_and_search_index` copies
 every render store's into the index. The
 pinned store is the complete truth about its source's problems at that
 commit, so the copy is the sweep and there is nothing to diff. Stamps
@@ -95,12 +95,12 @@ whose time series could not be read (`time_series`), and
 `render_occurrences`, an event whose occurrences could not be listed
 (`occurrences`). Each finds every one of them again on each run, so
 its rows replace the store's whole (`step_problems::replace`), keeping
-the stamps of the unchanged. `grid_index` takes both steps as inputs,
+the stamps of the unchanged. `unified_grid_and_search_index` takes both steps as inputs,
 for these rows alone, and copies each step's rows apart from the
 render store's (`copy_own_store_problems`): a source's render-store
 copy replaces every stage but those two, and each step's copy only its
 own, so neither erases the other's. A step no longer among the inputs
-has its rows taken out. Wiring an existing config's `grid_index` to
+has its rows taken out. Wiring an existing config's `unified_grid_and_search_index` to
 read them is one of the config upgrades the app makes without asking
 (`datalib_migrate_config::problem_inputs`).
 
@@ -108,7 +108,7 @@ The Manage screen's red and yellow counts are the index's rows, counted
 by whose they are: a fetch-stage row on the Download row, a
 time-series-stage row on `render_time_series`'s, an occurrences-stage
 row on `render_occurrences`'s, the index's own row about a render
-store it could not read on `grid_index`'s, every other row on the
+store it could not read on `unified_grid_and_search_index`'s, every other row on the
 render's. A group's count is the sum of its steps'.
 An `info` row is counted nowhere: nothing failed, and the problems grid
 is where it is seen. Each count opens exactly the rows it counted
@@ -619,7 +619,7 @@ one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
 predates the table. A reader of a derived store asks it once per pass
-rather than probing for each table: `grid_index` compares a render
+rather than probing for each table: `unified_grid_and_search_index` compares a render
 store's `schema_hash` with `indexed_markdown::schema_hash`, the same
 value the scheduler fingerprints, and leaves a store in any other shape
 as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
@@ -651,7 +651,7 @@ test that reads an unchanged input twice and asserts the second
 `commit_run` returns `None`.
 
 `insert_sql` exists for the one path where upserting would be wrong. In
-`grid_index`, a primary-key collision is a *finding* — two sources minting
+`unified_grid_and_search_index`, a primary-key collision is a *finding* — two sources minting
 the same `grid_rows.uuid` is a correctness emergency — so that path wants the
 generated column list and binds without the `ON CONFLICT` clause, and lets
 the error surface so it can name the other document.

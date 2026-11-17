@@ -31,12 +31,12 @@ Each provider (data source) is **three** crates at [`datalib/backend/etl/provide
 The per-stage modules within a provider crate form a strict layer with a single allowed dependency direction:
 
 ```
-upstream → download → render → grid_index
+upstream → download → render → unified_grid_and_search_index
 ```
 
 - **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the search index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
 - **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `ingest::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<group>/ingest/` (`RenderCommon::raw_path`); it must never reach back into upstream (the API) or into a file-backed method's `path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
-- **`grid_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
+- **`unified_grid_and_search_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
 
@@ -196,7 +196,7 @@ Each line is a small JSON object:
 
 Rules:
 
-- **The pipeline never reads it.** Render, grid_index, resume, retry — all of those go through doltlite. Deleting the `events/` directory does not break anything.
+- **The pipeline never reads it.** Render, the index step, resume, retry — all of those go through doltlite. Deleting the `events/` directory does not break anything.
 - **Same bytes as the upsert.** The tape is written next to the `ON CONFLICT(id) DO UPDATE`, after its commit, so it carries the same wire-fidelity payload that the doltlite row gets. No second parse, no second normalize. A tape write that fails is logged and does not fail the upsert.
 
 # Operational principles
@@ -222,7 +222,7 @@ Any subsequent sync should pick up as close as possible to where the last one le
 Two layers do the work:
 
 - **Provider-side dedup**: every UPSERT uses the upstream identifier as PK with `ON CONFLICT(id) DO UPDATE`; unchanged rows are no-op writes, and the run's closing commit finds nothing to commit.
-- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The grid_index step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
+- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The `unified_grid_and_search_index` step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
 
 Different upstreams expose different surfaces for "what changed since X": a delta token, an enumeration, a search over a range. Each becomes a listing, and what is owed is the same query over it (see [What is left to fetch](#what-is-left-to-fetch-listed-minus-held)).
 

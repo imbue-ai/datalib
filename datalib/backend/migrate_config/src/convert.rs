@@ -146,6 +146,9 @@ pub enum Retired {
     /// A `qmd_aggregator` step, from before `grid_index` swept the vectors
     /// and reported (`aggregator_drop.rs`).
     AggregatorStep,
+    /// The index step under its old function, `grid_index`
+    /// (`index_step_name.rs`).
+    GridIndexStep,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

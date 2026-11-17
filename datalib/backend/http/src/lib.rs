@@ -2204,7 +2204,7 @@ async fn log_lines(
             return Err((
                 StatusCode::BAD_REQUEST,
                 "ask for the lines after_seq or before_seq a line, not both".to_string(),
-            ))
+            ));
         }
     };
     let q = datalib_runs::LogQuery {
@@ -2507,13 +2507,13 @@ mod tests {
             "scaffold rejected: {}\n---\n{text}",
             checked.render(std::path::Path::new("scaffold"))
         );
-        // The `grid_index` step has no source to read yet, so on a scaffolded
+        // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
         // root it *is* the fringe. It is what
         // `--sync` can target until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            ["unified_grid_and_search_index/grid_index"]
+            ["unified_grid_and_search_index/unified_grid_and_search_index"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
@@ -2532,7 +2532,10 @@ mod tests {
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
         let fringe = fringe_of(STARTER_CONFIG);
-        assert_eq!(fringe, ["unified_grid_and_search_index/grid_index"]);
+        assert_eq!(
+            fringe,
+            ["unified_grid_and_search_index/unified_grid_and_search_index"]
+        );
         assert_eq!(configured_source_count(&fringe), 0);
     }
 

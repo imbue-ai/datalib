@@ -308,12 +308,12 @@ command = "datalib-applet unified_index" # serves the grid
             [
                 "picard/ingest",
                 "picard/render_markdown",
-                "unified_grid_and_search_index/grid_index",
+                "unified_grid_and_search_index/unified_grid_and_search_index",
                 "unified_grid_and_search_index/embedding_map",
                 "exports/csv",
             ]
         );
-        let check = datalib_dag::config::check_text(&after);
+        let check = datalib_dag::config::check_text(&crate::folded(&after));
         let applet = &check.cfg.applets[0];
         assert_eq!(applet.id, "unified_grid_and_search_index");
         assert_eq!(

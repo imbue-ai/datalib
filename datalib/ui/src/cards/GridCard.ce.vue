@@ -1493,7 +1493,7 @@ onMounted(async () => {
 
 const hint = computed(() => props.placeholder ?? "search…");
 
-// The index moved under us — a `grid_index` pass committed, which under
+// The index moved under us — a `unified_grid_and_search_index` pass committed, which under
 // streaming happens many times per sync, as each source's rows arrive.
 // Ask the shown search again; the rows update in place while the
 // download is still going.

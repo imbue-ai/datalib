@@ -153,7 +153,7 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
         assert!(!after.contains("qmd_aggregator"), "{after}");
         assert!(!after.contains("runs after every embed"), "{after}");
         assert!(after.contains("# the map"), "{after}");
-        let check = datalib_dag::config::check_text(&after);
+        let check = datalib_dag::config::check_text(&crate::folded(&after));
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         let map = check
             .cfg

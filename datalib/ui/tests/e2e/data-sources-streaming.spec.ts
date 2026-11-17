@@ -74,7 +74,7 @@ function release() {
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
 const RENDERS = SOURCES.map((s) => `${s}/render_markdown`);
-const INDEX = "unified_grid_and_search_index/grid_index";
+const INDEX = "unified_grid_and_search_index/unified_grid_and_search_index";
 const STEPS = [...INGESTS, ...RENDERS, INDEX];
 
 type DagStep = { id: string; current_state: string | null };
@@ -222,7 +222,7 @@ name = "Grid and Search Index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "'${STEP_BIN}'"
 inputs = [${sources.map(([id]) => `"${id}/render_markdown"`).join(", ")}]
 ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;

@@ -27,7 +27,7 @@
 //! bytes, in a different direction each time — so bytes stay out of
 //! the comparison (`counts_unchanged`) and out of `grid_rows.preview`.
 //! Otherwise every run rewrites a report nothing asked for and
-//! `grid_index` never gets to skip a source.
+//! `unified_grid_and_search_index` never gets to skip a source.
 
 use std::path::{Path, PathBuf};
 
@@ -171,7 +171,7 @@ const BOOKKEEPING_SUFFIX: &str = "_bookkeeping";
 ///
 /// The load-bearing half is `sync_runs`: it gains a row on every run,
 /// so counting it would change the report on a pipeline where nothing
-/// changed and hand `grid_index` work forever.
+/// changed and hand `unified_grid_and_search_index` work forever.
 fn is_datalib_bookkeeping(table: &str) -> bool {
     table.ends_with(BOOKKEEPING_SUFFIX) || datalib_etl::doltlite_raw::SHARED_TABLES.contains(&table)
 }
@@ -321,7 +321,7 @@ impl Measured {
     /// skips a source whose numbers have not moved, and writing the file
     /// before that check would restamp `measured_at_utc` on every run —
     /// churning the rendered tree, whose content hash is what the
-    /// scheduler uses to decide that `grid_index` has nothing to do.
+    /// scheduler uses to decide that `unified_grid_and_search_index` has nothing to do.
     pub fn write_report(&self) -> Result<()> {
         let path = &self.doc.md_path;
         if let Some(parent) = path.parent() {
@@ -516,7 +516,7 @@ pub fn plan(
 ///
 /// **Counts, never bytes**, for the reason in the module header: a store's
 /// size moves when no row did. Comparing bytes would rewrite a report
-/// nothing asked for on every run, and hand `grid_index` a diff to read
+/// nothing asked for on every run, and hand `unified_grid_and_search_index` a diff to read
 /// forever.
 pub fn counts_unchanged(
     previous: &std::collections::HashMap<String, Option<i64>>,
@@ -711,7 +711,7 @@ mod tests {
     /// documents" assertion caught: a doltlite store grows on any run
     /// that touches it — a bookkeeping `last_attempt_at_utc` mutation
     /// rewrites chunks with no row added — so a comparison over bytes
-    /// never settles, and `grid_index` gets work to do forever on a
+    /// never settles, and `unified_grid_and_search_index` gets work to do forever on a
     /// pipeline where nothing changed.
     #[test]
     fn a_store_that_only_grew_does_not_re_render_the_report() {

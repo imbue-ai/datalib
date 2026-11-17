@@ -549,6 +549,42 @@ impl Store {
     }
 
     /// Carry what the loop keeps per step over to the step's new id, for
+    /// the one step `old` now called `new`: whether it is turned off, its
+    /// last success and what it read then, its tree's version, and every
+    /// other step's record of having read that version. The run history
+    /// keeps the id it ran under. A row the new id already has is left as
+    /// it is. Returns how many rows moved.
+    pub async fn rename_step(&self, old: &str, new: &str) -> Result<u64> {
+        // `reads` is JSON keyed by input path, so a key is the id in quotes.
+        let (old_key, new_key) = (format!("\"{old}\""), format!("\"{new}\""));
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut moved = 0;
+        for (table, column) in [("turned_off", "step"), ("steps", "step"), ("sinks", "path")] {
+            // Safe: `table` and `column` are literals from the list above.
+            let rename = sqlx::AssertSqlSafe(format!(
+                "UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?"
+            ));
+            moved += sqlx::query(rename)
+                .bind(new)
+                .bind(old)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        sqlx::query("UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0")
+            .bind(&old_key)
+            .bind(&new_key)
+            .bind(&old_key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if moved > 0 {
+            self.announce(&format!("renamed {old} to {new}"));
+        }
+        Ok(moved)
+    }
+
+    /// Carry what the loop keeps per step over to the step's new id, for
     /// every step under the group `old` now named `new`: whether it is
     /// turned off, its last success and what it read then, and its tree's
     /// version. The run history keeps the ids it ran under. A row the new
@@ -915,6 +951,59 @@ mod tests {
                 .unwrap(),
             0
         );
+        store.close().await;
+    }
+
+    /// A renamed step keeps its switch, its last success and its tree's
+    /// version, a reader's record of that version follows it, and a step
+    /// whose id merely starts with the old one is not moved.
+    #[tokio::test]
+    async fn renaming_a_step_carries_its_rows_over() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let (old, new) = ("u/grid_index", "u/unified_grid_and_search_index");
+        store.turn_off(old, "test").await.unwrap();
+        store.turn_off("u/grid_index_extra", "test").await.unwrap();
+        for (step, reads) in [
+            (old, r#"{"a/render_markdown":"v1"}"#),
+            ("a/embed", r#"{"u/grid_index":"v2"}"#),
+        ] {
+            sqlx::query(
+                "INSERT INTO steps (step, succeeded, fingerprint, reads) VALUES (?, 1, 'f', ?)",
+            )
+            .bind(step)
+            .bind(reads)
+            .execute(store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO sinks (path, version) VALUES (?, 'v2')")
+            .bind(old)
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(store.rename_step(old, new).await.unwrap(), 3);
+        let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
+        assert_eq!(off, [new, "u/grid_index_extra"]);
+        let steps: Vec<(String, String)> =
+            sqlx::query_as("SELECT step, reads FROM steps ORDER BY step")
+                .fetch_all(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            steps,
+            [
+                ("a/embed".to_string(), format!(r#"{{"{new}":"v2"}}"#)),
+                (new.to_string(), r#"{"a/render_markdown":"v1"}"#.to_string()),
+            ]
+        );
+        let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(sink, new);
+        assert_eq!(store.rename_step(old, new).await.unwrap(), 0);
         store.close().await;
     }
 

@@ -54,7 +54,7 @@ function fanInReads(config: string, fn: string, id: string): boolean {
   const own = id.split("/")[1];
   return fanInInputs(config, fn).some((i) => i === id || i === `*/${own}`);
 }
-/// The sources the `grid_index` step keeps out of search.
+/// The sources the `unified_grid_and_search_index` step keeps out of search.
 function notSearched(config: string): string[] {
   const listed = /not_searched = \[([^\]]*)\]/.exec(config);
   return listed
@@ -216,7 +216,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
 
   // Take the render step out by hand, the way a config edited in an
   // editor might lack one — including the reference to it that adding
-  // the source put on `grid_index`. Both halves, because a step id that
+  // the source put on `unified_grid_and_search_index`. Both halves, because a step id that
   // names nothing is an invalid config and the save would be refused:
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
@@ -342,7 +342,9 @@ test("free-text search is a choice, and only the search feels it", async ({ page
   await expect(editor).toHaveValue(/rows-only\/render_markdown|group = "rows-only"/);
   await expect(editor).toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const added = await editor.inputValue();
-  expect(fanInReads(added, "grid_index", "rows-only/render_markdown")).toBe(true);
+  expect(fanInReads(added, "unified_grid_and_search_index", "rows-only/render_markdown")).toBe(
+    true,
+  );
   expect(notSearched(added)).toContain("rows-only");
   expect(added).not.toMatch(stepBlock("rows-only", "embed"));
 
@@ -382,7 +384,7 @@ test("free-text search is a choice, and only the search feels it", async ({ page
   await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/grid_index"]',
+    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]',
   );
   // Added once, however many times the source is saved.
   expect(saved.match(/group = "rows-only"\nfunction = "embed"\n/g)).toHaveLength(1);

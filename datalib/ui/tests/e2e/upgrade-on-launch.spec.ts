@@ -52,7 +52,7 @@ const MIGRATED: Upgrade = {
   rerender: [
     "enterprise-mail/render_markdown",
     "ten-forward/render_markdown",
-    "unified_grid_and_search_index/grid_index",
+    "unified_grid_and_search_index/unified_grid_and_search_index",
   ],
 };
 

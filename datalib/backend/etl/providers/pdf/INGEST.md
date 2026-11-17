@@ -307,7 +307,7 @@ Two things follow, both deliberate:
 
 - **PDF grid rows are machine-specific.** The backend index is a derived
   artifact — rebuilt from the per-source render stores by
-  `grid_index` — so this does not corrupt anything shared. But it does
+  `unified_grid_and_search_index` — so this does not corrupt anything shared. But it does
   mean two machines indexing the same corpus produce different rows for
   the same document.
 - **Moving the corpus rewrites its rows.** The path is in every grid

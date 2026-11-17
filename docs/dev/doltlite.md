@@ -920,7 +920,7 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   gc dropped, gets `revision '<hash>' is no longer available` on its
   next read of history; a table scan may still answer from pages it
   already had.
-  A tag on the commit keeps the reader whole. Render and `grid_index`
+  A tag on the commit keeps the reader whole. Render and `unified_grid_and_search_index`
   read this way, so a fold tags what they are pinned to, or waits.
 - **Doltlite has no verb that drops history**: no `dolt_squash_history`,
   no orphan branch, no shallow history, and `dolt_gc` takes no options.

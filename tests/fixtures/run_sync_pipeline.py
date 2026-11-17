@@ -73,7 +73,7 @@ Args (positional):
                       manual, a scanned blueprint). File-backed; the
                       scanner walks its `path` directly. Unlike
                       file_inventory this source RENDERS, so its markdown
-                      reaches grid_index and the search index like any
+                      reaches the index step and the search like any
                       chat source — which is the whole point of
                       including it here.
     24: garmin_tng    JSON spec for the TNG Garmin account (the path is
@@ -568,7 +568,7 @@ params = {params}
             root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{group}/render_markdown"')
         # The fan-ins read every source by pattern, as the starter config
-        # and the app's config upgrade write them. `grid_index` also reads
+        # and the app's config upgrade write them. `unified_grid_and_search_index` also reads
         # each `render_time_series` and `render_occurrences`, for their
         # problem rows.
         groups = [r.strip('"').split("/")[0] for r in rendered]
@@ -582,7 +582,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = [{grid_list}]"""
         )
         # The time-series index reads every source's `render_time_series`.
@@ -615,17 +615,17 @@ name = "Grid and Search Index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = [{grid_list}]"""
         )
-        # Each source embeds what the `grid_index` step's keyword pass cut of it.
+        # Each source embeds what the `unified_grid_and_search_index` step's keyword pass cut of it.
         # The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
                 f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
-                f'inputs = ["unified_grid_and_search_index/grid_index"]'
+                f'inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]'
             )
         root_text = "\n\n".join(root_blocks) + "\n"
         return _with_step_commands(dag_text), _with_step_commands(root_text)

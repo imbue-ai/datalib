@@ -1,6 +1,6 @@
 """Drops the search index's tables from a grid index file, in place.
 
-A sync's `grid_index` writes both the grid and the search index's keyword
+A sync's `unified_grid_and_search_index` writes both the grid and the search index's keyword
 tables into one file. The fixture keeps the grid alone as
 `backend_index.sqlite`, so a test can stand for a root no keyword pass has
 run on (`copy_grid_index` in the search fixture), and

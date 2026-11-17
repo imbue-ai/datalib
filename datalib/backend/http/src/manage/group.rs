@@ -238,10 +238,13 @@ mod tests {
     #[test]
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
-            step("u/grid_index", &["a/render_markdown"]),
+            step("u/unified_grid_and_search_index", &["a/render_markdown"]),
             step("u/embedding_map", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/embedding_map"]);
+        assert_eq!(
+            ids(&out),
+            ["u/unified_grid_and_search_index", "u/embedding_map"]
+        );
     }
 
     #[test]
@@ -249,9 +252,12 @@ mod tests {
         let out = pipeline_order(&[
             applet("u"),
             step("u/embedding_map", &[]),
-            step("u/grid_index", &[]),
+            step("u/unified_grid_and_search_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/embedding_map", "u/grid_index", "u"]);
+        assert_eq!(
+            ids(&out),
+            ["u/embedding_map", "u/unified_grid_and_search_index", "u"]
+        );
     }
 
     #[test]
@@ -413,7 +419,7 @@ mod tests {
     #[test]
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
-            child("u/grid_index", "succeeded", Step, None),
+            child("u/unified_grid_and_search_index", "succeeded", Step, None),
             child("u/embedding_map", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
@@ -533,7 +539,13 @@ mod tests {
 
     #[test]
     fn group_seeds_is_empty_for_a_group_whose_steps_all_read_something() {
-        let got = group_seeds(&[step("u/grid_index", &["a/render_markdown"])], |_| false);
+        let got = group_seeds(
+            &[step(
+                "u/unified_grid_and_search_index",
+                &["a/render_markdown"],
+            )],
+            |_| false,
+        );
         assert!(got.is_empty());
     }
 

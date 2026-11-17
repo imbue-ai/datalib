@@ -186,7 +186,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
 "#;
 
     fn loaded_inputs(text: &str, step: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
             .cfg
@@ -235,7 +235,10 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
             written_inputs(&after, export),
             written_inputs(BEFORE, export)
         );
-        for step in [grid, map, export] {
+        // As loaded, once the later rewrite has given the index step its
+        // group's name.
+        let loaded_grid = "unified_grid_and_search_index/unified_grid_and_search_index";
+        for step in [loaded_grid, map, export] {
             assert_eq!(
                 loaded_inputs(&after, step),
                 loaded_inputs(BEFORE, step),

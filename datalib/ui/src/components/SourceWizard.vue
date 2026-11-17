@@ -2538,8 +2538,10 @@ function submit() {
                     <span>
                       Keyword-index the markdown
                       <small class="wiz-help">
-                        Done by <code>grid_index</code>. Off: the source stays in the grid, but the
-                        search bar will not find it.<template v-if="!renderWanted">
+                        Done by <code>unified_grid_and_search_index</code>. Off: the source stays in
+                        the grid, but the search bar will not find it.<template
+                          v-if="!renderWanted"
+                        >
                           Nothing to index while rendering is off.</template
                         >
                       </small>

@@ -147,7 +147,7 @@ inputs = [
 "#;
 
     fn grid_inputs(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert_eq!(
             check.dropped(),
             0,
@@ -158,7 +158,7 @@ inputs = [
             .cfg
             .steps
             .iter()
-            .find(|s| s.id == "unified_grid_and_search_index/grid_index")
+            .find(|s| s.id == "unified_grid_and_search_index/unified_grid_and_search_index")
             .unwrap()
             .inputs
             .clone()

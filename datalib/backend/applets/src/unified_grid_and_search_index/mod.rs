@@ -64,7 +64,7 @@ const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
 struct Index {
     /// The data root, for resolving a document's on-disk neighbours.
     root: Arc<PathBuf>,
-    /// The grid index. Read-only: the `grid_index` step is its only
+    /// The grid index. Read-only: the `unified_grid_and_search_index` step is its only
     /// writer, so holding it open across a sync is safe.
     repo: DynIndexRepo,
     /// Embeds a Meaning search's text in this process, with the model the
@@ -594,7 +594,7 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
     if echo["search_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
-             words are searchable once `grid_index` has run after its render"
+             words are searchable once `unified_grid_and_search_index` has run after its render"
                 .to_string(),
         );
     }
@@ -1684,7 +1684,7 @@ pub struct IndexStateRequest {
 /// its fields keep the names they had when the search index answered them.
 #[derive(Debug, Serialize)]
 pub struct IndexStateResponse {
-    /// False when no `grid_index` keyword pass has written the search index
+    /// False when no `unified_grid_and_search_index` keyword pass has written the search index
     /// yet, so every document is legitimately un-indexed rather than
     /// unknown.
     pub index_present: bool,
@@ -2274,7 +2274,7 @@ mod tests {
     }
 
     /// Commits one chat per `(uuid, created_at)` to the root's grid index,
-    /// the way the `grid_index` step writes and seals it.
+    /// the way the `unified_grid_and_search_index` step writes and seals it.
     async fn index_chats(root: &std::path::Path, chats: &[(&str, &str)]) {
         let docs: Vec<Doc> = chats
             .iter()
@@ -2287,7 +2287,7 @@ mod tests {
     type Doc<'a> = (&'a str, &'a str, &'a str, Option<&'a str>);
 
     /// Commits one document per entry to the root's grid index, the way
-    /// the `grid_index` step writes and seals it.
+    /// the `unified_grid_and_search_index` step writes and seals it.
     async fn index_documents(root: &std::path::Path, docs: &[Doc<'_>]) {
         let rows = docs
             .iter()

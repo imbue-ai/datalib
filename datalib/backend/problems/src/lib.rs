@@ -80,7 +80,7 @@ closed_vocabulary! {
 
 impl Stage {
     /// The stages a step other than the download and the render records
-    /// in a store of its own, each that step's alone. `grid_index` copies
+    /// in a store of its own, each that step's alone. `unified_grid_and_search_index` copies
     /// each one's rows apart from the render store's, so neither copy
     /// erases the other's.
     pub const OWN_STORE: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];

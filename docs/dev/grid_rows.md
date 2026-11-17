@@ -8,7 +8,7 @@ projection of its records into one table, **`grid_rows`**, and the
 branches.
 
 The index holds one more table the grid does not read: `problems`,
-every source's render-store `problems` copied in whole by `grid_index`
+every source's render-store `problems` copied in whole by `unified_grid_and_search_index`
 and served by the applet at `/problems`, which filters, sorts, groups
 (`/problems/groups`) and pages the way `/search` does, through the keys
 declared on `ProblemRow`.
@@ -61,7 +61,7 @@ source, `contact-common`, `calendar-common`, `forge-render-common`
 (github, gitlab) and `timeseries_render`. It writes them into the
 source's own render store,
 `<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`. The
-`grid_index` step (`build_grid_index` in
+`unified_grid_and_search_index` step (`build_grid_index` in
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores
 into the unified grid and search index: it asks each one for the `dolt_diff` between
 the commit the index last consumed (`source_cursors`) and that store's
@@ -169,8 +169,8 @@ the new shape, and the grid index rebuilds itself from the stores.
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
    ingest/render step pair in the config and name the render step in
-   `grid_index`'s `inputs` (the wizard does this for a source it adds,
-   with the source's `embed`); `grid_index` reads exactly the stores
+   `unified_grid_and_search_index`'s `inputs` (the wizard does this for a source it adds,
+   with the source's `embed`); `unified_grid_and_search_index` reads exactly the stores
    its inputs name.
 3. Give it an icon and a catalog entry (`datalib/ui/src/assets/README.md`)
    — the query path itself does not change.
@@ -462,7 +462,7 @@ caption is a `caption:` term.
 
 **A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and `grid_index`'s keyword pass leaves
+its rows and opens like any other, and `unified_grid_and_search_index`'s keyword pass leaves
 that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found
@@ -545,7 +545,7 @@ never compared (`introspect::counts_unchanged`), and datalib's own
 tables (`doltlite_raw::SHARED_TABLES` — `sync_runs`, `sync_scope_state`
 and the like — and every `<table>_bookkeeping` sidecar) are left out of
 the report. Otherwise every run would rewrite the report and hand
-`grid_index` a diff forever. This is the download side's *volatile
+`unified_grid_and_search_index` a diff forever. This is the download side's *volatile
 field* idea in another shape: the bytes are signal, so they are
 **reported but not hashed**, neither sorted nor dropped.
 

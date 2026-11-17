@@ -458,7 +458,7 @@ Failing there is wrong: `data` means "a human must look at this", and
 the Manage row turns red for a source that has simply not been synced
 yet.
 
-An empty render is safe for the index: `grid_index` deletes per
+An empty render is safe for the index: `unified_grid_and_search_index` deletes per
 document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by
 the markdown files actually present, so rendering nothing contributes
 nothing rather than dropping another source's rows.
@@ -734,7 +734,7 @@ The run then returns as a shorter run, `finish` commits blobs then
 entities, and the step reports `cancelled`. A stopped run does not
 record its scope config as satisfied, so a widened filter interrupted
 part-way is backfilled by the next run rather than believed done.
-`grid_index` reads the same flag between documents: it rolls back the
+`unified_grid_and_search_index` reads the same flag between documents: it rolls back the
 source it is loading and keeps the ones it has already committed.
 
 ## Minimal examples
@@ -806,7 +806,7 @@ emit({"event": "outcome",
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
 learn what to do — `ingest`, `render_markdown`, `render_time_series`,
-`embed`, `grid_index`, `embedding_map`
+`embed`, `unified_grid_and_search_index`, `embedding_map`
 or `time_series_index`; anything else is
 refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
 provider to run, which `ingest`, `render_markdown` and
@@ -875,5 +875,5 @@ Four things a hand run has to get right that the runner does for it:
   second time, beneath itself.
 
 The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
-the search index's tables live in `grid_index`'s file; the rules are in
+the search index's tables live in `unified_grid_and_search_index`'s file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

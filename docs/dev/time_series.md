@@ -39,7 +39,7 @@ Three sources do:
   will not parse, or one the blob store no longer holds) costs only its
   own time series: it is a warning row in the store's `problems`, stage
   `time_series` (`datalib_etl_time_series::unreadable_problems`).
-  `grid_index` reads the step too, for those rows alone, and copies them
+  `unified_grid_and_search_index` reads the step too, for those rows alone, and copies them
   into the problems list, where the step's Manage row counts them
   (`etl/README.md` §"Problems flow downstream with the data").
 - **`time_series_index`** (same file) reads each source store named in

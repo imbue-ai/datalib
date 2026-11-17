@@ -109,7 +109,7 @@ the container or from any other one with the folder mounted:
 <!-- doc-test: run demo-sql -->
 ```sh
 docker exec datalib-demo datalib-doltlite -readonly \
-  /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
+  /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -166,7 +166,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
@@ -174,7 +174,7 @@ inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 group = "gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -227,7 +227,7 @@ describes. Query it without the server running at all:
 <!-- doc-test: run own-sql -->
 ```sh
 docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
-  /data/unified_grid_and_search_index/grid_index/db.sqlite \
+  /data/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 

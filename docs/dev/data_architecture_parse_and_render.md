@@ -199,7 +199,7 @@ row, no `.md` file — and its problem rows are the whole record of it.
 ### What is still a file: the markdown
 
 The rendered `.md` lives on disk rather than in a table. Search does
-not read it: `grid_index`'s keyword pass and each source's `embed`
+not read it: `unified_grid_and_search_index`'s keyword pass and each source's `embed`
 (`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
 text from the render store (`IndexedMarkdownStore::index_docs`), and
 `embed` runs the embedding model in process. What keeps the file is
@@ -722,7 +722,7 @@ what to change, the sink is wrong.
 [`step_protocol.md`](step_protocol.md) draws one line — absent vs
 malformed — and classifies a record that will not deserialize as a
 `data` failure, which fails the step and poisons its entire downstream
-subtree, including the `grid_index` fan-in that depends on *every*
+subtree, including the `unified_grid_and_search_index` fan-in that depends on *every*
 source. Right for "the store will not open," wrong for "one of forty
 thousand Slack messages has a field we did not expect."
 
@@ -990,11 +990,11 @@ The `.md` file matters as much as the rows: `md_path` is what
 `/applet/unified_grid_and_search_index/chat/{uuid}` serves, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
-the file at its old one (`put_document`). `grid_index` needs no part in
+the file at its old one (`put_document`). `unified_grid_and_search_index` needs no part in
 any of this — it learns of a removal from the render store's own diff.
 
 Across a version bump or a params change the store is **kept**: its
-history, the commit `grid_index` last consumed, and the cursor. "Render
+history, the commit `unified_grid_and_search_index` last consumed, and the cursor. "Render
 every bucket again" and "forget where I was" are different requests,
 and only the first is ever wanted — a re-keyed document then reaches the
 index as a deletion plus an addition rather than as an old row nobody

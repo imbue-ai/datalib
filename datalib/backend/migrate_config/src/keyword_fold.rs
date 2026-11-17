@@ -283,7 +283,7 @@ inputs = ["*/keyword_index", "*/embed"]
 "#;
 
     fn check(text: &str) -> datalib_dag::config::ConfigCheck {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }
@@ -311,7 +311,7 @@ inputs = ["*/keyword_index", "*/embed"]
         assert!(!after.contains("keyword_index\"\ncommand"), "{after}");
         assert!(!after.contains("the captain's mail, in search"), "{after}");
         let check = check(&after);
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert_eq!(inputs_of(&check, "picard/embed"), [grid]);
         let mut mapped = inputs_of(&check, "unified_grid_and_search_index/embedding_map");
         mapped.sort();
@@ -359,7 +359,10 @@ inputs = ["*/keyword_index", "*/embed"]
         let after = rewrite(&no_grid).unwrap();
         let check = check(&after);
         assert_eq!(
-            inputs_of(&check, "unified_grid_and_search_index/grid_index"),
+            inputs_of(
+                &check,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["picard/render_markdown", "q/render_markdown"]
         );
         assert!(after.contains("params.not_searched = [\"q\"]"), "{after}");

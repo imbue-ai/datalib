@@ -603,13 +603,13 @@ because the download could not get it".
 
 Each source's problems travel with its data. The download writes them
 into its raw store's `problems` table, where `source_id` is empty. The
-render step copies them under the source's id, and `grid_index` copies
+render step copies them under the source's id, and `unified_grid_and_search_index` copies
 every source's into one `problems` table in
-`unified_grid_and_search_index/grid_index/db.sqlite`. That last copy is
+`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. That last copy is
 the one to query, since it covers every source:
 
 ```sh
-datalib-doltlite -readonly unified_grid_and_search_index/grid_index/db.sqlite \
+datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT source_id, severity, outcome, reason, scope_key, sample
      FROM problems WHERE stage = 'fetch' ORDER BY changed_at_utc DESC LIMIT 20"
 ```

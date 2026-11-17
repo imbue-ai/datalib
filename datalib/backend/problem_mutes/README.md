@@ -71,7 +71,7 @@ place, `datalib_problem_mutes`:
    fetch-stage row is the source's `ingest` step's, a `time_series` row
    its `render_time_series` step's, an `occurrences` row its
    `render_occurrences` step's, the index's own row about a render
-   store it could not read is `grid_index`'s, and every other row is
+   store it could not read is `unified_grid_and_search_index`'s, and every other row is
    the source's `render_markdown` step's. An `info` row is in no count.
 3. The row's number is the unmuted rows; the muted ones are said on
    hover. With the number the row carries `problems_query`, the grid's
