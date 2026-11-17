@@ -166,9 +166,10 @@ write what datalib's own render steps write, in the same place:
   `time_series_index` lists and the Time series card charts. The step
   reports the store's commit hash as its version.
 
-The wizard adds these steps to the inputs of `grid_index`, the search
-aggregator and `time_series_index` (`setTimeSeriesStep` in
-`config/sourceSteps.ts`), as it does for a built-in source. Nothing in
+`grid_index`, the search aggregator and `time_series_index` read these
+steps by pattern (`*/render_markdown` and the like), as they read a
+built-in source's; where a config names its inputs one by one, the
+wizard adds them (`setTimeSeriesStep` in `config/sourceSteps.ts`). Nothing in
 the indexes asks a store which type or provider wrote it.
 
 These stores are datalib's own formats, not a published interface. A

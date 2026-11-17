@@ -7,9 +7,10 @@
 use std::ops::Range;
 use std::path::Path;
 
-use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
+use datalib_dag::config::{DagConfig, FAN_INS, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
+use datalib_dag::input_pattern::names;
 use datalib_obs::status_line;
 use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
@@ -18,38 +19,6 @@ use serde::Deserialize;
 use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
-
-/// Which index step reads a source step of each function, as
-/// `(source function, index group, index function)`.
-const FAN_INS: &[(&str, &str, &str)] = &[
-    (
-        "render_markdown",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    // For their problem rows alone.
-    (
-        "render_time_series",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    (
-        "render_occurrences",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    (
-        "keyword_index",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "qmd_aggregator",
-    ),
-    ("embed", UNIFIED_GRID_AND_SEARCH_INDEX_DIR, "qmd_aggregator"),
-    (
-        "render_time_series",
-        TIME_SERIES_INDEX_GROUP,
-        "time_series_index",
-    ),
-];
 
 fn qmd_aggregator() -> String {
     format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/qmd_aggregator")
@@ -222,12 +191,21 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             .find(|s| s.step_id().as_deref() == Some(index_id.as_str()));
         match index.and_then(|s| s.inputs.as_ref()) {
             Some(inputs) => {
-                let mut after = inputs.get_ref().clone();
-                after.extend(reads.iter().cloned());
-                edits.push((
-                    inputs.span(),
-                    edit_string_array(&config[inputs.span()], &after)?,
-                ));
+                // A pattern already there (`*/render_markdown`) reads the
+                // new step without an edit.
+                let unnamed: Vec<String> = reads
+                    .iter()
+                    .filter(|r| !inputs.get_ref().iter().any(|i| names(i, r)))
+                    .cloned()
+                    .collect();
+                if !unnamed.is_empty() {
+                    let mut after = inputs.get_ref().clone();
+                    after.extend(unnamed);
+                    edits.push((
+                        inputs.span(),
+                        edit_string_array(&config[inputs.span()], &after)?,
+                    ));
+                }
                 wired.extend(reads.into_iter().map(|r| (r, index_id.clone())));
             }
             None if index_group == TIME_SERIES_INDEX_GROUP

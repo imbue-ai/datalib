@@ -152,6 +152,9 @@ async fn main() -> Result<()> {
                     n => format!(", {n} step(s) whose params a sync would refuse"),
                 }
             );
+            for line in config::expansion_lines(&checked.expansions) {
+                println!("{line}");
+            }
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.

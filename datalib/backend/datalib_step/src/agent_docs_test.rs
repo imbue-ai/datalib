@@ -40,6 +40,7 @@ fn config_for(name: &str, block: &str) -> String {
         .filter_map(|s| s.get("inputs")?.as_array().cloned())
         .flatten()
         .filter_map(|i| i.as_str().map(str::to_string))
+        .filter(|i| datalib_dag::input_pattern::pattern_function(i).is_none())
         .collect();
     let mut config = block.to_string();
     for input in read.difference(&declared) {

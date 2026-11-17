@@ -10,6 +10,7 @@ use crate::index_name::NEW as UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use anyhow::{Context as _, Result};
 use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
+use datalib_dag::input_pattern::names;
 use serde::Deserialize;
 
 /// The functions whose problem rows `grid_index` copies.
@@ -64,7 +65,7 @@ fn missing(view: &View) -> Option<(Vec<String>, &toml::Spanned<Vec<String>>)> {
                 s.function.as_deref()?
             ))
         })
-        .filter(|id| !inputs.get_ref().contains(id))
+        .filter(|id| !inputs.get_ref().iter().any(|i| names(i, id)))
         .collect();
     (!ids.is_empty()).then_some((ids, inputs))
 }

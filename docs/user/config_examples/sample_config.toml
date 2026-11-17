@@ -23,13 +23,13 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
+inputs = ["*/keyword_index", "*/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
