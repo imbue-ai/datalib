@@ -206,7 +206,7 @@ text already stored five times on a real data root.
 Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
-"QMDs are write-only"), whatever database the markdown sits in.
+"Rendered markdown is write-only"), whatever database the markdown sits in.
 
 ### Upstream text is escaped where it becomes markup
 

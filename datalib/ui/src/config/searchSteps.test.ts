@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { listSteps, setQmdSteps } from "./sourceSteps";
+import { listSteps, setSearchSteps } from "./sourceSteps";
 
 const config = (type: string) => `[[groups]]
 id = "away-team"
@@ -27,7 +27,7 @@ function = "qmd_aggregator"
 inputs = []
 `;
 
-const qmdIds = (text: string) =>
+const searchStepIds = (text: string) =>
   listSteps(text)
     .filter((s) => s.function === "keyword_index" || s.function === "embed")
     .map((s) => s.id);
@@ -35,15 +35,15 @@ const qmdIds = (text: string) =>
 const aggregatorInputs = (text: string) =>
   listSteps(text).find((s) => s.function === "qmd_aggregator")?.inputs;
 
-describe("setQmdSteps", () => {
+describe("setSearchSteps", () => {
   it("gives a garmin source a keyword index and no embed step", () => {
-    const out = setQmdSteps(config("garmin"), "away-team", "keyword_and_embed");
-    expect(qmdIds(out)).toEqual(["away-team/keyword_index"]);
+    const out = setSearchSteps(config("garmin"), "away-team", "keyword_and_embed");
+    expect(searchStepIds(out)).toEqual(["away-team/keyword_index"]);
     expect(aggregatorInputs(out)).toEqual(["away-team/keyword_index"]);
   });
 
   it("still embeds a source of any other type", () => {
-    const out = setQmdSteps(config("email"), "away-team", "keyword_and_embed");
-    expect(qmdIds(out)).toEqual(["away-team/keyword_index", "away-team/embed"]);
+    const out = setSearchSteps(config("email"), "away-team", "keyword_and_embed");
+    expect(searchStepIds(out)).toEqual(["away-team/keyword_index", "away-team/embed"]);
   });
 });

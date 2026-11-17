@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use datalib_unified_grid_and_search_index::group::Within;
-use datalib_unified_grid_and_search_index::qmd::index_state::IndexStamp;
-use datalib_unified_grid_and_search_index::qmd::QmdHit;
+use datalib_unified_grid_and_search_index::hits::index_state::IndexStamp;
+use datalib_unified_grid_and_search_index::hits::SearchHit;
 use datalib_unified_grid_and_search_index::sort::Sort;
 
 /// Searches kept. A list of every row of a large root is a few MB of
@@ -31,7 +31,7 @@ pub struct Key {
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub uuid: String,
-    /// What qmd matched, for a free-text search.
+    /// What the search matched, for a free-text search.
     pub hit: Option<Hit>,
     /// The message a document's hit landed on and the lines quoted from
     /// it, set the first time a page shows it.
@@ -45,7 +45,7 @@ pub struct Hit {
     pub score: f64,
     pub snippet: String,
     /// A hit on a whole document, still to be landed on a message.
-    pub document: Option<Arc<QmdHit>>,
+    pub document: Option<Arc<SearchHit>>,
 }
 
 impl Entry {
@@ -64,7 +64,7 @@ impl Entry {
     }
 
     /// Whether a page must still land this entry before showing it.
-    pub fn unlanded(&self) -> Option<&QmdHit> {
+    pub fn unlanded(&self) -> Option<&SearchHit> {
         let document = self.hit.as_ref()?.document.as_deref()?;
         self.landed.get().is_none().then_some(document)
     }
@@ -117,7 +117,7 @@ impl ResultCache {
 pub struct Keyed {
     pub rows: HashSet<String>,
     pub documents: HashSet<String>,
-    pub kept: HashMap<String, datalib_unified_grid_and_search_index::qmd::vectors::Kept>,
+    pub kept: HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept>,
 }
 
 /// How many of the documents a search could find have no vectors, so search
@@ -152,7 +152,7 @@ impl WithoutVectors {
 }
 
 /// What counting [`WithoutVectors`] last read: the documents with vectors,
-/// until the qmd index moves, and the last search's count, until it or the
+/// until the search index moves, and the last search's count, until it or the
 /// grid does. A person repeats one search far more than they change it.
 #[derive(Default)]
 pub struct VectorCoverage {
@@ -160,7 +160,7 @@ pub struct VectorCoverage {
     pub last: Option<(CoverageKey, WithoutVectors)>,
 }
 
-/// A search's cache key, the grid's commit and how the qmd index looks.
+/// A search's cache key, the grid's commit and how the search index looks.
 pub type CoverageKey = (String, Option<String>, Vec<IndexStamp>);
 
 /// A search's terms, written out, and the commit they were read at.

@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
     search(
         order = "touched_at_utc desc, is_document desc, uuid desc",
         range = "touched_at_utc",
-        qmd
+        ranked
     )
 )]
 pub struct GridRow {
@@ -201,7 +201,7 @@ pub struct GridRow {
     /// mailbox, a workspace): what a person browses or filters by.
     #[col(sql = "VARCHAR(96)")]
     pub place_uuid: Option<String>,
-    /// Zero-based position within the conversation, in the order the QMD
+    /// Zero-based position within the conversation, in the order the rendered markdown
     /// renders messages. Null for thread-level rows.
     #[col(sql = "INT")]
     pub message_index: Option<i64>,
@@ -212,7 +212,7 @@ pub struct GridRow {
     /// Contents column shows when there is no search term. Cut from the
     /// body the producer hands the builder (`GridRowBuilder::body`); the
     /// body itself is not stored here — the rendered markdown holds it,
-    /// and free-text search goes through qmd's index of that markdown.
+    /// and free-text search goes through the search index of that markdown.
     #[col(sql = "TEXT")]
     pub preview: String,
     /// blake3 of the whole body, hex. A change past the preview still

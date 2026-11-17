@@ -50,7 +50,7 @@ sh_binary(
         # binary's runfiles path keeps that resolvable without a
         # `binary_dir` or a PATH assumption.
         "//datalib/backend/applets:datalib_applet",
-        "//third-party/qmd_models:embeddinggemma",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     visibility = ["//visibility:public"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
@@ -450,7 +450,7 @@ genrule(
     srcs = [
         "ingested/search_prompts.tsv",
         "//datalib/backend/embedder:embed_prompts",
-        "//third-party/qmd_models:embeddinggemma",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     outs = ["ingested/vectors.tsv"],
     tools = ["quiet.sh"],
@@ -458,7 +458,7 @@ genrule(
         "$(execpath quiet.sh) $(RULEDIR)/vectors.log",
         "$(execpath //datalib/backend/embedder:embed_prompts)",
         "$(execpath ingested/search_prompts.tsv)",
-        "$(execpath //third-party/qmd_models:embeddinggemma)",
+        "$(execpath //third-party/embedding_models:embeddinggemma)",
         "$(execpath ingested/vectors.tsv)",
     ]),
     # Cached remotely, never run there: its inputs are ~300 MB, and

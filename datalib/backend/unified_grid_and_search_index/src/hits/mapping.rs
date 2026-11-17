@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use datalib_schema::grid_rows::markdown_uuid_of_path;
 
 /// Which collections a search may draw from: every one, or exactly these.
-/// There is one qmd collection per group, so these are group ids; an empty
+/// Sources are scoped by group, so these are group ids; an empty
 /// list matches nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CollectionScope {
@@ -28,7 +28,7 @@ impl CollectionScope {
 
 /// One document a ranking found: by its words or by its meaning.
 #[derive(Debug, Clone)]
-pub struct QmdHit {
+pub struct SearchHit {
     /// The document's file, relative to the data root; empty until the
     /// page that shows the hit looks it up.
     pub path: String,
@@ -152,7 +152,7 @@ impl GridIndex {
     /// The rows `hit` lands on: the item it names when the search keeps
     /// it, else the document's own row, or every row of a document that
     /// has none. Empty for a document the grid does not have.
-    fn rows_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
+    fn rows_for_hit(&self, hit: &SearchHit) -> Vec<GridRowRef> {
         let Some(file_rows) =
             markdown_uuid_of_path(&hit.path).and_then(|d| self.by_document.get(d))
         else {
@@ -178,7 +178,7 @@ impl GridIndex {
     /// The row that *is* the document `hit` lands in, for an
     /// `is:document` search, whose filter would drop a message row. Empty
     /// when the document has no such row.
-    fn document_for_hit(&self, hit: &QmdHit) -> Vec<GridRowRef> {
+    fn document_for_hit(&self, hit: &SearchHit) -> Vec<GridRowRef> {
         self.rows_for_hit(hit)
             .first()
             .and_then(|r| self.by_document.get(&r.markdown_uuid))
@@ -193,7 +193,7 @@ impl GridIndex {
     /// reading the document's file once: the work a page does for each hit
     /// it shows, and only for those. The document's own row for an
     /// `is:document` search. `None` for a document the grid does not have.
-    pub fn land(&self, hit: &QmdHit, documents_only: bool) -> Option<(GridRowRef, String)> {
+    pub fn land(&self, hit: &SearchHit, documents_only: bool) -> Option<(GridRowRef, String)> {
         let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
         let rows = if documents_only {
             self.document_for_hit(hit)
@@ -283,8 +283,8 @@ mod tests {
         }
     }
 
-    fn hit(path: &str, snippet: &str) -> QmdHit {
-        QmdHit {
+    fn hit(path: &str, snippet: &str) -> SearchHit {
+        SearchHit {
             path: path.to_string(),
             score: 1.0,
             snippet: snippet.to_string(),
@@ -358,7 +358,7 @@ mod tests {
         let mut rows = write_two_message_doc(tmp.path(), CHAT);
         rows.push(document(CHAT, "Chat", CHAT, "claude"));
         let idx = GridIndex::new(tmp.path(), rows);
-        let named = |uuid: Option<&str>| QmdHit {
+        let named = |uuid: Option<&str>| SearchHit {
             place: Some(Place::Item {
                 uuid: uuid.map(String::from),
             }),
@@ -382,8 +382,8 @@ mod tests {
     const SECOND: &str = "bbbbbbbb-0000-0000-0000-000000000002";
 
     /// A hit on `CHAT` naming item `uuid`, as the search index answers.
-    fn on_item(uuid: Option<&str>) -> QmdHit {
-        QmdHit {
+    fn on_item(uuid: Option<&str>) -> SearchHit {
+        SearchHit {
             place: Some(Place::Item {
                 uuid: uuid.map(String::from),
             }),
@@ -485,7 +485,7 @@ mod tests {
             path_of("claude", OTHER),
             format!("claude/render_markdown/{CHAT}/all.md"),
         ] {
-            let h = QmdHit {
+            let h = SearchHit {
                 place: Some(Place::Item { uuid: None }),
                 ..hit(&path, "")
             };

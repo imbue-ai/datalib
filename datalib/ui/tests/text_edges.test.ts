@@ -112,7 +112,7 @@ function problems(c: Case, baseline: Rendered): string[] {
   }
 
   for (const phrase of c.finds) {
-    if (!phraseIn(phrase, r.file)) out.push(`qmd's words miss ${JSON.stringify(phrase)}`);
+    if (!phraseIn(phrase, r.file)) out.push(`the search's words miss ${JSON.stringify(phrase)}`);
     if (!phraseIn(phrase, r.grid_text)) {
       out.push(`the grid's text misses ${JSON.stringify(phrase)}: ${JSON.stringify(r.grid_text)}`);
     }

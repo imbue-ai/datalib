@@ -461,7 +461,7 @@ off just its `embed` step keeps keyword search.
 
 The wizard maintains all of it (`ui/src/config/sourceSteps.ts`):
 `wireIntoFanIns` on create, `unwireFromFanIns` on delete and when a
-render step is removed, and `setQmdSteps` for the two qmd tickboxes
+render step is removed, and `setSearchSteps` for the two qmd tickboxes
 under Rendering in Advanced options. "Keyword-index the markdown" adds or removes the
 source's `keyword_index` and its edge into `qmd_aggregator`; "Embed it
 for search by meaning", which needs the first, does the same for its

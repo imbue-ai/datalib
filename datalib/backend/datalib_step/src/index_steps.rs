@@ -49,18 +49,18 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 fn provision_embed_model(
     root: &Path,
     models_dir: Option<PathBuf>,
-    fetch: datalib_qmd_models::Fetch,
+    fetch: datalib_embedding_models::Fetch,
 ) -> Result<PathBuf> {
-    let models = datalib_runtime::qmd::EMBED_MODELS;
-    let dir = models_dir.unwrap_or_else(|| datalib_qmd_models::models_dir_for(root));
-    let outcomes = datalib_qmd_models::ensure_models(&dir, models, fetch)
+    let models = datalib_runtime::models::EMBED_MODELS;
+    let dir = models_dir.unwrap_or_else(|| datalib_embedding_models::models_dir_for(root));
+    let outcomes = datalib_embedding_models::ensure_models(&dir, models, fetch)
         .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
-    let missing = datalib_qmd_models::missing(models, &outcomes);
+    let missing = datalib_embedding_models::missing(models, &outcomes);
     if !missing.is_empty() {
         anyhow::bail!(
             "the embedding model is missing from {} and not fetched ({} is set): {}",
             dir.display(),
-            datalib_qmd_models::NO_FETCH_ENV,
+            datalib_embedding_models::NO_FETCH_ENV,
             missing.join(", ")
         );
     }
@@ -70,10 +70,10 @@ fn provision_embed_model(
 /// What qmd kept under the aggregator's directory: its index, the
 /// index's config and its link to the models. Nothing reads them now.
 fn retire_qmd(root: &Path) -> Result<()> {
-    let dir = datalib_runtime::qmd::qmd_state_dir(root);
+    let dir = datalib_runtime::models::qmd_state_dir(root);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {
-            tracing::info!(path = %dir.display(), "removed qmd's index; search reads its own");
+            tracing::info!(path = %dir.display(), "removed the search index; search reads its own");
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -167,7 +167,7 @@ pub async fn run_embed(
     let progress = emitter.progress();
     progress.set_message("embedding");
     let root = data_root.to_path_buf();
-    let fetch = datalib_qmd_models::Fetch::from_env();
+    let fetch = datalib_embedding_models::Fetch::from_env();
     let models =
         tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir, fetch))
             .await
@@ -270,7 +270,7 @@ mod tests {
         );
     }
 
-    /// qmd's index, its config and its link to the shared models go; the
+    /// the search index, its config and its link to the shared models go; the
     /// models themselves, which the link pointed at, stay.
     #[test]
     fn qmd_leaves_nothing_but_the_models_it_linked() {
@@ -279,7 +279,7 @@ mod tests {
         let models = tmp.path().join("models");
         std::fs::create_dir_all(&models).unwrap();
         std::fs::write(models.join("m.gguf"), b"weights").unwrap();
-        let qmd = datalib_runtime::qmd::qmd_state_dir(root);
+        let qmd = datalib_runtime::models::qmd_state_dir(root);
         std::fs::create_dir_all(&qmd).unwrap();
         std::fs::write(qmd.join("index.sqlite"), b"x").unwrap();
         std::fs::write(qmd.join("index.yml"), b"x").unwrap();
@@ -299,14 +299,14 @@ mod tests {
         let err = provision_embed_model(
             tmp.path(),
             Some(dir.clone()),
-            datalib_qmd_models::Fetch::Never,
+            datalib_embedding_models::Fetch::Never,
         )
         .unwrap_err();
         let why = format!("{err:#}");
         assert!(why.contains("the embedding model is missing from"), "{why}");
         assert!(why.contains(&dir.display().to_string()), "{why}");
         assert!(
-            why.contains(datalib_runtime::qmd::EMBED_MODELS[0].file),
+            why.contains(datalib_runtime::models::EMBED_MODELS[0].file),
             "{why}"
         );
         let written = std::fs::read_dir(&dir)

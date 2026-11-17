@@ -36,7 +36,7 @@ runtime at all, because the Node in it is a glibc build. A first-use
 fetch is as safe as a bundle when the bytes are pinned before they are
 fetched, nothing executes during the install, a miss fails loudly, and
 the bytes come from our own release. The embedding models work the same
-way (`datalib_qmd_models`).
+way (`datalib_embedding_models`).
 
 ## The assets
 

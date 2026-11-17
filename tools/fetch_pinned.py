@@ -1,6 +1,6 @@
 """Download one URL to one path and refuse it unless its sha256 matches.
 
-The build action behind `//third-party/qmd_models`: a pinned download
+The build action behind `//third-party/embedding_models`: a pinned download
 that runs as an ordinary, remote-cached action rather than at repository
 fetch time, so a run that needs none of the bytes never moves them.
 Standard library only, like every script the build runs.

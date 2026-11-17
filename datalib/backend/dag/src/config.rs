@@ -498,7 +498,7 @@ pub struct StepEntry {
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
     /// The named locks it holds while it runs. `None` holds one default:
-    /// a built-in qmd step's own lock, else the one its shape gives it
+    /// a built-in search step's own lock, else the one its shape gives it
     /// (`supervisor::locks::default_for`).
     pub locks: Option<StepLocks>,
     /// How it reads its inputs. `None` is at a pinned commit, but for the
@@ -597,7 +597,7 @@ impl TryFrom<StepTable> for StepEntry {
 impl StepEntry {
     /// Whether it runs `datalib-step`. The runner still does more for that
     /// program than for any other: the launch's migrate and compact
-    /// passes, the qmd locks and unpinned reads its functions default to,
+    /// passes, the search locks and unpinned reads its functions default to,
     /// and the params check against its sources' schemas.
     pub fn runs_datalib_step(&self) -> bool {
         names_datalib_step(self.command.as_deref())
@@ -1478,7 +1478,7 @@ fn accept_steps(
                     Some(group) => {
                         group_type = group.r#type.as_deref();
                         if group_type == Some(DIFF_GROUP_TYPE)
-                            && !QMD_SOURCE_FUNCTIONS.contains(&f.as_str())
+                            && !SEARCH_SOURCE_FUNCTIONS.contains(&f.as_str())
                         {
                             if f != DIFF_GROUP_FUNCTION {
                                 diags.push(
@@ -1699,7 +1699,7 @@ fn accept_steps(
                     text,
                     None,
                     "`qmd_aggregator` does not read this step, so every aggregation retires \
-                     this source's qmd collection and this step registers it again",
+                     this source's part of the search index and this step registers it again",
                 )
                 .with_help(format!(
                     "add {id:?} to `qmd_aggregator`'s `inputs`, or remove this step to leave \
@@ -1954,7 +1954,7 @@ pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
 /// Built-in steps that read their inputs off disk rather than at a pinned
 /// commit: a keyword index globs its render tree's `.md` files, an embed
-/// and the embedding map read qmd's own SQLite file, and perseus renders
+/// and the embedding map read the search index's file, and perseus renders
 /// straight from its ingest's TEI files. `(group type, function)`,
 /// `None` matching any type.
 const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
@@ -1993,9 +1993,9 @@ fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
 /// wrote it.
 const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 
-/// A source's own qmd steps, which read its `render_markdown` whoever
+/// A source's own search steps, which read its `render_markdown` whoever
 /// wrote it — so a diff group may have them too.
-const QMD_SOURCE_FUNCTIONS: &[&str] = &["keyword_index", "embed"];
+const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["keyword_index", "embed"];
 
 fn spec_of(
     e: &StepEntry,
@@ -4722,7 +4722,7 @@ inputs = ["mail/keyword_index"]
     }
 
     /// A comparison is searched like any source, so its group may carry
-    /// the qmd steps beside its one render.
+    /// the search steps beside its one render.
     #[test]
     fn a_diff_group_may_carry_its_qmd_steps() {
         let check = check_text(

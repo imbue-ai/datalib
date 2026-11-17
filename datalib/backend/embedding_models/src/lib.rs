@@ -1,5 +1,5 @@
 //! Provision the pinned GGUF models
-//! (`datalib_runtime::qmd::PINNED_MODELS`): verify what is on disk by
+//! (`datalib_runtime::models::PINNED_MODELS`): verify what is on disk by
 //! sha256, fetch what is missing or wrong from the pinned revision, and
 //! leave the files under the names node-llama-cpp looks for — so qmd
 //! finds every model already in place and never talks to HuggingFace.
@@ -16,12 +16,12 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
 use datalib_obs::status_line;
-use datalib_runtime::qmd::PinnedModel;
+use datalib_runtime::models::PinnedModel;
 
 pub use datalib_fetch::sha256_file;
-pub use datalib_runtime::qmd::PINNED_MODELS;
+pub use datalib_runtime::models::PINNED_MODELS;
 
-const TAG: &str = "[qmd-models]";
+const TAG: &str = "[models]";
 
 /// Where the models are for a search of, or an embed into, the data root
 /// at `root`: its own `unified_grid_and_search_index/models` when it has one (the
@@ -92,7 +92,7 @@ impl Fetch {
     }
 }
 
-/// Where a data root's qmd actually reads its models: the target of the
+/// Where qmd read a data root's models: the target of the
 /// `<qmd_state_dir>/models` link when one exists (the indexer made it
 /// on an earlier run, or the test fixture pointed it at bazel outputs),
 /// else `default` — the directory the indexer will link on this run.
@@ -143,7 +143,7 @@ fn ensure_one(models_dir: &Path, model: &PinnedModel, fetch: Fetch) -> Result<Ou
     }
     if fetch == Fetch::Never {
         status_line!(
-            "[qmd-models] {} is {} and fetching is off ({NO_FETCH_ENV}); leaving it",
+            "[models] {} is {} and fetching is off ({NO_FETCH_ENV}); leaving it",
             path.display(),
             if present {
                 "not the pinned bytes"

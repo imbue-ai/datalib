@@ -3,9 +3,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # Puts the pinned embedding model in place and verifies it. Linked by the
 # `embed` step and the search applet.
 rust_library(
-    name = "datalib_qmd_models",
+    name = "datalib_embedding_models",
     srcs = glob(["src/**/*.rs"]),
-    crate_name = "datalib_qmd_models",
+    crate_name = "datalib_embedding_models",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
@@ -17,9 +17,9 @@ rust_library(
 )
 
 rust_test(
-    name = "qmd_models_unittests",
+    name = "embedding_models_unittests",
     size = "small",
-    crate = ":datalib_qmd_models",
+    crate = ":datalib_embedding_models",
     deps = [
         "@datalib_crates//:tempfile",
     ],

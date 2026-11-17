@@ -32,7 +32,7 @@ pub const TABLE_PREFIX: &str = "search_";
 /// model's file and its sha256, so another model's vectors are never read
 /// as this one's.
 pub fn model_key() -> String {
-    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
+    let model = &datalib_runtime::models::EMBED_MODELS[0];
     format!("{}@{}", model.file, model.sha256)
 }
 

@@ -716,10 +716,8 @@ code.hljs {
   color: inherit;
   text-decoration: underline;
 }
-/* The chat-common message header. It is a real `## ` heading because
-   qmd cuts its chunks at the best nearby break point and scores an h2
-   far above a blank line — so the heading is what makes every message
-   start a preferred chunk boundary. On screen it should read as
+/* The chat-common message header.
+   It is a real `## ` heading in the file; on screen it should read as
    Slack's one-line "Name  time", not as a document section, hence the
    reset below. `:has()` keeps it off an h2 that came from the message
    *body* (someone pasting markdown with their own headings). */

@@ -131,7 +131,7 @@ rust_binary(
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/fetch:datalib_fetch",
-        "//datalib/backend/qmd_models:datalib_qmd_models",
+        "//datalib/backend/embedding_models:datalib_embedding_models",
         "//datalib/backend/search_index:datalib_search_index",
         "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/runtime:datalib_runtime",

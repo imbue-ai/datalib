@@ -17,7 +17,7 @@ use crate::config::{owner_only_options, root_config_path};
 pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
 # Every source feeds these two — the grid reads its rendered markdown,
-# the qmd aggregator its search steps. A step's id is
+# the search aggregator its search steps. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id. `command` is the program a step runs;
 # `datalib-step` is the one datalib ships.

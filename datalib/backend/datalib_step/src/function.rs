@@ -71,18 +71,18 @@ impl Function {
                  source's `<group>/render_markdown`."
             }
             Function::KeywordIndex => {
-                "Bring a source's collection of the qmd search index up to date for \
+                "Bring a source's collection of the search index up to date for \
                  keyword (BM25) search. One per searched source; \
                  inputs = [\"<group>/render_markdown\"]."
             }
             Function::Embed => {
-                "Embed what a source's qmd collection lacks, for search by meaning. The \
+                "Embed what a source's part of the search index lacks, for search by meaning. The \
                  slow one: turn it off for a source with `datalib-dag turn-off <config> \
                  <group>/embed`, and keyword search still works. One per searched \
                  source; inputs = [\"<group>/keyword_index\"]."
             }
             Function::QmdAggregator => {
-                "Keep the qmd search index to the sources it reads, and report on the \
+                "Keep the search index to the sources it reads, and report on the \
                  whole. Goes under the `unified_grid_and_search_index` group; its inputs name \
                  each searched source's `<group>/keyword_index` and `<group>/embed`. \
                  Without it, free-text search is off."

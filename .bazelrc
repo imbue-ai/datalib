@@ -93,7 +93,7 @@ build:macos --host_macos_minimum_os=11.0
 # here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
 # from inside the sandbox instead of re-downloading it. Nothing in the
 # build reads that directory any more: the models are pinned in
-# fetched by a build action (`//third-party/qmd_models`) and reach what
+# fetched by a build action (`//third-party/embedding_models`) and reach what
 # needs them — the fixture's vectors and `:materialize_tng_root` — as
 # ordinary bazel inputs. Dropping the mount also drops its onboarding
 # cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
@@ -101,7 +101,7 @@ build:macos --host_macos_minimum_os=11.0
 #
 # The host cache still exists and still matters — it is where the SHIPPED
 # app puts models at sync time, where qmd kept them before search had its
-# own index (`datalib_qmd_models::shared_models_dir()`, held there by the
+# own index (`datalib_embedding_models::shared_models_dir()`, held there by the
 # rust unit test `the_shared_cache_is_where_qmd_kept_its_models`).
 #
 # `--action_env=HOME` stays. It was introduced alongside the mount, but
@@ -226,7 +226,7 @@ build:buildbuddy-release --experimental_remote_downloader=grpcs://imbue-release.
 # they were ~2.26 GB fetched into every empty CI container, and
 # HuggingFace answered one of those cold fetches with `429 Too Many
 # Requests` on 2026-09-03 and failed the build. They are a build action
-# now (`//third-party/qmd_models`), so they ride the action cache
+# now (`//third-party/embedding_models`), so they ride the action cache
 # instead, and only a run that executes a consumer moves them. The
 # downloader stays for everything else.
 #

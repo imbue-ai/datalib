@@ -132,7 +132,7 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_grid_and_search_index/grid_index": "Grid and Search Index (table)",
-  "unified_grid_and_search_index/qmd_aggregator": "Grid and Search Index (QMD)",
+  "unified_grid_and_search_index/qmd_aggregator": "Grid and Search Index (search)",
   "unified_grid_and_search_index/embedding_map": "Grid and Search Index (map)",
   unified_grid_and_search_index: "Grid and Search Index (Applet)",
   "unified_time_series_index/time_series_index": "Time Series Index",
@@ -1066,8 +1066,8 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
 }
 
 /// The fan-in steps, by function: the SQL index the grid reads, which
-/// consumes rendered markdown; the qmd aggregator, which runs after each
-/// source's own qmd steps; the map, which reads the aggregator; and the
+/// consumes rendered markdown; the search aggregator, which runs after each
+/// source's own search steps; the map, which reads the aggregator; and the
 /// time-series index, which reads each source's time series. A source
 /// can be in one and not another.
 export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | "time_series_index";
@@ -1221,10 +1221,10 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   return wireIntoFanIns(next, id, "grid_index");
 }
 
-/// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
+/// A source's own search steps, as `[[steps]]` blocks: its keyword index,
 /// which reads its render, and its embeddings, which read the keyword
 /// index.
-export function buildQmdSteps(group: string): { id: string; body: string }[] {
+export function buildSearchSteps(group: string): { id: string; body: string }[] {
   const keywordId = `${group}/keyword_index`;
   const block = (fn: string, inputs: string[]) => ({
     id: `${group}/${fn}`,
@@ -1233,26 +1233,26 @@ export function buildQmdSteps(group: string): { id: string; body: string }[] {
   return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
 }
 
-/// How far into qmd a source's markdown goes: not at all, a keyword
+/// How far into the search index a source's markdown goes: not at all, a keyword
 /// index, or a keyword index and the embeddings that read it. There is
 /// no embeddings-only: the embed step reads the keyword index.
-export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
+export type SearchIndexing = "none" | "keyword" | "keyword_and_embed";
 
-/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
-export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+/// Which of a source's search steps the config has, as a `SearchIndexing`.
+export function searchIndexingOf(steps: ConfiguredStep[], group: string): SearchIndexing {
   const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
   if (!has("keyword_index")) return "none";
   return has("embed") ? "keyword_and_embed" : "keyword";
 }
 
-/// Give a source the qmd steps `asked` for — those it lacks — and a place
+/// Give a source the search steps `asked` for — those it lacks — and a place
 /// in the aggregator's inputs, and take away the ones it does not ask
 /// for, with every step that reads them. Never an `embed` step for a
 /// type that may not have one (`embedAllowed`). Only where the config has the
 /// aggregator: search is off without one, and the aggregator is what
 /// retires a source's collection once it goes.
-export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
-  const [keyword, embed] = buildQmdSteps(group);
+export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
+  const [keyword, embed] = buildSearchSteps(group);
   const all = listSteps(text);
   const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
@@ -1273,8 +1273,8 @@ export function setQmdSteps(text: string, group: string, asked: QmdIndexing): st
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
-/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
-/// source's own qmd steps — search is off without it, and nothing would
+/// them ([`readersOf`]), and, when the search aggregator is among them, every
+/// source's own search steps — search is off without it, and nothing would
 /// retire what they index.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
   const aggregatorGoes = all.some(
@@ -1316,7 +1316,7 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 /// The group every source feeds.
 const INDEX_GROUP = "unified_grid_and_search_index";
 
-/// Add entries — a source, a comparison, a source's qmd steps — where the
+/// Add entries — a source, a comparison, a source's search steps — where the
 /// file keeps reading in the order data flows: each step below the steps
 /// it reads, a source's entries together. That is beside its own group's
 /// entries when the group is already in the file, and otherwise after the

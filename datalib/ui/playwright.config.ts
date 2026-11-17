@@ -500,13 +500,13 @@ export default defineConfig({
   },
   projects: [
     {
-      // The qmd cold start, owned and named — see
-      // tests/e2e/qmd-warmup.setup.ts for why it can't be left to
+      // The search model's cold start, owned and named — see
+      // tests/e2e/search-warmup.setup.ts for why it can't be left to
       // whichever spec sorts first. `testMatch` here overrides the
       // top-level `*.spec.ts` pattern, so this file and only this file
       // runs in the project.
       name: "warmup",
-      testMatch: /qmd-warmup\.setup\.ts/,
+      testMatch: /search-warmup\.setup\.ts/,
       use: { browserName: "chromium" },
     },
     {
@@ -550,7 +550,7 @@ export default defineConfig({
         /selected-message-outline\.spec\.ts/,
         // Clicks, modifier clicks and Tab: where the engines' focus differs.
         /grid-selection\.spec\.ts/,
-        /qmd-index-columns\.spec\.ts/,
+        /index-columns\.spec\.ts/,
         // The search field, a CodeMirror editor: the desktop app's typing.
         /search-field\.spec\.ts/,
         /column-reveal\.spec\.ts/,

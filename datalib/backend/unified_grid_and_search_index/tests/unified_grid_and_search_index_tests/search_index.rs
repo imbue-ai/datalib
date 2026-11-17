@@ -7,8 +7,8 @@ use std::path::Path;
 use datalib_runtime::layout;
 use datalib_search_index::chunk::chunk_hash;
 use datalib_search_index::{model_key, Index, IndexDoc, IndexSection, InferenceCache};
-use datalib_unified_grid_and_search_index::qmd::mapping::Place;
-use datalib_unified_grid_and_search_index::qmd::vectors::{Freshness, Kept};
+use datalib_unified_grid_and_search_index::hits::mapping::Place;
+use datalib_unified_grid_and_search_index::hits::vectors::{Freshness, Kept};
 use datalib_unified_grid_and_search_index::search_index::HeldVectors;
 
 fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
@@ -48,7 +48,12 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     cache.close().await;
 }
 
-fn documents(hits: &[(String, datalib_unified_grid_and_search_index::qmd::QmdHit)]) -> Vec<&str> {
+fn documents(
+    hits: &[(
+        String,
+        datalib_unified_grid_and_search_index::hits::SearchHit,
+    )],
+) -> Vec<&str> {
     hits.iter().map(|(d, _)| d.as_str()).collect()
 }
 

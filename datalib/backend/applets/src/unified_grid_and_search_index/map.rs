@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{columns, ranked_rows, Index};
 
-/// How many qmd hits a free-text filter lights up. Retrieval is ranked,
+/// How many search hits a free-text filter lights up. Retrieval is ranked,
 /// so this is "the best matches", not "every document that mentions it".
 const FREE_TEXT_HITS: usize = 500;
 
@@ -40,7 +40,7 @@ pub struct MapResponse {
     pub present: bool,
     pub made_at: Option<String>,
     pub seed: Option<SeedCounts>,
-    /// Documents qmd has not embedded, so not on the map.
+    /// Documents not yet embedded, so not on the map.
     pub unembedded: usize,
     /// Points on the map with no document row in the grid: a document
     /// removed since the map was made, most likely.

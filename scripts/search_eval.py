@@ -144,10 +144,10 @@ def read_answer(get: Callable[[str], Any], path: str) -> dict[str, Any]:
     took = ms_since(started)
     echo = answer.get("query_echo") or {}
     problems = [*answer.get("refused", []), *answer.get("errors", [])]
-    if echo.get("qmd_error"):
-        problems.append(f"qmd: {echo['qmd_error']}")
-    if echo.get("qmd_index_missing"):
-        problems.append("no qmd index")
+    if echo.get("search_error"):
+        problems.append(f"search: {echo['search_error']}")
+    if echo.get("search_index_missing"):
+        problems.append("no search index")
     rows = [
         {
             "uuid": r["uuid"],
