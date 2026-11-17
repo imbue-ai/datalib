@@ -2309,7 +2309,7 @@ mod tests {
     }
 
     /// A source's own steps finish while another source is still running,
-    /// and the fan-in that reads them all finishes last. The qmd steps had
+    /// and the fan-in that reads them all finishes last. The search steps had
     /// a fan-in upstream of them, and every source's search steps read
     /// Running until the slowest source in the sync was done.
     #[tokio::test]

@@ -458,7 +458,7 @@ inputs = ["slack/render_markdown"]
     }
 
     /// The shape the wizard wrote before it kept the order, and the TNG
-    /// fixture still writes: every source's qmd steps after the
+    /// fixture still writes: every source's search steps after the
     /// aggregator that reads them. Each goes back beside its source, the
     /// aggregator after them, and the comments stay with their entries.
     #[test]

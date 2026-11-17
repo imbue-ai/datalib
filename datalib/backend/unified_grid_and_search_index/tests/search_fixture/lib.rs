@@ -32,7 +32,7 @@ fn copy_writable(var: &str, to: &Path) {
 
 /// The fixture's rendered documents, grid index, search index and
 /// vectors, under `dst`, with the embedding model where a search of `dst`
-/// looks for it (`datalib_qmd_models::models_dir_for`).
+/// looks for it (`datalib_embedding_models::models_dir_for`).
 pub fn materialize_root(dst: &Path) {
     let status = Command::new("tar")
         .arg("-xf")
@@ -58,7 +58,7 @@ pub fn materialize_root(dst: &Path) {
     std::fs::create_dir_all(&models).expect("mkdir models");
     std::os::unix::fs::symlink(
         runfile_from_env("SEARCH_FIXTURE_EMBED_MODEL_RLOC"),
-        models.join(datalib_runtime::qmd::EMBED_MODELS[0].cache_name()),
+        models.join(datalib_runtime::models::EMBED_MODELS[0].cache_name()),
     )
     .expect("link the model");
 }

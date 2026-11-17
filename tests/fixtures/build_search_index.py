@@ -53,7 +53,7 @@ def main() -> int:
                 "DATALIB_DAG_FUNCTION": "keyword_index",
                 "DATALIB_DAG_STEP": f"{group}/keyword_index",
                 "DATALIB_DAG_INPUTS": f"{group}/render_markdown",
-                "DATALIB_QMD_MODELS_NO_FETCH": "1",
+                "DATALIB_MODELS_NO_FETCH": "1",
             }
             subprocess.run([step], env=env, check=True)
         subprocess.run([prompts_bin, str(root), model, out_prompts], check=True)

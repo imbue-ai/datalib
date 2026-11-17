@@ -69,15 +69,11 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_abs = datalib_etl_render::grid_index::doc_md_path(
+    let md_abs = datalib_etl_render::grid_index::doc_md_path(
         &datalib_etl::layout::render_markdown_root(&render_root, stanza),
         &pr.uuid,
     );
-    assert!(
-        qmd_abs.exists(),
-        "rendered md missing: {}",
-        qmd_abs.display()
-    );
+    assert!(md_abs.exists(), "rendered md missing: {}", md_abs.display());
     // The projection rides on the emitted document now, not in a file
     // beside the markdown.
     assert!(
@@ -109,7 +105,7 @@ async fn github_live_single_pr_snapshot() {
         "state_known": pr.state.is_some(),
         "comment_count": parsed.comments.len(),
         "sections_present": sections,
-        "render_markdown_exists": qmd_abs.exists(),
+        "render_markdown_exists": md_abs.exists(),
         "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 

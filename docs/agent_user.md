@@ -451,7 +451,7 @@ Pick the surface that fits the question:
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
   doltlite recipes (history, diffs, a crashed writer):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **Markdown** — `<group>/render_markdown/` holds human-readable QMD
+- **Markdown** — `<group>/render_markdown/` holds human-readable
   markdown per conversation/document. Read files directly, or serve
   them via `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}`.
 - **Raw stores** — the per-source doltlite stores under

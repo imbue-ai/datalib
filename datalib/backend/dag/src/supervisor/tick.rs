@@ -914,7 +914,7 @@ mod tests {
         assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(1)));
     }
 
-    /// The qmd index globs a render's `.md` files off disk, so it must not
+    /// The search index globs a render's `.md` files off disk, so it must not
     /// read while the render writes — streaming or not — and the render
     /// must not write while it reads.
     #[test]

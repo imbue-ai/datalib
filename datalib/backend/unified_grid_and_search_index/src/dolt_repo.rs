@@ -18,8 +18,8 @@ use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
+use crate::hits::GridRowRef;
 use crate::problems::{Ids, ProblemsQuery};
-use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{
     DocRow, DocumentFile, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,

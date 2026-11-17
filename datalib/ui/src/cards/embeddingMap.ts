@@ -223,15 +223,15 @@ export function encodeState(st: MapState): string {
 
 /// The step that runs after every source's `embed`, and so the one the
 /// map reads.
-export const QMD_AGGREGATOR_STEP = "unified_grid_and_search_index/qmd_aggregator";
+export const AGGREGATOR_STEP = "unified_grid_and_search_index/qmd_aggregator";
 
 /// The TOML stanza that declares the step, for a config that lacks it:
 /// it reads every source's embeddings, so it runs after the aggregator —
 /// where there is one to name; without it nothing is embedded.
 export function stepStanza(hasAggregator: boolean): string {
-  const inputs = hasAggregator ? JSON.stringify(QMD_AGGREGATOR_STEP) : "";
+  const inputs = hasAggregator ? JSON.stringify(AGGREGATOR_STEP) : "";
   return `
-# qmd's document embeddings laid out on a plane, for the map card. Each
+# The search index's document embeddings laid out on a plane, for the map card. Each
 # run starts from the last map; resetting the step lays one out afresh.
 [[steps]]
 group = "unified_grid_and_search_index"

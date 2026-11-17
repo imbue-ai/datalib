@@ -106,7 +106,7 @@ to rows by `qmd_path` (below), keeps the ones the query's structured
 terms also match (`filter_uuids`), and shows each hit's own matched
 lines as its Contents cell. There is no weaker search in its place:
 before the first sync builds a qmd index, free text finds no rows and
-the answer says `qmd_index_missing`, which the grid shows as a note
+the answer says `search_index_missing`, which the grid shows as a note
 rather than an error.
 
 ## Adding a column

@@ -56,10 +56,10 @@ rust_test(
     name = "fits_the_model_test",
     size = "medium",
     srcs = ["tests/fits_the_model.rs"],
-    data = ["//third-party/qmd_models:embeddinggemma"],
+    data = ["//third-party/embedding_models:embeddinggemma"],
     edition = "2021",
     env = {
-        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
     },
     deps = [
         ":datalib_search_index",

@@ -44,7 +44,7 @@ pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
 /// The model's tokenizer, which cuts the chunks, from where the steps keep
 /// the model for this root. Read-only: it fetches nothing.
 fn tokenizer(root: &Path) -> Result<datalib_embedder::Tokenizer> {
-    let model = crate::search_index::model_file(&datalib_qmd_models::models_dir_for(root));
+    let model = crate::search_index::model_file(&datalib_embedding_models::models_dir_for(root));
     anyhow::ensure!(
         model.is_file(),
         "{} is missing; `datalib-step pull-models` puts it in place",

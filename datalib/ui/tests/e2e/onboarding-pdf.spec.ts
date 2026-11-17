@@ -156,11 +156,11 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       "Grid index",
     );
     await expect(nameCell(page, "unified_grid_and_search_index/qmd_aggregator")).toContainText(
-      "QMD aggregator",
+      "Search aggregator",
     );
 
-    // The qmd aggregator, removed before the source is added: without it
-    // the wizard writes no qmd steps, whose embedding is real work this
+    // The search aggregator, removed before the source is added: without it
+    // the wizard writes no search steps, whose embedding is real work this
     // test cannot afford, and the delete action is the honest way to not
     // run it.
     const remove = await rowMenuEntry(

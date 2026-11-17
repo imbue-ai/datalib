@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markdownsToAsk, widen } from "./qmdAsk";
+import { markdownsToAsk, widen } from "./indexStateAsk";
 
 describe("widen", () => {
   it("adds the margin on both sides", () => {

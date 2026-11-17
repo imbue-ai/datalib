@@ -108,7 +108,7 @@ command = "datalib-applet unified_grid_and_search_index"
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
     expect(byId.get("unified_grid_and_search_index/qmd_aggregator")?.name).toBe(
-      "Grid and Search Index (QMD)",
+      "Grid and Search Index (search)",
     );
   });
 

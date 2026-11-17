@@ -312,7 +312,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   expect(after).toContain('group = "no-render"');
 });
 
-test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
+test("free-text search is a choice, and only the search steps feel it", async ({ page }) => {
   // Embedding is the slow part of a sync, so a source can be rendered
   // and gridded without being embedded. The grid index is not a
   // choice — a source missing from it is missing from the table.

@@ -75,7 +75,7 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
 /// Spawn each sandbox backend's `unified_grid_and_search_index` applet before its spec
 /// asks for it.
 ///
-/// An empty `q` is answered from SQL and never reaches qmd, which is
+/// An empty `q` is answered from SQL and never reaches the ranked search, which is
 /// what is wanted: no spec on a sandbox root issues a free-text query,
 /// so none of them should pay a model load.
 async function warmApplets(urls: string[], token: string): Promise<void> {

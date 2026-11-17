@@ -253,7 +253,7 @@ fn render_one(
 ) -> Result<RenderedMarkdown> {
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
-    let qmd_rel = md_path
+    let md_rel = md_path
         .strip_prefix(data_root)
         .unwrap_or(md_path)
         .to_string_lossy()
@@ -327,7 +327,7 @@ fn render_one(
         copy_count: t.copy_count,
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
-        qmd_path: Some(&qmd_rel),
+        qmd_path: Some(&md_rel),
     };
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
     let node = grid_rows::document_node(source_id, &meta);
