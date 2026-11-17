@@ -158,7 +158,7 @@ Placed call — Lieutenant Commander Geordi La Forge, Chief Engineer
 
 === google-takeout 00000000-0000-877c-9cdc-4597c96ff7ac google-takeout storage
 --- chunk 0
-title: google-takeout storage | text: Source: datalib
+title: google-takeout storage | text: Source: google-takeout
 
 # google-takeout — storage
 
@@ -185,7 +185,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
 
 --- chunk 1
-title: google-takeout storage | text: Source: datalib
+title: google-takeout storage | text: Source: google-takeout
 
  `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |

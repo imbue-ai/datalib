@@ -498,6 +498,10 @@ async fn star_trek_mbox_renders_through_render_all() {
         risa_md.contains("jewel of the Alpha Quadrant"),
         "expected html-rendered body in risa thread"
     );
+    assert!(
+        risa_md.contains("Temtibi Lagoon is waiting for you.") && !risa_md.contains('\u{034F}'),
+        "the preheader's padding should go and its text stay:\n{risa_md}"
+    );
 
     // A `multipart/related` with an inline PNG referenced as
     // `<img src="cid:…">`: the renderer must rewrite the cid to the part's

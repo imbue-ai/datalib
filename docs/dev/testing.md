@@ -549,8 +549,12 @@ misplaced knob fails here rather than during the live run.
 
 The test makes three pipeline runs, each asserting something different:
 
-1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants. Then it makes the contacts listed in
+1. **Cold** — snapshots the produced data tree, one `.snap` per file
+   (each group's `ingest/`, `render_markdown/` and, for a time-series
+   source, `render_time_series/`, plus the time-series index), a
+   manifest and the layout invariants. A snapshot of a file the bake no
+   longer writes is deleted, and so is the folder of a group that is no
+   longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
    `contacts.toml` (beside the config) in the contacts app, asserts every
    handle they link is an author in the index, and snapshots the contacts
    store with each minted `contact_id` replaced by the contact's name.

@@ -74,7 +74,9 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v23: a thread sits in its account and is filed under its emails'
 ///     labels; an email's `In-Reply-To` is a reply edge.
 /// v24: a sender's hover title names their address once, not twice.
-pub const RENDER_VERSION: u32 = 24;
+/// v25: a body loses its preheader padding, runs of characters that show
+///     nothing.
+pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -1176,7 +1178,8 @@ fn email_body_markdown(
 }
 
 /// Each part as markdown by its own kind: HTML through htmd after its
-/// `cid:` srcs point at the parts' addresses, plain text escaped.
+/// `cid:` srcs point at the parts' addresses, plain text escaped; either
+/// without its preheader padding.
 fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>) -> String {
     parts
         .iter()
@@ -1184,6 +1187,7 @@ fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>)
             BodyPart::Html(html) => html_markdown(&rewrite_cid_srcs(html, cid_to_blob)),
             BodyPart::Plain(text) => plain_body_markdown(text),
         })
+        .map(|md| super::padding::without_padding(&md))
         .filter(|md| !md.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")

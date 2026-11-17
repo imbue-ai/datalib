@@ -4,7 +4,7 @@ expression: text
 ---
 === gitlab 00000000-0000-8b91-8399-3668763e7fba gitlab storage
 --- chunk 0
-title: gitlab storage | text: Source: datalib
+title: gitlab storage | text: Source: gitlab
 
 # gitlab — storage
 
@@ -21,7 +21,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 
 === gitlab 0b75b9f9-4400-887d-bae6-937c2e6ee3a6 Add Earl Grey, hot to replicator menu
 --- chunk 0
-title: Add Earl Grey, hot to replicator menu | text: Source: gitlab
+title: Add Earl Grey, hot to replicator menu | text: Source: GitLab
 Project: enterprise-d/holodeck
 Merge request: 17
 State: merged
@@ -51,7 +51,7 @@ Use `enum Tea { EarlGrey, Chamomile, ... }` here rather than a string match — 
 
 === gitlab 0b75bad4-fe00-8155-aa7c-9db9f663482a Holodeck safety interlock regression test
 --- chunk 0
-title: Holodeck safety interlock regression test | text: Source: gitlab
+title: Holodeck safety interlock regression test | text: Source: GitLab
 Project: enterprise-d/holodeck
 Merge request: 18
 State: opened
@@ -77,7 +77,7 @@ Beverly Crusher · Tue Apr 15th, 2369 at 14:30
 Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
 
 --- chunk 1
-title: Holodeck safety interlock regression test | text: Source: gitlab
+title: Holodeck safety interlock regression test | text: Source: GitLab
 Project: enterprise-d/holodeck
 Merge request: 18
 State: opened

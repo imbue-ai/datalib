@@ -4,6 +4,7 @@
 
 pub mod ids;
 pub mod mentions;
+mod padding;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring
