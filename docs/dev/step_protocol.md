@@ -917,6 +917,6 @@ Four things a hand run has to get right that the runner does for it:
   data root as its working directory, so a relative one is resolved a
   second time, beneath itself.
 
-The index functions' ids are fixed at `unified_document_index/<function>`, and
+The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
 the qmd steps share one index file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

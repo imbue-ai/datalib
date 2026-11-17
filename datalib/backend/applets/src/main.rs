@@ -7,7 +7,7 @@ mod gate;
 mod hangup_tests;
 mod photos;
 mod slack;
-mod unified_document_index;
+mod unified_grid_and_search_index;
 mod unified_time_series_index;
 
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use datalib_cli_help::Example;
 const EXAMPLES: &[Example] = &[
     Example {
         what: "serve the search applet on a port the OS picks, as the gateway does",
-        command: "datalib-applet unified_document_index --port 0 --params-file params.json",
+        command: "datalib-applet unified_grid_and_search_index --port 0 --params-file params.json",
     },
     Example {
         what: "search a data root as the app's search box does, and print the answer as JSON",
@@ -76,9 +76,12 @@ enum Which {
     Slack,
     /// Serve the grid index and the qmd index: search, columns, the
     /// document list, one document, and the files beside it.
-    // The old name stays for a config the server has not rewritten yet.
-    #[command(name = "unified_document_index", alias = "unified_index")]
-    UnifiedDocumentIndex,
+    // The old names stay for a config the server has not rewritten yet.
+    #[command(
+        name = "unified_grid_and_search_index",
+        aliases = ["unified_document_index", "unified_index"]
+    )]
+    UnifiedGridAndSearchIndex,
     /// Serve the time-series index: the time series, and their points over
     /// a range, downsampled to a budget.
     #[command(name = "unified_time_series_index")]
@@ -156,7 +159,7 @@ fn main() {
             None
         }
     };
-    // The unified_document_index applet runs qmd; from a release tarball that
+    // The unified_grid_and_search_index applet runs qmd; from a release tarball that
     // ships no `runtime/`, the first search fetches the manifest's.
     datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run(cli) {
@@ -189,9 +192,9 @@ fn run(cli: Cli) -> Result<()> {
         // Contributes no components, so there is nothing to write
         // first: the app's grid and document views are builtins, and
         // this applet only serves the endpoints behind them.
-        Which::UnifiedDocumentIndex => {
+        Which::UnifiedGridAndSearchIndex => {
             let port = cli.port.context("-p <port> is required")?;
-            unified_document_index::serve(port)
+            unified_grid_and_search_index::serve(port)
         }
         // The app's chart is a builtin; nothing to write first.
         Which::UnifiedTimeSeriesIndex => {
@@ -219,7 +222,7 @@ fn run(cli: Cli) -> Result<()> {
 /// empty answer for "nothing matched".
 fn search(args: SearchArgs) -> Result<()> {
     use std::io::Write;
-    let params = unified_document_index::SearchParams {
+    let params = unified_grid_and_search_index::SearchParams {
         q: Some(args.query),
         limit: args.limit,
         offset: args.offset,
@@ -229,12 +232,12 @@ fn search(args: SearchArgs) -> Result<()> {
         within: args.within,
         tab: args.tab,
     };
-    let unanswered = match unified_document_index::search_once(args.data_root, params) {
+    let unanswered = match unified_grid_and_search_index::search_once(args.data_root, params) {
         Ok(answer) => {
             let mut out = std::io::stdout().lock();
             serde_json::to_writer(&mut out, &answer).context("write the answer")?;
             writeln!(out).context("write the answer")?;
-            unified_document_index::unanswered(&answer)
+            unified_grid_and_search_index::unanswered(&answer)
         }
         Err(e) => vec![format!("{e:#}")],
     };

@@ -263,7 +263,7 @@ A mirror you can't leave is just another silo, so the exits are plain:
 - **Search** — `datalib-applet search <data_root> '<query>'` answers as
   the app's search box does, as JSON, with no server: for scripts and
   agents.
-- **SQL** — the grid's table, `unified_document_index/grid_index/db.sqlite`,
+- **SQL** — the grid's table, `unified_grid_and_search_index/grid_index/db.sqlite`,
   is plain SQLite. Each source's own stores are doltlite:
   `datalib-doltlite` ships with the tools and is a `sqlite3` shell that
   understands the versioned format, and one pipe writes a plain SQLite

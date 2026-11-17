@@ -362,7 +362,7 @@ mod tests {
             root,
             &StepEnv {
                 step: crate::grid_index::out_rel(),
-                group: datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR.into(),
+                group: datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR.into(),
                 group_type: None,
                 source_group: None,
                 source_group_type: None,

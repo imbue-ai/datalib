@@ -2,7 +2,7 @@
 // wire: how a value is quoted into a `key:value` token, how a token is
 // added to a query, and the two right-click entries that add one. The
 // grammar itself is `datalib_query` on the backend; the unified grid's
-// search sends it to `/applet/unified_document_index`, the run log's to `/api/log`.
+// search sends it to `/applet/unified_grid_and_search_index`, the run log's to `/api/log`.
 // What the server splits a query at: Rust's `char::is_whitespace`, which
 // is Unicode's White_Space. JS `\s` is not the same set: it lacks U+0085.
 const SPLITS = /\p{White_Space}/u;

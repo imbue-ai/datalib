@@ -4,9 +4,14 @@
 // answers: the columns, the rows, the errors it toasts and the link each
 // row opens. So a url is taken only when it is one of the app's own
 // tables, named here in full, with no query and no other spelling.
-import { REMOTE_ALLOW_TABLE, REMOTE_FETCHED_TABLE, SEARCH, UNIFIED_DOCUMENT_INDEX } from "@/api";
+import {
+  REMOTE_ALLOW_TABLE,
+  REMOTE_FETCHED_TABLE,
+  SEARCH,
+  UNIFIED_GRID_AND_SEARCH_INDEX,
+} from "@/api";
 
-const PROBLEMS = `${UNIFIED_DOCUMENT_INDEX}/problems`;
+const PROBLEMS = `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`;
 
 /// Tables that page, sort and group the way the search does.
 export const GRID_TABLES: readonly string[] = [SEARCH, PROBLEMS];

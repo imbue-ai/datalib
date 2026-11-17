@@ -30,7 +30,7 @@ def main() -> int:
             ["tar", "-xf", qmd_tar, "-C", str(root), "--strip-components=1"],
             check=True,
         )
-        db = root / "unified_document_index" / "grid_index" / "db.sqlite"
+        db = root / "unified_grid_and_search_index" / "grid_index" / "db.sqlite"
         db.parent.mkdir(parents=True)
         shutil.copyfile(grid, db)
         os.chmod(db, 0o644)

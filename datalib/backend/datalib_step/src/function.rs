@@ -66,8 +66,8 @@ impl Function {
             }
             Function::GridIndex => {
                 "Stack every source's rendered rows into the one SQL index the grid and \
-                 search read, unified_document_index/grid_index/db.sqlite. Goes \
-                 under the `unified_document_index` group; its inputs name each \
+                 search read, unified_grid_and_search_index/grid_index/db.sqlite. Goes \
+                 under the `unified_grid_and_search_index` group; its inputs name each \
                  source's `<group>/render_markdown`."
             }
             Function::KeywordIndex => {
@@ -83,14 +83,14 @@ impl Function {
             }
             Function::QmdAggregator => {
                 "Keep the qmd search index to the sources it reads, and report on the \
-                 whole. Goes under the `unified_document_index` group; its inputs name \
+                 whole. Goes under the `unified_grid_and_search_index` group; its inputs name \
                  each searched source's `<group>/keyword_index` and `<group>/embed`. \
                  Without it, free-text search is off."
             }
             Function::EmbeddingMap => {
                 "Lay the search index's embeddings out on a plane, for the map card. Goes \
-                 under the `unified_document_index` group; \
-                 inputs = [\"unified_document_index/qmd_aggregator\"]."
+                 under the `unified_grid_and_search_index` group; \
+                 inputs = [\"unified_grid_and_search_index/qmd_aggregator\"]."
             }
             Function::RenderTimeSeries => {
                 "Turn a raw store into its time series, under \
@@ -163,7 +163,7 @@ mod tests {
         );
         assert_eq!(
             Function::EmbeddingMap.as_str(),
-            datalib_unified_document_index::embedding_map::DIR
+            datalib_unified_grid_and_search_index::embedding_map::DIR
         );
     }
 }

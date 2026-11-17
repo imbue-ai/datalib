@@ -63,7 +63,6 @@ Two coupled projects that mirror personal data into a queryable local store:
     │   ├── core/             the app stores + deeplink grammar
     │   ├── etl/              shared ingest machinery; etl/render/ the render framework
     │   ├── etl/providers/*/  per-provider ingest / render / config crates
-    │   ├── qmd_indexer/      the qmd index's operations, over qmd's SDK
     │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
     │   ├── datalib_step/     datalib-step built-in step commands
     │   └── http/             axum binary
@@ -206,7 +205,7 @@ as a subprocess. Datalib's own steps write `command = "datalib-step"`
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_document_index/grid_index/db.sqlite`. See
+`<root>/unified_grid_and_search_index/grid_index/db.sqlite`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -269,45 +268,39 @@ live registry instead — a dev-only escape hatch that warns once per
 process per package, because the transitive packages are unpinned and
 their install scripts run.
 
-### QMD search index (default-on, incremental)
+### Search index (default-on, incremental)
 
-Three kinds of step build the qmd search index. Each source's
-`keyword_index` registers the source's qmd collection and brings its
-keyword index in line with its rendered tree; its `embed` embeds what
-that collection is missing, after putting the pinned, sha256-verified
-embedding model in place through `datalib_qmd_models`, so qmd never
-fetches a model itself. `unified_document_index/qmd_aggregator` reads every
-source's pair, so it runs after them: it retires the collection of any
-source it does not name and reports what each holds. All three drive qmd's
-SDK from the staged runtime tree (above) through
-`datalib/backend/qmd_indexer/`, with
-`XDG_CACHE_HOME=<root>/unified_document_index/qmd_aggregator`, so the one index lands
-at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collection
-scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
-alongside the per-source `<group>/render_markdown/` trees and
-`unified_document_index/grid_index/db.sqlite`. This is what a search matches
-words and meaning against (see `datalib/backend/unified_document_index/src/qmd/`).
+Three kinds of step build the search index
+([`datalib/backend/search_index`](../../datalib/backend/search_index)).
+Each source's `keyword_index` brings that source's documents in the index
+in line with its render store: it chunks each changed document and writes
+its words and chunks into `search_*` tables of the grid index's file,
+`unified_grid_and_search_index/grid_index/db.sqlite`. Its `embed` embeds every
+chunk the inference cache,
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
+vector for, in process (`datalib/backend/embedder`, llama.cpp), after
+putting the pinned, sha256-verified embedding model in place through
+`datalib_qmd_models`. `unified_grid_and_search_index/qmd_aggregator` reads
+every source's pair, so it runs after them: it drops any source it does
+not name, sweeps vectors no chunk names, and reports what each source
+holds. This is what a search matches words and meaning against (see
+`datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:
 
-- **Incremental**. qmd's `documents` table is unique on `(collection,
-  path)` and records each file's content hash, and `content_vectors` is
-  keyed by that hash, so a re-run only
-  rechunks files whose bytes changed and only re-embeds content hashes with
-  no existing vector row. Deletes are detected (rows marked `active=0`) and
-  orphaned content is cleaned.
-- **First run is slow** — embedding all chunks for a fresh `<root>` takes
-  several minutes on CPU (a one-time cost, roughly 5–10 minutes per thousand
-  unembedded chunks). Each `embed` step reports its progress in bytes; an
-  embed is resumable, so stopping and re-running is safe, and turning one
-  source's `embed` off leaves the rest running. Once the backlog drains,
-  re-runs are no-ops (a couple of seconds).
-- **Models cache**: qmd's embedding model (~300 MB) is shared across data
-  roots via a symlink at `<root>/unified_document_index/qmd_aggregator/qmd/models ->
-  ~/.cache/qmd/models` (qmd's own default, `$XDG_CACHE_HOME/qmd/models`
-  when that is set, so a standalone `qmd` run shares the same cache).
+- **Incremental**. A document is indexed under its render's content
+  hash, so a keyword pass rechunks only documents whose render changed,
+  and a vector is kept under the hash of exactly what the model was
+  shown, so an embed embeds only chunks whose prompt is new.
+- **First run is slow**: embedding every chunk of a fresh root takes
+  minutes on CPU. An embed is resumable, so stopping and re-running is
+  safe, and turning one source's `embed` off leaves the rest running.
+  Once the backlog drains, re-runs are no-ops.
+- **Models cache**: the embedding model (~300 MB) is shared across data
+  roots in `~/.cache/qmd/models` (`$XDG_CACHE_HOME/qmd/models` when that
+  is set), unless a root has its own `unified_grid_and_search_index/models`.
   Override with `datalib-step --models-dir`; `datalib-step pull-models`
-  fetches them ahead of time.
+  fetches it ahead of time.
 
 ### Manual integration tests (live provider APIs)
 

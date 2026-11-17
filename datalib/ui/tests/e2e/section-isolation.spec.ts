@@ -28,12 +28,12 @@ type Doc = { uuid: string; chat: ChatResponse; first: string; next: string };
 
 /// A conversation the route sends with two messages or more.
 async function aConversation(page: Page): Promise<Doc> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: { markdown_uuid: string | null }[] };
   const uuids = [...new Set(rows.flatMap((r) => (r.markdown_uuid ? [r.markdown_uuid] : [])))];
   for (const uuid of uuids) {
-    const got = await page.request.get(`/applet/unified_document_index/chat/${uuid}`);
+    const got = await page.request.get(`/applet/unified_grid_and_search_index/chat/${uuid}`);
     if (!got.ok()) continue;
     const chat = (await got.json()) as ChatResponse;
     const pair = twoMessagesInARow(chat);
@@ -80,7 +80,7 @@ function withPayload(doc: Doc): ChatResponse {
 }
 
 async function open(page: Page, doc: Doc, served: ChatResponse): Promise<void> {
-  await page.route(`**/applet/unified_document_index/chat/${doc.uuid}`, (route) =>
+  await page.route(`**/applet/unified_grid_and_search_index/chat/${doc.uuid}`, (route) =>
     route.fulfill({ json: served }),
   );
   await page.goto(`/chat/${doc.uuid}`);

@@ -1904,7 +1904,7 @@ media_blobs_bookkeeping
     tz_offset
     held_version
 
-== unified_document_index/grid ==
+== unified_grid_and_search_index/grid ==
 edges
     edge_uuid
     src_markdown_uuid

@@ -4,7 +4,7 @@ The grid in `datalib/ui` shows one row per displayable thing in the
 mirror: a conversation, a message, a content block, a PR, a page, a
 storage measurement. Every source's render writes a denormalized
 projection of its records into one table, **`grid_rows`**, and the
-`unified_document_index` applet reads it with one query and no per-provider
+`unified_grid_and_search_index` applet reads it with one query and no per-provider
 branches.
 
 The index holds one more table the grid does not read: `problems`,
@@ -20,7 +20,7 @@ declared on `ProblemRow`.
    (`channel`, `source_url`, …), one struct moves; the DDL, the column
    list and the search keys are derived from it.
 2. **One query path.** Adding a provider adds rows, not a query: the
-   query, filter and sort code in `datalib/backend/unified_document_index/`
+   query, filter and sort code in `datalib/backend/unified_grid_and_search_index/`
    stays put.
 3. **No joins at query time.** A message row already carries its
    conversation's name, account and project, so the grid renders
@@ -64,7 +64,7 @@ source's own render store,
 `<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`. The
 `grid_index` step (`build_grid_index` in
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores
-into the unified document index: it asks each one for the `dolt_diff` between
+into the unified grid and search index: it asks each one for the `dolt_diff` between
 the commit the index last consumed (`source_cursors`) and that store's
 HEAD, applies each changed document's row set, and copies the
 corresponding `markdowns` row across. The cursor keeps that commit's
@@ -76,8 +76,8 @@ pass keeps every source it finished.
 ## Consumer side
 
 The applet's search lists the matching uuids in order
-(`ordered_uuids` in `datalib/backend/unified_document_index/src/dolt_repo.rs`,
-over the `WHERE` that `build_where` in `unified_document_index/src/db.rs` makes
+(`ordered_uuids` in `datalib/backend/unified_grid_and_search_index/src/dolt_repo.rs`,
+over the `WHERE` that `build_where` in `unified_grid_and_search_index/src/db.rs` makes
 from the query's structured terms), then reads the rows for one page
 (`rows_by_uuids`, `search_row_from`) into `SearchRow`s with `preview`
 as the Contents cell. The order is newest first: `touched_at_utc`
@@ -89,7 +89,7 @@ The keys the search bar takes are declared on `GridRow`'s own columns
 qmd)` on the struct), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
-map onto `grid_rows` columns in `unified_document_index/src/grid_columns.rs`.
+map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
 
 Every read happens inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so a request sees one commit and the
@@ -119,19 +119,19 @@ rather than an error.
 2. Fill it where rows are built: the shared layers named under
    "Producer side", and the render crates that build rows themselves
    (notion, pdf, perseus, garmin; pdf writes the struct literally).
-3. Update `unified_document_index/src/dolt_repo.rs` — both the
+3. Update `unified_grid_and_search_index/src/dolt_repo.rs` — both the
    `SEARCH_ROW_COLUMNS` list and `search_row_from`, which name columns
-   by `GridRowColumn` — and `SearchRow` in `unified_document_index/src/search.rs`
+   by `GridRowColumn` — and `SearchRow` in `unified_grid_and_search_index/src/search.rs`
    if the column should reach the API.
 4. If it should be a grid column, add it to the `SearchRow` type in
    `datalib/ui/src/api.ts` and declare it in `columns()` in
-   `datalib/backend/applets/src/unified_document_index/columns.rs`, with its type
+   `datalib/backend/applets/src/unified_grid_and_search_index/columns.rs`, with its type
    from `datalib_columns`. The applet declares the columns and the grid
    draws them by type (`cards/typedColumns.ts`, over the renderers in
    `cards/cellRenderers.ts`); a width or a hover the type cannot know
    goes in `GridCard`'s `columnOverrides`. Map its id to the
    `grid_rows` column it sorts and filters by in `GridColumn::backing`
-   (`unified_document_index/src/grid_columns.rs`), and give that column `search`
+   (`unified_grid_and_search_index/src/grid_columns.rs`), and give that column `search`
    on its `#[col]` so Keep only, Exclude and dropping it on the search
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
@@ -304,7 +304,7 @@ the row on no page. A container that is also a row of its document (a
 thread, a chat) takes that row's sort key unless its renderer gave it
 one. The applet's `GET /children/{uuid}` lists a container's children
 in that order, a page each way around an anchor
-([the applets](../user/applets.md#unified_document_index)), off indexes
+([the applets](../user/applets.md#unified_grid_and_search_index)), off indexes
 on `(parent_uuid, sort_key, uuid)` that only the grid index has
 (`data_nodes::CHILDREN_INDEXES`). A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
@@ -459,10 +459,10 @@ never writes the file: the `photos` applet draws the photo from the
 applet's card. qmd indexes nothing for it, which is why a photo's
 caption is a `caption:` term.
 
-**A document can be in the grid and not in qmd.** One filed with
+**A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and every source's qmd collection ignores
-that folder (`qmd_indexer::ignore_for_group`). Use it for a document that only
+its rows and opens like any other, and every source's `keyword_index` leaves
+that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found
 by its own columns.

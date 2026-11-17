@@ -59,9 +59,11 @@ pub const NETWORK: &str = "network";
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
-/// Whatever writes qmd's collection registry or its keyword index. One
-/// slot, and resizing it is a mistake: two keyword updates on one index
-/// can lose a document's body (`docs/dev/qmd_behaviour.md`, finding 12).
+/// Whatever writes the grid index's file: `grid_index`, every
+/// `keyword_index` and `qmd_aggregator`. Named for the qmd keyword index it
+/// once guarded. One slot, and resizing it is a mistake: the file takes one
+/// writer at a time, and a writer left to wait inside SQLite behind a long
+/// run of another's transactions times out.
 pub const QMD_KEYWORD: &str = "qmd_keyword";
 /// Whatever embeds into qmd's index. One slot: two embeds race on qmd's
 /// vector table, and share one GPU besides.

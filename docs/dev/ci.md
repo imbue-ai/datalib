@@ -344,7 +344,7 @@ binary" has the layout.
 copy** — the crate built in the exec configuration as well as the
 target one, nothing shared. A `genrule` puts its `tools` there, so a
 Rust binary a genrule runs goes in `srcs` (`:ingested_tng` and
-`:ingested_tng_qmd` are the examples). Proc-macros and build scripts
+`:ingested_tng_search_index` are the examples). Proc-macros and build scripts
 run at build time by nature, so the crates they reach are the one
 legitimate exec-config set. CI's "No crate built a second time for a
 tool" step fails on anything else (`tools/check_tool_crates.py`, which

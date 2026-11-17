@@ -29,7 +29,7 @@ const chips = (page: Page) =>
 const sortPick = (page: Page) => shownCards(page).getByTestId("search-sort");
 const pickedResult = (page: Page) => shownCards(page).locator(".sc-result.is-picked");
 
-const SEARCH_PATH = "/applet/unified_document_index/search";
+const SEARCH_PATH = "/applet/unified_grid_and_search_index/search";
 
 /// The first document the server lists for `sort`, by the title the list
 /// shows for it.
@@ -103,7 +103,7 @@ test("gridView is the grid over a table it is given, and says so when given none
   page,
 }) => {
   await page.goto(
-    `/${encodeURIComponent('gridView({"url":"/applet/unified_document_index/problems"})')}`,
+    `/${encodeURIComponent('gridView({"url":"/applet/unified_grid_and_search_index/problems"})')}`,
   );
   await expect(shownCards(page).locator(".grid-wrap")).toHaveAttribute("data-shown-query", "");
   await expect(shownCards(page).getByRole("tablist", { name: "View" })).toHaveCount(0);

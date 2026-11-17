@@ -57,7 +57,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 
-# doltlite v0.51.3: the amalgamation, a single-file `doltlite.c` with the
+# doltlite v0.51.12: the amalgamation, a single-file `doltlite.c` with the
 # SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
 # by `//third-party/doltlite:sqlite3` into every binary.
 #
@@ -66,15 +66,10 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.3/doltlite-amalgamation-0.51.3.zip"],
-    sha256 = "c4f6f5eedb322bcccc06a15618dcb9fb95da1a90fe842fe46b1e0403e71b03d6",
-    strip_prefix = "doltlite-amalgamation-0.51.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.12/doltlite-amalgamation-0.51.12.zip"],
+    sha256 = "85782797b302ed54144565cf2adc15a4782498e5d8e333c80f28b3480350703a",
+    strip_prefix = "doltlite-amalgamation-0.51.12",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
-    # The amalgamation turns BLAKE3's SIMD kernels off, because a single
-    # file cannot carry their per-kernel `-m` flags; this patch takes
-    # that out, and `@blake3_c` below supplies the kernels.
-    patches = ["//third-party/doltlite:amalgamation_blake3_simd.patch"],
-    patch_args = ["-p1"],
 )
 
 # BLAKE3's C SIMD kernels, at the version the amalgamation embeds:
@@ -146,9 +141,9 @@ http_archive(
 # `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.3/doltlite-autoconf-0.51.3.tar.gz"],
-    sha256 = "80e63f3d0f4cc2bcea774e29f5541a752630ab1a465d9ae91bad9c52fd360dca",
-    strip_prefix = "doltlite-autoconf-0.51.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.12/doltlite-autoconf-0.51.12.tar.gz"],
+    sha256 = "3d29aca3adfc85a1394adf7a03da159036467d135e421dffa1f08a4bce08ee03",
+    strip_prefix = "doltlite-autoconf-0.51.12",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
@@ -616,10 +611,10 @@ bazel_dep(name = "bazel_lib", version = "3.7.2")
 
 # rules_nodejs is already in the graph transitively (via aspect_rules_js);
 # declared explicitly so we can `use_repo` the host Node toolchain repo.
-# `//tests/fixtures:ingested_tng_qmd` needs the node BINARY as a label —
-# it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
-# package tree) so `datalib_core::node_runtime::bundled_command` resolves,
-# which is what takes `npx` out of the build.
+# The e2e suite and the render preview need the node BINARY as a label:
+# the e2e suite stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the
+# qmd package tree) so `datalib_core::node_runtime::bundled_command`
+# resolves, which is what takes `npx` out of the build.
 bazel_dep(name = "rules_nodejs", version = "6.7.7")
 
 # NODE_VERSION is the one Node pin in the repo, and it is read by
@@ -672,8 +667,8 @@ npm.npm_translate_lock(
 use_repo(npm, "npm_lint")
 
 # The qmd CLI and its 277-package transitive tree, replacing the
-# `npx -y @tobilu/qmd@<v>` fetch that `//tests/fixtures:ingested_tng_qmd`
-# used to perform on every cache miss. `npx -y` resolves that tree from
+# `npx -y @tobilu/qmd@<v>` fetch the fixture's qmd index build used to
+# perform on every cache miss. `npx -y` resolves that tree from
 # the live registry with no lockfile and no integrity checking, and runs
 # every package's install scripts while doing it; this gets the identical
 # tree from a checked-in lockfile where every tarball carries a sha512,

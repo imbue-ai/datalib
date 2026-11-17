@@ -84,7 +84,6 @@ FAMILIES: list[Family] = [
                 "datalib/backend/runtime/src/qmd.rs",
                 r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
             ),
-            ("tests/fixtures/BUILD.bazel", r'^QMD_VERSION = "([^"]+)"'),
             # The vendored upstream snapshot, read by
             # //tools:qmd_model_cache_path_test for the cache-path check.
             ("third-party/qmd/package.json", r'"version"\s*:\s*"([^"]+)"'),

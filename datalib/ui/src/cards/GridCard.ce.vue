@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Search-grid card: a search bar + a slickgrid over a table the
-// unified_document_index applet pages — its /search results by default, or another
+// unified_grid_and_search_index applet pages — its /search results by default, or another
 // endpoint that pages the same way (/problems) — a page at a time
 // (grid/pagedWindow.ts). The server orders the rows: a header click asks
 // it again in the new order. What a row is named by, the document it
@@ -179,7 +179,7 @@ const props = defineProps<{
   // The card's name, from the card source (`gridView({name: "Slack
   // documents"})`). Without one the card is named for its live query.
   name?: string;
-  // The table the card pages (`gridView({url: "/applet/unified_document_index/problems"})`);
+  // The table the card pages (`gridView({url: "/applet/unified_grid_and_search_index/problems"})`);
   // the search when absent (`searchView()`). Its groups are at `${url}/groups`.
   url?: string;
   // What the empty search bar suggests typing.
@@ -466,8 +466,8 @@ function qmdFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedde
   if (v === null) return "Unknown.";
   if (which === "indexed") {
     return v
-      ? "This document's current content is in the qmd keyword index."
-      : "Not in the qmd index — either never indexed, or re-rendered since the last indexing run.";
+      ? "This document's current content is in the keyword index."
+      : "Not in the keyword index — either never indexed, or re-rendered since the last indexing run.";
   }
   return v
     ? "Embedded: semantic search can reach this document."
@@ -1624,8 +1624,7 @@ const extraColumns: Column[] = [
     field: "markdown_uuid",
     name: "Indexed",
     hidden: true,
-    toolTip:
-      "Whether this row's rendered document is in the qmd keyword index, at its current content",
+    toolTip: "Whether this row's rendered document is in the keyword index, at its current content",
     width: 100,
     cssClass: "tg-center",
     cellAttrs: { "col-id": "qmd_indexed" },

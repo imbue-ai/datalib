@@ -6,7 +6,7 @@
 import type { FreeSpace, PassRow, PassState, Upgrade } from "@/api";
 import { formatBytes } from "@/config/bytes";
 
-const INDEX_GROUP = "unified_document_index";
+const INDEX_GROUP = "unified_grid_and_search_index";
 
 /// The source a step belongs to: its group, and what to call it until
 /// its chip resolves — the search index by that name, a source by its id.

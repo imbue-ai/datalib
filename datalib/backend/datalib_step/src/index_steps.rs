@@ -1,6 +1,6 @@
 //! The search's steps: each source's `keyword_index` and `embed`, which
 //! fill its part of the search index (`search_index.rs`), and
-//! `unified_document_index/qmd_aggregator`, which reads every source's
+//! `unified_grid_and_search_index/qmd_aggregator`, which reads every source's
 //! pair, drops the sources it no longer reads, sweeps the inference cache
 //! and reports on the whole. The aggregator's id is qmd's, whose index
 //! this replaced; it deletes what qmd left in its directory.
@@ -16,11 +16,11 @@ use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 
 /// The aggregator's id, which is also its directory under the
-/// unified document index.
+/// unified grid and search index.
 pub fn aggregator_rel() -> String {
     format!(
         "{}/{}",
-        datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR,
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         crate::function::Function::QmdAggregator.as_str()
     )
 }
@@ -46,12 +46,15 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 
 /// Put the embedding model in place, sha256-verified, and answer its
 /// directory. A no-op once it is.
-fn provision_embed_model(root: &Path, models_dir: Option<PathBuf>) -> Result<PathBuf> {
+fn provision_embed_model(
+    root: &Path,
+    models_dir: Option<PathBuf>,
+    fetch: datalib_qmd_models::Fetch,
+) -> Result<PathBuf> {
     let models = datalib_runtime::qmd::EMBED_MODELS;
     let dir = models_dir.unwrap_or_else(|| datalib_qmd_models::models_dir_for(root));
-    let outcomes =
-        datalib_qmd_models::ensure_models(&dir, models, datalib_qmd_models::Fetch::from_env())
-            .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
+    let outcomes = datalib_qmd_models::ensure_models(&dir, models, fetch)
+        .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
     let missing = datalib_qmd_models::missing(models, &outcomes);
     if !missing.is_empty() {
         anyhow::bail!(
@@ -78,7 +81,7 @@ fn retire_qmd(root: &Path) -> Result<()> {
     }
 }
 
-/// `unified_document_index/qmd_aggregator`: drop every source the search
+/// `unified_grid_and_search_index/qmd_aggregator`: drop every source the search
 /// index holds that this step no longer reads, keep only the vectors a
 /// chunk still names, and report what each source holds.
 pub async fn run_aggregator(
@@ -102,9 +105,9 @@ pub async fn run_aggregator(
     progress.set_message(&holdings_summary(&held));
     // The index rebuilds from the render stores, so cache-aware backups
     // (`restic --exclude-caches` etc.) may skip it.
-    datalib_core::layout::mark_derived_cache(&datalib_core::layout::unified_document_index_dir(
-        data_root,
-    ));
+    datalib_core::layout::mark_derived_cache(
+        &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
+    );
     Ok(claim_reads(env))
 }
 
@@ -164,17 +167,27 @@ pub async fn run_embed(
     let progress = emitter.progress();
     progress.set_message("embedding");
     let root = data_root.to_path_buf();
-    let models = tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir))
-        .await
-        .context("model provisioning panicked")??;
+    let fetch = datalib_qmd_models::Fetch::from_env();
+    let models =
+        tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir, fetch))
+            .await
+            .context("model provisioning panicked")??;
     let model = crate::search_index::model_file(&models);
     let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
+    progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
+    progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);
+    let (chunks_per_sec, kb_per_sec) = done.rate().unwrap_or_default();
     tracing::info!(
         embedded = done.embedded,
         unsettled = done.unsettled,
         truncated = done.truncated,
-        "the search index's embeddings are done"
+        prompt_bytes = done.prompt_bytes,
+        embed_secs = format!("{:.1}", done.embed_time.as_secs_f64()),
+        chunks_per_sec = format!("{chunks_per_sec:.1}"),
+        kb_per_sec = format!("{kb_per_sec:.1}"),
+        "the search index's embeddings are done: {chunks_per_sec:.1} chunks/s, \
+         {kb_per_sec:.1} KB/s of prompt text"
     );
     Ok(claim_reads(env))
 }
@@ -275,6 +288,31 @@ mod tests {
         assert!(!qmd.exists());
         assert!(models.join("m.gguf").exists());
         retire_qmd(root).unwrap();
+    }
+
+    /// With fetching off, a missing model is an error that says where it
+    /// should be and why it was not fetched, and nothing is written there.
+    #[test]
+    fn a_missing_model_with_fetching_off_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("models");
+        let err = provision_embed_model(
+            tmp.path(),
+            Some(dir.clone()),
+            datalib_qmd_models::Fetch::Never,
+        )
+        .unwrap_err();
+        let why = format!("{err:#}");
+        assert!(why.contains("the embedding model is missing from"), "{why}");
+        assert!(why.contains(&dir.display().to_string()), "{why}");
+        assert!(
+            why.contains(datalib_runtime::qmd::EMBED_MODELS[0].file),
+            "{why}"
+        );
+        let written = std::fs::read_dir(&dir)
+            .map(|d| d.count())
+            .unwrap_or_default();
+        assert_eq!(written, 0, "nothing fetched into {}", dir.display());
     }
 
     /// An input is a step id, which is also the tree it writes. The

@@ -538,9 +538,11 @@ async fn proxy_impl(
         Err(e) => return applet_error(StatusCode::BAD_REQUEST, &format!("read body: {e}")),
     };
     let target = format!("{path}{query}");
-    // Card scripts written before the rename still call the old prefix.
+    // Card scripts and agents written before a rename still call an old prefix.
     let id = match id.as_str() {
-        "unified_index" => UNIFIED_DOCUMENT_INDEX_APPLET.to_string(),
+        "unified_index" | "unified_document_index" => {
+            UNIFIED_GRID_AND_SEARCH_INDEX_APPLET.to_string()
+        }
         _ => id,
     };
     let registry = s.applets.clone();
@@ -897,13 +899,16 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 }
 
 /// The applet id that serves the grid, search and the document view.
-const UNIFIED_DOCUMENT_INDEX_APPLET: &str = "unified_document_index";
+const UNIFIED_GRID_AND_SEARCH_INDEX_APPLET: &str = "unified_grid_and_search_index";
 /// The contacts app's applet id: its mount prefix, and the row whose
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
-    let prefix = format!("{}/", datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR);
+    let prefix = format!(
+        "{}/",
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
+    );
     fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
@@ -931,7 +936,7 @@ pub struct ConfigResponse {
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
     /// Whether the app can serve its own views at all. False in three
     /// cases: the file is not a config, or it declares no usable
-    /// `unified_document_index` applet — one screen for both, because they have
+    /// `unified_grid_and_search_index` applet — one screen for both, because they have
     /// one consequence: that applet serves the grid, search and the
     /// document view, so without it every view is a 502 — or the root
     /// was written by a newer datalib (`newer_root` says which stores),
@@ -1031,7 +1036,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
                 && c.cfg
                     .applets
                     .iter()
-                    .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET)
+                    .any(|a| a.id == UNIFIED_GRID_AND_SEARCH_INDEX_APPLET)
                 && newer_root.is_none(),
         ),
         None => (false, None, 0, Vec::new(), false),
@@ -2509,15 +2514,18 @@ mod tests {
         assert_eq!(
             source_ids(&checked),
             [
-                "unified_document_index/grid_index",
-                "unified_document_index/qmd_aggregator"
+                "unified_grid_and_search_index/grid_index",
+                "unified_grid_and_search_index/qmd_aggregator"
             ]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
         // contacts app, which a new root gets on by default.
         let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(applets, [UNIFIED_DOCUMENT_INDEX_APPLET, CONTACTS_APPLET]);
+        assert_eq!(
+            applets,
+            [UNIFIED_GRID_AND_SEARCH_INDEX_APPLET, CONTACTS_APPLET]
+        );
     }
 
     /// A scaffolded root has no *sources*, even though its two index
@@ -2530,8 +2538,8 @@ mod tests {
         assert_eq!(
             fringe,
             [
-                "unified_document_index/grid_index",
-                "unified_document_index/qmd_aggregator"
+                "unified_grid_and_search_index/grid_index",
+                "unified_grid_and_search_index/qmd_aggregator"
             ]
         );
         assert_eq!(configured_source_count(&fringe), 0);
@@ -2589,7 +2597,7 @@ mod tests {
             .cfg
             .applets
             .iter()
-            .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET));
+            .any(|a| a.id == UNIFIED_GRID_AND_SEARCH_INDEX_APPLET));
 
         // …and the PUT refuses it anyway, naming every problem so the
         // caller needs one round-trip rather than one per mistake.

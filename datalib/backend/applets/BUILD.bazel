@@ -1,6 +1,6 @@
 load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
-load("//datalib/backend/unified_document_index:search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
+load("//datalib/backend/unified_grid_and_search_index:search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
@@ -38,14 +38,13 @@ rust_binary(
         "//datalib/backend/etl/time_series:datalib_etl_time_series",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
         "//datalib/backend/sql_guard:datalib_sql_guard",
-        "//datalib/backend/unified_document_index:datalib_unified_document_index",
+        "//datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index",
         "//datalib/backend/uri:datalib_uri",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
@@ -65,14 +64,14 @@ rust_binary(
     ],
 )
 
-# The unified_document_index applet's searches run over the TNG fixture's
+# The unified_grid_and_search_index applet's searches run over the TNG fixture's
 # search index with the real embedding model, so this carries both; and the
 # applet binary itself, which serve_tests.rs starts the way the gateway does.
 rust_test(
     name = "applet_unittests",
     size = "medium",
     crate = ":datalib_applet",
-    data = glob(["src/unified_document_index/snapshots/*.snap"], allow_empty = True) +
+    data = glob(["src/unified_grid_and_search_index/snapshots/*.snap"], allow_empty = True) +
            SEARCH_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
     env = SEARCH_FIXTURE_ENV | {
@@ -85,7 +84,7 @@ rust_test(
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
-        "//datalib/backend/unified_document_index:search_fixture",
+        "//datalib/backend/unified_grid_and_search_index:search_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",

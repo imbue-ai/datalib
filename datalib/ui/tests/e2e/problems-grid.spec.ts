@@ -24,7 +24,7 @@ type Problem = {
 
 async function problems(request: APIRequestContext, q: string): Promise<Problem[]> {
   const r = await request.get(
-    `/applet/unified_document_index/problems?q=${encodeURIComponent(q)}&limit=2000`,
+    `/applet/unified_grid_and_search_index/problems?q=${encodeURIComponent(q)}&limit=2000`,
   );
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: Problem[] }).rows;

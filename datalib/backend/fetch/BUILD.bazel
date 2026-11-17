@@ -5,9 +5,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 # GGUF models (`datalib_qmd_models`), the perseus embedder's model files,
 # and the Node runtime a release tarball names in its manifest
 # (`RuntimeFetcher` here, the manifest and the hook in `datalib_runtime`).
-# Linked by the step, the applet and the app server — NOT by
-# //datalib/backend/qmd_indexer, which is an input to the fixture's embed
-# action and must stay tiny.
+# Linked by the step, the applet and the app server.
 rust_library(
     name = "datalib_fetch",
     srcs = glob(["src/**/*.rs"]),

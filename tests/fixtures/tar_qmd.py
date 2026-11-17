@@ -7,7 +7,7 @@ so the pipeline operates at the layer of DB + qmd files; the genrule is
 the Bazel-distribution boundary that wants archives.
 
 Layout: `data_root` holds one dir per source stanza (`<stanza>/render_markdown/…`)
-plus the reserved `system/` and `unified_document_index/` dirs. We tar every stanza's
+plus the reserved `system/` and `unified_grid_and_search_index/` dirs. We tar every stanza's
 `render_markdown` subtree, each entry prefixed with `qmd/<stanza>/render_markdown/<rel>`,
 so callers can extract with `--strip-components=1` to land
 `<stanza>/render_markdown/…` at a root data directory.
@@ -22,23 +22,13 @@ TWO archives come out, and the split is a build-cache decision:
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
-  * `qmd_md.tar` — markdown only, matching the masks the qmd indexer
-    scans with (one collection per group, each covering
-    `<group>/render_markdown/**/*.md` — see
-    `datalib_qmd_indexer::mask_for_group`).
-    This is the ONLY input to the `:ingested_tng_qmd` embedding action.
-
-Why the second archive exists: bazel keys an action on the content of
-its inputs, so any byte that can change without changing the action's
-OUTPUT is pure cache poison. The embedder opens nothing but `*.md`, and
-the excluded kind changes on literally every pipeline run — every
-`indexed_markdown.doltlite_db` chains its commit hashes off a wall-clock
-initial commit and carries the render cursor's `rendered_at_utc`, and the
-pdf provider's rows carry a `source_url` holding the absolute bazel
-sandbox path (…/darwin-sandbox/4914/… vs …/5269/…). With
-those in the archive the ~90s CPU-only embed on CI re-ran for every
-change anywhere upstream, including changes that left all 57 markdown
-files byte-identical.
+  * `qmd_md.tar` — markdown only: every `<group>/render_markdown/**/*.md`.
+    The UI's render preview reads it. Bazel keys an action on the
+    content of its inputs, and the excluded kind changes on every
+    pipeline run (each `indexed_markdown.doltlite_db` chains its commit
+    hashes off a wall-clock initial commit, and the pdf provider's rows
+    carry the absolute sandbox path), so an action that reads only
+    markdown takes this archive and is not re-run for nothing.
 
 A third, `time_series.tar`, holds the time-series stores: each
 source's `<stanza>/render_time_series/` and the index over them,
@@ -92,9 +82,9 @@ def main() -> int:
     # Every top-level dir that is not owned by the app itself is a source
     # stanza with a `render_markdown/` subtree. Tar them all, rooted at
     # `qmd/<stanza>/...`. `system/` is the server's own state and
-    # `unified_document_index/` is the index the steps write, so neither is a
+    # `unified_grid_and_search_index/` is the index the steps write, so neither is a
     # stanza even though both sit at the same level.
-    not_stanzas = {"system", "unified_document_index"}
+    not_stanzas = {"system", "unified_grid_and_search_index"}
     rendered_dirs = sorted(
         d
         for d in src_root.glob("*/render_markdown")

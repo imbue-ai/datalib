@@ -11,7 +11,7 @@
                                                   a calendar's occurrences in a window of
                                                   days, one row each, replaced whole by each
                                                   run (`calendar_render/src/occurrences/`)
-<data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
+<data_root>/unified_grid_and_search_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
                                                   data_nodes and filings (the tree the rows sit in) /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
@@ -25,14 +25,14 @@
                                                   message's keyword postings and each
                                                   chunk's place and prompt hash, no text
                                                   (`datalib/backend/search_index`)
-<data_root>/unified_document_index/search_index/inference_cache.sqlite
+<data_root>/unified_grid_and_search_index/search_index/inference_cache.sqlite
                                                   each chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
-<data_root>/unified_document_index/qmd_aggregator/           nothing now: the aggregator's directory,
+<data_root>/unified_grid_and_search_index/qmd_aggregator/           nothing now: the aggregator's directory,
                                                   where qmd's index was; the aggregator
                                                   deletes what qmd left there
-<data_root>/unified_document_index/embedding_map/embedding_map.json
+<data_root>/unified_grid_and_search_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
@@ -47,7 +47,7 @@
                                                   `datalib_contacts` applet
 <data_root>/datalib_curated/datalib_problem_mutes/mutes.doltlite_db
                                                   the problem rows a person muted; written
-                                                  only by the `unified_document_index`
+                                                  only by the `unified_grid_and_search_index`
                                                   applet, read by `datalib-http`, which
                                                   leaves them out of the Manage counts
 <data_root>/system/feedback.doltlite_db           filed feedback
@@ -139,7 +139,7 @@ the grid index's tables, and each source's `keyword_index` and the
 file; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
-`unified_document_index/src/dolt_repo.rs`). The grid index is plain
+`unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
 SQLite in WAL mode, and its step writes one source per transaction, so
 that transaction reads one state of it and a `grid_index` pass in
 flight is never served; a request also reopens the file when a reset

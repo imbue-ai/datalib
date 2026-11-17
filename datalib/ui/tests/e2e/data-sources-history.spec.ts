@@ -76,10 +76,12 @@ test("a group's commit history opens from the context menu as a card", async ({ 
 test("an applet row leaves out what an applet cannot do", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  await expandGroup(page, "unified_document_index");
+  await expandGroup(page, "unified_grid_and_search_index");
   // The applet shares its group's id; its row is keyed by the bare id.
-  await expect(nameCell(page, "unified_document_index").locator('[title="Applet"]')).toBeVisible();
-  const appletRow = pipelineRow(page, "unified_document_index");
+  await expect(
+    nameCell(page, "unified_grid_and_search_index").locator('[title="Applet"]'),
+  ).toBeVisible();
+  const appletRow = pipelineRow(page, "unified_grid_and_search_index");
 
   await appletRow.click({ button: "right" });
   // The menu is open — an entry every row has is showing — so the

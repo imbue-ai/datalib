@@ -576,13 +576,13 @@ async fn no_applets_and_no_store_is_an_empty_view() {
 /// A config that exists but doesn't load yields an empty applet list,
 /// which used to be indistinguishable from "you never configured that
 /// applet" — so a syntax error in `config.toml` reported itself as
-/// `no applet "unified_document_index"` and sent people looking in the wrong
+/// `no applet "unified_grid_and_search_index"` and sent people looking in the wrong
 /// place entirely.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
-    let state = state_with(tmp.path(), &config_for(&["unified_document_index"])).await;
+    let state = state_with(tmp.path(), &config_for(&["unified_grid_and_search_index"])).await;
     let registry = state.applets.clone();
     let app = router(state);
 
@@ -595,7 +595,7 @@ async fn an_unloadable_config_says_so_instead_of_blaming_the_applet() {
     .unwrap();
     reload(&registry).await;
 
-    let (status, body) = get_json(&app, "/applet/unified_document_index/search").await;
+    let (status, body) = get_json(&app, "/applet/unified_grid_and_search_index/search").await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     let error = body["error"].as_str().unwrap();
     assert!(
@@ -820,18 +820,21 @@ async fn concurrent_reloads_of_one_edit_start_the_applet_once() {
     );
 }
 
-/// Card scripts written before the rename call `/applet/unified_index/`;
-/// the gateway still answers them from the document index's applet.
+/// Card scripts and agents written before a rename call
+/// `/applet/unified_index/` or `/applet/unified_document_index/`; the
+/// gateway still answers them from the index's applet.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_old_index_prefix_reaches_the_document_index_applet() {
+async fn the_old_index_prefixes_reach_the_index_applet() {
     let tmp = tempfile::tempdir().unwrap();
     seed_tree(tmp.path());
-    let app = router(state_with(tmp.path(), &config_for(&["unified_document_index"])).await);
-    let (status, new) = get_json(&app, "/applet/unified_document_index/channels").await;
+    let app = router(state_with(tmp.path(), &config_for(&["unified_grid_and_search_index"])).await);
+    let (status, new) = get_json(&app, "/applet/unified_grid_and_search_index/channels").await;
     assert_eq!(status, StatusCode::OK);
-    let (status, old) = get_json(&app, "/applet/unified_index/channels").await;
-    assert_eq!(status, StatusCode::OK, "{old}");
-    assert_eq!(old, new);
+    for old_prefix in ["unified_index", "unified_document_index"] {
+        let (status, old) = get_json(&app, &format!("/applet/{old_prefix}/channels")).await;
+        assert_eq!(status, StatusCode::OK, "{old_prefix}: {old}");
+        assert_eq!(old, new, "{old_prefix}");
+    }
 }
 
 /// `ps eww` shows a process's environment to any other process of the same

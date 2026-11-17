@@ -1,9 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Puts qmd's pinned GGUF models in place and verifies them, so qmd never
-# reaches HuggingFace on its own. Linked by the `embed` step and the
-# search applet — NOT by //datalib/backend/qmd_indexer, which is an
-# input to the fixture's embed action and must stay tiny.
+# Puts the pinned embedding model in place and verifies it. Linked by the
+# `embed` step and the search applet.
 rust_library(
     name = "datalib_qmd_models",
     srcs = glob(["src/**/*.rs"]),

@@ -5,7 +5,10 @@
 // queries: [text]}; stdout: {docs: [{formatted, tokens, vector}],
 // queries: [...]}. QMD_FORCE_CPU in the environment keeps qmd off the GPU.
 //
-// Run as a file, not with `node -e`: see qmd_indexer's qmd_sdk.mjs.
+// Run as a file, not with `node -e`: `-e` needs `--input-type=module`,
+// node hands that flag to every child it forks, and node-llama-cpp probes
+// its prebuilt binary in such a child, which then fails to start on
+// linux-x64.
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 

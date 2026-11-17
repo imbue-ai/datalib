@@ -6,7 +6,7 @@
 //! and `inputs`, an applet's `group`. The folders follow at boot
 //! (`datalib-http`'s `config_upgrade::move_case_folders`).
 //!
-//! A text edit, like `document_index.rs`: values are replaced where they
+//! A text edit, like `index_name.rs`: values are replaced where they
 //! stand, so every comment and key the file holds survives.
 
 use std::ops::Range;
@@ -156,7 +156,7 @@ id = "Custom/Raw"
 command = "fetch-it"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["Email/render_markdown", "Custom/Raw"]
 

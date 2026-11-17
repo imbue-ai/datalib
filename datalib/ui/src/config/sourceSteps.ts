@@ -100,8 +100,8 @@ function groupedName(
   if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (fn === "render_occurrences") return `${group.name} (render occurrences)`;
   if (phase === "render") return `${group.name} (render markdown)`;
-  if (fn === "keyword_index") return `${group.name} (QMD keyword index)`;
-  if (fn === "embed") return `${group.name} (QMD embedding index)`;
+  if (fn === "keyword_index") return `${group.name} (Keyword index)`;
+  if (fn === "embed") return `${group.name} (Semantic indexing)`;
   return defaultName(id);
 }
 
@@ -131,10 +131,10 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// that lives here rather than in anyone's config file. A `name =` someone did
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
-  "unified_document_index/grid_index": "Document Index (table)",
-  "unified_document_index/qmd_aggregator": "Document Index (QMD)",
-  "unified_document_index/embedding_map": "Document Index (map)",
-  unified_document_index: "Document Index (Applet)",
+  "unified_grid_and_search_index/grid_index": "Grid and Search Index (table)",
+  "unified_grid_and_search_index/qmd_aggregator": "Grid and Search Index (QMD)",
+  "unified_grid_and_search_index/embedding_map": "Grid and Search Index (map)",
+  unified_grid_and_search_index: "Grid and Search Index (Applet)",
   "unified_time_series_index/time_series_index": "Time Series Index",
   unified_time_series_index: "Time Series Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
@@ -399,7 +399,7 @@ export function listSteps(text: string): ConfiguredStep[] {
   return [...steps, ...applets];
 }
 
-/// `datalib-applet unified_document_index` → `unified_document_index`. Null for anything
+/// `datalib-applet unified_grid_and_search_index` → `unified_grid_and_search_index`. Null for anything
 /// else, which is legitimate — an applet may be any executable.
 function appletType(command: string): string | null {
   const words = command.trim().split(/\s+/);
@@ -1074,7 +1074,7 @@ export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | 
 
 /// The groups the fan-ins are filed under: the document index and the
 /// time-series index.
-const FAN_IN_GROUPS = ["unified_document_index", "unified_time_series_index"];
+const FAN_IN_GROUPS = ["unified_grid_and_search_index", "unified_time_series_index"];
 
 /// The fan-ins a render step feeds.
 const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
@@ -1314,7 +1314,7 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 }
 
 /// The group every source feeds.
-const INDEX_GROUP = "unified_document_index";
+const INDEX_GROUP = "unified_grid_and_search_index";
 
 /// Add entries — a source, a comparison, a source's qmd steps — where the
 /// file keeps reading in the order data flows: each step below the steps
@@ -1645,6 +1645,7 @@ const RESERVED_IDS = new Set([
   "datalib_curated",
   "unified_index",
   "unified_document_index",
+  "unified_grid_and_search_index",
   "unified_time_series_index",
 ]);
 

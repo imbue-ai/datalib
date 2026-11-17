@@ -51,15 +51,15 @@ const BEEPER = catalogFor("beeper")!;
 const PAIR = `data_root = "~/datalib"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = []
 
@@ -84,8 +84,8 @@ inputs = ["slack/ingest"]
 describe("listSteps", () => {
   it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
       "slack/ingest",
       "slack/render_markdown",
     ]);
@@ -98,14 +98,14 @@ describe("listSteps", () => {
     const by = new Map(listSteps(PAIR).map((s) => [s.id, s.phase]));
     expect(by.get("slack/ingest")).toBe("ingest");
     expect(by.get("slack/render_markdown")).toBe("render");
-    expect(by.get("unified_document_index/grid_index")).toBe("index");
-    expect(by.get("unified_document_index/qmd_aggregator")).toBe("index");
+    expect(by.get("unified_grid_and_search_index/grid_index")).toBe("index");
+    expect(by.get("unified_grid_and_search_index/qmd_aggregator")).toBe("index");
     const qmd = new Map(
       listSteps(setQmdSteps(PAIR, "slack", "keyword_and_embed")).map((s) => [s.id, s]),
     );
     expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.phase).toBe("index");
-    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (QMD embedding index)");
+    expect(qmd.get("slack/embed")!.name).toBe("Work Slack (Semantic indexing)");
     // A custom function under a group, and a step outside any group,
     // are steps and nothing more — whatever their ids look like.
     const custom = listSteps(`[[steps]]
@@ -129,7 +129,7 @@ command = "my-exporter"
     expect(fetch.type).toBe("slack");
     expect(fetch.inputs).toEqual([]);
     expect(by.get("slack/render_markdown")!.inputs).toEqual(["slack/ingest"]);
-    expect(by.get("unified_document_index/grid_index")!.type).toBeNull();
+    expect(by.get("unified_grid_and_search_index/grid_index")!.type).toBeNull();
   });
 
   /// The group's name labels its fetch step; its render step is the same
@@ -139,21 +139,23 @@ command = "my-exporter"
     expect(by.get("slack/ingest")!.name).toBe("Work Slack");
     expect(by.get("slack/render_markdown")!.name).toBe("Work Slack (render markdown)");
     // The index group has no name, so its steps take the shared defaults.
-    expect(by.get("unified_document_index/grid_index")!.name).toBe("Document Index (table)");
+    expect(by.get("unified_grid_and_search_index/grid_index")!.name).toBe(
+      "Grid and Search Index (table)",
+    );
   });
 
   it("lists applets, after the steps, with no inputs", () => {
     const withApplet = `${PAIR}
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 `;
     const entries = listSteps(withApplet);
     expect(entries.at(-1)!.kind).toBe("applet");
-    expect(entries.at(-1)!.id).toBe("unified_document_index");
-    expect(entries.at(-1)!.group).toBe("unified_document_index");
-    expect(entries.at(-1)!.type).toBe("unified_document_index");
+    expect(entries.at(-1)!.id).toBe("unified_grid_and_search_index");
+    expect(entries.at(-1)!.group).toBe("unified_grid_and_search_index");
+    expect(entries.at(-1)!.type).toBe("unified_grid_and_search_index");
     expect(entries.at(-1)!.inputs).toEqual([]);
   });
 
@@ -181,7 +183,7 @@ command = "datalib-applet unified_document_index"
 describe("listGroups", () => {
   it("lists every group with its name, type and range", () => {
     const groups = listGroups(PAIR);
-    expect(groups.map((g) => g.id)).toEqual(["unified_document_index", "slack"]);
+    expect(groups.map((g) => g.id)).toEqual(["unified_grid_and_search_index", "slack"]);
     expect(groups[0]).toMatchObject({ name: null, type: null });
     expect(groups[1]).toMatchObject({ name: "Work Slack", type: "slack" });
     expect(PAIR.slice(groups[1].start, groups[1].end)).toContain('type = "slack"');
@@ -202,7 +204,7 @@ describe("a source's two steps", () => {
     expect(ingest?.id).toBe("slack/ingest");
     expect(render?.id).toBe("slack/render_markdown");
     // The index group has neither.
-    expect(sourceStepsOf("unified_document_index", all)).toEqual({
+    expect(sourceStepsOf("unified_grid_and_search_index", all)).toEqual({
       ingest: undefined,
       render: undefined,
     });
@@ -588,10 +590,10 @@ describe("removeSteps / patchSource", () => {
     const after = unwireFromFanIns(removeSteps(PAIR, [...both, group]), "slack/render_markdown");
     expect(after).not.toContain("slack");
     expect(listSteps(after).map((s) => s.id)).toEqual([
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
-    expect(listGroups(after).map((g) => g.id)).toEqual(["unified_document_index"]);
+    expect(listGroups(after).map((g) => g.id)).toEqual(["unified_grid_and_search_index"]);
   });
 
   it("edits one step without touching its sibling or its group", () => {
@@ -609,8 +611,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -633,8 +635,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -655,8 +657,8 @@ describe("removeSteps / patchSource", () => {
     ).toEqual([
       "slack/ingest",
       "slack/render_markdown",
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -682,8 +684,8 @@ describe("renameGroup", () => {
   });
 
   it("adds a name to a group that had none, right after its id", () => {
-    const after = renameGroup(PAIR, "unified_document_index", "Everything");
-    expect(after).toContain('id = "unified_document_index"\nname = "Everything"');
+    const after = renameGroup(PAIR, "unified_grid_and_search_index", "Everything");
+    expect(after).toContain('id = "unified_grid_and_search_index"\nname = "Everything"');
   });
 
   it("removes the key when the name is cleared or only respells the id", () => {
@@ -726,7 +728,7 @@ describe("renameGroup", () => {
   it("writes a name containing dollar signs verbatim", () => {
     const name = "Top $1 & $& costs $$";
     // Replacing an existing name, and inserting one after the id.
-    for (const groupId of ["slack", "unified_document_index"]) {
+    for (const groupId of ["slack", "unified_grid_and_search_index"]) {
       expect(renameGroup(PAIR, groupId, name)).toContain(`name = "${name}"`);
     }
     expect(
@@ -768,12 +770,18 @@ describe("fan-in wiring", () => {
       "qmd_aggregator",
     );
     const steps = (text: string, id: string) => listSteps(text).find((s) => s.id === id)!.inputs;
-    expect(steps(both, "unified_document_index/qmd_aggregator")).toEqual(["email/keyword_index"]);
-    expect(steps(both, "unified_document_index/grid_index")).not.toContain("email/keyword_index");
+    expect(steps(both, "unified_grid_and_search_index/qmd_aggregator")).toEqual([
+      "email/keyword_index",
+    ]);
+    expect(steps(both, "unified_grid_and_search_index/grid_index")).not.toContain(
+      "email/keyword_index",
+    );
 
     const gridOnly = unwireFromFanIns(both, "email/keyword_index", "qmd_aggregator");
-    expect(steps(gridOnly, "unified_document_index/grid_index")).toContain("email/render_markdown");
-    expect(steps(gridOnly, "unified_document_index/qmd_aggregator")).toEqual([]);
+    expect(steps(gridOnly, "unified_grid_and_search_index/grid_index")).toContain(
+      "email/render_markdown",
+    );
+    expect(steps(gridOnly, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
   });
 
   /// Which fan-in a step is comes off its `function`, not off the order
@@ -782,11 +790,11 @@ describe("fan-in wiring", () => {
     const odd = `[[steps]]
 inputs = []
 function = "qmd_aggregator"
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 `;
     const wired = wireIntoFanIns(odd, "pdfs/keyword_index", "qmd_aggregator");
     expect(
-      listSteps(wired).find((s) => s.id === "unified_document_index/qmd_aggregator")!.inputs,
+      listSteps(wired).find((s) => s.id === "unified_grid_and_search_index/qmd_aggregator")!.inputs,
     ).toEqual(["pdfs/keyword_index"]);
   });
 
@@ -795,17 +803,17 @@ group = "unified_document_index"
   /// steps and not stumble on the applet.
   it("wires into a scaffold whose fan-ins are empty", () => {
     const scaffold = `[[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = []
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 `;
     const wired = wireIntoFanIns(scaffold, "pdfs/render_markdown");
     expect(wired).toContain('inputs = ["pdfs/render_markdown"]');
@@ -813,12 +821,12 @@ command = "datalib-applet unified_document_index"
   });
 
   const gridIndex = (inputs: string) => `[[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ${inputs}
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = ["bridge/keyword_index"]
 `;
@@ -894,7 +902,7 @@ inputs = ["bridge/keyword_index"]
     );
     expect(
       listSteps(unwireFromFanIns(before, "sickbay/render_markdown")).find(
-        (s) => s.id === "unified_document_index/grid_index",
+        (s) => s.id === "unified_grid_and_search_index/grid_index",
       )!.inputs,
     ).toEqual(["bridge/render_markdown"]);
   });
@@ -1083,9 +1091,9 @@ describe("the ChatGPT descriptor", () => {
 describe("a source's qmd steps", () => {
   const MAPPED = `${PAIR}
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "embedding_map"
-inputs = ["unified_document_index/qmd_aggregator"]
+inputs = ["unified_grid_and_search_index/qmd_aggregator"]
 `;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
 
@@ -1097,12 +1105,12 @@ inputs = ["unified_document_index/qmd_aggregator"]
     const next = setQmdSteps(MAPPED, "slack", "keyword_and_embed");
     expect(inputsOf(next, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
     expect(inputsOf(next, "slack/embed")).toEqual(["slack/keyword_index"]);
-    expect(inputsOf(next, "unified_document_index/qmd_aggregator")).toEqual([
+    expect(inputsOf(next, "unified_grid_and_search_index/qmd_aggregator")).toEqual([
       "slack/keyword_index",
       "slack/embed",
     ]);
-    expect(inputsOf(next, "unified_document_index/embedding_map")).toEqual([
-      "unified_document_index/qmd_aggregator",
+    expect(inputsOf(next, "unified_grid_and_search_index/embedding_map")).toEqual([
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
     expect(setQmdSteps(next, "slack", "keyword_and_embed")).toBe(next);
     expect(qmdIndexingOf(listSteps(next), "slack")).toBe("keyword_and_embed");
@@ -1116,14 +1124,14 @@ inputs = ["unified_document_index/qmd_aggregator"]
     const keyword = setQmdSteps(both, "slack", "keyword");
     expect(inputsOf(keyword, "slack/keyword_index")).toEqual(["slack/render_markdown"]);
     expect(inputsOf(keyword, "slack/embed")).toBeUndefined();
-    expect(inputsOf(keyword, "unified_document_index/qmd_aggregator")).toEqual([
+    expect(inputsOf(keyword, "unified_grid_and_search_index/qmd_aggregator")).toEqual([
       "slack/keyword_index",
     ]);
     expect(qmdIndexingOf(listSteps(keyword), "slack")).toBe("keyword");
     expect(setQmdSteps(keyword, "slack", "keyword")).toBe(keyword);
     const back = setQmdSteps(keyword, "slack", "keyword_and_embed");
     expect(inputsOf(back, "slack/embed")).toEqual(["slack/keyword_index"]);
-    expect(inputsOf(back, "unified_document_index/qmd_aggregator")).toEqual([
+    expect(inputsOf(back, "unified_grid_and_search_index/qmd_aggregator")).toEqual([
       "slack/keyword_index",
       "slack/embed",
     ]);
@@ -1150,11 +1158,13 @@ inputs = ["slack/embed"]
     const off = setQmdSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"), "slack", "none");
     expect(inputsOf(off, "slack/keyword_index")).toBeUndefined();
     expect(inputsOf(off, "slack/embed")).toBeUndefined();
-    expect(inputsOf(off, "unified_document_index/qmd_aggregator")).toEqual([]);
-    expect(inputsOf(off, "unified_document_index/embedding_map")).toEqual([
-      "unified_document_index/qmd_aggregator",
+    expect(inputsOf(off, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
+    expect(inputsOf(off, "unified_grid_and_search_index/embedding_map")).toEqual([
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
-    expect(inputsOf(off, "unified_document_index/grid_index")).toEqual(["slack/render_markdown"]);
+    expect(inputsOf(off, "unified_grid_and_search_index/grid_index")).toEqual([
+      "slack/render_markdown",
+    ]);
     expect(qmdIndexingOf(listSteps(off), "slack")).toBe("none");
   });
 
@@ -1163,7 +1173,7 @@ inputs = ["slack/embed"]
   it("writes nothing where the config has no aggregator", () => {
     const noQmd = removeSteps(
       PAIR,
-      listSteps(PAIR).filter((s) => s.id === "unified_document_index/qmd_aggregator"),
+      listSteps(PAIR).filter((s) => s.id === "unified_grid_and_search_index/qmd_aggregator"),
     );
     expect(
       inputsOf(setQmdSteps(noQmd, "slack", "keyword_and_embed"), "slack/keyword_index"),
@@ -1174,10 +1184,12 @@ inputs = ["slack/embed"]
   /// or the map.
   it("wires a render into the grid index only", () => {
     const wired = wireIntoFanIns(MAPPED, "email/render_markdown");
-    expect(inputsOf(wired, "unified_document_index/grid_index")).toContain("email/render_markdown");
-    expect(inputsOf(wired, "unified_document_index/qmd_aggregator")).toEqual([]);
-    expect(inputsOf(wired, "unified_document_index/embedding_map")).toEqual([
-      "unified_document_index/qmd_aggregator",
+    expect(inputsOf(wired, "unified_grid_and_search_index/grid_index")).toContain(
+      "email/render_markdown",
+    );
+    expect(inputsOf(wired, "unified_grid_and_search_index/qmd_aggregator")).toEqual([]);
+    expect(inputsOf(wired, "unified_grid_and_search_index/embedding_map")).toEqual([
+      "unified_grid_and_search_index/qmd_aggregator",
     ]);
   });
 
@@ -1196,12 +1208,11 @@ inputs = ["slack/embed"]
   /// steps go with it — though none of them reads it.
   it("takes every source's qmd steps with the aggregator", () => {
     const all = listSteps(setQmdSteps(MAPPED, "slack", "keyword_and_embed"));
-    expect(readersOf(["unified_document_index/qmd_aggregator"], all)).toEqual([]);
-    expect(removedWith(["unified_document_index/qmd_aggregator"], all).map((s) => s.id)).toEqual([
-      "slack/keyword_index",
-      "slack/embed",
-    ]);
-    expect(removedWith(["unified_document_index/grid_index"], all)).toEqual([]);
+    expect(readersOf(["unified_grid_and_search_index/qmd_aggregator"], all)).toEqual([]);
+    expect(
+      removedWith(["unified_grid_and_search_index/qmd_aggregator"], all).map((s) => s.id),
+    ).toEqual(["slack/keyword_index", "slack/embed"]);
+    expect(removedWith(["unified_grid_and_search_index/grid_index"], all)).toEqual([]);
   });
 });
 
@@ -1242,24 +1253,24 @@ group = "notes"
 function = "render_markdown"
 inputs = ["notes/ingest"]
 
-# ── the unified document index ────────────────────────────────────────
+# ── the unified grid and search index ─────────────────────────────────
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown", "notes/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = []
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 `;
 
   /// Every input a step names that is in the file comes above it.
@@ -1286,7 +1297,7 @@ command = "datalib-applet unified_document_index"
       "slack",
       "notes",
       "extra",
-      "unified_document_index",
+      "unified_grid_and_search_index",
     ]);
     expect(listSteps(next).map((s) => s.id)).toEqual([
       "slack/ingest",
@@ -1297,28 +1308,27 @@ command = "datalib-applet unified_document_index"
       "extra/render_markdown",
       "extra/keyword_index",
       "extra/embed",
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
-      "unified_document_index",
+      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index",
     ]);
     expect(flowsDown(next)).toEqual([]);
     expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
     // Its divider stays above its group, and the index's above the index.
     expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
     expect(next.indexOf('function = "embed"')).toBeLessThan(
-      next.indexOf("── the unified document index"),
+      next.indexOf("── the unified grid and search index"),
     );
   });
 
   /// The scaffold a new root starts from is the index alone; the first
   /// source goes above it, not after it.
   it("puts the first source above the index a new root starts with", () => {
-    const scaffold = FLOWING.slice(FLOWING.indexOf("# ── the unified document index")).replace(
-      'inputs = ["slack/render_markdown", "notes/render_markdown"]',
-      "inputs = []",
-    );
+    const scaffold = FLOWING.slice(
+      FLOWING.indexOf("# ── the unified grid and search index"),
+    ).replace('inputs = ["slack/render_markdown", "notes/render_markdown"]', "inputs = []");
     const next = addSource(scaffold, "extra");
-    expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_document_index"]);
+    expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_grid_and_search_index"]);
     expect(flowsDown(next)).toEqual([]);
     expect(next.startsWith("# ── extra")).toBe(true);
   });
@@ -1371,7 +1381,7 @@ command = "datalib-applet unified_document_index"
       "slack",
       "notes",
       "slack-diff",
-      "unified_document_index",
+      "unified_grid_and_search_index",
     ]);
     expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
   });
@@ -1442,10 +1452,10 @@ group = "claude"
 function = "ingest"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
@@ -1479,15 +1489,15 @@ command = "datalib-applet slack_view"
 
   it("puts a group, with every step under it, above another, and moves nothing else", () => {
     const next = moveGroup(CONFIG, "claude", "slack");
-    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_document_index"]);
+    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_grid_and_search_index"]);
     expect(entryOrder(next)).toEqual([
       "group claude",
       "claude/ingest",
       "group slack",
       "slack/ingest",
       "slack/render_markdown",
-      "group unified_document_index",
-      "unified_document_index/grid_index",
+      "group unified_grid_and_search_index",
+      "unified_grid_and_search_index/grid_index",
       "slack/keyword_index",
       "slack_view",
     ]);
@@ -1498,12 +1508,12 @@ command = "datalib-applet slack_view"
 
   it("puts a group below the last one when there is nothing to put it above", () => {
     const next = moveGroup(CONFIG, "slack", null);
-    expect(groupOrder(next)).toEqual(["claude", "unified_document_index", "slack"]);
+    expect(groupOrder(next)).toEqual(["claude", "unified_grid_and_search_index", "slack"]);
     expect(entryOrder(next)).toEqual([
       "group claude",
       "claude/ingest",
-      "group unified_document_index",
-      "unified_document_index/grid_index",
+      "group unified_grid_and_search_index",
+      "unified_grid_and_search_index/grid_index",
       "group slack",
       "slack/ingest",
       "slack/render_markdown",
@@ -1515,8 +1525,8 @@ command = "datalib-applet slack_view"
   });
 
   it("gathers a group's steps and applets when moving it down past their neighbours", () => {
-    const next = moveGroup(CONFIG, "slack", "unified_document_index");
-    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_document_index"]);
+    const next = moveGroup(CONFIG, "slack", "unified_grid_and_search_index");
+    expect(groupOrder(next)).toEqual(["claude", "slack", "unified_grid_and_search_index"]);
     expect(entryOrder(next)).toEqual([
       "group claude",
       "claude/ingest",
@@ -1525,8 +1535,8 @@ command = "datalib-applet slack_view"
       "slack/render_markdown",
       "slack/keyword_index",
       "slack_view",
-      "group unified_document_index",
-      "unified_document_index/grid_index",
+      "group unified_grid_and_search_index",
+      "unified_grid_and_search_index/grid_index",
     ]);
     expect(entries(next)).toEqual(entries(CONFIG));
   });
@@ -1538,16 +1548,16 @@ command = "datalib-applet slack_view"
   });
 
   it("refuses a group above one it reads, or below one that reads it", () => {
-    expect(moveAgainstDataFlow(CONFIG, "unified_document_index", "slack")).toEqual({
+    expect(moveAgainstDataFlow(CONFIG, "unified_grid_and_search_index", "slack")).toEqual({
       reads: "slack",
     });
-    expect(moveAgainstDataFlow(CONFIG, "unified_document_index", "claude")).toBeNull();
+    expect(moveAgainstDataFlow(CONFIG, "unified_grid_and_search_index", "claude")).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "slack", null)).toEqual({
-      readBy: "unified_document_index",
+      readBy: "unified_grid_and_search_index",
     });
     expect(moveAgainstDataFlow(CONFIG, "claude", "slack")).toBeNull();
     expect(moveAgainstDataFlow(CONFIG, "claude", null)).toBeNull();
-    expect(moveAgainstDataFlow(CONFIG, "slack", "unified_document_index")).toBeNull();
+    expect(moveAgainstDataFlow(CONFIG, "slack", "unified_grid_and_search_index")).toBeNull();
   });
 });
 
@@ -1573,7 +1583,7 @@ function = "ingest"
     expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
     ]);
-    expect(inputsOf(added, "unified_document_index/grid_index")).toContain(
+    expect(inputsOf(added, "unified_grid_and_search_index/grid_index")).toContain(
       "riker/render_time_series",
     );
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
@@ -1606,7 +1616,7 @@ function = "ingest"
     const added = setTimeSeriesStep(WATCH, "riker", "garmin");
     const gone = unwireFromFanIns(added, "riker/render_time_series");
     expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
-    expect(inputsOf(gone, "unified_document_index/grid_index")).not.toContain(
+    expect(inputsOf(gone, "unified_grid_and_search_index/grid_index")).not.toContain(
       "riker/render_time_series",
     );
   });
@@ -1637,7 +1647,7 @@ function = "ingest"
   /// Its problem rows reach the problems list only through `grid_index`.
   it("is read by grid_index for its problem rows", () => {
     const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
-    const grid = listSteps(added).find((s) => s.id === "unified_document_index/grid_index");
+    const grid = listSteps(added).find((s) => s.id === "unified_grid_and_search_index/grid_index");
     expect(grid?.inputs).toContain("bridge/render_occurrences");
   });
 
