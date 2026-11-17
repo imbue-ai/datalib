@@ -207,14 +207,53 @@ secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
 BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
 
+### The local gate and CI's cache
+
+A laptop or cloud session with the contributor key reads and writes the
+same org as a PR run, but it only gets CI's entries when its action
+keys are CI's. A key holds the action's command line, its environment
+and the digest of every input, so two things have to agree.
+
+**The flags.** `bazelisk run //:precommit` (`scripts/run_checks.sh`)
+passes CI's pull-request flags to each of its bazel calls when it runs
+on x86_64 Linux and `.bazelrc.user` holds a BuildBuddy key:
+
+| flag | why |
+|---|---|
+| `-c opt --config=release --nostamp --config=pr-tests` | the build mode of `test.yml`'s PR run and of `warm-contributor-cache`; any other mode is a different key for every action |
+| `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` | in every test's key, so a test CI passed is not run again |
+| `--remote_download_minimal` | a hit's outputs stay remote unless a local action needs them (the same reason as in `build:ci`, below) |
+
+It takes nothing else from `--config=ci`. `--lockfile_mode=error` is
+left out because `//:lint_repo`, the gate's first step, already refuses
+a `MODULE.bazel.lock` that bazel had to rewrite. `--disk_cache=` is left
+out because a laptop's disk cache outlives the run; a cloud session's
+`.bazelrc.user` turns it off itself. On a mac, or with no key, the gate
+stays in fastbuild: there is nothing of CI's to reuse, and fastbuild
+compiles faster. The cost on Linux: on a miss, opt compiles slower, and
+the gate's outputs live in `bazel-out/k8-opt`, apart from the fastbuild
+tree a plain `bazelisk test` uses, so a crate you just tested is
+compiled again for the gate.
+
+**The host's C compiler.** Bazel's C toolchain is autodetected from the
+host (`local_config_cc`), and every Rustc and C action takes its
+`builtin_include_directory_paths` as an input: the include directories
+the host's gcc reports, its version among them
+(`/usr/lib/gcc/x86_64-linux-gnu/13/include` on Ubuntu 24.04). CI's image
+is Ubuntu 26.04 and a Claude Code cloud session is Ubuntu 24.04, so even
+with the flags above their Rust and C keys differ. Only a host whose
+gcc reports what the CI image's does (the devcontainer image itself)
+shares them. Two cloud sessions share with each other.
+
 ## The caches, and what each is for
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
 nothing. An action's key covers its toolchain, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one never share an entry — locally the
-remote cache buys sharing with your own other worktrees and machines,
-not a replay of CI's work.
+action and CI's linux-x86_64 one never share an entry, and a Linux host
+shares CI's only when its gcc and its flags are CI's (§"The local gate
+and CI's cache"). Otherwise the remote cache buys sharing with your own
+other worktrees and machines, not a replay of CI's work.
 
 **`--remote_download_minimal`** (`build:ci`, #497). A warm run has
 ~4400 cache hits; without this each hit's outputs were downloaded to

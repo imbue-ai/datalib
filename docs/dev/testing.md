@@ -22,7 +22,11 @@ bypass (and never warm) the cache and can disagree with CI.
 
 The complete local gate is `bazelisk run //:precommit` (the hygiene lint,
 `//:lint`, a `build //...` for the fmt and clippy aspects, and every
-hermetic test). Never put `--test_tag_filters=-manual,-external` on the
+hermetic test). On x86_64 Linux with a BuildBuddy key it passes CI's
+pull-request flags to every one of those, so it can reuse the entries CI
+wrote and CI can reuse its; elsewhere it builds in fastbuild, and so
+does a plain `bazelisk test //...`. Which flags and why:
+[`ci.md`](ci.md) §"The local gate and CI's cache". Never put `--test_tag_filters=-manual,-external` on the
 full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
 [`/docs/dev/coverage.md`](/docs/dev/coverage.md); why a run was slow:
 [`/docs/dev/ci.md`](/docs/dev/ci.md).

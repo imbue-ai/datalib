@@ -614,7 +614,14 @@ bazelisk run //:precommit          # the one command to run before pushing
 
 That is `//:lint_repo`, `//:lint`, a `bazelisk build //...` (which runs
 the rustfmt and clippy aspects over every crate) and every hermetic
-test. Measured on one warm mac:
+test. On x86_64 Linux with a BuildBuddy key in `.bazelrc.user` it
+builds with CI's pull-request flags (`-c opt --config=release --nostamp
+--config=pr-tests`), since an action's cache key holds its flags and a
+fastbuild gate can never reuse what CI built; anywhere else it builds in
+fastbuild. The flags are not the whole key: a host also shares CI's
+entries only if its C compiler is CI's
+([`ci.md`](docs/dev/ci.md) §"The local gate and CI's cache").
+Measured on one warm mac:
 
 | loop | command | cost |
 |---|---|---|
