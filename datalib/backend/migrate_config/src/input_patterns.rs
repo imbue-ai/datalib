@@ -137,7 +137,7 @@ inputs = ["picard/ingest"]
 group = "picard"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "riker"
@@ -165,7 +165,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = [
     "picard/render_markdown", # the captain's mail
@@ -186,7 +186,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
 "#;
 
     fn loaded_inputs(text: &str, step: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(&crate::folded(text));
+        let check = datalib_dag::config::check_text(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
             .cfg
@@ -219,7 +219,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
     fn complete_lists_become_patterns_and_read_the_same_steps() {
         assert!(is_retired(BEFORE).unwrap());
         let after = rewrite(BEFORE).unwrap();
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         let map = "unified_grid_and_search_index/embedding_map";
         let export = "exports/csv";
         assert_eq!(
@@ -235,10 +235,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
             written_inputs(&after, export),
             written_inputs(BEFORE, export)
         );
-        // As loaded, once the later rewrite has given the index step its
-        // group's name.
-        let loaded_grid = "unified_grid_and_search_index/unified_grid_and_search_index";
-        for step in [loaded_grid, map, export] {
+        for step in [grid, map, export] {
             assert_eq!(
                 loaded_inputs(&after, step),
                 loaded_inputs(BEFORE, step),
@@ -257,7 +254,10 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
         let partial = BEFORE.replace("    \"riker/render_markdown\",\n", "");
         let after = rewrite(&partial).unwrap();
         assert_eq!(
-            written_inputs(&after, "unified_grid_and_search_index/grid_index"),
+            written_inputs(
+                &after,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             [
                 "picard/render_markdown",
                 "*/render_time_series",

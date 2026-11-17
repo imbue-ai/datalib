@@ -648,13 +648,7 @@ the next would put the first back:
    input that named one (the embedding map's) reads `*/embed`.
    `unified_grid_and_search_index` sweeps the vectors and reports what search holds. The
    loader refuses the old step.
-12. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
-   an index step whose `inputs` name every step of a function it reads
-   (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
-   every render, so it reads the same steps and, from then on, every
-   source added. A list that leaves a step out is left as written, since
-   whoever wrote it may have meant it. The loader still reads the lists.
-13. The index step's name (`upgrade_index_step_name`,
+12. The index step's name (`upgrade_index_step_name`,
    `index_step_name.rs`): a built-in step whose function is `grid_index`
    takes its group's name, `unified_grid_and_search_index`, so its id is
    `unified_grid_and_search_index/unified_grid_and_search_index`, and
@@ -666,9 +660,16 @@ the next would put the first back:
    step's rows in `system/supervisor.sqlite` (turned off, its last
    success, its tree's version) to the new id. The step and every
    `embed` still run once at the next sync, since a step's id and inputs
-   are in its fingerprint; that run finds nothing new to read or embed.
+   are in its fingerprint; the step reads from the cursors the moved file
+   kept, and an embed finds its vectors in the inference cache.
    If both trees exist it leaves both and logs an error naming them. The
    loader refuses the old function.
+13. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
+   an index step whose `inputs` name every step of a function it reads
+   (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
+   every render, so it reads the same steps and, from then on, every
+   source added. A list that leaves a step out is left as written, since
+   whoever wrote it may have meant it. The loader still reads the lists.
 
 A source may not take `unified_index`, `unified_document_index`,
 `unified_grid_and_search_index` or `unified_time_series_index` as its id

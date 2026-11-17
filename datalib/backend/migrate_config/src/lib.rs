@@ -25,10 +25,11 @@
 //! `render_time_series` and `render_occurrences` step, for its problem
 //! rows; then `conversation_settings.rs`: the ChatGPT and Claude
 //! ingests' API settings take the names they share; then
-//! `keyword_fold.rs`, `aggregator_drop.rs` and `input_patterns.rs`: the
-//! search's own steps fold into the index step, which reads every source
-//! by pattern; then `index_step_name.rs`: the index step's function,
-//! `grid_index`, becomes `unified_grid_and_search_index`. Those last
+//! `keyword_fold.rs` and `aggregator_drop.rs`: the search's own steps
+//! fold into the index step; then `index_step_name.rs`: the index step's
+//! function, `grid_index`, becomes `unified_grid_and_search_index`; then
+//! `input_patterns.rs`: the index steps read every source by pattern,
+//! which finds them by their current functions. Those last
 //! thirteen rewrites are also the ones `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
@@ -136,8 +137,8 @@ pub fn convert(text: &str) -> Result<String> {
     let out = conversation_settings::rewrite(&out)?;
     let out = keyword_fold::rewrite(&out)?;
     let out = aggregator_drop::rewrite(&out)?;
-    let out = input_patterns::rewrite(&out)?;
     let out = index_step_name::rewrite(&out)?;
+    let out = input_patterns::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -422,16 +423,16 @@ pub const UNATTENDED: [Rewrite; 13] = [
         run: upgrade_aggregator_drop,
     },
     Rewrite {
-        why: "has an index step that names every source's step by id",
-        what: "an index step reads every source's step of a function by pattern \
-               (`*/render_markdown`), so a source added later is read without editing it",
-        run: upgrade_input_patterns,
-    },
-    Rewrite {
         why: "has an index step whose function is `grid_index`",
         what: "the index step is `unified_grid_and_search_index`, named for its group and \
                the grid and the search it fills; each input that named it names the new id",
         run: upgrade_index_step_name,
+    },
+    Rewrite {
+        why: "has an index step that names every source's step by id",
+        what: "an index step reads every source's step of a function by pattern \
+               (`*/render_markdown`), so a source added later is read without editing it",
+        run: upgrade_input_patterns,
     },
 ];
 
@@ -1121,9 +1122,9 @@ inputs = ["mail/render_markdown"]
         assert_eq!(upgrade_step_commands(&out).unwrap(), None);
         let out = upgrade_keyword_fold(&out).unwrap().unwrap();
         let out = upgrade_aggregator_drop(&out).unwrap().unwrap();
-        let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
         let out = upgrade_index_step_name(&out).unwrap().unwrap();
         assert_eq!(upgrade_index_step_name(&out).unwrap(), None);
+        let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
         let check = datalib_dag::config::check_text(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check
