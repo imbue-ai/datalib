@@ -1194,8 +1194,9 @@ fn resolve_inputs(steps: &[WrittenStep], universe: &[&str]) -> Resolved {
             .map(|(id, t)| (id.as_str(), t.as_str()));
         // The entry rules built this spec once with the inputs as written;
         // an expansion only puts ids of steps they kept in their place.
-        let spec = spec_of(&entry, w.group_type.as_deref(), source_group)
+        let mut spec = spec_of(&entry, w.group_type.as_deref(), source_group)
             .expect("an accepted step's spec builds again with its patterns expanded");
+        spec.inputs_written = !w.entry.inputs.is_empty();
         out.push((entry, spec));
     }
     (out, expansions)
