@@ -418,6 +418,9 @@ jobs:
           path: artifact/datalib-x86_64-unknown-linux-gnu.tar.gz
           retention-days: 3
 
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
+
   # The Playwright suite, on a runner of its own. It is tagged `cpu:4`
   # (datalib/ui/BUILD.bazel), the whole runner, so inside `bazel-test`
   # every other test waited behind it; here the two run side by side.
@@ -611,6 +614,9 @@ jobs:
           path: e2e-report/test.log
           retention-days: 14
 
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
+
   # Fill the *contributor* cache with main's tree, after the merge.
   #
   # The two BuildBuddy orgs (docs/dev/ci.md § "Two caches") are
@@ -690,6 +696,9 @@ jobs:
             --nostamp --jobs=16 \
             --build_metadata=ROLE=CACHE \
             //datalib/backend:dist
+
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
 
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo
@@ -788,5 +797,8 @@ jobs:
           DATALIB_BIN_DIR="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin" \
           DATALIB_VCF_DIR="datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng" \
               datalib/backend/doltlite_link_test.sh
+
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
 
 
