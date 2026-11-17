@@ -69,8 +69,9 @@ impl<C> Eq for SearchKey<C> {}
 /// What text outside any `key:` matches.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FreeText<C: 'static> {
-    /// The words go to the table's qmd index; SQL never sees them.
-    Qmd,
+    /// The words go to the search index, which ranks the rows; SQL never
+    /// sees them.
+    Ranked,
     /// A case-insensitive substring of any of these columns.
     Like(&'static [C]),
 }

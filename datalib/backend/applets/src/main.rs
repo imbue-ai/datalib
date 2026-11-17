@@ -74,7 +74,7 @@ enum Which {
     /// Browse a Slack mirror: channels, then one channel's threads,
     /// then a whole thread.
     Slack,
-    /// Serve the grid index and the qmd index: search, columns, the
+    /// Serve the grid index and the search index: search, columns, the
     /// document list, one document, and the files beside it.
     // The old names stay for a config the server has not rewritten yet.
     #[command(

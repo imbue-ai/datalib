@@ -42,7 +42,10 @@ security model the walkthrough's bind-mount rules rest on.
 - a user, `datalib` (uid and gid 1000), that everything runs as
   (§ "Permissions and signals").
 
-There is one variant. The devcontainer CI runs in is a separate image
+Two variants are published: the image above, and **`<version>-cuda`**,
+the same image with NVIDIA's cuBLAS and datalib's CUDA module added, for
+a machine with an NVIDIA GPU (§ "The CUDA variant"). The devcontainer
+CI runs in is a separate image
 (`.devcontainer/Dockerfile`, published by `devcontainer.yml`) and does
 not build on it. Releases up to v0.53.0 also published a
 `:<version>-slim` tag without the models; later releases do not.
@@ -64,6 +67,67 @@ The user's page names the image by digest, not by a tag, and each release
 carries that digest as its `docker-image.digest` asset
 ([`security_posture.md`](security_posture.md)).
 
+## The CUDA variant
+
+`ghcr.io/imbue-ai/datalib:<version>-cuda` (and `latest-cuda`), for
+`linux/amd64` only, is what a person with an NVIDIA GPU runs, with
+`docker run --gpus all`, and what embedding on Modal runs
+([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). On top of the
+plain image it holds:
+
+- **`/opt/datalib/lib/libggml-cuda.so`**, the release's
+  `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` asset unpacked, which
+  `datalib-step` loads from `lib/` beside itself when there is a GPU
+  ([`embedder/README.md`](../../datalib/backend/embedder/README.md)
+  § "Measured by hand");
+- **cuBLAS 12** (`libcublas.so.12`, `libcublasLt.so.12`) in
+  `/usr/local/lib/datalib-cuda/cublas`, on `LD_LIBRARY_PATH`. NVIDIA's
+  container runtime passes a container the driver (`libcuda.so.1`) and
+  nothing else, so without cuBLAS inside, `--gpus all` would still embed
+  on the CPU. It is about 580 MB compressed, which is why the plain
+  image goes without.
+
+Both are NVIDIA's or link NVIDIA's code, whose use is governed by the
+CUDA Toolkit EULA, not datalib's MIT license:
+[`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
+image carries in each of those directories' `licenses/`, beside NVIDIA's
+own `LICENSE` for the component there (`licenses/nvidia/cudart/`,
+`licenses/nvidia/cublas/`), copied from the archive Bazel fetched it in
+(`@llama_cpp//:nvidia_licenses`).
+
+**They sit below the release, so that a pull of the next version can
+reuse them.** The Dockerfile's `CUDA` build argument picks a stage
+between the OS layers and the tarball: `none`, or `12`, which adds the
+two archives with `ADD --link`, which builds a layer apart from the
+layers under it. A layer is reused only if its digest is the same, and
+its digest is the hash of every byte of the layer, directory times
+included. So `scripts/release/stage_docker_context.sh` roots each
+archive at `/` (`cuda/rootfs-cuda-libs.tar` holds
+`usr/local/lib/datalib-cuda/…`, `cuda/rootfs-ggml-cuda.tar` holds
+`opt/datalib/…`), every entry dated 1970 as `stage_cuda.sh` dates its
+own. Added to a directory instead (`ADD … /opt/datalib/`), BuildKit
+makes the destination and its parents itself and stamps them with the
+build's clock, so each build gets new digests for the same bytes:
+measured with BuildKit v0.34.2, two builds from a cold cache a few
+minutes apart gave different layers, over the same Ubuntu and over
+different ones, and the rooted archives gave the same two layers both
+times (583 MB and 105 MB compressed). The comparison is of what a
+registry holds after a push, which is what a pull compares; a `--load`
+into the local Docker store says nothing about it.
+`.github/workflows/cuda.yml` builds the variant up to its demo
+(`--target app`) twice from a cold cache, the second time over Ubuntu
+24.04, pushes both to a registry on the runner, and fails if the two
+CUDA layers' digests differ (`scripts/release/cuda_layer_digests.py`).
+It runs on every change that could move them.
+A machine with no GPU runs the variant on the
+CPU, as the plain image does: `docker-publish-cuda` checks the
+walkthrough against it on a runner that has none.
+
+Published by the `cuda`, `docker-image-cuda` and `docker-publish-cuda`
+jobs, apart from the plain image's, so the plain image neither waits for
+the CUDA build nor fails with it. Each release carries its digest as
+`docker-image-cuda.digest`.
+
 ## The demo library
 
 [`datalib/docker/demo/config.toml`](../../datalib/docker/demo/config.toml)
@@ -77,8 +141,8 @@ of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
 The image carries the whole search index: every step in the demo
-config runs at image time, each source's `keyword_index` and `embed`
-and the `qmd_aggregator` included, so search by words and by meaning
+config runs at image time, `grid_index`'s keyword pass and each
+source's `embed` included, so search by words and by meaning
 both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a

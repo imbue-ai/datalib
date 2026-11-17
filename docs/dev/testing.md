@@ -243,13 +243,13 @@ suite gates merges like everything else. Two things make it work in the
 CI image:
 
 * **The qmd GGUFs are bazel inputs.** A build action
-  (`//third-party/qmd_models`) fetches them into the remote cache, and
+  (`//third-party/embedding_models`) fetches them into the remote cache, and
   they reach the materializer and the fixture's index genrule as
   runfiles; the image has no `/root/.cache/qmd/models`. The e2e suite
   runs on the runner itself, so its runfiles *are* downloaded before it
   starts — which is why it uses `materialize_tng_root_embed_only`: the
   embedding model is all it loads, and the other two are 1.8 GB. The
-  suite sets `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them
+  suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports them
   absent instead of fetching them into the fixture root.
 * **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
   GitHub forces `HOME=/github/home` for container steps, while the image
@@ -382,7 +382,7 @@ each backend answer by a random 0–400 ms shows many at once: export a `test`
 from a scratch file with `base.extend`, give it an `auto` fixture that does
 `context.route(/\/(api|applet|data)\//, …)` with the delay and then
 `route.fallback()`, and point the specs' imports at that file. Leave
-`qmd-warmup.setup.ts` as it is, or its timeout stops the run. A routed
+`search-warmup.setup.ts` as it is, or its timeout stops the run. A routed
 request loses its `sec-fetch-*` headers, so `links-from-elsewhere` and
 `document-sandbox` fail for that reason alone. This found a real bug as well
 as loose specs: Add source writing a config that held nothing but the new
@@ -549,8 +549,12 @@ misplaced knob fails here rather than during the live run.
 
 The test makes three pipeline runs, each asserting something different:
 
-1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants. Then it makes the contacts listed in
+1. **Cold** — snapshots the produced data tree, one `.snap` per file
+   (each group's `ingest/`, `render_markdown/` and, for a time-series
+   source, `render_time_series/`, plus the time-series index), a
+   manifest and the layout invariants. A snapshot of a file the bake no
+   longer writes is deleted, and so is the folder of a group that is no
+   longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
    `contacts.toml` (beside the config) in the contacts app, asserts every
    handle they link is an author in the index, and snapshots the contacts
    store with each minted `contact_id` replaced by the contact's name.
@@ -693,7 +697,7 @@ A root last synced by an older build may have no index this build can
 read; `run` refuses a root with no rows rather than score an empty one.
 
 **Across languages.** Measured 2026-11-04 on a real library of 450,000 rows,
-with the embedding model pinned in `runtime/src/qmd.rs` (EmbeddingGemma,
+with the embedding model pinned in `runtime/src/models.rs` (EmbeddingGemma,
 which is multilingual). German and Italian wordings of English
 descriptions the Meaning tab already found: 28 of 28 in its top 10 and 27
 in its top 3, against 14 of 14 at top 3 for the English. Two-to-four-word

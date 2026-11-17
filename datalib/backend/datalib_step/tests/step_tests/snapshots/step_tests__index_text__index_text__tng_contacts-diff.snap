@@ -4,7 +4,7 @@ expression: text
 ---
 === tng_contacts-diff 00000000-0000-8195-8ee2-d14cb601f004 Worf
 --- chunk 0
-title: Worf | text: Source: contacts
+title: Worf | text: Source: Contacts
 Group: Bridge
 
 Worf
@@ -25,7 +25,7 @@ Note: Son of Mogh. Prefers prune juice.
 
 === tng_contacts-diff 00000000-0000-819d-aad9-cb628fc3bec0 Kalita
 --- chunk 0
-title: Kalita | text: Source: contacts
+title: Kalita | text: Source: Contacts
 Group: Maquis
 
 # Kalita
@@ -36,7 +36,7 @@ Phone work: +1-555-BADLANDS
 
 === tng_contacts-diff 00000000-0000-825c-a3c4-1fb84e9bfce6 Jean-Luc Picard
 --- chunk 0
-title: Jean-Luc Picard | text: Source: contacts
+title: Jean-Luc Picard | text: Source: Contacts
 Group: Bridge
 
 Jean-Luc Picard
@@ -66,7 +66,7 @@ Note: Make it so.
 
 === tng_contacts-diff 00000000-0000-8429-b938-7d1e51384182 Ro Laren
 --- chunk 0
-title: Ro Laren | text: Source: contacts
+title: Ro Laren | text: Source: Contacts
 Group: Maquis
 
 Ro Laren
@@ -83,7 +83,7 @@ Note: Resigned her commission. Last seen in the Badlands.
 
 === tng_contacts-diff 00000000-0000-86be-a0a0-341fa48bbc80 Data
 --- chunk 0
-title: Data | text: Source: contacts
+title: Data | text: Source: Contacts
 Group: Bridge
 
 Data

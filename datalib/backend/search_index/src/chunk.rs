@@ -5,8 +5,12 @@
 //!
 //! An item (a message) always starts a chunk of its own, so a Meaning hit,
 //! which lands on the first item its chunk covers, lands on the one it
-//! matched; in the search eval that beat packing short messages together
-//! on every measure, for 4% more chunks. A heading of level one or two
+//! matched. Packing messages up to the budget instead puts a dozen or more
+//! in one chunk, whose vector is then about all of them: in the search
+//! eval a query about one exchange scored lower against it than against
+//! the exchange's own message, and found fewer targets further from where
+//! they sit. A chunk per message costs about 2.4 times the chunks of
+//! packing to the budget. A heading of level one or two
 //! inside a section starts a chunk too, so an edit under one heading moves
 //! only the chunks under it, unless the chunk so far holds less than a
 //! quarter of the budget: then it takes the heading in, so a document's

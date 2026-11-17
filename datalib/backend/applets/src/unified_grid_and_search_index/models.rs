@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
-use datalib_runtime::qmd::EMBED_MODELS;
+use datalib_runtime::models::EMBED_MODELS;
 
 /// Where the pinned models are, once something has verified them. The
 /// query embedder loads the model only with an answer.
@@ -168,7 +168,7 @@ impl Inner {
                 "{} is not in {} and fetching is switched off ({})",
                 missing.join(", "),
                 dir.display(),
-                datalib_qmd_models::NO_FETCH_ENV
+                datalib_embedding_models::NO_FETCH_ENV
             );
             Ok(())
         });
@@ -188,10 +188,16 @@ impl Inner {
 
 /// Verifies `models` in `dir`, fetching what is not there if fetching is
 /// on, and answers the ones still not there.
-fn ensure<'a>(dir: &Path, models: &'a [datalib_runtime::qmd::PinnedModel]) -> Result<Vec<&'a str>> {
-    let outcomes =
-        datalib_qmd_models::ensure_models(dir, models, datalib_qmd_models::Fetch::from_env())?;
-    Ok(datalib_qmd_models::missing(models, &outcomes))
+fn ensure<'a>(
+    dir: &Path,
+    models: &'a [datalib_runtime::models::PinnedModel],
+) -> Result<Vec<&'a str>> {
+    let outcomes = datalib_embedding_models::ensure_models(
+        dir,
+        models,
+        datalib_embedding_models::Fetch::from_env(),
+    )?;
+    Ok(datalib_embedding_models::missing(models, &outcomes))
 }
 
 /// The directory the pinned models belong in for `root`. None when there
@@ -202,7 +208,7 @@ fn link_models(root: &Path) -> Result<Option<PathBuf>> {
         tracing::info!("no grid index yet; nothing searches by meaning until the first sync");
         return Ok(None);
     }
-    Ok(Some(datalib_qmd_models::models_dir_for(root)))
+    Ok(Some(datalib_embedding_models::models_dir_for(root)))
 }
 
 #[cfg(test)]
@@ -221,7 +227,7 @@ mod tests {
     }
 
     /// The regression: a search while the models were still downloading
-    /// started qmd, which fetched its own unpinned copy. Until they are
+    /// started qmd, which fetched its own unpinned copy, before search ran the model in process. Until they are
     /// verified the gate answers no directory at all.
     #[test]
     fn no_directory_while_the_models_are_being_provisioned() {

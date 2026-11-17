@@ -4,7 +4,9 @@
 under Bazel (#1750), the embedder loading it (#1752), the module run on
 Modal's T4, A100 and H100 in the published image with several prompts
 per call (#1801, § "Measured on Modal"), and `datalib-step
-embed-prompts`. The rest is not. Facts marked _to check_ have not been
+embed-prompts`; of step 3, the module as a release asset and the `-cuda`
+image (docs/dev/docker.md § "The CUDA variant"), not yet tried by a tag.
+The rest is not. Facts marked _to check_ have not been
 measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
@@ -25,19 +27,33 @@ function = "embed"
 command = "datalib-step"
 inputs = ["gmail/keyword_index"]
 [steps.params]
-embed_on = "modal"        # "local", the default, or "modal"
+embed_on_modal_from_n_chunks = 5000
 ```
 
+**Absent, nothing of the source leaves the machine.** Present, a run that
+owes at least that many chunks (prompts the inference cache has no
+vector for) sends all of them to Modal; a run that owes fewer embeds
+them here. So a source's first embed, the backfill, goes to Modal, and
+the few new chunks of a daily sync stay local, where a Modal container's
+start would cost more than it saves. 0 sends every run. A run that falls
+under the threshold after an interrupted one finishes locally, since it
+is counted on what that run owes.
+
 Per source, because it is per source that a person decides what may
-leave their machine: a work Slack, maybe; their health data, never.
-`embed_on` is a closed set, so it is an enum (`EmbedOn`), and a value
-this build does not know is refused by name at load, never read as
-"local".
+leave their machine: a work Slack, maybe; their health data, never. It
+is the first parameter of an `embed` step, so `check-params` learns to
+plan it and refuse a value that is not a whole number.
+
+The 5,000 in the example is a starting point, not a measurement: about
+seven minutes of a Mac's Metal at 12 chunks a second, against a Modal
+container's start (the image, then the model onto the GPU), which is
+_to check_.
 
 ## What leaves the machine
 
 **The text of every chunk the inference cache lacks, for the sources
-that say `modal`, and nothing else**: no file, no path, no title but the
+that set `embed_on_modal_from_n_chunks` and on a run that owes at least
+that many, and nothing else**: no file, no path, no title but the
 one inside each chunk's prompt, no store. What comes back is one vector
 per chunk. The vectors go into the inference cache under each prompt's
 hash (`docs/dev/plans/search_index_from_ram.md` § "The inference cache"),
@@ -53,15 +69,22 @@ _to check_, and the step prints nothing of a chunk.
 
 `docs/dev/security_posture.md` gains a section for this: who sees the
 text (Modal, as the person's processor), what guards it (the per-source
-switch, nothing written there), and what is open (Modal's own retention).
+parameter, absent by default, nothing written there), and what is open (Modal's own retention).
 
 ## What runs there: our image, our code
 
 Modal runs a container from an image in a registry, so the remote side is
-**`ghcr.io/imbue-ai/datalib`, the docker image we already ship**. It
-holds `datalib-step` and the pinned embedding model, which
-`datalib-step pull-models` puts in place at build time and which
-`DATALIB_NO_FETCH` keeps from being fetched again. `datalib-step
+**the docker image we already ship, in its CUDA variant,
+`ghcr.io/imbue-ai/datalib:<version>-cuda`**: the image a person with an
+NVIDIA GPU would run themselves. It is the plain image (`docs/dev/docker.md`)
+with two more layers, for `linux/amd64` only: `libggml-cuda.so` in
+`/opt/datalib/lib/`, and cuBLAS 12. The plain image, the one everyone
+else pulls, does not grow. Both hold `datalib-step` and the pinned
+embedding model, which `datalib-step pull-models` puts in place at build
+time and which `DATALIB_NO_FETCH` keeps from being fetched again. A
+variant is needed at all because NVIDIA's container runtime passes a
+container the driver (`libcuda.so.1`) and nothing else: without cuBLAS
+in the image, `--gpus all` still embeds on the CPU. `datalib-step
 embed-prompts` reads one `{"hash", "prompt"}` JSON object a line on
 stdin and writes one `{"hash", "vector", "cut"}` object a line on
 stdout, in order and 64 at a time, through the same `datalib_embedder`
@@ -95,22 +118,21 @@ x86_64, as a module the one gnu build loads when it can:
   `nvidia-cublas-cu12` package), as node-llama-cpp's CUDA build does;
   besides those it needs only the driver's `libcuda.so.1`, and the
   small CUDA runtime is linked in. Linked in statically, cuBLAS made the
-  module 939 MB, and `nvprune` only took it to 737 MB (#1750). On Modal,
-  the image our Modal side runs adds cuBLAS to our image as a layer:
-  `Image.from_registry(<our image>, add_python=...)` and
-  `pip_install("nvidia-cublas-cu12")` (12.9, a 581 MB wheel that brings
-  nvrtc's 90 MB), with its `nvidia/cublas/lib` on `LD_LIBRARY_PATH`.
-  Modal's GPU hosts give the driver's `libcuda.so.1`.
-- **The module is fetched, like the runtime's CUDA overlay.** Without
-  cuBLAS it is about llama.cpp's GPU code alone (node-llama-cpp's is
-  156 MB for more GPU models; ours is 122 MB for five), still more than
-  everyone else should carry. It ships as one more release asset,
-  fetched on first use under the probe `datalib_fetch::runtime` already
-  makes for node-llama-cpp's CUDA overlay (`QMD_LLAMA_GPU=cuda` or
-  `libcuda.so.1` on the loader path; `docs/dev/runtime_fetch.md`). The
-  image does not change; on Modal the module is fetched once into a
-  Modal volume, or baked into the layer above, so a container does not
-  fetch it each start.
+  module 939 MB, and `nvprune` only took it to 737 MB (#1750). A
+  tarball install on a GPU machine has the toolkit or the wheel; the
+  `-cuda` image carries cuBLAS itself. In the smoke test (§ "Measured on
+  Modal") it came from NVIDIA's `nvidia-cublas-cu12` wheel (12.9, 581 MB
+  with nvrtc's 90 MB), its `nvidia/cublas/lib` on `LD_LIBRARY_PATH`;
+  whether the `-cuda` image takes it from that wheel or from NVIDIA's
+  redistributable tarballs, as the build takes the toolkit, is _to
+  check_. Modal's GPU hosts give the driver's `libcuda.so.1`.
+- **The module ships apart from the tarball.** Without cuBLAS it is
+  about llama.cpp's GPU code alone (node-llama-cpp's is 156 MB for more
+  GPU models; ours is 122 MB for five), still more than everyone else
+  should carry. It is one more release asset: a tarball install fetches
+  it on first use where there is a GPU (`libcuda.so.1` on the loader
+  path; `docs/dev/runtime_fetch.md`), and the `-cuda` image has it
+  built in, so a container never fetches it.
 - **musl stays CPU-only.** A fully static musl binary cannot `dlopen` a
   glibc library, and NVIDIA's libraries are glibc builds.
 - NVIDIA's toolkit as a pinned, sha256-checked download (NVIDIA publishes
@@ -203,32 +225,59 @@ and what Modal has free of a GPU type (_to check_).
 
 ## How the step drives Modal
 
-`datalib-step` is Rust and Modal's main client is Python, which we do not
-ship. Options, in order of preference:
+`datalib-step` is Rust, Modal has no Rust SDK, and its Python SDK, the
+only one that can define or deploy a Function, is a tool we do not
+ship or pin. Its JavaScript SDK (`modal` on npm, beta; the Go SDK has
+the same scope) runs on the Node we bundle (`docs/dev/runtime_fetch.md`)
+and can do two things that matter here: call a Function someone already
+deployed, and start a **Sandbox**, a container from a registry image
+with a GPU, and write to its stdin and read its stdout. It cannot
+deploy a Function, and cannot `map` one.
 
-- **Modal's JavaScript SDK on the Node we bundle** (`docs/dev/runtime_fetch.md`).
-  Whether that SDK can start a container from a registry image with a GPU
-  and stream its stdin and stdout, as Modal's Python sandboxes can, is
-  _to check_. If it can, a small script beside the step does the Modal
-  half, as `qmd_sdk.mjs` does qmd's today, and nothing is installed.
-- **Modal's `modal` command**, if the person has it. Simple, but then a
-  feature depends on a Python tool we do not pin.
+So the step's Modal half is a small script beside the step on that Node,
+and it uses Sandboxes:
 
-Either way the step owns the work: it asks the cache what is missing,
-sends those prompts in slices, writes what comes back as it arrives, and
-counts what failed. An interrupted run loses nothing already written,
-and the next run sends only what is still missing.
+- **The step asks the cache what is missing**, as it does locally, and
+  cuts those prompts into slices of a few thousand, a few minutes of a
+  GPU each.
+- **One Sandbox per slice**, from the `-cuda` image with a GPU, several
+  at once, each running `datalib-step embed-prompts` with its slice on
+  stdin. Splitting one embed across many cheap GPUs costs the same
+  GPU-seconds as one and divides the wait (§ "Measured on Modal").
+- **Each slice's vectors go into the inference cache as it returns**,
+  and the step counts what failed. A slice that fails is re-sent once,
+  then reported.
+- **Nothing about the remote work is stored.** An interrupted run loses
+  the slices in flight and nothing already written; the next run owes
+  what is still missing and sends only that.
+
+A Sandbox's GPU-seconds cost what a Function's do; its CPU and memory
+cost three times a Function's, a small share of the bill. Its output is
+gone if the step stops watching, which is why nothing is kept for later.
+_To check_: that a Sandbox can pull from `ghcr.io` (Modal's examples use
+Docker Hub), whether the SDK reads a Sandbox's stdout as a stream or
+only whole (a slice small enough to read whole works either way), and
+the largest payload a Sandbox's stdin and stdout carry.
+
+**TODO (#1815): durable batch jobs, once we can reach them.** On a
+deployed Function, Modal's `spawn()` and `spawn_map()` keep running when
+the caller leaves, keep each `spawn()` result for 7 days, queue up to a
+million inputs, and scale out on their own. With those, a laptop that
+sleeps mid-backfill would lose nothing. They need the Function deployed
+from Python, or `map` from the JavaScript SDK, which "is not currently
+supported"; the issue says what to check for in a new SDK release.
 
 ## What a person notices
 
-- With `embed_on = "modal"` on a source, its first embed takes minutes
-  rather than hours, and shows the same progress bar.
-- Without a Modal sign-in, the step fails and says how to sign in; it
-  does not quietly embed locally, which would cost the hours the person
-  chose not to spend.
+- With `embed_on_modal_from_n_chunks` on a source, its first embed takes
+  minutes rather than hours, and shows the same progress bar; its daily
+  embeds run here as before.
+- A run over the threshold without a Modal sign-in fails and says how to
+  sign in or raise the threshold; it does not quietly embed locally,
+  which would cost the hours the person chose not to spend.
 - A search reads these vectors as any other; the vectors from Modal's
   GPU and from a Mac differ in the last digits, as Metal's and the CPU's
-  do (the parity test's bound).
+  do (`datalib/backend/embedder/README.md`).
 
 ## Order of work
 
@@ -239,8 +288,16 @@ and the next run sends only what is still missing.
    tested here on the CPU against the step's own vectors.~~ Done:
    `datalib_step/src/embed_prompts.rs`, and its end-to-end test in
    `tests/step_tests/embed_prompts.rs` against the TNG fixture's cache.
-3. The module as a release asset, its license notices, and the fetch.
-4. The Modal half behind `embed_on = "modal"`, measured on one small
+3. The module as a release asset, its license notices, the fetch for a
+   tarball install, and the `-cuda` image with the module and cuBLAS.
+   Built, but for the fetch: the release's `cuda`, `docker-image-cuda`
+   and `docker-publish-cuda` jobs, `scripts/release/build_cuda.sh` and
+   `stage_cuda.sh`, the Dockerfile's `CUDA` stage, and
+   `third-party/llama_cpp/CUDA-NOTICE.md`. The fetch is a follow-up: a
+   `cuda` line in `runtime.manifest` and the embedder looking in the
+   fetched tree as well as `lib/`.
+4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
+   the `-cuda` image driven by the JavaScript SDK, measured on one small
    source of a real library, then a large one.
 5. The security posture section, and `docs/dev/config_model.md` and
-   `configs/dag_example.toml` for the switch.
+   `configs/dag_example.toml` for the parameter.

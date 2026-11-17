@@ -426,9 +426,9 @@ these steps for whichever source failed.
 
 The config lives at `config.toml` in your data root. Each source is a
 **group** with an `ingest` step (bring the data in) and a
-`render_markdown` step (turn it into readable markdown), plus two shared
-index steps that fan in over everything rendered. None of them names a
-command: a step without one is datalib's own, and the group's `type`
+`render_markdown` step (turn it into readable markdown), plus a shared
+index step that fans in over everything rendered. The steps name their
+program, `datalib-step`, and the group's `type`
 says which source it is. A one-source config looks like this:
 
 ```toml
@@ -454,15 +454,9 @@ inputs = ["claude/ingest"]
 
 [[steps]]
 group = "claude"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "claude"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
@@ -472,12 +466,6 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["*/keyword_index", "*/embed"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -609,10 +597,11 @@ faster.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
 - The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_grid_and_search_index/grid_index/db.sqlite`.
-- A `keyword_index` and an `embed` step per source: that source's part
-  of free-text search — its words, then its embeddings, which let a
-  search match on meaning. The first `embed` downloads its model once.
+  the SQL store at `<data_root>/unified_grid_and_search_index/grid_index/db.sqlite`,
+  then each source's words into the keyword search beside them.
+- An `embed` step per source: the embeddings of that source's part of
+  search, which let a search match on meaning. The first `embed`
+  downloads its model once.
   **The first embed is slow** — roughly 5–10
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
@@ -620,9 +609,6 @@ faster.
   drains take seconds. A Garmin, YoLink or AirVisual source has no
   `embed` step: its markdown is daily summaries of numbers, which the
   keyword index already finds. The app takes out one a config already has.
-- The `qmd_aggregator` step, once every source's search steps are
-  done: it drops any source no longer in the config from the search
-  index and reports what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 

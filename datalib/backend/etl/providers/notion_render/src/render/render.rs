@@ -348,7 +348,7 @@ fn thread_sections(
             .unwrap_or("(unknown)");
         let when = c.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
         // The id + data-section-uuid pair is what the UI walks to anchor
-        // per-message feedback; see AGENTS.md "QMDs are write-only".
+        // per-message feedback; see AGENTS.md "Rendered markdown is write-only".
         out.push_str(&format!(
             "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
         ));

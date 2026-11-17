@@ -687,8 +687,8 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
 }
 
 /// Drops the grid's own tables when they were written in another shape,
-/// under the write lock: a source's `keyword_index` may be writing the
-/// search index's tables in the same file meanwhile.
+/// under the write lock: the search index's tables share the file, and
+/// stay.
 async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let have = datalib_store_meta::schema_hash_in(&mut tx)
@@ -759,8 +759,8 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
             "journal_size_limit",
             datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
         )
-        // Each source's `keyword_index` writes the search index's tables in
-        // this file too, a batch of documents at a time.
+        // The step's keyword pass writes the search index's tables in this
+        // file too, a batch of documents at a time.
         .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -1026,13 +1026,13 @@ pub async fn apply_one(
     md: &RenderedMarkdown,
 ) -> Result<usize> {
     let md = crate::names::settled(md);
-    let qmd_rel = md
+    let md_rel = md
         .md_path
         .strip_prefix(out_dir)
         .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_markdown(write_lock, &md, &qmd_rel).await
+    apply_markdown(write_lock, &md, &md_rel).await
 }
 
 /// Every source under the data root with a render store: the directory

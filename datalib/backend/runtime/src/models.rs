@@ -1,6 +1,6 @@
 //! The embedding model search runs, pinned; and where qmd, which search
-//! used before its own index, kept its index in a data root, so the
-//! aggregator can delete what an older build left there.
+//! used before its own index, kept its index in a data root, so
+//! `grid_index` can delete what an older build left there.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +12,8 @@ pub fn qmd_state_dir(root: &Path) -> PathBuf {
 
 /// One GGUF model, pinned to a HuggingFace repo *revision* and the sha256
 /// of the blob at that revision — the same table
-/// `third-party/qmd_models/BUILD.bazel` fetches the build's copies from
-/// (`//tools:qmd_model_pins_test` holds the two equal), so a re-upload
+/// `third-party/embedding_models/BUILD.bazel` fetches the build's copies from
+/// (`//tools:model_pins_test` holds the two equal), so a re-upload
 /// upstream cannot change every embedding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PinnedModel {

@@ -42,15 +42,10 @@ inputs = ["baby_connect/ingest"]
 [steps.params]
 time_zone = "America/Los_Angeles"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-[[steps]]
-group = "baby_connect"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["baby_connect/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "baby_connect"
 function = "embed"
 command = "datalib-step"
-inputs = ["baby_connect/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]

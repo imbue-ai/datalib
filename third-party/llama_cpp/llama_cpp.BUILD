@@ -12,6 +12,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load("@@//third-party/llama_cpp:shared_libraries.bzl", "shared_libraries")
 
 GGML_VERSION = "0.19.0"
 
@@ -338,6 +339,36 @@ cuda_library(
         "@cuda//:cublas",
         "@cuda//:cuda",
     ],
+)
+
+# The cuBLAS libraries the module links, as files, for the `-cuda` image
+# (scripts/release/stage_cuda.sh).
+shared_libraries(
+    name = "cublas_libs",
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+    deps = ["@cuda//:cublas"],
+)
+
+# NVIDIA's license for the CUDA runtime the module links in and for
+# cuBLAS, verbatim from the archive each was fetched from, to ship beside
+# them (scripts/release/stage_cuda.sh).
+genrule(
+    name = "nvidia_licenses",
+    srcs = [
+        "@cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE",
+        "@cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE",
+    ],
+    outs = [
+        "nvidia/cudart/LICENSE",
+        "nvidia/cublas/LICENSE",
+    ],
+    cmd = " && ".join([
+        "cp $(location @cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE) $(location nvidia/cudart/LICENSE)",
+        "cp $(location @cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE) $(location nvidia/cublas/LICENSE)",
+    ]),
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
 )
 
 cc_shared_library(

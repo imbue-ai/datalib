@@ -1,7 +1,7 @@
 //! Pinned first-use fetches. The caller knows the sha256 before the
 //! bytes are fetched; a download that hashes wrong is refused and
-//! nothing of it is kept. Users: qmd's GGUF models
-//! (`datalib_qmd_models`), the perseus embedder's model files, the
+//! nothing of it is kept. Users: the pinned GGUF models
+//! (`datalib_embedding_models`), the perseus embedder's model files, the
 //! Node runtime a release tarball names in its manifest ([`runtime`]),
 //! and packages (`datalib_packages`), whose manifest is the one document
 //! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
@@ -164,7 +164,7 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 
 /// GET `url` to `<dest>.partial`, hashing as it streams; rename into
 /// place only on a matching digest. `tag` prefixes the status lines
-/// (`[qmd-models]`, `[runtime]`). HuggingFace has answered a cold fetch
+/// (`[models]`, `[runtime]`). HuggingFace has answered a cold fetch
 /// with 429 before, so a retryable status backs off and tries again
 /// rather than failing the sync on the first refusal.
 pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {

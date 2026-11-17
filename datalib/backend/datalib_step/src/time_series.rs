@@ -369,6 +369,8 @@ mod tests {
                 function: crate::function::Function::GridIndex,
                 inputs: vec!["riker/render_time_series".into()],
             },
+            &crate::grid_index::Params::default(),
+            None,
             Some(NOW),
             &Emitter::new("test".into()),
             &datalib_etl::stop::StopFlag::new(),

@@ -38,7 +38,7 @@ fn fixture_prompts() -> Vec<(String, String)> {
 }
 
 async fn cached_vector(cache: &mut sqlx::SqliteConnection, hash: &str) -> Vec<f32> {
-    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
+    let model = &datalib_runtime::models::EMBED_MODELS[0];
     let key = format!("{}@{}", model.file, model.sha256);
     let row = sqlx::query("SELECT vector FROM vectors WHERE model = ? AND hash = ?")
         .bind(key)

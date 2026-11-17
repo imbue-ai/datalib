@@ -18,8 +18,8 @@ pub fn datalib_source_id() -> &'static str {
 }
 
 /// Per-conversation header data read from `grid_rows`. The chat preview
-/// renders the QMD body verbatim and pulls the page header from here —
-/// no QMD parsing.
+/// renders the markdown body verbatim and pulls the page header from here —
+/// no markdown parsing.
 #[derive(Debug, Default, Clone)]
 pub struct ChatMeta {
     /// The configured source's id (`grid_rows.source_id`); what the
@@ -44,8 +44,8 @@ pub const ANY_VALUE: &str = "*";
 
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
 /// parameter list for a parsed query's terms, and for its free text when
-/// the table matches free text with `LIKE`; a qmd table's free text is
-/// qmd's.
+/// the table matches free text with `LIKE`; a ranked table's free text is
+/// the search index's.
 pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -370,7 +370,7 @@ mod tests {
     }
 
     /// What a table does not have is refused by name: a range, a flag,
-    /// and qmd's predicates on a table qmd does not index.
+    /// and the ranked search's predicates on a table that is not ranked.
     #[test]
     fn a_table_refuses_the_keys_it_lacks() {
         for q in ["before:2025-01-01", "is:document", "qmd:tea", "author:worf"] {

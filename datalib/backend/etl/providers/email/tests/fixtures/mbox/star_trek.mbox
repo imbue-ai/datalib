@@ -109,12 +109,14 @@ today and save 30%. Visit https://risa.tourism/shore-leave to redeem.
 Content-Type: text/html; charset=utf-8
 
 <html><body>
+<div style="display:none;max-height:0;overflow:hidden">Temtibi Lagoon is waiting for you.&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;</div>
 <h1>Greetings Captain Picard!</h1>
 <p><img src="https://risa.tourism/images/temtibi-lagoon.jpg" alt="Temtibi Lagoon at sunset"></p>
 <p>Risa is the <strong>jewel of the Alpha Quadrant</strong>.
 Book your next shore leave today and save 30%.</p>
 <p><a href="https://risa.tourism/shore-leave">Redeem your offer</a></p>
 <p>— The Risa Tourism Board</p>
+<a href="https://risa.tourism/t?u=picard"><table><tr><td><a href="https://risa.tourism/follow?board=risa"><p>Risa Tourism Board</p><p>Follow</p></a></td></tr></table></a>
 <img src="https://pixel.ferengi-marketing.example/open.gif?m=risa-promo-001" width="1" height="1" alt="">
 </body></html>
 

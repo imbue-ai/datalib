@@ -3,18 +3,18 @@
 
 Run by the `:ingested_tng` genrule after the pipeline has produced its
 raw outputs. We deliberately keep tar packaging out of the sync binary
-so the pipeline operates at the layer of DB + qmd files; the genrule is
+so the pipeline operates at the layer of DB + rendered files; the genrule is
 the Bazel-distribution boundary that wants archives.
 
 Layout: `data_root` holds one dir per source stanza (`<stanza>/render_markdown/…`)
 plus the reserved `system/` and `unified_grid_and_search_index/` dirs. We tar every stanza's
-`render_markdown` subtree, each entry prefixed with `qmd/<stanza>/render_markdown/<rel>`,
+`render_markdown` subtree, each entry prefixed with `root/<stanza>/render_markdown/<rel>`,
 so callers can extract with `--strip-components=1` to land
 `<stanza>/render_markdown/…` at a root data directory.
 
 TWO archives come out, and the split is a build-cache decision:
 
-  * `qmd.tar` — the whole rendered tree. Markdown, each source's
+  * `rendered.tar` — the whole rendered tree. Markdown, each source's
     `indexed_markdown.doltlite_db` (which carries its render cursor), the
     attachment files render wrote beside a page, and each source's blob
     store (`<stanza>/ingest/blobs.sqlite`), which a page links its
@@ -22,7 +22,7 @@ TWO archives come out, and the split is a build-cache decision:
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
-  * `qmd_md.tar` — markdown only: every `<group>/render_markdown/**/*.md`.
+  * `rendered_md.tar` — markdown only: every `<group>/render_markdown/**/*.md`.
     The UI's render preview reads it. Bazel keys an action on the
     content of its inputs, and the excluded kind changes on every
     pipeline run (each `indexed_markdown.doltlite_db` chains its commit
@@ -41,8 +41,8 @@ gname zeroed, entries sorted.
 
 Args (positional):
     1: path to the data root (containing `<stanza>/render_markdown/`)
-    2: output path for qmd.tar (the whole rendered tree)
-    3: output path for qmd_md.tar (markdown only)
+    2: output path for rendered.tar (the whole rendered tree)
+    3: output path for rendered_md.tar (markdown only)
     4: output path for time_series.tar (the time-series stores)
 """
 
@@ -71,7 +71,7 @@ def _write_tar(out_tar: Path, src_root: Path, entries: list[Path]) -> None:
     out_tar.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out_tar, "w") as tf:
         for p in entries:
-            _add(tf, p, "qmd/" + str(p.relative_to(src_root)))
+            _add(tf, p, "root/" + str(p.relative_to(src_root)))
 
 
 def main() -> int:
@@ -81,7 +81,7 @@ def main() -> int:
 
     # Every top-level dir that is not owned by the app itself is a source
     # stanza with a `render_markdown/` subtree. Tar them all, rooted at
-    # `qmd/<stanza>/...`. `system/` is the server's own state and
+    # `root/<stanza>/...`. `system/` is the server's own state and
     # `unified_grid_and_search_index/` is the index the steps write, so neither is a
     # stanza even though both sit at the same level.
     not_stanzas = {"system", "unified_grid_and_search_index"}

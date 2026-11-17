@@ -1,8 +1,8 @@
 //! axum router for the Datalib HTTP API.
 //!
-//! Dolt is the source of truth. **QMDs are write-only output**: `/api/chat`
+//! Dolt is the source of truth. **Rendered markdown is write-only output**: `/api/chat`
 //! serves the file body verbatim, sans frontmatter, and the UI renders it. We
-//! never parse a QMD back into structured data — structured fields come from
+//! never parse rendered markdown back into structured data — structured fields come from
 //! `grid_rows`.
 //!
 //! `config.toml` is the only config this side reads, in the shape the
@@ -2507,16 +2507,13 @@ mod tests {
             "scaffold rejected: {}\n---\n{text}",
             checked.render(std::path::Path::new("scaffold"))
         );
-        // The fan-ins have no inputs to name yet, so on a scaffolded
-        // root they *are* the fringe. They are what `--sync` can target
-        // until the first source is added — and running them against
-        // nothing is a no-op, not an error.
+        // The `grid_index` step has no source to read yet, so on a scaffolded
+        // root it *is* the fringe. It is what
+        // `--sync` can target until the first source is added — and
+        // running it against nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            [
-                "unified_grid_and_search_index/grid_index",
-                "unified_grid_and_search_index/qmd_aggregator"
-            ]
+            ["unified_grid_and_search_index/grid_index"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
@@ -2535,13 +2532,7 @@ mod tests {
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
         let fringe = fringe_of(STARTER_CONFIG);
-        assert_eq!(
-            fringe,
-            [
-                "unified_grid_and_search_index/grid_index",
-                "unified_grid_and_search_index/qmd_aggregator"
-            ]
-        );
+        assert_eq!(fringe, ["unified_grid_and_search_index/grid_index"]);
         assert_eq!(configured_source_count(&fringe), 0);
     }
 
