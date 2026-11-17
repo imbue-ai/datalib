@@ -385,11 +385,7 @@ test("free-text search is a choice, and only the search feels it", async ({ page
     'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/grid_index"]',
   );
   // Added once, however many times the source is saved.
-  expect(
-    saved.match(
-      /function = "embed"\ncommand = "datalib-step"\ninputs = \["unified_grid_and_search_index\/grid_index"\]/g,
-    ),
-  ).toHaveLength(1);
+  expect(saved.match(/group = "rows-only"\nfunction = "embed"\n/g)).toHaveLength(1);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
