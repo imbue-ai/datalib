@@ -54,3 +54,27 @@ pub trait BulkUpsertable: Sync {
         q: Query<'q, Sqlite, SqliteArguments>,
     ) -> Query<'q, Sqlite, SqliteArguments>;
 }
+
+/// `INSERT INTO <table> (<id>, <typed columns>) VALUES (?, …)`, one `?`
+/// per column the row struct declares, for [`BulkUpsertable::bind_into`].
+pub fn insert_sql<T: BulkUpsertable>() -> String {
+    let mut cols = String::from(T::ID_COLUMN);
+    for c in T::TYPED_COLUMNS {
+        cols.push_str(", ");
+        cols.push_str(c);
+    }
+    let n = 1 + T::TYPED_COLUMNS.len();
+    let mut placeholders = String::with_capacity(n * 3);
+    for i in 0..n {
+        if i > 0 {
+            placeholders.push_str(", ");
+        }
+        placeholders.push('?');
+    }
+    format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        T::TABLE,
+        cols,
+        placeholders
+    )
+}

@@ -8,8 +8,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::stop::StopFlag;
-use datalib_etl_render::grid_index::{build_grid_index_for, open_index, OwnStore};
-use datalib_schema::problems::{Severity, Stage, METRIC};
+use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
+use datalib_schema::problems::{Severity, METRIC};
 use serde::Deserialize;
 
 use crate::events::{Emitter, OutputClaim};
@@ -55,35 +55,21 @@ impl Params {
     }
 }
 
-/// The inputs whose render store this step indexes, and the stores of
-/// the steps whose problem rows alone it copies, each with the stage
-/// those rows are in.
-fn split_inputs(data_root: &Path, inputs: &[String]) -> (Vec<String>, Vec<OwnStore>) {
-    let mut render = Vec::new();
-    let mut own = Vec::new();
-    for input in inputs {
-        let (group, function) = input.rsplit_once('/').unwrap_or((input, ""));
-        let (stage, path) = match Function::parse(function) {
-            Some(Function::RenderTimeSeries) => (
-                Stage::TimeSeries,
-                datalib_etl::layout::render_time_series_db(data_root, group),
-            ),
-            Some(Function::RenderOccurrences) => (
-                Stage::Occurrences,
-                datalib_etl::layout::render_occurrences_db(data_root, group),
-            ),
-            _ => {
-                render.push(input.clone());
-                continue;
-            }
-        };
-        own.push(OwnStore {
-            source_id: group.to_string(),
-            stage,
-            path,
-        });
-    }
-    (render, own)
+/// The inputs whose render store this step indexes: not a source's
+/// time-series or occurrences step, which an older config names here for
+/// their problems, which a reader now finds in their own stores.
+fn render_inputs(inputs: &[String]) -> Vec<String> {
+    inputs
+        .iter()
+        .filter(|input| {
+            let function = input.rsplit_once('/').map_or("", |(_, f)| f);
+            !matches!(
+                Function::parse(function),
+                Some(Function::RenderTimeSeries | Function::RenderOccurrences)
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// The step, with the embedding model's tokenizer put in place and opened
@@ -97,7 +83,7 @@ pub async fn run(
     emitter: &Emitter,
     stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
-    let (render_inputs, _) = split_inputs(data_root, &env.inputs);
+    let render_inputs = render_inputs(&env.inputs);
     let searched = params.searched(&crate::index_steps::groups_from_inputs(&render_inputs));
     let model = match searched.is_empty() {
         true => None,
@@ -140,7 +126,7 @@ pub(crate) async fn run_with(
     // the same rule the search step follows, so the two indexes agree on
     // what a source is. A `render_time_series` or `render_occurrences`
     // input is read for its problem rows alone.
-    let (render_inputs, own_stores) = split_inputs(data_root, &env.inputs);
+    let render_inputs = render_inputs(&env.inputs);
     let sources = crate::index_steps::groups_from_inputs(&render_inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
     let progress = emitter.progress();
@@ -154,10 +140,6 @@ pub(crate) async fn run_with(
     )
     .await
     .context("stack the per-source render stores")?;
-    let own_store_problems =
-        datalib_etl_render::grid_index::copy_own_store_problems(&pool, &own_stores)
-            .await
-            .context("copy the time-series and occurrences steps' problems")?;
     tracing::info!(
         // `read` is the one that says whether the cursors are working:
         // it is how many documents were pulled out of the per-source
@@ -176,10 +158,6 @@ pub(crate) async fn run_with(
         ("last_pass_markdowns_loaded", summary.markdowns_loaded),
         ("last_pass_markdowns_removed", summary.markdowns_removed),
         ("last_pass_rows_inserted", summary.rows_inserted),
-        (
-            "last_pass_problems_copied",
-            summary.problems_copied + own_store_problems,
-        ),
         ("last_pass_search_terms_written", summary.terms_written),
         (
             "last_pass_search_indexes_remade",

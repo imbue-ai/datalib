@@ -35,7 +35,6 @@ pub mod read_marks;
 pub mod run_problems;
 pub mod scope_state;
 pub mod sniff;
-pub mod step_problems;
 pub mod stop;
 pub mod store_handle;
 pub mod upstream;

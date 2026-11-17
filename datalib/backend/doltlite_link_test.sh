@@ -49,6 +49,12 @@ root="${TEST_TMPDIR:-$(mktemp -d)}/root"
 mkdir -p "$root"
 # Not the host's fingerprint cache: this test's paths are gone by the next run.
 export DATALIB_CACHE_DIR="$root/fingerprint_cache"
+# Off the network and out of the host's caches: a step that comes to need
+# something it would download fails here by name, rather than fetching it
+# into a cache that tests running in parallel share. The contacts are kept
+# out of the search below for that reason: the keyword pass cuts chunks
+# with the embedding model's tokenizer, 300 MB from HuggingFace.
+export XDG_CACHE_HOME="$root/cache" DATALIB_NO_FETCH=1 DATALIB_MODELS_NO_FETCH=1
 cat > "$root/config.toml" <<CONFIG
 [[groups]]
 id = "contacts"
@@ -72,6 +78,8 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "unified_grid_and_search_index"
 inputs = ["contacts/render_markdown"]
+[steps.params]
+not_searched = ["contacts"]
 CONFIG
 
 # The run takes seconds. Past the deadline it is hung, and a job killed

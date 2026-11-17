@@ -94,7 +94,7 @@ pub fn schema_hash() -> String {
 fn ddl() -> Vec<&'static str> {
     DDL.iter()
         .copied()
-        .chain([datalib_etl::step_problems::ddl()])
+        .chain([datalib_schema::problems::DDL[0].1])
         .collect()
 }
 

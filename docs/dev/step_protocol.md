@@ -273,9 +273,8 @@ sit in, for that cell's hover; **`problems`**, with
 a `severity=error` or `severity=warning` label, is a grey count after
 a row's name — count the problems your step found, not ones it copied
 from an input, since the group's count is the sum of its steps'. (The
-red and yellow counts are the grid index's problem rows, which only
-datalib's own download, render, time-series, occurrences and index
-steps write.) Report each one every run, zero
+red and yellow counts are problem rows, read where each step keeps
+them; §"Problems: what you could not do".) Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
 series, and draws a blank Items cell and no counts. They are
@@ -363,6 +362,53 @@ SQLite, one row per log line, the newest value per metric, every
 step's state — for this run and the ones before it, which is what the
 Manage screen reads. The store, its retention and how to read it:
 [`logging.md`](logging.md).
+
+### Problems: what you could not do
+
+A problem is one thing your step could not fully do: a record it could
+not fetch, a file it could not read. It is a row of the `problems`
+table (`datalib_problems::ProblemRow`), the same table in every store,
+and a reader finds a step's problems in the stores directly in its
+folder (`<data root>/<group>/<function>/`): each `.doltlite_db` as its
+`main` commit has it, and each plain `.sqlite` file
+(`datalib_step_problems::of_step`). `datalib-step`'s steps keep theirs
+in their own stores. A step with no store of its own keeps them in
+`problems.sqlite` there: it writes the file itself through
+`datalib_step_problems::StepFile`, or sends two lines and lets the
+runner write it:
+
+```json
+{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1712345678.000100","outcome":"dropped","reason":"fetch_failed","severity":"warning","sample":"HTTP 404","upstream_entity_kind":"message","upstream_id":"C01/1712345678.000100"}
+{"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
+```
+
+- **A `problem` line** is a `ProblemRow` without the columns its writer
+  fills: its id (minted from what the line says), its source (the
+  step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
+  `reason` and `severity` are datalib's own closed sets
+  (`datalib_problems`); `sample` says what happened; `item_uuid`,
+  `field`, `path` and `rule` are optional.
+- **`scope_key`** is what the problem is about within your step:
+  `<table>:<id>` for a record, `file:<path>` for a file, or
+  `listing:<name>` or `phase:<name>` for a part of your run. It is
+  what `covered` matches.
+- **What it is about upstream** goes in `upstream_entity_kind`,
+  `upstream_id` and `upstream_account`, the names a grid row carries;
+  never an id some other step mints.
+- **`covered`** says what this run checked again, so what it covered
+  and did not find again can go: `all`, `listings` (every `listing:`
+  and `phase:` scope), `records` of one `table`, or `files` `under` a
+  folder. A `records` line with `only` vouches for exactly those
+  records; one with `all_but`, and a `files` line with it, for every
+  one but those. Both count even when your run fails. Without either,
+  and for `all` and `listings`, only a run that succeeds clears
+  anything.
+
+The runner writes the problems as they arrive, at most a second after
+a line, so they show while you run, and clears when you end. A step
+that sends no `problem` or `covered` line has its file left alone. Run
+by hand (§"Running `datalib-step` by hand"), these lines are printed
+and kept nowhere; a step that wants them kept writes the file itself.
 
 ### The outcome line
 

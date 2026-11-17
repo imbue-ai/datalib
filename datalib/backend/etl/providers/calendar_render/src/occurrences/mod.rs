@@ -71,7 +71,7 @@ impl Listed {
     /// A problem row for each event whose occurrences could not be
     /// listed: a warning, since its occurrences are left out and the
     /// rest are not. Two reasons for one event are one row
-    /// (`datalib_etl::step_problems`).
+    /// (`datalib_step_problems::replace`).
     pub fn problems(&self, source_id: &str) -> Vec<datalib_schema::problems::ProblemRow> {
         use datalib_schema::problems::{
             Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage,
