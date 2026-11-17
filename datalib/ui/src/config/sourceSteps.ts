@@ -1287,7 +1287,7 @@ export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredSte
   const aggregatorGoes = all.some(
     (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
   );
-  const qmdSteps = aggregatorGoes
+  const searchSteps = aggregatorGoes
     ? all.filter(
         (s) =>
           s.kind === "step" &&
@@ -1295,8 +1295,8 @@ export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredSte
           (s.function === "keyword_index" || s.function === "embed"),
       )
     : [];
-  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
-  return [...qmdSteps, ...readers];
+  const readers = readersOf([...ids, ...searchSteps.map((s) => s.id)], all);
+  return [...searchSteps, ...readers];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other
