@@ -196,6 +196,21 @@ FAMILIES: list[Family] = [
         ],
     ),
     Family(
+        name="bazelisk",
+        why=(
+            "The Claude Code cloud environment's setup script installs "
+            "the bazelisk the devcontainer does. A version moved in one "
+            "and not the other gives cloud sessions and CI different "
+            "build drivers. Each site keeps its own sha256 pins beside "
+            "the version, so a bump moves those too."
+        ),
+        canonical=".devcontainer/Dockerfile",
+        sites=[
+            (".devcontainer/Dockerfile", r"^ARG BAZELISK_VERSION=(\S+)"),
+            ("scripts/cloud_env_setup.sh", r"^BAZELISK_VERSION=(\S+)"),
+        ],
+    ),
+    Family(
         name="node-major",
         why=(
             "Two Node runtimes are in play — the one Bazel resolves, "
