@@ -60,13 +60,7 @@ const UPDATED: VolatilePath<'static> = &["updatedAt"];
 
 pub const TEAMS: Kind = Kind {
     table: "teams",
-    volatile: &[
-        UPDATED,
-        &["issueCount"],
-        &["progressHistory"],
-        &["currentProgress"],
-        &["activeCycle"],
-    ],
+    volatile: &[UPDATED, &["issueCount"], &["activeCycle"]],
 };
 
 /// A person's status and when they were last seen change as they work,

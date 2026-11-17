@@ -39,6 +39,7 @@ Worst hour: 03:00, at 0.44 degrees of drift.
 --- chunk 0
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:00
 
+<permissions instructions>
 Filesystem sandboxing: `workspace-write`. Network access is off.
 
 
@@ -47,13 +48,15 @@ title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it
 
 # AGENTS.md instructions for /Users/picard/src/enterprise
 
+<INSTRUCTIONS>
 # Agent Instructions
 
 Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
+</INSTRUCTIONS>
 
 <environment_context>
-  /Users/picard/src/enterprise
-  zsh
+  <cwd>/Users/picard/src/enterprise</cwd>
+  <shell>zsh</shell>
 </environment_context>
 
 
@@ -251,6 +254,7 @@ Pattern buffer 7 is offline, so the replicator falls back to the cold profile. B
 --- chunk 0
 title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:15
 
+<permissions instructions>
 Filesystem sandboxing: `workspace-write`.
 
 
@@ -265,9 +269,11 @@ title: Audit the warp core containment logs and tell me what you find. | text: C
 
 # AGENTS.md instructions for /Users/picard/src/enterprise
 
+<INSTRUCTIONS>
 # Agent Instructions
 
 Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
+</INSTRUCTIONS>
 
 
 --- chunk 3
@@ -334,7 +340,7 @@ Two events crossed 0.9, both at 02:14-02:15. That is the window to look at; ever
 --- chunk 9
 title: Audit the warp core containment logs and tell me what you find. | text: Me — Mon 13 Apr 2364 09:17
 
-readings look wrong to me. Check the sensor calibration?
+<containment> readings look wrong to me. Check the sensor calibration?
 
 
 --- chunk 10

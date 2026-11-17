@@ -1,10 +1,9 @@
 # Messages, not documents: grouping chosen when a search runs
 
-**Status: proposal (2026-11-16). Steps 1 and 2 have landed (#1765,
-#1770); step 3a is in review (#1775) and 3b is being built on branch
-`tree-step-3b`; nothing else is.** Facts about
-the tree were checked against the code that day; file references are
-to that tree.
+**Status: proposal (2026-11-17). Steps 1, 2, 3a and 3b have landed
+(#1765, #1770, #1775, #1782); 3c is next and not started; nothing
+else is.** Facts about the tree were checked against the code on
+2026-11-16; file references are to that tree.
 
 ## The problem
 
@@ -503,7 +502,12 @@ against the eval before the next.
      draws chat-common's and the hostile samples and fails when the
      output changes and the version does not.
    - **3c. The fold.** `keyword_index` into `grid_index`, with the
-     config upgrade above.
+     config upgrade above. That upgrade runs after the rewrite that
+     renamed the index group to `unified_grid_and_search_index`
+     (`migrate_config/src/index_name.rs`, #1796). The one-slot
+     `qmd_keyword` lock (#1795) is then held by `grid_index` and
+     `qmd_aggregator` alone: `BUILTIN_LOCKS` in `dag/src/config.rs`,
+     its test and the docs that name the lock's holders change with it.
 4. **Grouping when a search runs.** Search ranks items and groups them
    by the grouping asked for. `is:document` becomes an alias. The eval
    compares the grouped answer with today's.
