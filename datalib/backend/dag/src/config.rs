@@ -4588,7 +4588,7 @@ function = "qmd_aggregator"
 inputs = ["mail/keyword_index", "mail/embed"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["mail/render_markdown"]
 
@@ -4611,7 +4611,10 @@ inputs = ["mail/keyword_index"]
             ["qmd_keyword"]
         );
         assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
-        assert_eq!(held("unified_document_index/grid_index"), ["qmd_keyword"]);
+        assert_eq!(
+            held("unified_grid_and_search_index/grid_index"),
+            ["qmd_keyword"]
+        );
         assert_eq!(held("mail/embed"), ["cpu"], "named locks win");
         assert_eq!(
             held("custom/embed"),
