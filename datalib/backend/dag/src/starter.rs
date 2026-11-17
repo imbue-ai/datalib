@@ -39,7 +39,7 @@ name = "Grid and Search Index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any

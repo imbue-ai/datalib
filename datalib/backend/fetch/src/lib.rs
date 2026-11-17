@@ -2,12 +2,15 @@
 //! bytes are fetched; a download that hashes wrong is refused and
 //! nothing of it is kept. Users: the pinned GGUF models
 //! (`datalib_embedding_models`), the perseus embedder's model files, the
-//! Node runtime a release tarball names in its manifest ([`runtime`]),
-//! and packages (`datalib_packages`), whose manifest is the one document
+//! Node runtime and the CUDA module a release tarball names in its
+//! manifest ([`runtime`], [`cuda`]), and packages (`datalib_packages`),
+//! whose manifest is the one document
 //! fetched unpinned ([`get_unpinned`]) so its hash can be shown and pinned.
 //! An install that ships what it runs sets [`NO_FETCH_ENV`], and every
 //! fetch here then fails instead of going to the network.
 
+mod cached_asset;
+pub mod cuda;
 pub mod runtime;
 
 use std::fs;
@@ -24,6 +27,7 @@ const CHUNK: usize = 1 << 20;
 const ATTEMPTS: u32 = 6;
 const MAX_REDIRECTS: usize = 10;
 
+pub use cuda::{enable_cuda_fetch, ensure_cuda_module, ReleaseCudaFetcher};
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
 
 /// Set, to anything but empty or `0`, by an install that ships everything
@@ -162,13 +166,18 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// GET `url` to `<dest>.partial`, hashing as it streams; rename into
-/// place only on a matching digest. `tag` prefixes the status lines
-/// (`[models]`, `[runtime]`). HuggingFace has answered a cold fetch
-/// with 429 before, so a retryable status backs off and tries again
-/// rather than failing the sync on the first refusal.
+/// GET `url` to a partial file beside `dest`, hashing as it streams;
+/// rename into place only on a matching digest. Any number of processes
+/// may fetch one `dest` at once: each writes its own partial file, and the
+/// rename replaces whatever an earlier one put there with the same bytes.
+/// A partial file left by a fetch that was killed is removed first.
+/// `tag` prefixes the status lines (`[models]`, `[runtime]`).
+/// HuggingFace has answered a cold fetch with 429 before, so a retryable
+/// status backs off and tries again rather than failing the sync on the
+/// first refusal.
 pub fn download_verified(tag: &str, url: &str, want: &str, dest: &Path) -> Result<()> {
     allowed(url)?;
+    sweep_stale_partials(tag, dest);
     let client = client()?;
     let mut delay = Duration::from_secs(2);
     for attempt in 1..=ATTEMPTS {
@@ -207,7 +216,7 @@ fn fetch_once(
     want: &str,
     dest: &Path,
 ) -> std::result::Result<(), FetchError> {
-    let mut resp = client
+    let resp = client
         .get(url)
         .send()
         .map_err(|e| Retry(format!("request failed: {e}")))?;
@@ -218,19 +227,26 @@ fn fetch_once(
     if !status.is_success() {
         return Err(Fatal(anyhow::anyhow!("{url}: HTTP {status}")));
     }
-    let partial = partial_path(dest);
-    let mut file =
-        fs::File::create(&partial).with_context(|| format!("create {}", partial.display()))?;
+    write_verified(url, resp, want, dest)
+}
+
+/// Stream `body` to a partial file of this fetch's own, hashing as it
+/// goes, and rename it over `dest` only when the digest is `want`. A
+/// partial file that is not renamed is removed when it drops.
+fn write_verified(
+    url: &str,
+    mut body: impl Read,
+    want: &str,
+    dest: &Path,
+) -> std::result::Result<(), FetchError> {
+    let mut file = partial_file(dest)?;
+    let partial = file.path().to_path_buf();
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK];
     loop {
-        let n = match resp.read(&mut buf) {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = fs::remove_file(&partial);
-                return Err(Retry(format!("read failed mid-body: {e}")));
-            }
-        };
+        let n = body
+            .read(&mut buf)
+            .map_err(|e| Retry(format!("read failed mid-body: {e}")))?;
         if n == 0 {
             break;
         }
@@ -238,28 +254,105 @@ fn fetch_once(
         file.write_all(&buf[..n])
             .with_context(|| format!("write {}", partial.display()))?;
     }
-    file.sync_all()
+    file.as_file()
+        .sync_all()
         .with_context(|| format!("sync {}", partial.display()))?;
-    drop(file);
     let got = hex(&hasher.finalize());
     if got != want {
-        let _ = fs::remove_file(&partial);
         return Err(Fatal(anyhow::anyhow!(
             "{url}: sha256 {got}, expected {want} — the pinned source no longer serves \
              the pinned bytes, or something rewrote the download; nothing was kept"
         )));
     }
-    fs::rename(&partial, dest)
+    file.persist(dest)
+        .map_err(|e| anyhow::Error::new(e.error))
         .with_context(|| format!("rename {} -> {}", partial.display(), dest.display()))?;
     Ok(())
 }
 
-/// `<dest>.partial`, appended rather than swapped for the extension so
-/// `runtime-x.tar.gz` does not become `runtime-x.tar.partial`.
-fn partial_path(dest: &Path) -> std::path::PathBuf {
-    let mut name = dest.file_name().unwrap_or_default().to_os_string();
-    name.push(".partial");
-    dest.with_file_name(name)
+const PARTIAL_SUFFIX: &str = ".partial";
+
+/// A partial file beside `dest` that no other fetch writes:
+/// `<dest name>.<random>.partial`. Two processes fetching one `dest` at
+/// once (parallel tests sharing one model cache) each need their own; a
+/// shared name let the second's create truncate the first's, and the
+/// slower rename then found nothing to move.
+fn partial_file(dest: &Path) -> Result<tempfile::NamedTempFile> {
+    let dir = match dest.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut prefix = dest.file_name().unwrap_or_default().to_os_string();
+    prefix.push(".");
+    tempfile::Builder::new()
+        .prefix(&prefix)
+        .suffix(PARTIAL_SUFFIX)
+        // What `File::create` asks for, so the umask decides the mode and
+        // the model is as readable as it was when the name was fixed.
+        .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
+        .tempfile_in(dir)
+        .with_context(|| {
+            format!(
+                "create a partial file for {} in {}",
+                dest.display(),
+                dir.display()
+            )
+        })
+}
+
+/// A partial file nobody has written to for this long belongs to a fetch
+/// that was killed: a live one touches its file with every chunk.
+const STALE_PARTIAL: Duration = Duration::from_secs(60 * 60);
+
+/// Which of `entries` (name, mtime) are partial files of `dest_name` left
+/// by a killed fetch, so not every interrupted download leaves its bytes
+/// behind for good. `<dest_name>.partial`, the one name older builds
+/// used, counts too.
+fn stale_partials(
+    dest_name: &std::ffi::OsStr,
+    entries: &[(std::ffi::OsString, std::time::SystemTime)],
+    now: std::time::SystemTime,
+) -> Vec<std::ffi::OsString> {
+    let mut prefix = dest_name.to_os_string();
+    prefix.push(".");
+    let prefix = prefix.to_string_lossy();
+    entries
+        .iter()
+        .filter(|(name, mtime)| {
+            let name = name.to_string_lossy();
+            let ours = name.starts_with(prefix.as_ref()) && name.ends_with(PARTIAL_SUFFIX);
+            let idle = now.duration_since(*mtime).unwrap_or_default();
+            ours && idle >= STALE_PARTIAL
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Remove the partial files of `dest` that [`stale_partials`] picks, each
+/// said on a status line. One that cannot be removed is said and left.
+fn sweep_stale_partials(tag: &str, dest: &Path) {
+    let (Some(dir), Some(dest_name)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let Ok(listing) = fs::read_dir(dir) else {
+        return;
+    };
+    let entries: Vec<_> = listing
+        .filter_map(|e| {
+            let e = e.ok()?;
+            Some((e.file_name(), e.metadata().ok()?.modified().ok()?))
+        })
+        .collect();
+    for name in stale_partials(dest_name, &entries, std::time::SystemTime::now()) {
+        let path = dir.join(&name);
+        match fs::remove_file(&path) {
+            Ok(()) => status_line!(
+                "{tag} removed {}, left by a fetch that stopped",
+                path.display()
+            ),
+            Err(e) => status_line!("{tag} could not remove {}: {e}", path.display()),
+        }
+    }
 }
 
 /// Unpack a `.tar.gz` into `dest`, which must exist. Entries that would
@@ -317,11 +410,116 @@ mod tests {
         assert_eq!(last_on_host(&requested, &[]), &requested);
     }
 
+    /// A body that waits at `gate` before giving up its bytes. Its first
+    /// read comes after the writer has opened its partial file, so the
+    /// gate holds every writer there until all of them have.
+    struct Gated<'a> {
+        gate: &'a std::sync::Barrier,
+        bytes: &'a [u8],
+        waited: bool,
+    }
+
+    impl Read for Gated<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.waited {
+                self.waited = true;
+                self.gate.wait();
+            }
+            let n = self.bytes.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.bytes[..n]);
+            self.bytes = &self.bytes[n..];
+            Ok(n)
+        }
+    }
+
+    /// Two processes fetching the same model into a shared cache, as
+    /// parallel tests under one `$HOME` do: both partial files exist at
+    /// once, and both fetches must end with the file in place. One fixed
+    /// `<dest>.partial` made the second rename fail with ENOENT.
     #[test]
-    fn partial_keeps_the_whole_name() {
+    fn two_writers_of_one_dest_both_succeed() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("model.gguf");
+        let gate = std::sync::Barrier::new(2);
+        let outcomes: Vec<std::result::Result<(), String>> = std::thread::scope(|s| {
+            let writers: Vec<_> = (0..2)
+                .map(|_| {
+                    s.spawn(|| {
+                        let body = Gated {
+                            gate: &gate,
+                            bytes: b"hello",
+                            waited: false,
+                        };
+                        write_verified("test://model", body, HELLO_SHA, &dest).map_err(
+                            |e| match e {
+                                Retry(r) => r,
+                                Fatal(e) => format!("{e:#}"),
+                            },
+                        )
+                    })
+                })
+                .collect();
+            writers.into_iter().map(|w| w.join().unwrap()).collect()
+        });
+        assert_eq!(outcomes, [Ok(()), Ok(())]);
+        assert_eq!(fs::read(&dest).unwrap(), b"hello");
+        let left: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["model.gguf"], "no partial file is left behind");
+    }
+
+    /// The extension is kept whole (`runtime-x.tar.gz.…`, not
+    /// `runtime-x.tar.…`), each fetch gets a name of its own, and the
+    /// file is made with the mode `File::create` gives.
+    #[test]
+    fn a_partial_file_keeps_the_whole_name_and_is_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("runtime-x.tar.gz");
+        let (a, b) = (partial_file(&dest).unwrap(), partial_file(&dest).unwrap());
+        for p in [a.path(), b.path()] {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                name.starts_with("runtime-x.tar.gz.") && name.ends_with(".partial"),
+                "{name}"
+            );
+            assert_eq!(p.parent(), Some(dir.path()));
+        }
+        assert_ne!(a.path(), b.path());
+
+        // Not tempfile's owner-only 0600: a model fetched while building
+        // an image is read by whoever the container runs as.
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode();
+        let created = dir.path().join("created");
+        fs::File::create(&created).unwrap();
+        assert_eq!(mode(a.path()), mode(&created));
+    }
+
+    /// A killed fetch's partial file goes once it has sat idle; a live
+    /// one, another dest's, and the dest itself stay.
+    #[test]
+    fn only_idle_partials_of_this_dest_are_swept() {
+        use std::ffi::{OsStr, OsString};
+        let now = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let idle = now - STALE_PARTIAL;
+        let live = now - Duration::from_secs(5);
+        let entries: Vec<(OsString, _)> = [
+            ("m.gguf", idle),
+            ("m.gguf.partial", idle),
+            ("m.gguf.Ab12Cd.partial", idle),
+            ("m.gguf.Ef34Gh.partial", live),
+            ("m.gguf.sha256-ok", idle),
+            ("other.gguf.Ab12Cd.partial", idle),
+            ("m.ggu.partial", idle),
+        ]
+        .into_iter()
+        .map(|(n, t)| (n.into(), t))
+        .collect();
         assert_eq!(
-            partial_path(Path::new("/c/runtime-x.tar.gz")),
-            Path::new("/c/runtime-x.tar.gz.partial")
+            stale_partials(OsStr::new("m.gguf"), &entries, now),
+            ["m.gguf.partial", "m.gguf.Ab12Cd.partial"]
         );
     }
 

@@ -39,11 +39,7 @@ struct GroupView {
 }
 
 /// What a `grid_index` the rewrite adds reads.
-const GRID_READS: &[&str] = &[
-    "*/render_markdown",
-    "*/render_time_series",
-    "*/render_occurrences",
-];
+const GRID_READS: &[&str] = &["*/render_markdown"];
 
 #[derive(Deserialize)]
 struct StepView {
@@ -273,7 +269,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
@@ -352,7 +348,7 @@ inputs = ["*/keyword_index", "*/embed"]
         let no_grid = BEFORE.replace(
             "[[steps]]\ngroup = \"unified_grid_and_search_index\"\nfunction = \"grid_index\"\n\
              command = \"datalib-step\"\n\
-             inputs = [\"*/render_markdown\", \"*/render_time_series\", \"*/render_occurrences\"]\n",
+             inputs = [\"*/render_markdown\"]\n",
             "",
         );
         assert!(!no_grid.contains("grid_index"), "{no_grid}");

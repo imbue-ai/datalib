@@ -5,11 +5,12 @@
 
 use std::ffi::{c_char, CString};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
+use datalib_runtime::cuda_module;
 
 mod ffi {
     use std::ffi::c_char;
@@ -41,6 +42,7 @@ mod ffi {
             err: *mut c_char,
             err_len: usize,
         ) -> i32;
+        pub fn dl_embedder_can_load(name: *const c_char) -> i32;
         pub fn dl_embedder_gpu_available() -> i32;
         pub fn dl_embedder_close(e: *mut Embedder);
         pub fn dl_embedder_device(e: *const Embedder) -> *const c_char;
@@ -189,16 +191,20 @@ pub fn load_gpu_module(path: &Path) -> Result<usize> {
     Ok(usize::try_from(n)?)
 }
 
-/// Where a gnu Linux build looks for the CUDA module: `lib/` beside the
-/// running binary, as the release tarball lays it out. Never the loader's
-/// search path, which would run whatever library it found first.
-pub fn cuda_module_path(exe: &Path) -> Option<PathBuf> {
-    Some(exe.parent()?.join("lib").join("libggml-cuda.so"))
+/// Whether the dynamic loader can load the library `name` names.
+pub fn can_load(name: &str) -> bool {
+    let Ok(name) = CString::new(name) else {
+        return false;
+    };
+    unsafe { ffi::dl_embedder_can_load(name.as_ptr()) != 0 }
 }
 
 /// What became of the CUDA module, decided once per process on the first
 /// [`Device::Best`] open: `None` on a build that does not look for one
-/// (macOS, musl).
+/// (macOS, musl). The module is the one beside the binary, else the one
+/// the release names, fetched where there is an NVIDIA driver
+/// (`datalib_runtime::cuda_module`); never one on the loader's search
+/// path, which would run whatever library it found first.
 pub fn cuda_module_report() -> Option<&'static str> {
     static REPORT: OnceLock<Option<String>> = OnceLock::new();
     REPORT
@@ -206,17 +212,13 @@ pub fn cuda_module_report() -> Option<&'static str> {
             if !cfg!(all(target_os = "linux", target_env = "gnu")) {
                 return None;
             }
-            let exe = std::env::current_exe().ok();
-            let Some(path) = exe.as_deref().and_then(cuda_module_path) else {
-                return Some("no CUDA module: the running binary's path is unknown".into());
-            };
-            Some(if !path.exists() {
-                format!("no CUDA module at {}", path.display())
-            } else {
-                match load_gpu_module(&path) {
+            let driver = can_load(cuda_module::DRIVER_LIBRARY);
+            Some(match cuda_module::find(driver) {
+                Err(why) => why,
+                Ok(path) => match load_gpu_module(&path) {
                     Ok(n) => format!("loaded {}: {n} CUDA device(s)", path.display()),
                     Err(e) => format!("could not load {}: {e:#}", path.display()),
-                }
+                },
             })
         })
         .as_deref()
@@ -539,7 +541,7 @@ pub fn fit(mut tokens: Vec<i32>, context: usize) -> (Vec<i32>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cuda_module_path, fit, load_gpu_module, pack, Batching};
+    use super::{can_load, cuda_module, fit, load_gpu_module, pack, Batching};
     use std::path::Path;
 
     #[test]
@@ -558,9 +560,23 @@ mod tests {
     #[test]
     fn the_cuda_module_is_looked_for_in_lib_beside_the_binary() {
         assert_eq!(
-            cuda_module_path(Path::new("/opt/datalib/datalib-step")).unwrap(),
+            cuda_module::beside(Path::new("/opt/datalib/datalib-step")).unwrap(),
             Path::new("/opt/datalib/lib/libggml-cuda.so")
         );
+    }
+
+    /// How the embedder asks whether there is an NVIDIA driver to fetch
+    /// the module for: a library that loads says so, and one that is not
+    /// there does not.
+    #[test]
+    fn can_load_asks_the_dynamic_loader() {
+        let libc = if cfg!(target_os = "macos") {
+            "/usr/lib/libSystem.B.dylib"
+        } else {
+            "libc.so.6"
+        };
+        assert!(can_load(libc));
+        assert!(!can_load("libdatalib-no-such-library.so.1"));
     }
 
     /// A module that will not load says why, in the loader's words.

@@ -1,10 +1,14 @@
 # Problems in the step protocol, read where each step keeps them
 
-*Proposal (2026-11-16), partly built: steps 1 and 2 below are in
-#1766. It replaces the problem rows that render and `grid_index` copy
-downstream (`datalib/backend/etl/README.md` §"Problems flow downstream
-with the data"). It leans on `documents_to_blocks.md`, which gives
-every row a place in a tree of data nodes.*
+*Proposal (2026-11-16), mostly built: steps 1–5 below landed in
+#1766, with the linking of a download's problem to its record (render's
+`entity_items`, the reader's `datalib_step_problems::link`); the
+`grid_index` inputs #1755 added are taken out by the unattended rewrite
+`unread_inputs.rs`. Still to do: step 6, the roll-up through data nodes,
+and step 7, the per-provider recipes for a record's upstream values.
+How problems are kept now: `datalib/backend/etl/README.md` §"Problems
+stay in the step that found them". It leans on `documents_to_blocks.md`,
+which gives every row a place in a tree of data nodes.*
 
 ## The problem
 

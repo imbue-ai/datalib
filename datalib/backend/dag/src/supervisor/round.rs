@@ -1693,6 +1693,7 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
         .enumerate()
         .map(|(i, spec)| StepShape {
             reads: graph.deps_in_order(i).collect(),
+            source: spec.is_source(),
             fingerprint: graph.fingerprints[i].clone(),
             pins_reads: spec.reads_pinned,
             waits_for_settled_inputs: spec.waits_for_settled_inputs,

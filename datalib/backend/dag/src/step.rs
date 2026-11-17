@@ -25,6 +25,10 @@ pub struct StepSpec {
     /// The ids of the steps this one reads. Every entry must name a
     /// declared step; the loader refuses anything else.
     pub inputs: Vec<ArtifactPath>,
+    /// Whether its `inputs` named anything as written. A pattern that
+    /// matches no step leaves `inputs` empty, and the step is still a
+    /// fan-in with nothing to read yet, not a source.
+    pub inputs_written: bool,
     /// How to run it. In-process today; a spawned subprocess under the
     /// same contract.
     pub run: StepRun,
@@ -129,6 +133,7 @@ impl StepSpec {
         Self {
             id: id.into(),
             inputs: Vec::new(),
+            inputs_written: false,
             run,
             code_version: None,
             migrates: false,
@@ -141,6 +146,12 @@ impl StepSpec {
             group_type: None,
             function: None,
         }
+    }
+
+    /// Whether its real input is outside the graph (a download, an
+    /// import): it declared no inputs at all.
+    pub fn is_source(&self) -> bool {
+        self.inputs.is_empty() && !self.inputs_written
     }
 
     /// The one tree this step writes, which is its id. Panics only on
