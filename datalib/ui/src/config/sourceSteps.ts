@@ -1313,15 +1313,15 @@ export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredSte
   );
   const isEmbed = (s: ConfiguredStep) =>
     s.kind === "step" && s.function === "embed" && !ids.includes(s.id);
-  const qmdSteps = aggregatorGoes ? all.filter(isEmbed) : [];
-  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
+  const searchSteps = aggregatorGoes ? all.filter(isEmbed) : [];
+  const readers = readersOf([...ids, ...searchSteps.map((s) => s.id)], all);
   const going = new Set(
-    [...ids, ...qmdSteps, ...readers].map((s) => (typeof s === "string" ? s : s.id)),
+    [...ids, ...searchSteps, ...readers].map((s) => (typeof s === "string" ? s : s.id)),
   );
   const unrendered = all.filter(
     (s) => isEmbed(s) && !going.has(s.id) && going.has(`${s.group}/render_markdown`),
   );
-  return [...qmdSteps, ...readers, ...unrendered];
+  return [...searchSteps, ...readers, ...unrendered];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other

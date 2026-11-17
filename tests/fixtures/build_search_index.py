@@ -7,10 +7,10 @@ Writes the grid index with the search index's tables in it, and every
 chunk's prompt (`search_prompts`), which `:ingested_tng_vectors` embeds.
 The embedding is its own action so that Bazel reruns it only when a
 prompt changes: this one's inputs carry wall-clock stamps and change on
-every run (tar_qmd.py).
+every run (tar_rendered.py).
 
 Usage: build_search_index.py <datalib-step> <search_prompts> <model.gguf>
-       <qmd.tar> <backend_index.sqlite> <out grid> <out prompts>
+       <rendered.tar> <backend_index.sqlite> <out grid> <out prompts>
 """
 
 import os
@@ -23,12 +23,12 @@ from pathlib import Path
 
 
 def main() -> int:
-    step, prompts_bin, model, qmd_tar, grid, out_grid, out_prompts = sys.argv[1:]
+    step, prompts_bin, model, rendered_tar, grid, out_grid, out_prompts = sys.argv[1:]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "root"
         root.mkdir()
         subprocess.run(
-            ["tar", "-xf", qmd_tar, "-C", str(root), "--strip-components=1"],
+            ["tar", "-xf", rendered_tar, "-C", str(root), "--strip-components=1"],
             check=True,
         )
         db = root / "unified_grid_and_search_index" / "grid_index" / "db.sqlite"

@@ -14,7 +14,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from check_ingested import declared_sources, time_series_sources
 
-SERIES_INDEX = "qmd/unified_time_series_index/time_series_index/time_series.doltlite_db"
+SERIES_INDEX = (
+    "root/unified_time_series_index/time_series_index/time_series.doltlite_db"
+)
 
 
 class CheckIngestedTest(unittest.TestCase):
