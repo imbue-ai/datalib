@@ -4845,12 +4845,10 @@ inputs = ["a"]
         assert_eq!(slots(&check, "cpu"), Some(4));
     }
 
-    /// Every writer of the grid index's file (the grid's load with its
-    /// keyword pass, the aggregator's sweep) holds the one-slot
-    /// `qmd_keyword` lock, so they queue in the runner rather than inside
-    /// SQLite, where a `grid_index` waiting on a long keyword write timed
-    /// out. An embed only reads that file and holds `qmd_embed`, so it may
-    /// overlap them. A step that names its own locks, or runs its own
+    /// The one writer of the grid index's file, `grid_index` (the grid's
+    /// load, its keyword pass and its sweep of the vectors), holds the
+    /// one-slot `qmd_keyword` lock. An embed only reads that file and holds
+    /// `qmd_embed`. A step that names its own locks, or runs its own
     /// command, keeps those.
     #[test]
     fn the_qmd_steps_hold_the_qmd_locks() {
