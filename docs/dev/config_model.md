@@ -132,6 +132,15 @@ package's programs by its path under the data root, in its `command`;
   (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
   joins no index. The rows and their columns:
   `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
+- An `embed` step takes one parameter, `embed_on_modal_from_n_chunks`,
+  a whole number. Absent, the source's chunks are embedded on this
+  machine and never leave it. Present, a run that owes at least that
+  many chunks (prompts the inference cache has no vector for) sends all
+  of them to the person's own Modal account to be embedded on rented
+  GPUs, and a run that owes fewer embeds them here; `0` sends every run.
+  `check-params` refuses anything else. What leaves and what guards it:
+  `docs/dev/security_posture.md` § "What leaves the machine for Modal";
+  how the step does it: `docs/dev/plans/embed_on_modal.md`.
 - The search steps are the exception to "a step writes its own tree":
   `grid_index`'s keyword pass writes the search index's tables in the
   grid index's file, each source's `embed` writes its vectors to the
