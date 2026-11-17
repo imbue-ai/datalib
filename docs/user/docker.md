@@ -342,9 +342,10 @@ on this page works the same with this `$IMG` and `--gpus all` added.
 No release machine has a GPU, so unlike sections 1 and 2 this is not
 run against each release. Releases after v0.54.1 publish the variant.
 
-The CUDA pieces are NVIDIA's, redistributed under NVIDIA's CUDA Toolkit
-license rather than datalib's MIT license; the image carries the notice
-beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`).
+The CUDA pieces are NVIDIA's, and their use is governed by NVIDIA's CUDA
+Toolkit license rather than datalib's MIT license; the image carries the
+notice beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`), with
+NVIDIA's own license text for each.
 
 ## Checking who built the image
 

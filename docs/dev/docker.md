@@ -87,10 +87,13 @@ plain image it holds:
   on the CPU. It is about 580 MB compressed, which is why the plain
   image goes without.
 
-Both are NVIDIA's or link NVIDIA's code, redistributed under the CUDA
-Toolkit EULA, not datalib's MIT license:
+Both are NVIDIA's or link NVIDIA's code, whose use is governed by the
+CUDA Toolkit EULA, not datalib's MIT license:
 [`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
-image carries in each of those directories' `licenses/`.
+image carries in each of those directories' `licenses/`, beside NVIDIA's
+own `LICENSE` for the component there (`licenses/nvidia/cudart/`,
+`licenses/nvidia/cublas/`), copied from the archive Bazel fetched it in
+(`@llama_cpp//:nvidia_licenses`).
 
 **They sit below the release, so that a pull of the next version can
 reuse them.** The Dockerfile's `CUDA` build argument picks a stage

@@ -200,6 +200,8 @@ RUN set -eux; \
         echo "libggml-cuda.so lacks: ${missing:-nothing}"; \
         test -z "$missing" || test "$missing" = libcuda.so.1; \
         test -s /opt/datalib/licenses/CUDA-NOTICE.md; \
+        test -s /opt/datalib/licenses/nvidia/cudart/LICENSE; \
+        test -s /usr/local/lib/datalib-cuda/licenses/nvidia/cublas/LICENSE; \
     fi; \
     # The demo library is the one place under /opt the app writes.
     install -d -o datalib -g datalib /opt/datalib/demo
