@@ -230,14 +230,9 @@ rust_test(
 # the live test with INSTA_UPDATE=always; the test writes the new `.snap`s
 # straight into `$DATALIB_MANUAL_E2E_DIR/snapshots` (an absolute host path), so
 # nothing lands in this repo's source tree.
-#
-# `extra_data` re-declares the binary dir because bazel does NOT propagate a
-# rust_test's `data`/`env` to the sibling sh_binary this macro generates —
-# without it the runfiles lookup finds nothing under `bazel run`.
 insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
-    extra_data = ["//datalib/backend:bin"],
     test_args = ["--ignored"],
 )
 
