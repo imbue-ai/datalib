@@ -34,7 +34,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
 /// Keeps the source the wizard is adding out of the keyword search. The
-/// `grid_index` step cuts a searched source's chunks with the embedding model's
+/// `unified_grid_and_search_index` step cuts a searched source's chunks with the embedding model's
 /// tokenizer, and a library made from an empty folder has no model and
 /// may not fetch one here. What this spec checks reads the grid alone.
 async function leaveOutOfSearch(page: Page) {
@@ -62,7 +62,7 @@ const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 const SYNCED_ROWS = [
   "pdfs/ingest",
   "pdfs/render_markdown",
-  "unified_grid_and_search_index/grid_index",
+  "unified_grid_and_search_index/unified_grid_and_search_index",
 ];
 
 /// The "Size" column as a number, read back off the label drawn over the
@@ -155,7 +155,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(nameCell(page, "system")).toContainText("System");
     await expandGroup(page, "unified_grid_and_search_index");
     for (const id of [
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "unified_grid_and_search_index",
       "datalib_contacts",
     ]) {
@@ -164,9 +164,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The index step is labelled by its function, not by the generic
     // "Index" the label map falls through to when a key is stale —
     // which is what happened when the functions were renamed.
-    await expect(nameCell(page, "unified_grid_and_search_index/grid_index")).toContainText(
-      "Grid index",
-    );
+    await expect(
+      nameCell(page, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).toContainText("Grid and search index");
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "Add source" }).click();
@@ -233,7 +233,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
     expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
     expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(firstDone["unified_grid_and_search_index/grid_index"]).toMatch(
+    expect(firstDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
       /^(Succeeded|Up to date)$/,
     );
 
@@ -290,7 +290,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
     expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
     expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(secondDone["unified_grid_and_search_index/grid_index"]).toMatch(
+    expect(secondDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
       /^(Succeeded|Up to date)$/,
     );
 

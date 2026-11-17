@@ -67,13 +67,13 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "perseus"
 function = "embed"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]

@@ -34,7 +34,7 @@ id = "unified_grid_and_search_index"       # no type: it mirrors nothing
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 # every source's render
 inputs = ["*/render_markdown"]
@@ -113,9 +113,9 @@ package's programs by its path under the data root, in its `command`;
   be two writers on one doltlite file.
 - The built-in functions are the directory names: `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
-  `embed`, `grid_index`, `embedding_map`, `time_series_index`
+  `embed`, `unified_grid_and_search_index`, `embedding_map`, `time_series_index`
   (`datalib_step/src/function.rs`, tested against the layout constants
-  the render and index crates use). `grid_index` and `embedding_map`
+  the render and index crates use). `unified_grid_and_search_index` and `embedding_map`
   write `unified_grid_and_search_index/<function>`, and
   `time_series_index` writes `unified_time_series_index/time_series_index`,
   and nothing else, because the applet that reads each finds it from the
@@ -142,12 +142,12 @@ package's programs by its path under the data root, in its `command`;
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
   how the step does it: `docs/dev/plans/embed_on_modal.md`.
 - The search steps are the exception to "a step writes its own tree":
-  `grid_index`'s keyword pass writes the search index's tables in the
+  `unified_grid_and_search_index`'s keyword pass writes the search index's tables in the
   grid index's file, each source's `embed` writes its vectors to the
   one inference cache under `unified_grid_and_search_index/search_index/`,
-  and `grid_index`'s sweep deletes the vectors no chunk names from it.
+  and `unified_grid_and_search_index`'s sweep deletes the vectors no chunk names from it.
   The runner cannot see those files as shared, so these steps hold
-  one-slot locks instead (below), and an `embed` reads `grid_index` off
+  one-slot locks instead (below), and an `embed` reads `unified_grid_and_search_index` off
   disk, so the runner never runs the two at once.
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
@@ -359,7 +359,7 @@ file runs.
 | any entry | it does not deserialize: an unknown key, a wrong type, both `id` and `group` |
 | a lock | its name is not one segment, it has no slots, or it is declared twice |
 | a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
-| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, `keyword_index` or `qmd_aggregator`, shapes whose work other steps do now (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
+| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, `keyword_index` or `qmd_aggregator`, shapes whose work other steps do now, or `grid_index`, the index step's old name (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle or downstream of one |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate; its `command` is empty |
 
@@ -396,7 +396,7 @@ fingerprint, so changing it re-runs the group.
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
-- `grid_index` or `embedding_map` under any group but
+- `unified_grid_and_search_index` or `embedding_map` under any group but
   `unified_grid_and_search_index`, and `time_series_index` under any but
   `unified_time_series_index`.
 
@@ -434,11 +434,11 @@ key, say) drops out of the pattern, where an input naming it by id
 blocks the step that names it. `datalib-dag --check` prints what each
 pattern stood for.
 
-The index steps read by pattern: `grid_index` reads
+The index steps read by pattern: `unified_grid_and_search_index` reads
 `*/render_markdown`, `embedding_map` reads `*/embed`, and
 `time_series_index` reads `*/render_time_series`
 (`datalib_dag::config::FAN_INS`). No index reads a
-`render_occurrences` step. `grid_index` takes the groups it
+`render_occurrences` step. `unified_grid_and_search_index` takes the groups it
 indexes from those inputs, the group being each input's first segment
 (`index_steps::groups_from_inputs`). It passes over a
 `render_time_series` or `render_occurrences` input, which an older
@@ -449,7 +449,7 @@ Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
 rendered tree is still on disk.
 
-After the grid, `grid_index` puts each source it reads in the keyword
+After the grid, `unified_grid_and_search_index` puts each source it reads in the keyword
 search, but those its `params.not_searched` lists, and drops from the
 search index every source it no longer searches. Each source's pass
 reads its render store at one commit and is skipped when neither that
@@ -457,10 +457,10 @@ commit nor the index text's version has moved since its last finished
 pass (`search_sources` in the search index). The step's version is the
 grid's generation and the search index's together, so a keyword change
 alone still reaches the embeds. The pass cuts the chunks with the
-embedding model's tokenizer, so `grid_index` needs the model file when
-any source is searched. A source's `embed` (input: `grid_index`) loads
+embedding model's tokenizer, so `unified_grid_and_search_index` needs the model file when
+any source is searched. A source's `embed` (input: `unified_grid_and_search_index`) loads
 the model and fills the vectors. Both fetch the model when it is
-missing. After the keyword passes `grid_index` sweeps the vectors no
+missing. After the keyword passes `unified_grid_and_search_index` sweeps the vectors no
 chunk names from the inference cache, and reports each searched
 source's documents and chunks not yet embedded; each `embed` reports
 what it left of its own. Nothing of a source's reads a step that reads
@@ -468,9 +468,9 @@ every source, and that is what lets each source's `embed` finish on its
 own: the runner holds a step's finish back while anything upstream of
 it is still running, so a step downstream of a fan-in would finish only
 when the slowest source did. Search by meaning is off for a source with
-no `embed`, or with its `embed` turned off; removing `grid_index` takes
+no `embed`, or with its `embed` turned off; removing `unified_grid_and_search_index` takes
 every `embed` with it. A `keyword_index` or `qmd_aggregator` step is
-the shape from before `grid_index` did that work: the loader refuses
+the shape from before `unified_grid_and_search_index` did that work: the loader refuses
 it, and `datalib-http` rewrites it (below). A `qmd_index` step is the
 shape from before the per-source steps,
 when that fan-in fed the per-source steps or did their work itself; the
@@ -481,7 +481,7 @@ a file, at boot or on any change to it, keeping the old text as
 
 So every source reaches the grid and the keyword search unless the
 config says otherwise, and leaving one out is something written down:
-its id in `grid_index`'s `not_searched`, which keeps it out of search,
+its id in `unified_grid_and_search_index`'s `not_searched`, which keeps it out of search,
 or the other sources named one by one in place of the pattern, which
 keeps it out of the grid too. A source in `not_searched` is in the grid
 and its documents open and filter, but free text will not find it by
@@ -494,10 +494,10 @@ The wizard maintains the rest (`ui/src/config/sourceSteps.ts`):
 names the step, `unwireFromFanIns` on delete and when a render step is
 removed, and `setSearchSteps` for the two search tickboxes under Rendering
 in Advanced options. "Keyword-index the markdown" takes the source out of
-`grid_index`'s `not_searched`, or puts it in; "Embed it for search by
+`unified_grid_and_search_index`'s `not_searched`, or puts it in; "Embed it for search by
 meaning", which needs the first, adds or removes its `embed`. Removing
 any step takes every step that reads it (a fan-in loses the input
-instead), so removing `grid_index` takes every source's `embed`
+instead), so removing `unified_grid_and_search_index` takes every source's `embed`
 (`removedWith`). A fan-in that
 names its inputs one by one has to be edited by hand, and the Manage
 screen flags a render step nothing consumes.
@@ -538,7 +538,7 @@ header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
 the last one and above the `unified_grid_and_search_index` group, and
 each step below the steps it reads, so a source's `embed` goes below
-`grid_index`. A file already out of that order where no place fits gets
+`unified_grid_and_search_index`. A file already out of that order where no place fits gets
 the new entries at the end. The runner itself reads only `inputs`.
 
 Dragging a group by the grip at the left of its row is how a person
@@ -574,7 +574,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Thirteen rewrites are made without asking,
+well enough to name the tool. Fourteen rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -625,7 +625,7 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   twelve that is meant to take an entry out; it still refuses a result
+   thirteen that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
@@ -645,31 +645,47 @@ the next would put the first back:
    old keys.
 9. The keyword fold (`upgrade_keyword_fold`, `keyword_fold.rs`): each
    built-in `keyword_index` step goes, with its comments; every input
-   that named one (an `embed`, the embedding map) reads `grid_index`
-   instead; and each source `grid_index` reads that had no
+   that named one (an `embed`, the embedding map) reads `unified_grid_and_search_index`
+   instead; and each source `unified_grid_and_search_index` reads that had no
    `keyword_index` is listed in its `params.not_searched`, so nothing
-   out of search comes into it. A config with no `grid_index` gets one
+   out of search comes into it. A config with no `unified_grid_and_search_index` gets one
    reading every render. The loader refuses the old step.
 10. The aggregator (`upgrade_aggregator_drop`, `aggregator_drop.rs`):
    each built-in `qmd_aggregator` step goes, with its comments, and an
    input that named one (the embedding map's) reads `*/embed`.
-   `grid_index` sweeps the vectors and reports what search holds. The
+   `unified_grid_and_search_index` sweeps the vectors and reports what search holds. The
    loader refuses the old step.
-11. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
+11. The index step's name (`upgrade_index_step_name`,
+   `index_step_name.rs`): a built-in step whose function is `grid_index`
+   takes its group's name, `unified_grid_and_search_index`, so its id is
+   `unified_grid_and_search_index/unified_grid_and_search_index`, and
+   every `inputs` entry naming it (each source's `embed`) names the new
+   id. At boot the server then moves
+   `<root>/unified_grid_and_search_index/grid_index/` to the new id's
+   tree with one rename (`move_index_step_dir`), so the grid index's
+   file, with its cursors and the search tables, is kept, and carries the
+   step's rows in `system/supervisor.sqlite` (turned off, its last
+   success, its tree's version) to the new id. The step and every
+   `embed` still run once at the next sync, since a step's id and inputs
+   are in its fingerprint; the step reads from the cursors the moved file
+   kept, and an embed finds its vectors in the inference cache.
+   If both trees exist it leaves both and logs an error naming them. The
+   loader refuses the old function.
+12. The input patterns (`upgrade_input_patterns`, `input_patterns.rs`):
    an index step whose `inputs` name every step of a function it reads
    (`FAN_INS`) gets the pattern in their place, `*/render_markdown` for
    every render, so it reads the same steps and, from then on, every
    source added. A list that leaves a step out is left as written, since
    whoever wrote it may have meant it. The loader still reads the lists.
-12. The unread inputs (`upgrade_unread_inputs`, `unread_inputs.rs`):
-   `grid_index` stops naming `render_time_series` and
+13. The unread inputs (`upgrade_unread_inputs`, `unread_inputs.rs`):
+   the index step stops naming `render_time_series` and
    `render_occurrences` steps, by pattern or by id. A config was given
-   them so `grid_index` could copy their problem rows; problems are now
-   read in each step's own store, `grid_index` passes over those inputs,
-   and all they did was run it again after every such render. A
-   `grid_index` that runs a program other than `datalib-step` is left
-   as written.
-13. The search locks (`upgrade_lock_names`, `lock_names.rs`): a step's
+   them so the step could copy their problem rows; problems are now read
+   in each step's own store, the step passes over those inputs, and all
+   they did was run it again after every such render. An index step that
+   runs a program other than `datalib-step` is left as written. It runs
+   after the rename above, so it finds the step by its new function.
+14. The search locks (`upgrade_lock_names`, `lock_names.rs`): a step's
    `locks` that named `qmd_embed` name `embedder`, in a list or a
    table, and `qmd_keyword` is dropped from them; a step left holding
    nothing loses the key and holds its default lock. A `[[locks]]`

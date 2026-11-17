@@ -37,7 +37,7 @@ step whose `command` is `datalib-step` runs the step program datalib
 ships, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `embed`, …), and why the loader requires such a step to
+`unified_grid_and_search_index`, `embed`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
@@ -297,7 +297,7 @@ appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
 migrated in place, and the step reports its new head, which the record
 takes as its version while keeping the step's last success. A render
 store or the index in another shape is rebuilt by running the step, so
-that step answers `needs_rerun`, and so does `grid_index` when a source
+that step answers `needs_rerun`, and so does `unified_grid_and_search_index` when a source
 it reads was drawn into the search index by another version of the index
 text or its chunking (`INDEX_TEXT_VERSION`), which no render moved: the record keeps the flag
 (`steps.needs_rerun`), the tick holds the step due until it next
@@ -324,7 +324,10 @@ renames forward (`http/src/config_upgrade.rs`): it moves
 `<root>/unified_document_index/` or `<root>/unified_index/` to
 `<root>/unified_grid_and_search_index/` and the record's rows for those
 steps to their new ids
-(`Store::rename_group_steps`), and moves each folder an older config
+(`Store::rename_group_steps`), moves the index step's tree from
+`grid_index/` to `unified_grid_and_search_index/` under it, with the
+record's rows for that step (`move_index_step_dir`,
+`Store::rename_step`), and moves each folder an older config
 spelled with capitals to the lowercase spelling the config now uses
 (`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
 has the config side.
@@ -358,9 +361,9 @@ follows from it:
   (1 slot), is what every built-in `embed` that names no locks holds
   instead, so one embedding model is loaded at a time and one step
   writes the inference cache, which the runner cannot see as shared.
-  `grid_index` needs no lock of its own: it is the one writer of the
-  grid index's file, and an `embed` reads that file off disk, so the
-  two never run together. A `[[locks]]` entry of the same name resizes
+  The index step, `unified_grid_and_search_index`, needs no lock of its
+  own: it is the one writer of the grid index's file, and an `embed`
+  reads that file off disk, so the two never run together. A `[[locks]]` entry of the same name resizes
   one, and `--parallelism N` sets `network` and `cpu` to N, over the
   config.
 
@@ -449,7 +452,7 @@ and the hash of that commit's tree, which also stays put when the
 store's history is folded into fewer commits
 ([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
 `render_markdown` reports the tree, since nothing reads its history;
-`grid_index`, whose index is plain SQLite, reports its generation, a
+`unified_grid_and_search_index`, whose index is plain SQLite, reports its generation, a
 count it raises only when a reader would see a change; the time-series
 steps report the head commit, since the time-series index reads each
 store at the commit it recorded. An ingest reports a commit too, so a

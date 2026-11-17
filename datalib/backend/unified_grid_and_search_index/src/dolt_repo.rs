@@ -37,7 +37,7 @@ use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
     /// The grid index: `grid_rows`, `markdowns`, `edges`. The
-    /// `grid_index` step is its only writer, and this handle cannot be
+    /// `unified_grid_and_search_index` step is its only writer, and this handle cannot be
     /// a second one: it is opened `read_only`, and only once the file
     /// exists — a root that has never synced has none, and a reader must
     /// not be the thing that creates it. Filled on first use and kept: a
@@ -166,7 +166,7 @@ async fn add_subject_people<'r>(
     {
         Ok(found) => found,
         Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
-        // An index an older build wrote, until `grid_index` rebuilds it.
+        // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it.
         Err(e) if matches!(missing_schema(&e), Some(Missing::Column(c)) if c.ends_with("supplied_terms")) => {
             return Ok(())
         }
@@ -433,7 +433,7 @@ impl DoltRepo {
 
     /// The directory is created here, the file never is. The server's
     /// watcher arms its watch on this directory when it exists, and a
-    /// grid that learns of the first `grid_index` pass from that watch
+    /// grid that learns of the first `unified_grid_and_search_index` pass from that watch
     /// needs it armed before the pass, not after.
     pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
         let db_path = datalib_core::layout::grid_index_db(&root);
@@ -448,7 +448,7 @@ impl DoltRepo {
     }
 
     /// The index at the generation it is at now, or `None` while the
-    /// `grid_index` step has yet to create it — the same answer every read
+    /// `unified_grid_and_search_index` step has yet to create it — the same answer every read
     /// gives for a missing table.
     ///
     /// A transaction on a read-only connection to the WAL file reads one
@@ -613,7 +613,7 @@ fn grouping<R>(
 }
 
 /// A read of the tree's tables from an index an older build wrote, which
-/// has none of them, until `grid_index` rebuilds it: no children.
+/// has none of them, until `unified_grid_and_search_index` rebuilds it: no children.
 fn older_than_the_tree(e: &sqlx::Error) -> bool {
     match missing_schema(e) {
         Some(Missing::Table(t)) => ["grid_rows", "data_nodes", "filings"].contains(&t.as_str()),
@@ -1720,13 +1720,13 @@ impl IndexRepo for DoltRepo {
         };
         let lacks_layouts = |e: &sqlx::Error| matches!(missing_schema(e), Some(Missing::Column(c)) if c.ends_with("section_layout"));
         let row = match document_file_row(&mut at, markdown_uuid, "section_layout").await {
-            // An index an older build wrote, until `grid_index` rebuilds it:
+            // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it:
             // the document goes out as one piece.
             Err(e) if lacks_layouts(&e) => {
                 tracing::info!(
                     document = %markdown_uuid,
-                    "the grid index has no section layouts yet; \
-                     the document goes out without one until grid_index rebuilds it",
+                    "the grid index has no section layouts yet; the document goes out \
+                     without one until the `unified_grid_and_search_index` step rebuilds it",
                 );
                 document_file_row(&mut at, markdown_uuid, "NULL AS section_layout").await
             }

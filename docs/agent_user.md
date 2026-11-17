@@ -35,11 +35,11 @@ Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
-database), `grid_index` under the `unified_grid_and_search_index` group (the SQL
+database), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
 index, which also puts every source it reads in the keyword search but
 those its `params.not_searched` lists), and, for a source searched by
 meaning, `<group>/embed`, which embeds that source's part of the search
-index; `grid_index` keeps only the embeddings the index still names. A
+index; `unified_grid_and_search_index` keeps only the embeddings the index still names. A
 step's function
 is the directory it writes (the search steps are the exception: they
 write the search index's tables in the grid index's file, and the
@@ -54,7 +54,7 @@ vectors in `unified_grid_and_search_index/search_index/`):
 ├── <group>/render_markdown/        # per-source markdown tree
 │   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
 ├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid_index/db.sqlite        # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
+│   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
 │   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
 ├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it
 └── system/                         # the server's own state
@@ -395,7 +395,7 @@ Pick the surface that fits the question:
   It exits 1, with each reason on stderr, when the answer is not the
   search you asked for: a query it refused (`refused`), an error, a
   free-text search the search index could not answer, or free text on a root with no
-  search index yet (a source's words are searchable once `grid_index`
+  search index yet (a source's words are searchable once `unified_grid_and_search_index`
   has run after its render), or part of a search that could not
   answer (`query_echo.partial`, with the rows the rest found). An empty
   answer with exit 0 means nothing matched. Free text loads the embedding
@@ -403,7 +403,7 @@ Pick the surface that fits the question:
   takes tens of seconds; `semantic:off` in the query loads neither. A running
   app holds them loaded, so `GET …/search` has no such wait.
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_grid_and_search_index/grid_index/db.sqlite`: one row per
+  `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
@@ -417,11 +417,11 @@ Pick the surface that fits the question:
   `doltlite` in the docker image, and
   `bazelisk build //third-party/doltlite:doltlite` from a checkout).
   Its argv is `sqlite3`'s. **Always pass `-readonly`**: the index is
-  the `grid_index` step's to write, and a transaction a writable session
+  the `unified_grid_and_search_index` step's to write, and a transaction a writable session
   holds open stalls the sync:
 
   ```sh
-  datalib-doltlite -readonly unified_grid_and_search_index/grid_index/db.sqlite \
+  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -433,7 +433,7 @@ Pick the surface that fits the question:
   stock `sqlite3` cannot read at all, into plain SQLite:
 
   ```sh
-  datalib-doltlite -readonly unified_grid_and_search_index/grid_index/db.sqlite .dump \
+  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite .dump \
     | sqlite3 grid.sqlite
   ```
 

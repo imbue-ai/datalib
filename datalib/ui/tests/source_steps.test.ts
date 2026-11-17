@@ -55,7 +55,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
@@ -84,7 +84,7 @@ inputs = ["slack/ingest"]
 describe("listSteps", () => {
   it("gives every step its own row, in file order, under its composed id", () => {
     expect(listSteps(PAIR).map((s) => s.id)).toEqual([
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "unified_grid_and_search_index/embedding_map",
       "slack/ingest",
       "slack/render_markdown",
@@ -98,7 +98,7 @@ describe("listSteps", () => {
     const by = new Map(listSteps(PAIR).map((s) => [s.id, s.phase]));
     expect(by.get("slack/ingest")).toBe("ingest");
     expect(by.get("slack/render_markdown")).toBe("render");
-    expect(by.get("unified_grid_and_search_index/grid_index")).toBe("index");
+    expect(by.get("unified_grid_and_search_index/unified_grid_and_search_index")).toBe("index");
     expect(by.get("unified_grid_and_search_index/embedding_map")).toBe("index");
     const search = new Map(
       listSteps(setSearchSteps(PAIR, "slack", "keyword_and_embed")).map((s) => [s.id, s]),
@@ -128,7 +128,7 @@ command = "my-exporter"
     expect(fetch.type).toBe("slack");
     expect(fetch.inputs).toEqual([]);
     expect(by.get("slack/render_markdown")!.inputs).toEqual(["slack/ingest"]);
-    expect(by.get("unified_grid_and_search_index/grid_index")!.type).toBeNull();
+    expect(by.get("unified_grid_and_search_index/unified_grid_and_search_index")!.type).toBeNull();
   });
 
   /// The group's name labels its fetch step; its render step is the same
@@ -138,7 +138,7 @@ command = "my-exporter"
     expect(by.get("slack/ingest")!.name).toBe("Work Slack");
     expect(by.get("slack/render_markdown")!.name).toBe("Work Slack (render markdown)");
     // The index group has no name, so its steps take the shared defaults.
-    expect(by.get("unified_grid_and_search_index/grid_index")!.name).toBe(
+    expect(by.get("unified_grid_and_search_index/unified_grid_and_search_index")!.name).toBe(
       "Grid and Search Index (table)",
     );
   });
@@ -574,7 +574,7 @@ describe("removeSteps / patchSource", () => {
     expect(after).toContain('function = "render_markdown"');
     expect(after).toContain("── slack");
     expect(after).toContain('name = "Work Slack"');
-    expect(after).toContain('function = "grid_index"');
+    expect(after).toContain('function = "unified_grid_and_search_index"');
     expect(after).toContain('data_root = "~/datalib"');
   });
 
@@ -589,7 +589,7 @@ describe("removeSteps / patchSource", () => {
     const after = unwireFromFanIns(removeSteps(PAIR, [...both, group]), "slack/render_markdown");
     expect(after).not.toContain("slack");
     expect(listSteps(after).map((s) => s.id)).toEqual([
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "unified_grid_and_search_index/embedding_map",
     ]);
     expect(listGroups(after).map((g) => g.id)).toEqual(["unified_grid_and_search_index"]);
@@ -611,7 +611,7 @@ describe("removeSteps / patchSource", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_grid_and_search_index/embedding_map",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
     ]);
   });
 
@@ -635,7 +635,7 @@ describe("removeSteps / patchSource", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_grid_and_search_index/embedding_map",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
     ]);
   });
 
@@ -657,7 +657,7 @@ describe("removeSteps / patchSource", () => {
       "slack/ingest",
       "slack/render_markdown",
       "unified_grid_and_search_index/embedding_map",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
     ]);
   });
 
@@ -756,7 +756,7 @@ describe("fan-in wiring", () => {
     // edges; removing the step is `removeSteps`, and the two are
     // separate because deleting a source needs both.
     expect(bare).toContain('function = "render_markdown"');
-    expect(bare).toContain('function = "grid_index"');
+    expect(bare).toContain('function = "unified_grid_and_search_index"');
   });
 
   /// Semantic search is the one fan-in a person can opt out of, so the
@@ -772,14 +772,14 @@ describe("fan-in wiring", () => {
     expect(steps(both, "unified_grid_and_search_index/embedding_map")).toEqual([
       "email/keyword_index",
     ]);
-    expect(steps(both, "unified_grid_and_search_index/grid_index")).not.toContain(
-      "email/keyword_index",
-    );
+    expect(
+      steps(both, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).not.toContain("email/keyword_index");
 
     const gridOnly = unwireFromFanIns(both, "email/keyword_index", "embedding_map");
-    expect(steps(gridOnly, "unified_grid_and_search_index/grid_index")).toContain(
-      "email/render_markdown",
-    );
+    expect(
+      steps(gridOnly, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).toContain("email/render_markdown");
     expect(steps(gridOnly, "unified_grid_and_search_index/embedding_map")).toEqual([]);
   });
 
@@ -806,7 +806,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = []
 
 [[applets]]
@@ -821,7 +821,7 @@ command = "datalib-applet unified_grid_and_search_index"
 
   const gridIndex = (inputs: string) => `[[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ${inputs}
 
 [[steps]]
@@ -846,7 +846,9 @@ inputs = ["bridge/keyword_index"]
 ]`),
     );
     expect(unwireFromFanIns(wired, "holodeck/render_markdown")).toBe(before);
-    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
+    expect(
+      unwireFromFanIns(before, "bridge/render_markdown", "unified_grid_and_search_index"),
+    ).toBe(
       gridIndex(`[
     "sickbay/render_markdown",
 ]`),
@@ -901,7 +903,7 @@ inputs = ["bridge/keyword_index"]
     );
     expect(
       listSteps(unwireFromFanIns(before, "sickbay/render_markdown")).find(
-        (s) => s.id === "unified_grid_and_search_index/grid_index",
+        (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
       )!.inputs,
     ).toEqual(["bridge/render_markdown"]);
   });
@@ -913,17 +915,17 @@ inputs = ["bridge/keyword_index"]
         `["bridge/render_markdown", "sickbay/render_markdown", "holodeck/render_markdown"]`,
       ),
     );
-    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
-      gridIndex(`["sickbay/render_markdown"]`),
-    );
+    expect(
+      unwireFromFanIns(before, "bridge/render_markdown", "unified_grid_and_search_index"),
+    ).toBe(gridIndex(`["sickbay/render_markdown"]`));
   });
 
   /// An id is matched by the string it spells, not by how it is quoted.
   it("unwires an id written as a literal string", () => {
     const before = gridIndex(`['bridge/render_markdown', "sickbay/render_markdown"]`);
-    expect(unwireFromFanIns(before, "bridge/render_markdown", "grid_index")).toBe(
-      gridIndex(`["sickbay/render_markdown"]`),
-    );
+    expect(
+      unwireFromFanIns(before, "bridge/render_markdown", "unified_grid_and_search_index"),
+    ).toBe(gridIndex(`["sickbay/render_markdown"]`));
     expect(wireIntoFanIns(before, "bridge/render_markdown")).toBe(before);
   });
 
@@ -1091,13 +1093,15 @@ describe("a source's search steps", () => {
   const MAPPED = PAIR;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
 
-  /// The `grid_index` step puts the source in the keyword search; its embed
-  /// reads the `grid_index` step, and the map reads the embed. Nothing of
+  /// The `unified_grid_and_search_index` step puts the source in the keyword search; its embed
+  /// reads the `unified_grid_and_search_index` step, and the map reads the embed. Nothing of
   /// the source's reads the map: a step downstream of a fan-in that waits
   /// on every source would finish only when the slowest does.
-  it("adds the embed, reading the `grid_index` step, and wires it into the map", () => {
+  it("adds the embed, reading the `unified_grid_and_search_index` step, and wires it into the map", () => {
     const next = setSearchSteps(MAPPED, "slack", "keyword_and_embed");
-    expect(inputsOf(next, "slack/embed")).toEqual(["unified_grid_and_search_index/grid_index"]);
+    expect(inputsOf(next, "slack/embed")).toEqual([
+      "unified_grid_and_search_index/unified_grid_and_search_index",
+    ]);
     expect(inputsOf(next, "unified_grid_and_search_index/embedding_map")).toEqual(["slack/embed"]);
     expect(next).not.toContain("not_searched");
     expect(setSearchSteps(next, "slack", "keyword_and_embed")).toBe(next);
@@ -1116,7 +1120,9 @@ describe("a source's search steps", () => {
     expect(searchIndexingOf(listSteps(keyword), "slack")).toBe("keyword");
     expect(setSearchSteps(keyword, "slack", "keyword")).toBe(keyword);
     const back = setSearchSteps(keyword, "slack", "keyword_and_embed");
-    expect(inputsOf(back, "slack/embed")).toEqual(["unified_grid_and_search_index/grid_index"]);
+    expect(inputsOf(back, "slack/embed")).toEqual([
+      "unified_grid_and_search_index/unified_grid_and_search_index",
+    ]);
     expect(inputsOf(back, "unified_grid_and_search_index/embedding_map")).toEqual(["slack/embed"]);
   });
 
@@ -1135,7 +1141,7 @@ inputs = ["slack/embed"]
     expect(inputsOf(keyword, "slack/render_markdown")).toBeDefined();
   });
 
-  /// Turning search off for a source lists it in the `grid_index` step's
+  /// Turning search off for a source lists it in the `unified_grid_and_search_index` step's
   /// `not_searched` and takes its embed out; the grid keeps the source.
   it("lists the source as not searched and takes its embed back out", () => {
     const off = setSearchSteps(
@@ -1144,23 +1150,26 @@ inputs = ["slack/embed"]
       "none",
     );
     expect(
-      listSteps(off).find((s) => s.id === "unified_grid_and_search_index/grid_index")?.params
-        ?.not_searched,
+      listSteps(off).find(
+        (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
+      )?.params?.not_searched,
     ).toEqual(["slack"]);
     expect(inputsOf(off, "slack/embed")).toBeUndefined();
     expect(inputsOf(off, "unified_grid_and_search_index/embedding_map")).toEqual([]);
-    expect(inputsOf(off, "unified_grid_and_search_index/grid_index")).toEqual([
+    expect(inputsOf(off, "unified_grid_and_search_index/unified_grid_and_search_index")).toEqual([
       "slack/render_markdown",
     ]);
     expect(searchIndexingOf(listSteps(off), "slack")).toBe("none");
   });
 
-  /// An embed reads the `grid_index` step, so without one none is written: its
+  /// An embed reads the `unified_grid_and_search_index` step, so without one none is written: its
   /// input would name nothing.
-  it("writes no embed where the config has no `grid_index` step", () => {
+  it("writes no embed where the config has no `unified_grid_and_search_index` step", () => {
     const noSearch = removeSteps(
       PAIR,
-      listSteps(PAIR).filter((s) => s.id === "unified_grid_and_search_index/grid_index"),
+      listSteps(PAIR).filter(
+        (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
+      ),
     );
     expect(
       inputsOf(setSearchSteps(noSearch, "slack", "keyword_and_embed"), "slack/embed"),
@@ -1170,9 +1179,9 @@ inputs = ["slack/embed"]
   /// A render is wired into the grid index and never into the map.
   it("wires a render into the grid index only", () => {
     const wired = wireIntoFanIns(MAPPED, "email/render_markdown");
-    expect(inputsOf(wired, "unified_grid_and_search_index/grid_index")).toContain(
-      "email/render_markdown",
-    );
+    expect(
+      inputsOf(wired, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).toContain("email/render_markdown");
     expect(inputsOf(wired, "unified_grid_and_search_index/embedding_map")).toEqual([]);
   });
 
@@ -1183,17 +1192,20 @@ inputs = ["slack/embed"]
     expect(readersOf(["slack/ingest"], all).map((s) => s.id)).toEqual(["slack/render_markdown"]);
   });
 
-  /// Every embed reads the `grid_index` step, so removing it takes them; removing
-  /// the map, which reads them, takes nothing.
-  it("takes every source's embed with the `grid_index` step", () => {
+  /// Every embed reads the `unified_grid_and_search_index` step, so
+  /// removing it takes them; removing the map, which reads them, takes
+  /// nothing.
+  it("takes every source's embed with the `unified_grid_and_search_index` step", () => {
     const all = listSteps(setSearchSteps(MAPPED, "slack", "keyword_and_embed"));
     expect(removedWith(["unified_grid_and_search_index/embedding_map"], all)).toEqual([]);
-    expect(removedWith(["unified_grid_and_search_index/grid_index"], all).map((s) => s.id)).toEqual(
-      ["slack/embed"],
-    );
+    expect(
+      removedWith(["unified_grid_and_search_index/unified_grid_and_search_index"], all).map(
+        (s) => s.id,
+      ),
+    ).toEqual(["slack/embed"]);
   });
 
-  /// A source's embed reads the `grid_index` step, not its render, but it embeds
+  /// A source's embed reads the `unified_grid_and_search_index` step, not its render, but it embeds
   /// that render's documents: it goes when the render does.
   it("takes a source's embed with its render", () => {
     const all = listSteps(setSearchSteps(MAPPED, "slack", "keyword_and_embed"));
@@ -1247,7 +1259,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown", "notes/render_markdown"]
 
 [[steps]]
@@ -1294,7 +1306,7 @@ command = "datalib-applet unified_grid_and_search_index"
       "notes/render_markdown",
       "extra/ingest",
       "extra/render_markdown",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "extra/embed",
       "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index",
@@ -1302,11 +1314,11 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(flowsDown(next)).toEqual([]);
     expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
     // Its divider stays above its group, and the index's above the index.
-    // Its embed reads the `grid_index` step, so it sits below it, above the
+    // Its embed reads the `unified_grid_and_search_index` step, so it sits below it, above the
     // map that reads the embed.
     expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
     expect(next.indexOf('function = "embed"')).toBeGreaterThan(
-      next.indexOf('function = "grid_index"'),
+      next.indexOf('function = "unified_grid_and_search_index"'),
     );
     expect(next.indexOf('function = "embed"')).toBeLessThan(
       next.indexOf('function = "embedding_map"'),
@@ -1326,16 +1338,16 @@ command = "datalib-applet unified_grid_and_search_index"
   });
 
   /// Search by meaning turned on for a source that is not the last: its
-  /// embed reads the `grid_index` step, so it goes below that and above the
+  /// embed reads the `unified_grid_and_search_index` step, so it goes below that and above the
   /// map that reads it, whichever source it belongs to.
-  it("puts a source's embed between the `grid_index` step and the map", () => {
+  it("puts a source's embed between the `unified_grid_and_search_index` step and the map", () => {
     const both = setSearchSteps(FLOWING, "slack", "keyword_and_embed");
     expect(listSteps(both).map((s) => s.id)).toEqual([
       "slack/ingest",
       "slack/render_markdown",
       "notes/ingest",
       "notes/render_markdown",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "slack/embed",
       "unified_grid_and_search_index/embedding_map",
       "unified_grid_and_search_index",
@@ -1378,18 +1390,20 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
   });
 
-  /// A file written with the map above the `grid_index` step has no place
-  /// below the one and above the other; the embed goes at the end, as
+  /// A file written with the map above the `unified_grid_and_search_index`
+  /// step has no place below the one and above the other; the embed goes at the end, as
   /// entries always did there, and the file still loads.
   it("falls back to the end of a file already out of order", () => {
-    const gridIndexStep = `[[steps]]
+    const indexStep = `[[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 `;
-    const swapped = `${PAIR.replace(gridIndexStep, "").replace("# ── slack", `${gridIndexStep}# ── slack`)}`;
-    expect(swapped.indexOf("embedding_map")).toBeLessThan(swapped.indexOf("grid_index"));
+    const swapped = `${PAIR.replace(indexStep, "").replace("# ── slack", `${indexStep}# ── slack`)}`;
+    expect(swapped.indexOf("embedding_map")).toBeLessThan(
+      swapped.indexOf('function = "unified_grid_and_search_index"'),
+    );
     const next = setSearchSteps(swapped, "slack", "keyword_and_embed");
     expect(
       listSteps(next)
@@ -1456,7 +1470,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 # A step filed under slack, written apart from it.
@@ -1497,7 +1511,7 @@ command = "datalib-applet slack_view"
       "slack/ingest",
       "slack/render_markdown",
       "group unified_grid_and_search_index",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "slack/keyword_index",
       "slack_view",
     ]);
@@ -1513,7 +1527,7 @@ command = "datalib-applet slack_view"
       "group claude",
       "claude/ingest",
       "group unified_grid_and_search_index",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "group slack",
       "slack/ingest",
       "slack/render_markdown",
@@ -1536,7 +1550,7 @@ command = "datalib-applet slack_view"
       "slack/keyword_index",
       "slack_view",
       "group unified_grid_and_search_index",
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
     ]);
     expect(entries(next)).toEqual(entries(CONFIG));
   });
@@ -1568,7 +1582,7 @@ command = "datalib-applet slack_view"
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 `;
     expect(moveAgainstDataFlow(embedded, "slack", "claude")).toBeNull();
     expect(moveAgainstDataFlow(embedded, "slack", null)).toEqual({
@@ -1599,9 +1613,9 @@ function = "ingest"
     expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
     ]);
-    expect(inputsOf(added, "unified_grid_and_search_index/grid_index")).not.toContain(
-      "riker/render_time_series",
-    );
+    expect(
+      inputsOf(added, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).not.toContain("riker/render_time_series");
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
     expect(
       listSteps(added).some((s) => s.kind === "applet" && s.id === "unified_time_series_index"),
@@ -1636,9 +1650,9 @@ function = "ingest"
     const step = listSteps(added).find((s) => s.id === "riker/render_time_series")!;
     const gone = unwireFromFanIns(removeSteps(added, [step]), step.id);
     expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
-    expect(inputsOf(gone, "unified_grid_and_search_index/grid_index")).not.toContain(
-      "riker/render_time_series",
-    );
+    expect(
+      inputsOf(gone, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).not.toContain("riker/render_time_series");
   });
 });
 
@@ -1664,12 +1678,14 @@ function = "ingest"
     expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
   });
 
-  /// Its problems are read in its own store, so wiring it into
-  /// `grid_index` would only re-run the grid after every occurrences run.
-  it("is not wired into grid_index", () => {
+  /// Its problems are read in its own store, so wiring it into the index
+  /// step would only run that step again after every occurrences run.
+  it("is not wired into the index step", () => {
     const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
-    const grid = listSteps(added).find((s) => s.id === "unified_grid_and_search_index/grid_index");
-    expect(grid?.inputs).not.toContain("bridge/render_occurrences");
+    const index = listSteps(added).find(
+      (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
+    );
+    expect(index?.inputs).not.toContain("bridge/render_occurrences");
   });
 
   /// The wizard edits a source's render step; written first, the
@@ -1696,7 +1712,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 `;
@@ -1711,7 +1727,7 @@ inputs = ["*/render_markdown"]
   /// ids the pattern names.
   it("reads the steps the pattern names", () => {
     const grid = listSteps(PATTERNED).find(
-      (s) => s.id === "unified_grid_and_search_index/grid_index",
+      (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
     );
     expect(grid?.inputs).toEqual(["picard/render_markdown"]);
   });

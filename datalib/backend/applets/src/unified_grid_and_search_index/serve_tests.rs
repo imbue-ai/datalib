@@ -206,7 +206,7 @@ fn sql_reads_a_store_it_lists() {
         .spawn()
         .expect("start the applet");
     let port = announced_port(&mut child);
-    let grid = "unified_grid_and_search_index/grid_index/db.sqlite";
+    let grid = "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite";
 
     let (status, body) = get(port, "/sql/stores", Some(SECRET));
     assert_eq!(status, 200, "{body}");
@@ -264,7 +264,7 @@ fn children_page_through_a_channel() {
         port,
         "/sql",
         &serde_json::json!({
-            "store": "unified_grid_and_search_index/grid_index/db.sqlite",
+            "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             "sql": "SELECT DISTINCT uuid FROM data_nodes WHERE kind = 'Slack Channel' AND name = '#bridge'",
         })
         .to_string(),

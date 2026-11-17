@@ -1,5 +1,5 @@
 """The fixture's search index: `:ingested_tng`'s rendered tree and grid
-index, with the `grid_index` step run over them by the real
+index, with the `unified_grid_and_search_index` step run over them by the real
 `datalib-step`, as a sync runs it: the grid is already loaded, so the
 step's keyword pass over every source is what it writes.
 
@@ -31,7 +31,12 @@ def main() -> int:
             ["tar", "-xf", rendered_tar, "-C", str(root), "--strip-components=1"],
             check=True,
         )
-        db = root / "unified_grid_and_search_index" / "grid_index" / "db.sqlite"
+        db = (
+            root
+            / "unified_grid_and_search_index"
+            / "unified_grid_and_search_index"
+            / "db.sqlite"
+        )
         db.parent.mkdir(parents=True)
         shutil.copyfile(grid, db)
         os.chmod(db, 0o644)
@@ -50,8 +55,8 @@ def main() -> int:
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "DATALIB_DAG_DATA_ROOT": str(root),
             "DATALIB_DAG_GROUP": "unified_grid_and_search_index",
-            "DATALIB_DAG_FUNCTION": "grid_index",
-            "DATALIB_DAG_STEP": "unified_grid_and_search_index/grid_index",
+            "DATALIB_DAG_FUNCTION": "unified_grid_and_search_index",
+            "DATALIB_DAG_STEP": "unified_grid_and_search_index/unified_grid_and_search_index",
             "DATALIB_DAG_INPUTS": "\n".join(f"{g}/render_markdown" for g in groups),
             "DATALIB_MODELS_NO_FETCH": "1",
         }

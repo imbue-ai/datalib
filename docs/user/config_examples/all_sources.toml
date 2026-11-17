@@ -52,7 +52,7 @@ name = "Grid and Search Index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 
@@ -176,7 +176,7 @@ inputs = ["apple_messages/ingest"]
 group = "apple_messages"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- apple_photos by `library` ------------------------------------------
 
@@ -279,7 +279,7 @@ time_zone = "America/Los_Angeles"
 group = "baby_connect"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- beeper by `texts` --------------------------------------------------
 
@@ -317,7 +317,7 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 group = "beeper"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- calendar by `google` -----------------------------------------------
 
@@ -371,7 +371,7 @@ inputs = ["calendar-google/ingest"]
 group = "calendar-google"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -441,7 +441,7 @@ inputs = ["calendar-fastmail/ingest"]
 group = "calendar-fastmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -511,7 +511,7 @@ inputs = ["calendar-caldav/ingest"]
 group = "calendar-caldav"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -577,7 +577,7 @@ inputs = ["calendar-calendly/ingest"]
 group = "calendar-calendly"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
@@ -627,7 +627,7 @@ inputs = ["calendar-ics/ingest"]
 group = "calendar-ics"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -711,7 +711,7 @@ inputs = ["chatgpt-api/ingest"]
 group = "chatgpt-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- chatgpt by `export` ------------------------------------------------
 
@@ -752,7 +752,7 @@ inputs = ["chatgpt-export/ingest"]
 group = "chatgpt-export"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude by `api` ----------------------------------------------------
 
@@ -826,7 +826,7 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 group = "claude-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude by `export` -------------------------------------------------
 
@@ -868,7 +868,7 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 group = "claude-export"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude_code by `sessions` ------------------------------------------
 
@@ -908,7 +908,7 @@ max_tool_result_bytes = 16384  # the default
 group = "claude_code"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- codex by `sessions` ------------------------------------------------
 
@@ -948,7 +948,7 @@ max_tool_result_bytes = 16384  # the default
 group = "codex"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `fastmail` ---------------------------------------------
 
@@ -999,7 +999,7 @@ inputs = ["contacts-fastmail/ingest"]
 group = "contacts-fastmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `carddav` ----------------------------------------------
 
@@ -1050,7 +1050,7 @@ inputs = ["contacts-carddav/ingest"]
 group = "contacts-carddav"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `vcf` --------------------------------------------------
 
@@ -1089,7 +1089,7 @@ inputs = ["contacts-vcf/ingest"]
 group = "contacts-vcf"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `jmap` ----------------------------------------------------
 
@@ -1149,7 +1149,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 group = "email-jmap"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `gmail` ---------------------------------------------------
 
@@ -1228,7 +1228,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 group = "email-gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `mbox` ----------------------------------------------------
 
@@ -1278,7 +1278,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 group = "email-mbox"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `apple_mail` ----------------------------------------------
 
@@ -1327,7 +1327,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message in these ma
 group = "email-apple_mail"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- facebook by `export` -----------------------------------------------
 
@@ -1359,7 +1359,7 @@ inputs = ["facebook/ingest"]
 group = "facebook"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- file_inventory by `fswalk` -----------------------------------------
 
@@ -1495,7 +1495,7 @@ inputs = ["github/ingest"]
 group = "github"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- gitlab by `api` ----------------------------------------------------
 
@@ -1545,7 +1545,7 @@ inputs = ["gitlab/ingest"]
 group = "gitlab"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- google_drive by `api` ----------------------------------------------
 
@@ -1604,7 +1604,7 @@ inputs = ["google_drive/ingest"]
 group = "google_drive"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- google_takeout by `export` -----------------------------------------
 
@@ -1651,7 +1651,7 @@ inputs = ["google_takeout/ingest"]
 group = "google_takeout"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- lightroom by `catalog` ---------------------------------------------
 
@@ -1820,7 +1820,7 @@ inputs = ["linkedin/ingest"]
 group = "linkedin"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- media by `fswalk` --------------------------------------------------
 
@@ -1912,7 +1912,7 @@ inputs = ["notion/ingest"]
 group = "notion"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- pdf by `fswalk` ----------------------------------------------------
 
@@ -1957,7 +1957,7 @@ inputs = ["pdf/ingest"]
 group = "pdf"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- perseus by `github` ------------------------------------------------
 
@@ -2010,7 +2010,7 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 group = "perseus"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- signal by `backup` -------------------------------------------------
 
@@ -2050,7 +2050,7 @@ inputs = ["signal/ingest"]
 group = "signal"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- slack by `api` -----------------------------------------------------
 
@@ -2130,7 +2130,7 @@ inputs = ["slack/ingest"]
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- sms_backup_restore by `backup` -------------------------------------
 
@@ -2168,7 +2168,7 @@ inputs = ["sms_backup_restore/ingest"]
 group = "sms_backup_restore"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- todoist by `api` ---------------------------------------------------
 
@@ -2218,7 +2218,7 @@ inputs = ["todoist/ingest"]
 group = "todoist"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 
@@ -2262,7 +2262,7 @@ inputs = ["whatsapp/ingest"]
 group = "whatsapp"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- yolink by `api` ----------------------------------------------------
 

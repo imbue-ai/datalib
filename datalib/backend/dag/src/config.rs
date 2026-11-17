@@ -757,7 +757,7 @@ pub const FAN_INS: &[(&str, &str, &str)] = &[
     (
         "render_markdown",
         datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
+        "unified_grid_and_search_index",
     ),
     (
         "embed",
@@ -1981,17 +1981,21 @@ fn params_key_span(
 const RETIRED_BUILTINS: &[(&str, &str)] = &[
     (
         "qmd_index",
-        "each source's `embed` and `grid_index`'s keyword search did its work",
+        "each source's `embed` and `unified_grid_and_search_index`'s keyword search did its work",
     ),
     (
         "keyword_index",
-        "`grid_index` put each source in the keyword search itself: it searches every \
+        "`unified_grid_and_search_index` put each source in the keyword search itself: it searches every \
          source it reads but those its `params.not_searched` names",
     ),
     (
         "qmd_aggregator",
-        "`grid_index` kept the vector cache to what a chunk names and reported what search \
+        "`unified_grid_and_search_index` kept the vector cache to what a chunk names and reported what search \
          holds; `embedding_map` reads every `embed` itself",
+    ),
+    (
+        "grid_index",
+        "the index step took its group's name, `unified_grid_and_search_index`",
     ),
 ];
 
@@ -2050,7 +2054,7 @@ fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
 /// wrote it.
 const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 
-/// A source's own search step, which embeds what the `grid_index` step's keyword
+/// A source's own search step, which embeds what the `unified_grid_and_search_index` step's keyword
 /// pass cut of its `render_markdown` whoever wrote it — so a diff group
 /// may have it too.
 const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["embed"];
@@ -2868,7 +2872,7 @@ mod tests {
 
             [[steps]]
             group = "unified_grid_and_search_index"
-            function = "grid_index"
+            function = "unified_grid_and_search_index"
             inputs = ["slack/render_markdown"]
             "#,
         )
@@ -2912,7 +2916,10 @@ mod tests {
 
         // The composed ids are what everything downstream sees.
         assert_eq!(specs[0].id, "slack/ingest");
-        assert_eq!(specs[2].id, "unified_grid_and_search_index/grid_index");
+        assert_eq!(
+            specs[2].id,
+            "unified_grid_and_search_index/unified_grid_and_search_index"
+        );
         assert_eq!(specs[0].group.as_deref(), Some("slack"));
         assert_eq!(specs[0].group_type.as_deref(), Some("slack"));
         assert_eq!(specs[0].function.as_deref(), Some("ingest"));
@@ -3025,11 +3032,11 @@ mod tests {
             [[steps]]
             group = "mail"
             function = "embed"
-            inputs = ["unified_grid_and_search_index/grid_index"]
+            inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
             [[steps]]
             group = "unified_grid_and_search_index"
-            function = "grid_index"
+            function = "unified_grid_and_search_index"
             inputs = ["iliad/render_markdown", "mail/render_markdown"]
 
             [[steps]]
@@ -3394,7 +3401,7 @@ mod tests {
             );
             let index = check_text(&format!(
                 "[[groups]]\nid = \"{id}\"\n\n\
-                 [[steps]]\ngroup = \"{id}\"\nfunction = \"grid_index\"\n"
+                 [[steps]]\ngroup = \"{id}\"\nfunction = \"unified_grid_and_search_index\"\n"
             ));
             assert!(index.is_clean(), "{id}: {:?}", index.diagnostics);
         }
@@ -3683,7 +3690,7 @@ id = "pdfs/ingest"
 command = "fetch-pdfs"
 
 [[steps]]
-id = "unified_grid_and_search_index/grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
 command = "index-it"
 inputs = ["pdfs/ingest"]
 
@@ -3695,7 +3702,10 @@ command = "datalib-applet unified_grid_and_search_index"
         // The broken step is gone and named; everything else loaded.
         assert_eq!(
             ids(&check),
-            vec!["pdfs/ingest", "unified_grid_and_search_index/grid_index"]
+            vec![
+                "pdfs/ingest",
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ]
         );
         assert_eq!(check.cfg.applets.len(), 1, "the applet must survive");
         assert_eq!(
@@ -3769,7 +3779,7 @@ command = "datalib-applet unified_grid_and_search_index"
 
     /// Applet ids and step ids are separate namespaces, and the scaffold
     /// depends on it: `unified_grid_and_search_index` the applet sits beside
-    /// `unified_grid_and_search_index/grid_index` the step.
+    /// `unified_grid_and_search_index/unified_grid_and_search_index` the step.
     #[test]
     fn the_scaffold_shape_loads_clean() {
         let check = check_text(
@@ -3779,7 +3789,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -4170,7 +4180,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 "#;
@@ -4193,7 +4203,7 @@ inputs = ["*/render_markdown"]
     fn a_pattern_reads_every_step_of_its_function() {
         let check = check_text(CONFIG);
         assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert_eq!(
             inputs_of(&check, grid),
             ["slack/render_markdown", "mail/render_markdown"]
@@ -4228,7 +4238,10 @@ inputs = ["*/render_markdown"]
         );
         let check = check_text(&added);
         assert_eq!(
-            inputs_of(&check, "unified_grid_and_search_index/grid_index"),
+            inputs_of(
+                &check,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             [
                 "slack/render_markdown",
                 "mail/render_markdown",
@@ -4248,7 +4261,7 @@ inputs = ["*/render_markdown"]
             "group = \"mail\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\nbogus = 1",
         );
         let check = check_text(&broken);
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert_eq!(inputs_of(&check, grid), ["slack/render_markdown"]);
         assert!(check.diagnostics.iter().all(|d| d.id() != Some(grid)));
         assert_eq!(
@@ -4284,7 +4297,7 @@ inputs = ["*/render_markdown"]
 group = \"slack\"
 function = \"embed\"
 command = \"datalib-step\"
-inputs = [\"unified_grid_and_search_index/grid_index\"]
+inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]
 
 [[steps]]
 group = \"unified_grid_and_search_index\"
@@ -4361,7 +4374,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
@@ -4381,7 +4394,7 @@ command = "datalib-applet unified_grid_and_search_index"
         assert_eq!(
             ids,
             vec![
-                "unified_grid_and_search_index/grid_index",
+                "unified_grid_and_search_index/unified_grid_and_search_index",
                 "work-slack/ingest",
                 "work-slack/render_markdown"
             ]
@@ -4857,7 +4870,7 @@ inputs = ["a"]
     }
 
     /// Every embed holds the one-slot `embedder` lock, so one model is
-    /// loaded at a time. `grid_index`, the one writer of the grid index's
+    /// loaded at a time. The index step, the one writer of the grid index's
     /// file, needs no lock of its own: no other step writes that file, and
     /// an embed reading it off disk keeps it from running beside one. It
     /// holds the `index` budget, as any index step does. A step that names
@@ -4871,17 +4884,8 @@ id = "mail"
 type = "email"
 
 [[groups]]
-id = "notes"
-type = "notion"
-
-[[steps]]
-group = "notes"
-function = "render_markdown"
-
-[[steps]]
-group = "notes"
-function = "embed"
-inputs = ["unified_grid_and_search_index/grid_index"]
+id = "riker"
+type = "email"
 
 [[groups]]
 id = "unified_grid_and_search_index"
@@ -4893,18 +4897,27 @@ function = "render_markdown"
 [[steps]]
 group = "mail"
 function = "embed"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+[[steps]]
+group = "riker"
+function = "render_markdown"
+
+[[steps]]
+group = "riker"
+function = "embed"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 locks = ["cpu"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
-inputs = ["mail/render_markdown", "notes/render_markdown"]
+function = "unified_grid_and_search_index"
+inputs = ["mail/render_markdown", "riker/render_markdown"]
 
 [[steps]]
 id = "custom/embed"
 command = "x"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
@@ -4915,9 +4928,12 @@ inputs = ["unified_grid_and_search_index/grid_index"]
                 .map(|(name, _)| name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(held("unified_grid_and_search_index/grid_index"), ["index"]);
-        assert_eq!(held("notes/embed"), ["embedder"]);
-        assert_eq!(held("mail/embed"), ["cpu"], "named locks win");
+        assert_eq!(
+            held("unified_grid_and_search_index/unified_grid_and_search_index"),
+            ["index"]
+        );
+        assert_eq!(held("mail/embed"), ["embedder"]);
+        assert_eq!(held("riker/embed"), ["cpu"], "named locks win");
         assert_eq!(
             held("custom/embed"),
             ["index"],
@@ -4967,7 +4983,7 @@ inputs = ["mail/render_markdown"]
             .any(|s| s.id == "mail/render_markdown"));
     }
 
-    /// `keyword_index` was each source's own keyword pass; `grid_index`
+    /// `keyword_index` was each source's own keyword pass; `unified_grid_and_search_index`
     /// does it now. A config still naming the step is refused, naming the
     /// tool that rewrites it, and loses that entry alone.
     #[test]
@@ -5004,7 +5020,7 @@ inputs = ["mail/render_markdown"]
             .any(|s| s.id == "mail/render_markdown"));
     }
 
-    /// `qmd_aggregator` swept the vectors and reported; `grid_index` does
+    /// `qmd_aggregator` swept the vectors and reported; `unified_grid_and_search_index` does
     /// both now. A config still naming it is refused, naming the tool that
     /// rewrites it, and loses that entry alone.
     #[test]
@@ -5016,12 +5032,12 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 "#,
         );
         let refused: Vec<&Diagnostic> = check
@@ -5033,6 +5049,48 @@ inputs = ["unified_grid_and_search_index/grid_index"]
         assert_eq!(refused[0].severity, Severity::Rejected);
         assert!(refused[0].describe().contains("datalib-migrate-config"));
         assert_eq!(check.graph.steps.len(), 1);
+    }
+
+    /// `grid_index` was the index step's function before it took its
+    /// group's name. A config still naming it is refused, naming the tool
+    /// that rewrites it, and loses that entry alone.
+    #[test]
+    fn a_grid_index_step_is_refused_and_names_the_migrator() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+inputs = ["*/render_markdown"]
+"#,
+        );
+        let refused: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("unified_grid_and_search_index/grid_index"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
+        assert!(refused[0]
+            .describe()
+            .contains("`unified_grid_and_search_index`"));
+        assert!(check
+            .graph
+            .steps
+            .iter()
+            .any(|s| s.id == "mail/render_markdown"));
     }
 
     /// A comparison is searched like any source, so its group may carry
@@ -5059,13 +5117,13 @@ function = "render_markdown"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "slack-diff"
 function = "embed"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 "#,
         );
         let dropped: Vec<_> = check

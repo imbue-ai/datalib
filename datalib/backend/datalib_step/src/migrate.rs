@@ -26,9 +26,9 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
-        Function::GridIndex => {
+        Function::UnifiedGridAndSearchIndex => {
             let store = datalib_core::layout::grid_index_db(data_root);
-            let retired = datalib_core::layout::grid_index_dir(data_root)
+            let retired = datalib_core::layout::index_step_dir(data_root)
                 .join(datalib_core::layout::RETIRED_GRID_DB);
             if retired.exists() {
                 tracing::info!(
@@ -629,8 +629,8 @@ mod tests {
     async fn a_grid_index_in_another_shape_asks_for_a_rerun() {
         let root = tempfile::tempdir().unwrap();
         let env = env_of(
-            "unified_grid_and_search_index/grid_index",
-            Function::GridIndex,
+            "unified_grid_and_search_index/unified_grid_and_search_index",
+            Function::UnifiedGridAndSearchIndex,
         );
         let ask = || async {
             let emitter = Emitter::new(env.step.clone());
@@ -662,7 +662,7 @@ mod tests {
     }
 
     /// A new version of the index's drawing or chunking moves nothing the
-    /// `grid_index` step's keyword pass reads, so the migrate pass asks for it:
+    /// `unified_grid_and_search_index` step's keyword pass reads, so the migrate pass asks for it:
     /// when a source it reads was drawn by another version, and not before
     /// there is an index or once it is this build's; and when the index's
     /// tables are in another shape, which its next writer empties.
@@ -672,8 +672,8 @@ mod tests {
         let env = StepEnv {
             inputs: vec!["mail/render_markdown".into()],
             ..env_of(
-                "unified_grid_and_search_index/grid_index",
-                Function::GridIndex,
+                "unified_grid_and_search_index/unified_grid_and_search_index",
+                Function::UnifiedGridAndSearchIndex,
             )
         };
         let ask = || async {

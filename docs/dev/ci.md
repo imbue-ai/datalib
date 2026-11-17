@@ -33,9 +33,15 @@ reference behind them.
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
   below); so a PR's tarball is not what a release ships.
-- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone. It
-  is tagged `cpu:4`, the whole runner, and takes about six minutes, so
-  in the job above every other test waited behind it. The two jobs'
+- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone: a
+  `test_suite` of three tests, `e2e_chromium_test`, `e2e_sandboxes_test`
+  and `e2e_webkit_test`, one per group of Playwright projects
+  ([`testing.md`](testing.md) § "The Playwright suite runs in two
+  engines"). Each is tagged `cpu:4`, the whole runner, so they run one
+  after another, about eleven minutes in all; in the job above every
+  other test would wait behind them. They are three tests rather than
+  one so each has its own 900 s timeout: whole, the suite took 600 to
+  850 s, and a slow runner timed it out two-thirds of the way through. The two jobs'
   patterns are complements (`//...` less one label, and that label), so
   a new test lands in the first without anyone choosing. On a run where
   the binaries the suite drives are not cached yet, both jobs compile
@@ -246,12 +252,13 @@ compiled again for the gate.
 the hermetic LLVM one `MODULE.bazel` registers and Rust's is pinned
 too, so neither depends on the machine's compiler (§"The caches, and
 what each is for"). Nor does an action's environment carry the caller's
-`HOME`, which every C compile, genrule and test would otherwise hold in
-its key (`/root` in a cloud session, `/github/home` on CI); a test runs
-with `HOME` set to its own `TEST_TMPDIR` (`.bazelrc`). So a cloud
-session, a Linux laptop and CI's runner build the same keys from the
-same flags. A mac uses Apple's toolchain and its caller's `HOME`, never
-shares CI's entries, and is why the gate leaves it in fastbuild.
+`HOME`, on any host, which every C compile, genrule and test would
+otherwise hold in its key (`/root` in a cloud session, `/github/home`
+on CI, `/Users/<name>` on a mac); a test runs with `HOME` set to its
+own `TEST_TMPDIR` (`.bazelrc`). So a cloud session, a Linux laptop and
+CI's runner build the same keys from the same flags, and so do two
+macs whatever their users are called. A mac uses Apple's toolchain,
+never shares CI's entries, and is why the gate leaves it in fastbuild.
 
 ## The caches, and what each is for
 

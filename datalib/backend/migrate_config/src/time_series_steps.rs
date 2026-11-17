@@ -142,7 +142,7 @@ path = "/deck8/troi.mbox"
 "#;
 
     fn step_ids(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         check.cfg.steps.iter().map(|s| s.id.clone()).collect()
     }
 
@@ -162,7 +162,7 @@ path = "/deck8/troi.mbox"
         );
         assert!(!ids.iter().any(|i| i.starts_with("troi-mail/render_time")));
         assert!(after.contains(r#"inputs = ["riker/render_time_series"]"#));
-        let check = datalib_dag::config::check_text(&after);
+        let check = datalib_dag::config::check_text(&crate::folded(&after));
         let applets: Vec<&str> = check.cfg.applets.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(applets, ["unified_time_series_index"]);
         assert!(!is_retired(&after).unwrap());
@@ -183,7 +183,7 @@ path = "/deck8/troi.mbox"
             1
         );
         assert!(after.contains(r#"inputs = ["riker/render_time_series"]"#));
-        assert!(datalib_dag::config::check_text(&after).is_clean());
+        assert!(datalib_dag::config::check_text(&crate::folded(&after)).is_clean());
     }
 
     /// Once the index group is there, a step the person took out stays out.

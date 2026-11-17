@@ -1,7 +1,7 @@
 //! The locks from before search had an index of its own. `qmd_embed`, the
 //! one every `embed` holds, is `embedder`. `qmd_keyword` is gone: only
-//! `grid_index` held it once it alone wrote the grid index's file, and a
-//! step never runs beside itself. A step's `locks` that named `qmd_embed`
+//! the index step (`unified_grid_and_search_index`) held it once it alone
+//! wrote the grid index's file, and a step never runs beside itself. A step's `locks` that named `qmd_embed`
 //! name `embedder`; one that named `qmd_keyword` drops it, and a step left
 //! holding nothing loses the key and holds its default lock again. A
 //! `[[locks]]` entry that resized `qmd_embed` resizes `embedder`, and one
@@ -187,7 +187,7 @@ command = "datalib-step"
 group = "picard"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 locks = ["qmd_embed", "gpu"]  # one model, one GPU
 
 [[steps]]
@@ -199,7 +199,7 @@ command = "datalib-step"
 group = "riker"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 locks = { qmd_embed = "exclusive" }
 
 [[groups]]
@@ -207,7 +207,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 locks = ["qmd_keyword"]
@@ -270,7 +270,10 @@ name = "gpu"
         assert_eq!(held(&after, "picard/embed"), ["embedder", "gpu"]);
         assert_eq!(held(&after, "riker/embed"), ["embedder"]);
         assert_eq!(
-            held(&after, "unified_grid_and_search_index/grid_index"),
+            held(
+                &after,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["index"]
         );
         assert!(!is_retired(&after).unwrap());

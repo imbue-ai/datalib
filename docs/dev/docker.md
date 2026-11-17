@@ -141,7 +141,7 @@ of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
 The image carries the whole search index: every step in the demo
-config runs at image time, `grid_index`'s keyword pass and each
+config runs at image time, `unified_grid_and_search_index`'s keyword pass and each
 source's `embed` included, so search by words and by meaning
 both answer the moment the container starts.
 

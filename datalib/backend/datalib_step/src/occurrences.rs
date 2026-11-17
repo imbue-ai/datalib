@@ -66,7 +66,7 @@ pub async fn run(
         return Ok(Vec::new());
     };
     // An event whose occurrences could not be listed is a warning row,
-    // which `grid_index` copies into the index for the Manage row to count.
+    // which `unified_grid_and_search_index` copies into the index for the Manage row to count.
     let problems = listed.problems(&env.group);
     let progress = emitter.progress();
     for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {

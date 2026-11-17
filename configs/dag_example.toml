@@ -18,7 +18,7 @@
 # (bring the data in), `render_markdown` (turn the raw store into
 # markdown), `embed` (the embeddings of a source's part of the search
 # index, for search by meaning), and three under the unified grid and
-# search index: `grid_index` over every render_markdown tree, which also
+# search index: `unified_grid_and_search_index` over every render_markdown tree, which also
 # puts each source in the keyword search and keeps the vector cache to
 # what a chunk still names, and `embedding_map`, which lays out what the
 # `embed` steps embedded.
@@ -136,16 +136,16 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["slack/ingest"]
 
-# A source's search by meaning. `grid_index` puts every source it reads in
+# A source's search by meaning. `unified_grid_and_search_index` puts every source it reads in
 # the keyword search; `embed` then embeds what that cut and is the slow
 # one. Turn it off on the Manage screen, or leave it out, and keyword
-# search still finds the source. `grid_index`'s `not_searched`, below,
+# search still finds the source. `unified_grid_and_search_index`'s `not_searched`, below,
 # keeps a source out of search entirely.
 [[steps]]
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # Optional: a run that owes at least this many chunks embeds them on your
 # own Modal account's GPUs instead of here (`modal setup` signs you in),
 # which turns a first embed of hours into minutes; a run that owes fewer
@@ -180,7 +180,7 @@ inputs = ["claude/ingest"]
 group = "claude"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # ── a diff group ───────────────────────────────────────────────────
 # What changed in a source between two of its raw store's commits, as
@@ -213,7 +213,7 @@ max_documents = 200
 group = "slack-diff"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # ── locks ──────────────────────────────────────────────────────────
 # What keeps steps apart beyond the trees they write and read. Every
@@ -247,7 +247,7 @@ inputs = ["unified_grid_and_search_index/grid_index"]
 # source out on purpose; the Pipeline table flags a render step nothing
 # consumes. `datalib-dag --check` prints what each pattern stood for.
 # The group has no `type`: it mirrors
-# nothing, it indexes what the others mirrored. `grid_index` puts every
+# nothing, it indexes what the others mirrored. `unified_grid_and_search_index` puts every
 # source it reads in the keyword search but those `params.not_searched`
 # lists (`params.not_searched = ["slack-diff"]`), and drops from search
 # any source it no longer reads. It also keeps only the vectors a chunk
@@ -257,7 +257,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 

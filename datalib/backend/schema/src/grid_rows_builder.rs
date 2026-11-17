@@ -564,7 +564,7 @@ mod builder_tests {
     }
 
     /// The stanza is the first path segment, matching how `datalib-step`
-    /// names a source from its declared outputs and how `grid_index`
+    /// names a source from its declared outputs and how `unified_grid_and_search_index`
     /// names one from the directory it walked.
     #[test]
     fn source_id_is_the_first_path_segment() {

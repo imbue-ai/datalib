@@ -67,7 +67,7 @@ pub async fn run_render(
     let raw = data_root.join(env.raw_store_rel());
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
-    // nothing else; it is a warning row, which `grid_index` copies into
+    // nothing else; it is a warning row, which `unified_grid_and_search_index` copies into
     // the index for the Manage row to count.
     let problems = datalib_etl_time_series::unreadable_problems(&env.group, &unreadable);
     let progress = emitter.progress();
@@ -286,7 +286,7 @@ mod tests {
 
     /// A source file whose time series could not be read is a warning row
     /// in the step's own store, where a reader finds it as the step's
-    /// (`datalib_step_problems::of_step`); `grid_index` copies none of it.
+    /// (`datalib_step_problems::of_step`); the `unified_grid_and_search_index` step copies none of it.
     /// The TNG account's ride holds no FIT file the reader can parse.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unreadable_file_is_a_warning_row_of_the_steps_own() {
@@ -358,18 +358,18 @@ mod tests {
             .collect();
         assert_eq!(rows, [("riker", "time_series", "warning", "17010414002")]);
 
-        crate::grid_index::run(
+        crate::unified_grid_and_search_index::run(
             root,
             &StepEnv {
-                step: crate::grid_index::out_rel(),
+                step: crate::unified_grid_and_search_index::out_rel(),
                 group: datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR.into(),
                 group_type: None,
                 source_group: None,
                 source_group_type: None,
-                function: crate::function::Function::GridIndex,
+                function: crate::function::Function::UnifiedGridAndSearchIndex,
                 inputs: vec!["riker/render_time_series".into()],
             },
-            &crate::grid_index::Params::default(),
+            &crate::unified_grid_and_search_index::Params::default(),
             None,
             Some(NOW),
             &Emitter::new("test".into()),
@@ -377,7 +377,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let index = datalib_step_problems::of_step(root, &crate::grid_index::out_rel()).await;
+        let index =
+            datalib_step_problems::of_step(root, &crate::unified_grid_and_search_index::out_rel())
+                .await;
         assert!(index.rows.is_empty(), "the index copied {:?}", index.rows);
     }
 

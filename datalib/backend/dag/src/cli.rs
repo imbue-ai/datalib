@@ -24,7 +24,7 @@ step_start, progress_*, log, hint and step_finish per step, then one \
 run_summary. stdout gets one line per step at the end.
 
 A step's id is <group>/<function>: slack/ingest, slack/render_markdown, \
-unified_grid_and_search_index/grid_index.";
+unified_grid_and_search_index/unified_grid_and_search_index.";
 
 pub const EXAMPLES: &[Example] = &[
     Example {

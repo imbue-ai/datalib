@@ -245,8 +245,8 @@ as a subprocess. Datalib's own steps write `command = "datalib-step"`
 (`//datalib/backend/datalib_step:datalib_step`), which
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
-markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_grid_and_search_index/grid_index/db.sqlite`. See
+markdown + its store, and `unified_grid_and_search_index` loads every render store into
+`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -313,16 +313,16 @@ their install scripts run.
 
 Three steps build the search index
 ([`datalib/backend/search_index`](../../datalib/backend/search_index)).
-`grid_index`, after the grid, brings each searched source's documents in
+`unified_grid_and_search_index`, after the grid, brings each searched source's documents in
 the index in line with its render store: it chunks each changed document
 and writes its words and chunks into `search_*` tables of the grid
-index's file, `unified_grid_and_search_index/grid_index/db.sqlite`. Each
+index's file, `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. Each
 source's `embed` embeds every
 chunk the inference cache,
 `unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
 vector for, in process (`datalib/backend/embedder`, llama.cpp), after
 putting the pinned, sha256-verified embedding model in place through
-`datalib_embedding_models`. `grid_index` also sweeps the vectors no chunk
+`datalib_embedding_models`. `unified_grid_and_search_index` also sweeps the vectors no chunk
 names, and reports what each source holds. This is what a search matches words and meaning against (see
 `datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 

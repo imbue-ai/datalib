@@ -157,7 +157,7 @@ mod tests {
         for (name, kind) in [
             ("slack/ingest/entities.doltlite_db", StoreKind::Doltlite),
             (
-                "unified_grid_and_search_index/grid_index/db.sqlite",
+                "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
                 StoreKind::Sqlite,
             ),
             (

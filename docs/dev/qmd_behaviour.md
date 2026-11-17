@@ -17,7 +17,7 @@ No sync drives qmd now: search keeps its own index
 the record behind what still bears qmd's mark — the one-slot
 `embedder` lock, once `qmd_embed` (findings 5 and 12), and the shared
 model cache's path — until those are revisited. Its other lock,
-`qmd_keyword` (finding 4), is gone: only `grid_index` writes the file it
+`qmd_keyword` (finding 4), is gone: only the index step writes the file it
 guarded.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships

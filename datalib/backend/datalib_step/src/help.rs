@@ -91,7 +91,7 @@ const SETUP: &[SetupStep] = &[
               and get JSON back: `datalib-applet search <data_root> 'from:picard \
               after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
               the flags). For SQL, `datalib-doltlite -readonly \
-              <data_root>/unified_grid_and_search_index/grid_index/db.sqlite \"SELECT provider, \
+              <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \"SELECT provider, \
               count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 opens it read-only only \
               while its writer is running). Or serve \
               the app with `datalib-http <data_root>`. `datalib-step help search` has the \
@@ -302,7 +302,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              Their steps read every source by pattern (`inputs = [\"*/render_markdown\"]`), \
              so a source appended by hand is read with no further edit. A config whose \
              index steps name their inputs one by one needs `<id>/render_markdown` added to \
-             `unified_grid_and_search_index/grid_index`'s, and the stanza's `embed` to \
+             `unified_grid_and_search_index/unified_grid_and_search_index`'s, and the stanza's `embed` to \
              `unified_grid_and_search_index/embedding_map`'s.{}",
             if t.renders_time_series() {
                 " There `<id>/render_time_series` goes in \
@@ -602,7 +602,7 @@ fn example_step_id(f: Function) -> String {
         Function::Ingest | Function::RenderMarkdown | Function::Embed => "slack",
         Function::RenderTimeSeries => "garmin",
         Function::RenderOccurrences => "calendar",
-        Function::GridIndex | Function::EmbeddingMap => {
+        Function::UnifiedGridAndSearchIndex | Function::EmbeddingMap => {
             datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
         }
         Function::TimeSeriesIndex => datalib_runtime::layout::UNIFIED_TIME_SERIES_INDEX_DIR,

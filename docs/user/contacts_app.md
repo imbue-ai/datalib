@@ -96,7 +96,7 @@ The grid index holds every handle any source mentioned, and what that
 source called the person. This lists them with the most written first:
 
 ```sh
-datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/grid_index/db.sqlite "
+datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite "
   SELECT h.handle,
          group_concat(DISTINCT c.name) AS names,
          group_concat(DISTINCT c.source_id) AS sources,
