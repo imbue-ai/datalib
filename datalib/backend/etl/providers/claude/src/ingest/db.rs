@@ -914,8 +914,10 @@ mod tests {
     }
 
     fn later(minutes: i64) -> datalib_time::IsoOffsetTimestamp {
-        datalib_time::IsoOffsetTimestamp::try_from(now().inner() + chrono::Duration::minutes(minutes))
-            .unwrap()
+        datalib_time::IsoOffsetTimestamp::try_from(
+            now().inner() + chrono::Duration::minutes(minutes),
+        )
+        .unwrap()
     }
 
     fn make_user(id: &str, email: &str, name: &str) -> UserRow {
