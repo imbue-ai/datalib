@@ -14,9 +14,15 @@ typedef struct dl_embedder dl_embedder;
 
 // NULL on failure, with the reason in err. With use_gpu, the model and its
 // work go to the GPU where this build and machine have one (Metal on a
-// mac); without it, everything stays on the CPU.
+// mac); without it, everything stays on the CPU. Each input may be n_ctx
+// tokens; one call takes up to n_seq_max inputs and n_tokens tokens in all
+// (raised to n_ctx when less).
 dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
-                              int32_t use_gpu, char *err, size_t err_len);
+                              int32_t use_gpu, int32_t n_seq_max, int32_t n_tokens, char *err,
+                              size_t err_len);
+
+// The device dl_embedder_open would choose: "CPU", or the GPU's name.
+const char *dl_embedder_device_for(int32_t use_gpu);
 
 // Loads a ggml backend module (libggml-cuda.so) from exactly path, before
 // any embedder opens. The count of devices it offers, or -1 with the reason
@@ -31,7 +37,12 @@ void dl_embedder_close(dl_embedder *e);
 const char *dl_embedder_device(const dl_embedder *e);
 
 int32_t dl_embedder_n_embd(const dl_embedder *e);
+// Tokens one input may be.
 int32_t dl_embedder_n_ctx(const dl_embedder *e);
+int32_t dl_embedder_n_seq_max(const dl_embedder *e);
+int32_t dl_embedder_n_tokens(const dl_embedder *e);
+// Whether llama.cpp keeps a cache (KV or other memory) for this model.
+int32_t dl_embedder_keeps_cache(const dl_embedder *e);
 
 // The model's tokens for text, with its BOS and EOS added and special-token
 // text read as plain text. Returns the count; when it exceeds cap, nothing
@@ -44,6 +55,12 @@ int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t tex
 // `batch` tokens at a time; 0 or n or more is all at once. 0 on success.
 int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int32_t batch,
                           float *out, char *err, size_t err_len);
+
+// The pooled embeddings of n_seqs inputs in one call, n_embd floats each
+// into out, in order. tokens holds the inputs end to end, lens[s] long
+// each. 0 on success.
+int32_t dl_embedder_embed_seqs(dl_embedder *e, const int32_t *tokens, const int32_t *lens,
+                               int32_t n_seqs, float *out, char *err, size_t err_len);
 
 #ifdef __cplusplus
 }

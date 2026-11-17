@@ -3,87 +3,89 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === sms-backup-restore 00000000-0000-85d9-b5a3-420c27c71680 Geordi La Forge
---- 0b75ba9e-0f80-8ad5-8bd8-d3e3fd659bed
-Me — Tue 15 Apr 2369 11:00
+--- chunk 0
+title: Geordi La Forge | text: Me — Tue 15 Apr 2369 11:00
 
 Geordi, I need warp speed in three minutes.
 
+
 === sms-backup-restore 00000000-0000-8709-8732-c5f02579e8d6 Deanna Troi
---- 0b75b781-8d40-89bb-8299-ebbc766db091
-Deanna Troi <+12025550103> — Mon 14 Apr 2369 20:30
+--- chunk 0
+title: Deanna Troi | text: Deanna Troi <+12025550103> — Mon 14 Apr 2369 20:30
 
 Outgoing call — Deanna Troi (4:00)
 
+
 === sms-backup-restore 00000000-0000-8a32-861f-a85bca667a83 Worf
---- 0b75b74a-9ec0-83ec-af8b-969533e62bc5
-Worf <+12025550102> — Mon 14 Apr 2369 19:30
+--- chunk 0
+title: Worf | text: Worf <+12025550102> — Mon 14 Apr 2369 19:30
 
 Missed call — Worf
 
---- 0b75ba67-2100-8288-a8b2-df54cf9b6b1c
-Worf <+12025550102> — Tue 15 Apr 2369 10:00
+
+--- chunk 1
+title: Worf | text: Worf <+12025550102> — Tue 15 Apr 2369 10:00
 
 Today is a good day to die.
 
---- 0b75ba68-0b60-887e-b930-8855bf9650de
-Worf <+12025550102> — Tue 15 Apr 2369 10:01
+
+--- chunk 2
+title: Worf | text: Worf <+12025550102> — Tue 15 Apr 2369 10:01
 
 Bat'leth practice at 0700.
 
 batleth.gif
 
+
 === sms-backup-restore 00000000-0000-8a35-a540-630d0aa1cfba sms-backup-restore storage
---- -
----
-title: sms-backup-restore storage
-source: sms-backup-restore
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: sms-backup-restore storage | text: Source: datalib
 
-# [sms-backup-restore](datalib:group/sms-backup-restore "sms-backup-restore") — storage
+# sms-backup-restore — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest` | <size> | 3 files | <span id="m-00000000-0000-8a35-a540-630d0aa1cfba" data-section-uuid="00000000-0000-8a35-a540-630d0aa1cfba">`00000000`</span> |
-| Store | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-88a7-92ad-f5a193a4d09b" data-section-uuid="00000000-0000-88a7-92ad-f5a193a4d09b">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/blobs.sqlite#cas_objects` |  | 3 rows | <span id="m-00000000-0000-8cd4-8b68-9f471a1cd695" data-section-uuid="00000000-0000-8cd4-8b68-9f471a1cd695">`00000000`</span> |
-| Store | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8a75-924b-4a798fb11139" data-section-uuid="00000000-0000-8a75-924b-4a798fb11139">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | <span id="m-00000000-0000-8d85-bbe5-55de05bbfb12" data-section-uuid="00000000-0000-8d85-bbe5-55de05bbfb12">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db#read_marks` |  | 7 rows | <span id="m-00000000-0000-8eb2-a178-1ef900e95fb2" data-section-uuid="00000000-0000-8eb2-a178-1ef900e95fb2">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db#sms_attachments` |  | 3 rows | <span id="m-00000000-0000-8e21-a4d7-7c6588d4afac" data-section-uuid="00000000-0000-8e21-a4d7-7c6588d4afac">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db#sms_calls` |  | 3 rows | <span id="m-00000000-0000-8e90-a777-cdd1814cf208" data-section-uuid="00000000-0000-8e90-a777-cdd1814cf208">`00000000`</span> |
-| Table | [ingest](datalib:step/sms-backup-restore/ingest "sms-backup-restore/ingest") | `sms-backup-restore/ingest/entities.doltlite_db#sms_messages` |  | 7 rows | <span id="m-00000000-0000-8ba6-9454-3c3348bd19b7" data-section-uuid="00000000-0000-8ba6-9454-3c3348bd19b7">`00000000`</span> |
+| Source Size | ingest | `sms-backup-restore/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `sms-backup-restore/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/blobs.sqlite#cas_objects` |  | 3 rows | `00000000` |
+| Store | ingest | `sms-backup-restore/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#read_marks` |  | 7 rows | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_attachments` |  | 3 rows | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_calls` |  | 3 rows | `00000000` |
+| Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_messages` |  | 7 rows | `00000000` |
 
 === sms-backup-restore 00000000-0000-8c57-9571-2bd28212d376 Jean-Luc Picard
---- 0b75b713-b040-84e2-aa8e-c1c59f7a1ca4
-Jean-Luc Picard <+12025550101> — Mon 14 Apr 2369 18:30
+--- chunk 0
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Mon 14 Apr 2369 18:30
 
 Incoming call — Jean-Luc Picard (1:35)
 
---- 0b75ba30-3280-85bd-b058-e3f81fd3f403
-Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:00
+
+--- chunk 1
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:00
 
 Make it so. 🚀
 
---- 0b75ba31-1ce0-8607-a757-33aa9851eb7b
-Me — Tue 15 Apr 2369 09:01
+
+--- chunk 2
+title: Jean-Luc Picard | text: Me — Tue 15 Apr 2369 09:01
 
 Aye, Captain.
 
---- 0b75ba32-0740-8993-adf7-73c1d3d06442
-Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:02
+
+--- chunk 3
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:02
 
 The Enterprise approaches.
 
 viewscreen.png
 
---- 0b75ba32-f1a0-824c-915f-32273472fad4
-Me <+12025550100> — Tue 15 Apr 2369 09:03
+
+--- chunk 4
+title: Jean-Luc Picard | text: Me <+12025550100> — Tue 15 Apr 2369 09:03
 
 Captain's log, supplemental.
-
-<audio controls src="/data/sms-backup-restore/ingest/blob/722dc947668381e99576a7646289e9d3374447f7b7bf56461f5901c52a14d5b8"></audio>
 
 🔊 captainslog.m4a — 895 B

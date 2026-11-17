@@ -2515,6 +2515,7 @@ mod tests {
                 markdown_uuid: uuid.into(),
                 content_hash: "h".into(),
                 title: "Engineering".into(),
+                head: None,
                 sections: sections
                     .iter()
                     .map(|s| IndexSection {

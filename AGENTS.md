@@ -278,7 +278,9 @@ datalib/
                    (docs/dev/plans/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
-                   Metal on a mac. Tested against a golden of qmd's answers.
+                   Metal on a mac, CUDA as a module on gnu Linux. Tested
+                   against a golden of qmd's answers; README.md has the
+                   facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
     sql_guard/     reads SQL a caller wrote, and nothing else: a
@@ -292,6 +294,8 @@ datalib/
     h3/            `datalib_h3`: where a thing is, as H3 cells over `h3o`;
                    a location is its finest cell, a cell a range of them.
                    README.md has the facts, each a test in `h3_facts`.
+    html_entities/ reads `&amp;`-style character references back to text,
+                   over quick-xml's HTML5 table; the one decoder.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
                    `data-handle`. No first-party deps.

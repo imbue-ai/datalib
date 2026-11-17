@@ -3119,6 +3119,7 @@ mod shape_tests {
             markdown_uuid: uuid.into(),
             content_hash: format!("hash-{uuid}"),
             title: "Ten Forward".into(),
+            head: None,
             sections: vec![datalib_search_index::IndexSection {
                 uuid: Some("m1".into()),
                 text: "the warp core is stable".into(),

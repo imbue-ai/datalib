@@ -1,10 +1,10 @@
 # Builds llama.cpp's CUDA backend, `libggml-cuda.so`
-# (third-party/llama_cpp/llama_cpp.BUILD), and the `datalib-step` that
-# would load it, when a change could move either, and checks that every
-# ggml symbol the module leaves undefined is one `datalib-step` exports.
-# Nothing here has a GPU: this proves the module builds, links and would
-# resolve; running it is a Modal GPU's job
-# (docs/dev/plans/embed_on_modal.md). Kept out of `test.yml` because the
+# (third-party/llama_cpp/llama_cpp.BUILD), and the `datalib-step` and
+# `gpu_check` that would load it, when a change could move any of them,
+# and checks that every ggml symbol the module leaves undefined is one
+# both binaries export. Nothing here has a GPU: this proves the module
+# builds, links and would resolve; running it is a Modal GPU's job, with
+# the uploaded `gpu_check` (docs/dev/plans/embed_on_modal.md). Kept out of `test.yml` because the
 # toolkit is a ~1 GB fetch that no other target needs.
 name: cuda
 
@@ -50,7 +50,7 @@ jobs:
       - name: bazel build
         run: |
           flags=(-c opt --config=release --config=cuda --nostamp)
-          targets=(@llama_cpp//:ggml_cuda_so //datalib/backend/datalib_step:datalib_step)
+          targets=(@llama_cpp//:ggml_cuda_so //datalib/backend/datalib_step:datalib_step //datalib/backend/embedder:gpu_check)
           bazelisk build "${flags[@]}" "${targets[@]}"
           mkdir -p "$RUNNER_TEMP/cuda"
           # A Rust target's files also list its rustfmt and clippy checks.
@@ -62,6 +62,7 @@ jobs:
           ls -la "$RUNNER_TEMP/cuda"
           readelf -d "$RUNNER_TEMP/cuda/libggml-cuda.so" | grep NEEDED
           readelf -d "$RUNNER_TEMP/cuda/datalib_step" | grep NEEDED
+          readelf -d "$RUNNER_TEMP/cuda/gpu_check" | grep NEEDED
 
       # The module's undefined symbols that no versioned system library,
       # cuBLAS or the driver (cu*) provides must be ones datalib-step
@@ -70,34 +71,17 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/cuda"
           nm -D --undefined-only libggml-cuda.so | awk '$1 == "U" {print $2}' | sort -u > undefined.txt
-          nm -D --defined-only datalib_step | awk '{print $3}' | sort -u > exported.txt
           grep -v '@' undefined.txt | grep -vE '^(cublas|cu[A-Z])' > from_step.txt || true
-          comm -23 from_step.txt exported.txt > missing.txt
-          echo "$(wc -l < undefined.txt) undefined; $(wc -l < from_step.txt) wanted from datalib-step"
-          if [[ -s missing.txt ]]; then
-            echo "::error::libggml-cuda.so needs symbols datalib-step does not export:"
-            cat missing.txt
-            exit 1
-          fi
-
-      # What the module's bytes are: each ELF section, the GPU code per GPU
-      # model (uncompressed, so it sums past the file), and the file
-      # stripped of host symbols.
-      - name: measure
-        run: |
-          so="$RUNNER_TEMP/cuda/libggml-cuda.so"
-          size -A -d "$so" | sort -k2 -n -r | head -n 12
-          bazelisk build --config=cuda @cuda_cuobjdump//:bin/cuobjdump
-          cuobjdump="$(bazelisk info output_base)/external/+http_archive+cuda_cuobjdump/bin/cuobjdump"
-          mkdir -p "$RUNNER_TEMP/elf" && cd "$RUNNER_TEMP/elf"
-          "$cuobjdump" -xelf all "$so" > /dev/null
-          "$cuobjdump" -xptx all "$so" > /dev/null || true
-          for f in *; do
-            arch=$(printf '%s\n' "$f" | grep -oE 'sm_[0-9]+|compute_[0-9]+' | head -n 1 || true)
-            echo "${arch:-unknown} $(wc -c < "$f")"
-          done | awk '{n[$1]++; b[$1]+=$2} END {for (a in b) printf "%-12s %5d files %8.1f MB\n", a, n[a], b[a]/1e6}' | sort
-          strip --strip-unneeded -o "$RUNNER_TEMP/stripped.so" "$so"
-          ls -la "$so" "$RUNNER_TEMP/stripped.so"
+          echo "$(wc -l < undefined.txt) undefined; $(wc -l < from_step.txt) wanted from the binary"
+          for bin in datalib_step gpu_check; do
+            nm -D --defined-only "$bin" | awk '{print $3}' | sort -u > exported.txt
+            comm -23 from_step.txt exported.txt > missing.txt
+            if [[ -s missing.txt ]]; then
+              echo "::error::libggml-cuda.so needs symbols $bin does not export:"
+              cat missing.txt
+              exit 1
+            fi
+          done
 
       # What the module's bytes are: each ELF section, the GPU code per GPU
       # model (uncompressed, so it sums past the file), and the file
@@ -121,6 +105,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ggml-cuda-linux-x86_64
-          path: ${{ runner.temp }}/cuda/libggml-cuda.so
+          # gpu_check beside lib/, as it looks for the module there.
+          path: |
+            ${{ runner.temp }}/cuda/libggml-cuda.so
+            ${{ runner.temp }}/cuda/gpu_check
           if-no-files-found: error
           retention-days: 7

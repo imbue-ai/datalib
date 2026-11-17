@@ -46,6 +46,10 @@ pub struct IndexDoc {
     /// What the render store records for this rendering of the document.
     pub content_hash: String,
     pub title: String,
+    /// What every chunk of it says first, as its title frames it: a
+    /// page's facts line ([`text::head`]). The first chunk has it in its
+    /// text already.
+    pub head: Option<String>,
     pub sections: Vec<IndexSection>,
 }
 
@@ -72,7 +76,7 @@ impl IndexDoc {
     /// ([`chunk::prompted`]): what the keyword pass files and the embed
     /// pass embeds.
     pub fn prompted(&self) -> Vec<chunk::Prompted> {
-        chunk::prompted(&self.title, &self.sections_or_one())
+        chunk::prompted(&self.title, self.head.as_deref(), &self.sections_or_one())
     }
 
     /// The sections, or one empty one, so the title is indexed for a

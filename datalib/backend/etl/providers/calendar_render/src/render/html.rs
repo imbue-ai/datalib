@@ -90,47 +90,9 @@ fn attr(tag: &str, name: &str) -> Option<String> {
     Some(decode_entities(&body[..end]))
 }
 
+/// A no-break space reads as a space in a description's text.
 fn decode_entities(s: &str) -> String {
-    if !s.contains('&') {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find('&') {
-        out.push_str(&rest[..i]);
-        let tail = &rest[i..];
-        let Some(end) = tail.find(';').filter(|e| *e <= 10) else {
-            out.push('&');
-            rest = &tail[1..];
-            continue;
-        };
-        let entity = &tail[1..end];
-        let decoded = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" | "#39" => Some('\''),
-            "nbsp" => Some(' '),
-            e if e.starts_with("#x") => u32::from_str_radix(&e[2..], 16)
-                .ok()
-                .and_then(char::from_u32),
-            e if e.starts_with('#') => e[1..].parse().ok().and_then(char::from_u32),
-            _ => None,
-        };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &tail[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
+    datalib_html_entities::decode(s).replace('\u{a0}', " ")
 }
 
 #[cfg(test)]

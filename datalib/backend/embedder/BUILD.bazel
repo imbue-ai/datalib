@@ -43,12 +43,44 @@ rust_binary(
     ],
 )
 
+# Holds a machine's GPU to its CPU (tools/gpu_check.rs). Built in CI with
+# libggml-cuda.so (.github/workflows/cuda.yml), run where there is a GPU.
+rust_binary(
+    name = "gpu_check",
+    srcs = ["tools/gpu_check.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
 rust_test(
     name = "embedder_unittests",
     size = "small",
     crate = ":datalib_embedder",
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
+)
+
+# The embedding behaviour datalib depends on (README.md), one test per
+# fact. Run it after every llama.cpp or model bump; a fact that moved fails
+# by name.
+rust_test(
+    name = "embedding_facts",
+    size = "medium",
+    srcs = ["tests/embedding_facts.rs"],
+    data = ["//third-party/qmd_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
 )
 
 # The embedder against qmd's own answers on the same texts, captured once
