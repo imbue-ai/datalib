@@ -299,7 +299,7 @@ async fn no_index_reads_as_none() {
     assert!(reader.is_none());
 }
 
-/// The grid index's file is there before any `keyword_index` has run: the
+/// The grid index's file is there before any keyword pass has run: the
 /// reader takes it as no index yet, not as an error.
 #[tokio::test]
 async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
@@ -357,8 +357,8 @@ fn conversation() -> IndexDoc {
     c
 }
 
-/// A page holds the words between its pieces, as qmd scored a whole
-/// document, and lands on the piece holding the most of them; a
+/// A page holds the words between its pieces, and lands on the piece
+/// holding the most of them; a
 /// conversation that says them in different messages is not found.
 #[tokio::test]
 async fn a_page_holds_the_words_between_its_pieces() {

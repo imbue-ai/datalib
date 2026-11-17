@@ -1,5 +1,5 @@
 //! The text the search indexes and embeds for a document, drawn from what
-//! the render store keeps of it (docs/dev/plans/messages_not_documents.md,
+//! the render store keeps of it (docs/dev/plans/documents_to_blocks.md,
 //! step 3b). An item is its envelope line (who, to whom, when), then its
 //! body. A page, a document whose first piece is kept whole, opens with a
 //! line of the facts its front matter holds, then its pieces without their
@@ -15,7 +15,7 @@ use crate::IndexSection;
 /// document was drawn with and draws it again when this moves;
 /// `text_tests::the_golden_draw_is_this_versions` fails when the drawing
 /// changes and this does not.
-pub const INDEX_TEXT_VERSION: u32 = 7;
+pub const INDEX_TEXT_VERSION: u32 = 8;
 
 /// What ends the key the index files a document under: the version it was
 /// drawn and chunked with.
@@ -51,18 +51,20 @@ pub struct Addressed {
 }
 
 /// What a document's front matter says, as its renderer handed it, and
-/// the provider tag it was rendered under.
+/// what its source is called where the front matter does not say.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
-    pub provider: String,
+    /// The product's name (`GitHub`, `PDF`), from the provider it was
+    /// rendered under.
+    pub source_name: String,
     /// Each key with its value, in order; a value that is `null` left out.
     pub front: Vec<(String, String)>,
 }
 
 /// The facts a page's opening line names, and as what: what the page is,
-/// where it is filed, who made it, its numbers. Everything else stays
-/// out: ids, hashes, paths and stamps say nothing anyone searches for, and
-/// the title is already the prompt's frame.
+/// where it is filed (a file's path names its folders), who made it, its
+/// numbers. Everything else stays out: ids, hashes and stamps say nothing
+/// anyone searches for, and the title is already the prompt's frame.
 const PAGE_FACTS: &[(&str, &str)] = &[
     ("kind", "Kind"),
     ("calendar", "Calendar"),
@@ -82,6 +84,7 @@ const PAGE_FACTS: &[(&str, &str)] = &[
     ("edition", "Edition"),
     ("language", "Language"),
     ("page_count", "Pages"),
+    ("source_path", "Path"),
 ];
 
 /// What every chunk of a document repeats: a page's facts line. `None`
@@ -109,6 +112,8 @@ pub fn draw(pieces: &[Piece], facts: &Facts) -> Vec<IndexSection> {
 }
 
 /// `Source: GitHub`, then each fact [`PAGE_FACTS`] names, a line apiece.
+/// The source is the renderer's own label, else the source a page is
+/// about (a storage report's), else the product's name.
 fn facts_line(facts: &Facts) -> String {
     let value = |key: &str| {
         facts
@@ -119,8 +124,8 @@ fn facts_line(facts: &Facts) -> String {
             .filter(|v| !v.is_empty())
     };
     let source = value("source_label")
-        .map(str::to_string)
-        .or_else(|| Some(facts.provider.replace('_', " ")).filter(|p| !p.is_empty()));
+        .or_else(|| value("source"))
+        .or(Some(facts.source_name.trim()).filter(|n| !n.is_empty()));
     source
         .map(|s| format!("Source: {s}"))
         .into_iter()
@@ -280,14 +285,21 @@ fn flatten(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fenced = false;
     let mut after_dropped = false;
-    for line in body.split_inclusive('\n') {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        i += 1;
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        if is_fence(trimmed) {
             fenced = !fenced;
             out.push_str(line);
         } else if fenced {
             out.push_str(line);
         } else {
+            let joined = with_its_link_closed(line, &lines[i..]);
+            i += joined.1;
+            let line = joined.0.as_str();
             let mut flat = String::new();
             flatten_line(line, &mut flat);
             let blank = flat.trim().is_empty();
@@ -306,6 +318,57 @@ fn flatten(body: &str) -> String {
         }
     }
     out
+}
+
+fn is_fence(trimmed: &str) -> bool {
+    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+}
+
+/// The most lines a link's text is followed across.
+const LINK_SPAN: usize = 6;
+
+/// `line`, and the lines after it a `[` it opens needs to close: a link
+/// whose text spans lines (`[[\n\nFollow](…)](…)`, as a mail's HTML
+/// converts) is then read as one. Lines are joined only up to
+/// [`LINK_SPAN`], never into a fence, and only when they close every
+/// bracket; otherwise `line` stands alone. Returns the text and how many
+/// lines after `line` it took.
+fn with_its_link_closed(line: &str, after: &[&str]) -> (String, usize) {
+    let mut depth = bracket_depth(line);
+    if depth <= 0 {
+        return (line.to_string(), 0);
+    }
+    let mut joined = line.to_string();
+    for (n, next) in after.iter().take(LINK_SPAN).enumerate() {
+        if is_fence(next.trim_start()) {
+            break;
+        }
+        joined.push_str(next);
+        depth += bracket_depth(next);
+        if depth <= 0 {
+            return (joined, n + 1);
+        }
+    }
+    (line.to_string(), 0)
+}
+
+/// `[` minus `]`, leaving out escaped ones and those in inline code.
+fn bracket_depth(text: &str) -> i32 {
+    let mut depth = 0;
+    let mut chars = text.chars();
+    let mut in_code = false;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '`' => in_code = !in_code,
+            '[' if !in_code => depth += 1,
+            ']' if !in_code => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
 }
 
 fn flatten_line(line: &str, out: &mut String) {

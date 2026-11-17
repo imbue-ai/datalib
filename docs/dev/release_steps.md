@@ -33,7 +33,7 @@ workflow's `run:` blocks are one line each:
 |---|---|---|
 | `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple>` | `runtime-<triple>.tar.gz` and its `.sha256` sidecar, from `scripts/stage_runtime.sh` |
 | `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
-| `cuda` job, "Build and stage" | `scripts/release/build_cuda.sh <bazel flag>…`, which runs `stage_cuda.sh` | `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` (`lib/libggml-cuda.so` and its notices) and, for the `-cuda` image only, `cuda-libs-x86_64-unknown-linux-gnu.tar.gz` (cuBLAS), each with its sidecar; it refuses a module that needs a symbol `datalib-step` does not export, or a library besides NVIDIA's driver that the staged cuBLAS lacks |
+| `cuda` job, "Build and stage" | `scripts/release/build_cuda.sh <bazel flag>…`, which runs `stage_cuda.sh` | `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` (`lib/libggml-cuda.so`, our notice, llama.cpp's license and NVIDIA's for the CUDA runtime) and, for the `-cuda` image only, `cuda-libs-x86_64-unknown-linux-gnu.tar.gz` (cuBLAS and NVIDIA's license for it), each with its sidecar; it refuses a module that needs a symbol `datalib-step` does not export, or a library besides NVIDIA's driver that the staged cuBLAS lacks |
 | the image jobs, "Stage … into docker build context" | `scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets> [<cuda>]` | the build context `datalib/docker/Dockerfile` expects |
 
 Each script writes into the current directory, prints what it wrote,
@@ -388,21 +388,26 @@ image's binaries, run on **glibc 2.39 and newer: Ubuntu 24.04, Debian
 13, and anything later**. On an older glibc the installer picks the
 musl build, which needs no libc from the host (below).
 
-A binary built on Linux asks for the glibc of the machine that linked
-it: each libc function it calls is tied to the glibc version that
-introduced the function's current form (`atan2f@GLIBC_2.43`), and the
-loader refuses to start a binary whose versions the host's glibc lacks
-("version `GLIBC_2.43' not found"). Bazel builds the gnu legs with the
-runner's own C toolchain and glibc, so **the runner's Ubuntu is the
-floor**. v0.52.0's x86_64 tarball was built on `ubuntu-latest`, by then
-Ubuntu 26.04 with glibc 2.43, and would not start on 24.04, while its
-arm64 sibling, on the pinned `ubuntu-24.04-arm`, needed 2.39.
+A binary built on Linux asks for the glibc it was linked against: each
+libc function it calls is tied to the glibc version that introduced the
+function's current form (`atan2f@GLIBC_2.43`), and the loader refuses
+to start a binary whose versions the host's glibc lacks ("version
+`GLIBC_2.43' not found"). Bazel builds the gnu legs with the hermetic
+LLVM toolchain `MODULE.bazel` registers, which compiles against its own
+glibc 2.28 headers and links against 2.28 stubs, so **datalib's own
+binaries ask for glibc 2.28 at most, whatever the runner**, and link no
+`libgcc_s` or `libstdc++`. The declared floor stays 2.39, and the
+checks below still hold every Linux file to it, Node and the npm
+prebuilds in the runtime included, which someone else built. Lowering
+it is a decision of its own: `install.sh` would then hand hosts between
+the two the gnu build rather than the musl one.
 
 What holds it:
 
 - **Every job that builds or stages a shipped Linux file names a
   pinned runner**, `ubuntu-24.04` or `ubuntu-24.04-arm`, never
-  `ubuntu-latest`: `runtime`, every Linux `build` leg (the musl ones
+  `ubuntu-latest`, for what is staged rather than built by the
+  toolchain: `runtime`, every Linux `build` leg (the musl ones
   too, so their build scripts run where the gnu ones do),
   `cuda`, `docker-image` and `docker-image-cuda`, and
   `reader-wheels.yml`'s Linux legs. The wheels

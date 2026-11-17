@@ -283,11 +283,14 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(meta.project, None, "project was NULL");
     assert_eq!(meta.channel, None, "channel was NULL");
 
-    let qmd = repo.document_file("c-1").await.unwrap().map(|f| f.path);
-    assert!(qmd.is_some());
-    let qmd = qmd.unwrap();
-    assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
-    assert!(qmd.to_string_lossy().ends_with("chats/c-1.md"));
+    let file = repo.document_file("c-1").await.unwrap().map(|f| f.path);
+    assert!(file.is_some());
+    let file = file.unwrap();
+    assert!(
+        file.is_absolute(),
+        "expected an absolute path, got {file:?}"
+    );
+    assert!(file.to_string_lossy().ends_with("chats/c-1.md"));
 
     // The batch form the grid's index-state columns use must agree
     // with the single lookup, and must simply omit uuids it has no
@@ -297,7 +300,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .await
         .unwrap();
     assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
-    assert_eq!(batch.get("c-1"), Some(&qmd));
+    assert_eq!(batch.get("c-1"), Some(&file));
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
@@ -342,7 +345,7 @@ async fn a_document_opens_in_an_index_without_section_layouts() {
 }
 
 /// A search's rows are listed once, as uuids, and every page is read by
-/// uuid: the listing is in the order asked for, a qmd ranking keeps its
+/// uuid: the listing is in the order asked for, a search's ranking keeps its
 /// own order unless a sort replaces it, and the rows come back in the
 /// order they were asked for, whatever order the table holds them in.
 #[tokio::test]
@@ -383,7 +386,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         .unwrap();
     assert_eq!(oldest_first.uuids, ["c-old", "c-mid", "c-new"]);
 
-    // A qmd ranking, with a row from another source and one the index
+    // A search's ranking, with a row from another source and one the index
     // does not have.
     let ranked: Vec<String> = ["c-mid", "v-1", "gone", "c-old", "c-new"]
         .map(String::from)

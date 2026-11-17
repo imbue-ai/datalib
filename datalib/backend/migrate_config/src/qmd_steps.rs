@@ -312,7 +312,7 @@ inputs = [\"mail/embed\"]
     }
 
     fn loads_clean(text: &str) {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     }
 

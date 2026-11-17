@@ -118,8 +118,8 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// Re-exports of the ONE canonical latchkey pin and the user-facing
 /// invocation hint (`datalib_runtime::node_runtime`) — re-exports
 /// rather than literals so this crate and the provider crates cannot
-/// drift from the hint text / staged tree (same discipline as the qmd
-/// pin).
+/// drift from the hint text / staged tree (same discipline as the model
+/// pins).
 pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
 /// `std::process::Command` for `latchkey` from the staged runtime tree

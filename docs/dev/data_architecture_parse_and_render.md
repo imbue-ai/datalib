@@ -116,7 +116,7 @@ database per source, at
     the calendar, the repository …), then each framed piece as the words
     a person reads, without its front matter, tags, link targets or
     escapes. The grid index does not copy it
-    ([`messages_not_documents.md`](plans/messages_not_documents.md)
+    ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
@@ -199,7 +199,7 @@ row, no `.md` file — and its problem rows are the whole record of it.
 ### What is still a file: the markdown
 
 The rendered `.md` lives on disk rather than in a table. Search does
-not read it: each source's `keyword_index` and `embed` steps
+not read it: `grid_index`'s keyword pass and each source's `embed`
 (`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
 text from the render store (`IndexedMarkdownStore::index_docs`), and
 `embed` runs the embedding model in process. What keeps the file is

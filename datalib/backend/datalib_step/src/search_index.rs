@@ -1,8 +1,10 @@
-//! The search index (docs/dev/plans/search_index_from_ram.md): what each
-//! source's `keyword_index` and `embed`, and the aggregator, do with it.
+//! The search index (docs/dev/plans/search_index_from_ram.md): what the
+//! `grid_index` step's keyword pass and sweep, and each source's `embed`, do with
+//! it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -27,6 +29,8 @@ const CHUNK_BATCH: usize = 32;
 pub(crate) struct Done {
     pub(crate) put: usize,
     pub(crate) removed: usize,
+    /// Chunks the cache had no vector for when the embed began.
+    pub(crate) owed: usize,
     pub(crate) embedded: usize,
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
@@ -77,41 +81,6 @@ pub(crate) fn searchable(row: &MarkdownRow) -> bool {
     })
 }
 
-/// This source's searchable `markdowns` rows at its render store's head,
-/// by id. Empty when the store has nothing committed; `None` when an older
-/// build wrote it, which its next render rewrites in this build's shape.
-async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, MarkdownRow>>> {
-    let render_root = datalib_etl::layout::render_markdown_root(root, group);
-    let group = group.to_string();
-    tokio::task::spawn_blocking(move || {
-        let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
-            return Ok(Some(BTreeMap::new()));
-        };
-        let rows = match store.in_this_shape() {
-            Ok(true) => store.markdown_rows().map(Some),
-            Ok(false) => Ok(None),
-            Err(e) => Err(e),
-        };
-        store.close();
-        let Some(rows) = rows? else {
-            tracing::warn!(
-                group = %group,
-                "the render store was written by an older build; the search index takes \
-                 this source once its render has rewritten it"
-            );
-            return Ok(None);
-        };
-        Ok(Some(
-            rows.into_iter()
-                .filter(searchable)
-                .map(|r| (r.markdown_uuid.clone(), r))
-                .collect(),
-        ))
-    })
-    .await
-    .context("render store read panicked")?
-}
-
 /// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
 /// its head.
 async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<IndexDoc>> {
@@ -129,8 +98,11 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
     .context("render store read panicked")?
 }
 
-/// `<group>/keyword_index`'s half: this source's documents in the search
-/// index, brought in line with its render store.
+/// One source's documents in the search index, brought in line with its
+/// render store: the `grid_index` step's keyword pass, once per searched source.
+/// The store is read at one commit for the whole pass, and a source whose
+/// store and text version are where its last finished pass left them is
+/// not read at all.
 pub(crate) async fn update_keywords(
     root: &Path,
     group: &str,
@@ -139,28 +111,83 @@ pub(crate) async fn update_keywords(
     stop: &StopFlag,
 ) -> Result<Done> {
     retire_separate_file(root)?;
-    let Some(rows) = rendered(root, group).await? else {
-        return Ok(Done::default());
+    let render_root = datalib_etl::layout::render_markdown_root(root, group);
+    let store = tokio::task::spawn_blocking(move || {
+        IndexedMarkdownStore::open_for_reading(&render_root, None)
+    })
+    .await
+    .context("render store open panicked")??
+    .map(Arc::new);
+    let index = Index::open(&layout::grid_index_db(root)).await;
+    let out = match index {
+        Ok(index) => {
+            let out = keyword_pass(&index, group, store.clone(), ends, progress, stop).await;
+            index.close().await;
+            out
+        }
+        Err(e) => Err(e),
     };
-    let index = Index::open(&layout::grid_index_db(root)).await?;
-    let out = update_keywords_in(&index, root, group, &rows, ends, progress, stop).await;
-    index.close().await;
+    if let Some(store) = store.and_then(Arc::into_inner) {
+        tokio::task::spawn_blocking(move || store.close())
+            .await
+            .context("render store close panicked")?;
+    }
     out
 }
 
-async fn update_keywords_in(
+/// Where a pass over `store` reads: its commit, and the text version
+/// every document is drawn with. `None` with no store to read.
+fn read_at(store: Option<&IndexedMarkdownStore>) -> Option<String> {
+    let pin = store?.pin()?;
+    Some(format!(
+        "{}{}",
+        pin.commit(),
+        datalib_search_index::text::key_suffix()
+    ))
+}
+
+async fn keyword_pass(
     index: &Index,
-    root: &Path,
     group: &str,
-    rows: &BTreeMap<String, MarkdownRow>,
+    store: Option<Arc<IndexedMarkdownStore>>,
     ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
+    let reading = read_at(store.as_deref());
+    if reading.is_some() && index.read_at(group).await? == reading {
+        return Ok(done);
+    }
+    let rows = match &store {
+        None => BTreeMap::new(),
+        Some(store) => {
+            let store = Arc::clone(store);
+            let rows = tokio::task::spawn_blocking(move || match store.in_this_shape()? {
+                true => store.markdown_rows().map(Some),
+                false => Ok(None),
+            })
+            .await
+            .context("render store read panicked")??;
+            let Some(rows) = rows else {
+                tracing::warn!(
+                    group = %group,
+                    "the render store was written by an older build; the search index takes \
+                     this source once its render has rewritten it"
+                );
+                return Ok(done);
+            };
+            rows.into_iter()
+                .filter(searchable)
+                .map(|r| (r.markdown_uuid.clone(), r))
+                .collect()
+        }
+    };
+    // Forgotten first, so a pass cut short is never taken for a finished one.
+    index.set_read_at(group, None).await?;
     let indexed = index.indexed(group).await?;
     let mut current: BTreeMap<String, String> = BTreeMap::new();
-    for (uuid, row) in rows {
+    for (uuid, row) in &rows {
         match index_key(row) {
             Some(key) => {
                 current.insert(uuid.clone(), key);
@@ -169,13 +196,20 @@ async fn update_keywords_in(
         }
     }
     let owed = datalib_search_index::owed(&current, &indexed);
-    progress.set_message("search index: keywords");
+    progress.set_message(&format!("search index: keywords for {group}"));
     progress.set_length(Some(owed.put.len() as u64));
+    let mut cut_short = false;
     for batch in owed.put.chunks(DOCUMENT_BATCH) {
         if stop.requested() {
+            cut_short = true;
             break;
         }
-        let docs = draw_batch(root, group, batch.to_vec()).await?;
+        let Some(store) = &store else { break };
+        let store = Arc::clone(store);
+        let (source, uuids) = (group.to_string(), batch.to_vec());
+        let docs = tokio::task::spawn_blocking(move || store.index_docs(&source, &uuids))
+            .await
+            .context("render store read panicked")??;
         done.unsettled += batch.len() - docs.len();
         index.put(&docs, ends).await?;
         done.put += docs.len();
@@ -183,6 +217,9 @@ async fn update_keywords_in(
     }
     index.remove(&owed.remove).await?;
     done.removed = owed.remove.len();
+    if !cut_short && done.unsettled == 0 {
+        index.set_read_at(group, reading.as_deref()).await?;
+    }
     Ok(done)
 }
 
@@ -278,6 +315,7 @@ async fn embed_into<E: EmbedPrompt>(
             by_doc.entry(doc).or_default().insert(hash);
         }
     }
+    done.owed = queued.len();
     progress.set_message("search index: embedding");
     progress.set_length(Some(queued.len() as u64));
 
@@ -382,34 +420,36 @@ async fn embed_batch<E: EmbedPrompt>(
     })
 }
 
-/// The aggregator's half: drop every source it no longer reads, then let
-/// the cache keep only what the index still names. Touches nothing that
-/// does not exist yet.
-pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)> {
+/// The `grid_index` step's sweep: the cache keeps only the vectors a chunk of the
+/// index still names. Answers how many went. Touches nothing that does not
+/// exist yet.
+pub(crate) async fn sweep(root: &Path) -> Result<u64> {
     retire_separate_file(root)?;
     let index_path = layout::grid_index_db(root);
-    if !index_path.exists() {
-        return Ok((0, 0));
+    let cache_path = layout::inference_cache_db(root);
+    if !index_path.exists() || !cache_path.exists() {
+        return Ok(0);
     }
     let index = Index::open(&index_path).await?;
-    let kept = sweep_index(&index, groups).await;
+    let hashes = index.all_hashes().await;
     index.close().await;
-    let (removed, hashes) = kept?;
-    let cache_path = layout::inference_cache_db(root);
-    if !cache_path.exists() {
-        return Ok((removed, 0));
-    }
+    let hashes = hashes?;
     let cache = InferenceCache::open(&cache_path).await?;
     let gone = cache
         .keep_only(&datalib_search_index::model_key(), &hashes)
         .await;
     cache.close().await;
-    Ok((removed, gone?))
+    gone
 }
 
-async fn sweep_index(index: &Index, groups: &[String]) -> Result<(usize, HashSet<String>)> {
-    let removed = index.keep_sources(groups).await?;
-    Ok((removed, index.all_hashes().await?))
+/// The `grid_index` step's half after its keyword passes: every document of a
+/// source it does not search goes, whether the source left the config or
+/// was put in `not_searched`. Returns how many went.
+pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<usize> {
+    let index = Index::open(&layout::grid_index_db(root)).await?;
+    let out = index.keep_sources(searched).await;
+    index.close().await;
+    out
 }
 
 /// Deletes the file the search index was before its tables moved into the
@@ -680,7 +720,9 @@ mod tests {
     }
 
     /// The Manage row's bar: its length is the documents owed, and it
-    /// fills to that length; a pass that owes nothing says so.
+    /// fills to that length. A pass over a store that has not moved since
+    /// the last finished one does not read it, and draws no bar; the next
+    /// commit is read again.
     #[tokio::test(flavor = "multi_thread")]
     async fn keyword_progress_counts_the_documents_owed() {
         let td = tempfile::tempdir().unwrap();
@@ -710,7 +752,63 @@ mod tests {
         update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
-        assert_eq!(bar.take(), [Ev::Length(Some(0))]);
+        assert_eq!(bar.take(), [], "the store has not moved");
+
+        one_doc(root, GROUP, "d-quarters", "Captain's quarters");
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
+            .await
+            .unwrap();
+        assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
+    }
+
+    /// The `grid_index` step searches every source it reads but those its
+    /// `not_searched` lists: a listed source's documents leave the index,
+    /// and come back once it is off the list, though its store has not
+    /// moved since its last pass.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grid_step_searches_every_source_it_reads_but_those_not_searched() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        one_doc(root, OTHER, "d-hypo", "a hypospray");
+        let env = crate::source::StepEnv {
+            step: "unified_grid_and_search_index/grid_index".into(),
+            group: "unified_grid_and_search_index".into(),
+            group_type: None,
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::GridIndex,
+            inputs: vec![
+                format!("{GROUP}/render_markdown"),
+                format!("{OTHER}/render_markdown"),
+            ],
+        };
+        let run = |not_searched: Vec<String>| {
+            let env = &env;
+            async move {
+                crate::grid_index::run_with(
+                    root,
+                    env,
+                    &crate::grid_index::Params { not_searched },
+                    &four_bytes_a_token,
+                    Some("2026-01-01T00:00:00+00:00"),
+                    &crate::events::Emitter::new("test".into()),
+                    &StopFlag::new(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        run(Vec::new()).await;
+        assert_eq!(indexed(root).await.len(), 1);
+        assert_eq!(indexed_of(root, OTHER).await.len(), 1);
+
+        run(vec![OTHER.to_string()]).await;
+        assert_eq!(indexed(root).await.len(), 1);
+        assert!(indexed_of(root, OTHER).await.is_empty());
+
+        run(Vec::new()).await;
+        assert_eq!(indexed_of(root, OTHER).await.len(), 1);
     }
 
     /// An embed is one source's: it embeds that source's chunks and no

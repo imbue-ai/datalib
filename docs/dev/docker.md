@@ -24,11 +24,11 @@ security model the walkthrough's bind-mount rules rest on.
   nothing is fetched from a registry at build or run time, and the first-use fetch
   a tarball install does (`runtime_fetch.md`) never fires here.
   `DATALIB_NO_FETCH=1` is set, so nothing datalib would otherwise fetch
-  for itself (the runtime, qmd's models, a package) is fetched at run
+  for itself (the runtime, the embedding model, a package) is fetched at run
   time: a missing piece is a failed step naming it
   ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
   fetched");
-- qmd's embedding model (about 330 MB), the one model search loads,
+- the embedding model (about 330 MB), the one model search loads,
   put in `/root/.cache/qmd/models` by `datalib-step pull-models` at
   build time from its pinned HuggingFace revision and sha256-verified,
   so search by meaning works with nothing fetched. The query-expansion
@@ -87,24 +87,39 @@ plain image it holds:
   on the CPU. It is about 580 MB compressed, which is why the plain
   image goes without.
 
-Both are NVIDIA's or link NVIDIA's code, redistributed under the CUDA
-Toolkit EULA, not datalib's MIT license:
+Both are NVIDIA's or link NVIDIA's code, whose use is governed by the
+CUDA Toolkit EULA, not datalib's MIT license:
 [`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
-image carries in each of those directories' `licenses/`.
+image carries in each of those directories' `licenses/`, beside NVIDIA's
+own `LICENSE` for the component there (`licenses/nvidia/cudart/`,
+`licenses/nvidia/cublas/`), copied from the archive Bazel fetched it in
+(`@llama_cpp//:nvidia_licenses`).
 
 **They sit below the release, so that a pull of the next version can
 reuse them.** The Dockerfile's `CUDA` build argument picks a stage
 between the OS layers and the tarball: `none`, or `12`, which adds the
 two archives with `ADD --link`, which builds a layer apart from the
-layers under it, from archives whose file times are fixed
-(`scripts/release/stage_cuda.sh`). Whether that keeps the pushed CUDA
-layers' digests from one release to the next, when Ubuntu's packages
-have moved, is _not yet shown_: two builds over different Ubuntus,
-loaded into the local Docker store with `--load`, gave different CUDA
-layers, and what a registry holds after a push, which is what a pull
-sees, has not been compared. `.github/workflows/cuda.yml` builds the
-variant up to its demo (`--target app`) on every change that could move
-it. A machine with no GPU runs the variant on the
+layers under it. A layer is reused only if its digest is the same, and
+its digest is the hash of every byte of the layer, directory times
+included. So `scripts/release/stage_docker_context.sh` roots each
+archive at `/` (`cuda/rootfs-cuda-libs.tar` holds
+`usr/local/lib/datalib-cuda/…`, `cuda/rootfs-ggml-cuda.tar` holds
+`opt/datalib/…`), every entry dated 1970 as `stage_cuda.sh` dates its
+own. Added to a directory instead (`ADD … /opt/datalib/`), BuildKit
+makes the destination and its parents itself and stamps them with the
+build's clock, so each build gets new digests for the same bytes:
+measured with BuildKit v0.34.2, two builds from a cold cache a few
+minutes apart gave different layers, over the same Ubuntu and over
+different ones, and the rooted archives gave the same two layers both
+times (583 MB and 105 MB compressed). The comparison is of what a
+registry holds after a push, which is what a pull compares; a `--load`
+into the local Docker store says nothing about it.
+`.github/workflows/cuda.yml` builds the variant up to its demo
+(`--target app`) twice from a cold cache, the second time over Ubuntu
+24.04, pushes both to a registry on the runner, and fails if the two
+CUDA layers' digests differ (`scripts/release/cuda_layer_digests.py`).
+It runs on every change that could move them.
+A machine with no GPU runs the variant on the
 CPU, as the plain image does: `docker-publish-cuda` checks the
 walkthrough against it on a runner that has none.
 
@@ -126,8 +141,8 @@ of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
 The image carries the whole search index: every step in the demo
-config runs at image time, each source's `keyword_index` and `embed`
-and the `qmd_aggregator` included, so search by words and by meaning
+config runs at image time, `grid_index`'s keyword pass and each
+source's `embed` included, so search by words and by meaning
 both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a
@@ -220,9 +235,10 @@ credential store, the demo library and its own home. The binaries and
 the runtime under `/opt/datalib` are root's and read-only to it.
 
 Its home stays `/root`, which is only a path: every `docker run` a
-person has written mounts `/root/.latchkey`, and every data root an
-earlier image wrote links its qmd models at `/root/.cache/qmd/models`, a
-link the indexer never repoints.
+person has written mounts `/root/.latchkey`, and the image puts the
+embedding model in `/root/.cache/qmd/models`, the shared cache
+(`datalib_embedding_models::shared_models_dir`) every data root reads
+under that home.
 
 uid 1000 is the first user on most Linux desktops, so a folder such a
 user mounts is already writable. Docker Desktop on macOS maps ownership

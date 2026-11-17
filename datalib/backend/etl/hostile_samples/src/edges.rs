@@ -102,7 +102,7 @@ struct CaseOut {
 /// would hold it.
 #[derive(Serialize)]
 struct Rendered {
-    /// The file, front matter included: what qmd indexes.
+    /// The file, front matter included.
     file: String,
     /// The file after its front matter: what the page draws.
     body: String,

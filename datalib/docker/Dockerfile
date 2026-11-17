@@ -22,10 +22,11 @@
 #
 # and, for the CUDA variant only (`--build-arg CUDA=12`, amd64):
 #
-#     cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz   cuBLAS 12
-#     cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz   lib/libggml-cuda.so
+#     cuda/rootfs-cuda-libs.tar   cuBLAS 12, at usr/local/lib/datalib-cuda/
+#     cuda/rootfs-ggml-cuda.tar   opt/datalib/lib/libggml-cuda.so
 #
-# (scripts/release/stage_cuda.sh stages both).
+# (scripts/release/stage_cuda.sh stages them, and stage_docker_context.sh
+# roots them at /).
 #
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
@@ -97,9 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # holds that id and goes.
 #
 # Its home stays /root, a path and nothing more: every `docker run` a
-# person has written mounts `/root/.latchkey`, and every data root an
-# earlier image wrote links its qmd models at `/root/.cache/qmd/models`
-# (a link the indexer never repoints).
+# person has written mounts `/root/.latchkey`.
 #
 # The bind-mount targets are made here so empty-dir mounts behave
 # predictably and an unmounted run still has somewhere to write.
@@ -118,14 +117,17 @@ FROM os AS cuda-none
 
 # cuBLAS and the CUDA module, below everything a release changes, with
 # `--link`, which builds each layer apart from the ones under it, so that a
-# pull of the next release can reuse the ~700 MB. Whether the pushed layers
-# keep their digests when Ubuntu's change is not yet shown
+# pull of the next release can reuse the ~700 MB. Each archive is rooted at
+# /, so every directory in its layer comes from the archive with a fixed
+# time: one `ADD` makes for its destination would carry the build's clock
+# and a new digest every release. `.github/workflows/cuda.yml` holds the
+# pushed layers' digests across two builds over different Ubuntus
 # (docs/dev/docker.md § "The CUDA variant"). NVIDIA's container
 # runtime passes in the driver (libcuda.so.1) and nothing else, so cuBLAS
 # ships here; datalib-step finds the module in /opt/datalib/lib/.
 FROM os AS cuda-12
-ADD --link cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz /usr/local/lib/datalib-cuda/
-ADD --link cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz /opt/datalib/
+ADD --link cuda/rootfs-cuda-libs.tar /
+ADD --link cuda/rootfs-ggml-cuda.tar /
 ENV LD_LIBRARY_PATH=/usr/local/lib/datalib-cuda/cublas
 
 # The app without the demo: what `.github/workflows/cuda.yml` builds
@@ -200,6 +202,8 @@ RUN set -eux; \
         echo "libggml-cuda.so lacks: ${missing:-nothing}"; \
         test -z "$missing" || test "$missing" = libcuda.so.1; \
         test -s /opt/datalib/licenses/CUDA-NOTICE.md; \
+        test -s /opt/datalib/licenses/nvidia/cudart/LICENSE; \
+        test -s /usr/local/lib/datalib-cuda/licenses/nvidia/cublas/LICENSE; \
     fi; \
     # The demo library is the one place under /opt the app writes.
     install -d -o datalib -g datalib /opt/datalib/demo
@@ -208,16 +212,18 @@ RUN set -eux; \
 # app; from here on, everything runs as the app's user.
 USER datalib
 
-# qmd's embedding model (about 330 MB), the one model search loads,
-# from its pinned HuggingFace revision and sha256-verified into qmd's
-# cache (`/root/.cache/qmd/models`) — the same table the `embed` step and
-# the search applet check, so a rebuilt image with the same pins lands
-# the same bytes, and search by meaning works with nothing fetched.
+# The embedding model (about 330 MB), the one model search loads,
+# from its pinned HuggingFace revision and sha256-verified into the
+# shared model cache (`/root/.cache/qmd/models`, the path qmd chose) —
+# the same table the `embed` step and the search applet check, so a
+# rebuilt image with the same pins lands the same bytes, and search by
+# meaning works with nothing fetched.
 RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
 
 # Nothing is fetched at run time: what the image ships is all it runs.
-# Every first-use fetch datalib makes (qmd's model, the Node runtime, a
-# package) is refused under this switch, naming what was missing.
+# Every first-use fetch datalib makes (the embedding model, the Node
+# runtime, a package) is refused under this switch, naming what was
+# missing.
 # `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
 ENV DATALIB_NO_FETCH=1
 

@@ -193,16 +193,6 @@ rust_test(
 # Rewrites the fixture's index-text goldens (tests/step_tests/snapshots/).
 insta_update(
     name = "index_text.update",
-    extra_data = [
-        ":datalib_step",
-        "//tests/fixtures:ingested/rendered.tar",
-        "//third-party/embedding_models:embeddinggemma",
-    ],
-    extra_env = {
-        "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
-        "EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
-        "INGESTED_RENDERED_TAR": "$(rootpath //tests/fixtures:ingested/rendered.tar)",
-    },
     test = ":step_tests",
     test_args = ["every_sources_index_text_is_this"],
 )

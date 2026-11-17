@@ -18,7 +18,8 @@ while the package's `rust_test` skips it by name:
     )
 
 Then `bazel run //datalib/backend/etl/providers/claude:claude_live`
-runs exactly what that `--skip` excluded, with the invoking shell's
+runs exactly what that `--skip` excluded, with the test's own env
+and runfiles (`tools/test_env.bzl`) and the invoking shell's
 environment — which is what these tests need, and what a `bazel test`
 of the same target could neither provide nor un-skip.
 
@@ -28,44 +29,14 @@ tests that are genuinely ignored; a second meaning would make the two
 impossible to tell apart in one binary.
 """
 
-load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools:test_env.bzl", "run_with_test_env")
 
-def live_run(
-        name,
-        test,
-        filter = "live::",
-        extra_data = None,
-        extra_env = None,
-        visibility = None):
-    """Generates a `bazel run`-able target for a test binary's live module.
-
-    Args:
-      name: target name (convention: `<provider>_live`).
-      test: the `rust_test` whose `live` module to run.
-      filter: the libtest name filter; the default matches the module.
-      extra_data: optional extra `data` deps, mirroring the underlying
-        `rust_test`'s `data =` when it reaches them through
-        `$(rootpath ...)`-style env vars.
-      extra_env: optional extra env vars, same reason.
-      visibility: optional visibility list.
-    """
-    env = {
-        "LIVE_TEST_BIN": "$(rootpath {})".format(test),
-        "LIVE_TEST_FILTER": filter,
-    }
-    if extra_env:
-        env.update(extra_env)
-
-    data = [test]
-    if extra_data:
-        data = data + list(extra_data)
-
-    sh_binary(
+def live_run(name, test, filter = "live::", visibility = None):
+    run_with_test_env(
         name = name,
-        srcs = ["//tools:live_run.sh"],
-        data = data,
-        env = env,
-        # Depends on a `rust_test`, which is `testonly`.
-        testonly = True,
+        test = test,
+        script = "//tools:live_run.sh",
+        test_bin_var = "LIVE_TEST_BIN",
+        env = {"LIVE_TEST_FILTER": filter},
         visibility = visibility,
     )

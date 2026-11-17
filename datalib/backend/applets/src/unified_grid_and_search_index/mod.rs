@@ -594,7 +594,7 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
     if echo["search_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
-             words are searchable once its `keyword_index` step has run"
+             words are searchable once `grid_index` has run after its render"
                 .to_string(),
         );
     }
@@ -1343,10 +1343,9 @@ async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, 
         .ok_or(SearchFailure::NoIndex)?;
         append_below(&mut hits, found);
     }
-    // Then pages holding the words between their pieces, as qmd used to score a
-    // whole document: a page's heading and its rows are parts of one
-    // thing. A conversation's messages are each said on their own, so a
-    // conversation is found only by a message holding every word.
+    // Then pages holding the words between their pieces: a page's heading and its rows are parts of
+    // one thing. A conversation's messages are each said on their own, so a conversation is found
+    // only by a message holding every word.
     if let Some(terms) = lex::fts5_page_terms(&parsed.free_text) {
         let found = datalib_unified_grid_and_search_index::search_index::page_word_hits(
             &s.root,
@@ -1685,7 +1684,7 @@ pub struct IndexStateRequest {
 /// its fields keep the names they had when the search index answered them.
 #[derive(Debug, Serialize)]
 pub struct IndexStateResponse {
-    /// False when no `keyword_index` step has written the search index
+    /// False when no `grid_index` keyword pass has written the search index
     /// yet, so every document is legitimately un-indexed rather than
     /// unknown.
     pub index_present: bool,

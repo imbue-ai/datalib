@@ -183,7 +183,7 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `keyword_index` and `embed`: the directory holding the embedding
+    /// `grid_index` and `embed`: the directory holding the embedding
     /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
@@ -287,7 +287,7 @@ enum Cmd {
     /// through the embedder the `embed` step uses. Needs no data root.
     EmbedPrompts {
         /// The model's directory, put in place as `pull-models` does;
-        /// default is qmd's own cache.
+        /// default is the same shared cache.
         #[arg(long, conflicts_with = "model")]
         models_dir: Option<PathBuf>,
         /// A model file to load as it is, with no check that it is the
@@ -820,14 +820,17 @@ async fn run_function(
         }
         Function::GridIndex => {
             writes_the_index_tree(&env, &grid_index::out_rel())?;
-            grid_index::run(data_root, &env, Some(now), emitter, &control.stop).await
-        }
-        Function::QmdAggregator => {
-            writes_the_index_tree(&env, &index_steps::aggregator_rel())?;
-            index_steps::run_aggregator(data_root, &env, emitter, &control.stop).await
-        }
-        Function::KeywordIndex => {
-            index_steps::run_keyword(data_root, &env, models_dir, emitter, &control.stop).await
+            let params = grid_index::Params::from_json(params)?;
+            grid_index::run(
+                data_root,
+                &env,
+                &params,
+                models_dir,
+                Some(now),
+                emitter,
+                &control.stop,
+            )
+            .await
         }
         Function::Embed => {
             index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await

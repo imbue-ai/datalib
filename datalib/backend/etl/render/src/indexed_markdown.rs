@@ -1056,7 +1056,8 @@ fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_i
         .and_then(Front::from_json)
         .unwrap_or_default();
     datalib_search_index::text::Facts {
-        provider: row.provider.clone(),
+        source_name: datalib_schema::providers::Provider::parse(&row.provider)
+            .map_or_else(|| row.provider.clone(), |p| p.label().to_string()),
         front: front
             .facts()
             .iter()

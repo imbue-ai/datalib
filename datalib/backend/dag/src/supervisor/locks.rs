@@ -59,8 +59,8 @@ pub const NETWORK: &str = "network";
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
-/// Whatever writes the grid index's file: `grid_index`, every
-/// `keyword_index` and `qmd_aggregator`. Named for the qmd keyword index it
+/// Whatever writes the grid index's file: `grid_index`, whose keyword pass
+/// fills the search index there too. Named for the qmd keyword index it
 /// once guarded. One slot, and resizing it is a mistake: the file takes one
 /// writer at a time, and a writer left to wait inside SQLite behind a long
 /// run of another's transactions times out.
