@@ -59,16 +59,21 @@ pub const NETWORK: &str = "network";
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
-/// Whatever embeds into the search index. One slot: two embeds race on the cache's
-/// vector table, and share one GPU besides.
-pub const QMD_EMBED: &str = "qmd_embed";
+/// Every `embed`: one slot, so one embedding model is loaded at a time.
+/// Each embed is a process of its own that loads the model and spreads
+/// over every core (or queues on the one GPU), so two at once cost twice
+/// the memory and finish no sooner.
+pub const EMBEDDER: &str = "embedder";
+/// What [`EMBEDDER`] was called while qmd did the embedding. The config
+/// upgrade renames it (`datalib_migrate_config::lock_names`).
+pub const RETIRED_EMBEDDER: &str = "qmd_embed";
 
 /// The locks every config has, whether or not it declares them: the three
 /// budgets, as `--parallelism 4` sizes them, and the embeds'. A
 /// config's `[[locks]]` entry of the same name resizes one;
 /// `--parallelism N` sets `network` and `cpu` to N, over the config.
 pub fn defaults() -> Vec<LockSpec> {
-    [(NETWORK, 4), (CPU, 4), (INDEX, 2), (QMD_EMBED, 1)]
+    [(NETWORK, 4), (CPU, 4), (INDEX, 2), (EMBEDDER, 1)]
         .into_iter()
         .map(|(name, slots)| LockSpec {
             name: name.to_string(),

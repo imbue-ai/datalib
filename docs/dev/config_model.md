@@ -402,7 +402,7 @@ A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network`, `cpu` or `index`, the
 three budgets every config has — or, for a built-in `embed`, the
-one-slot lock every config has too, `qmd_embed`, so one embedding model
+one-slot lock every config has too, `embedder`, so one embedding model
 is loaded at a time.
 `reads = "files"` says a step reads its inputs off disk, so no writer of
 them runs beside it. `start = "after_inputs_settle"` says a step waits
@@ -563,7 +563,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Thirteen rewrites are made without asking,
+well enough to name the tool. Fourteen rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -614,7 +614,7 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   thirteen that is meant to take an entry out; it still refuses a result
+   fourteen that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
@@ -670,6 +670,12 @@ the next would put the first back:
    every render, so it reads the same steps and, from then on, every
    source added. A list that leaves a step out is left as written, since
    whoever wrote it may have meant it. The loader still reads the lists.
+14. The lock names (`upgrade_lock_names`, `lock_names.rs`): `qmd_embed`,
+   the one-slot lock every `embed` holds, is `embedder`, in a `[[locks]]`
+   entry's `name` and in every step's `locks`, so a resize a person wrote
+   still applies. `qmd_keyword` is no longer a lock every config has; a
+   step that still holds it gets a `[[locks]]` entry declaring it, one
+   slot as before, appended at the end, so the step keeps loading.
 
 A source may not take `unified_index`, `unified_document_index`,
 `unified_grid_and_search_index` or `unified_time_series_index` as its id

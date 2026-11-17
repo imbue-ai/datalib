@@ -211,7 +211,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # config has three budgets, `network` (4 slots), `cpu` (4) and `index`
 # (2), and a step that names none holds one of them by its shape: a
 # download `network`, a render `cpu`, an index `index`. Every `embed`
-# holds `qmd_embed` instead, one slot, so one embedding model is loaded
+# holds `embedder` instead, one slot, so one embedding model is loaded
 # at a time. Declare a budget to resize it, or add your own and name it
 # on the steps that hold it:
 #
