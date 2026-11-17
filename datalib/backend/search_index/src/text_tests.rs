@@ -65,7 +65,8 @@ fn golden() -> Vec<Piece> {
         item(
             "Worf",
             "2026-03-06T08:00:00-08:00",
-            "<details><summary>Tool use: phaser_check</summary>\n\n&lt;armed&gt; \\| ready\n\n</details>",
+            "<details><summary>Tool use: phaser_check</summary>\n\n&lt;armed&gt; \\| ready\n\n\
+             thread '<unnamed>' panicked; a Vec<String> of <T>\n\n</details>",
         ),
     ]
 }
@@ -239,6 +240,21 @@ fn a_page_has_a_head_and_a_conversation_does_not() {
     assert_eq!(head(&golden(), &facts), None);
 }
 
+/// A `<word>` was taken for a tag whatever the word, so a panic's
+/// `thread '<unnamed>'` was indexed as `thread ''`. Only HTML's own
+/// elements are tags; any other `<word>` is text.
+#[test]
+fn only_an_html_element_is_a_tag() {
+    for (body, drawn) in [
+        ("thread '<unnamed>' panicked", "thread '<unnamed>' panicked"),
+        ("a Vec<String> of <T>", "a Vec<String> of <T>"),
+        ("<b>bold</b> and <Summary>S</Summary>", "bold and S"),
+        ("<custom-tag>x</custom-tag>", "<custom-tag>x</custom-tag>"),
+    ] {
+        assert_eq!(flatten(body), drawn, "{body}");
+    }
+}
+
 /// The source is named as its renderer labels it, else by its provider
 /// tag; a fact with no value, and one not worth reading, says nothing.
 #[test]
@@ -304,6 +320,16 @@ const DRAWN: &[(u32, &str)] = &[
     (
         5,
         "71ddcdd5d3bfc7fc0315a4aec050de3f61f9975240c2d18b20b808c64402e804",
+    ),
+    // Only HTML's own elements are tags; any other `<word>` is text.
+    (
+        6,
+        "18d549e12746d78b7d2d99071a7de0b3416475eb593930abe37e5fbf66fc4537",
+    ),
+    // The same text, chunked by the model's tokens.
+    (
+        7,
+        "18d549e12746d78b7d2d99071a7de0b3416475eb593930abe37e5fbf66fc4537",
     ),
 ];
 

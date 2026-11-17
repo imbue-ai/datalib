@@ -85,10 +85,36 @@ fn split_inputs(data_root: &Path, inputs: &[String]) -> (Vec<String>, Vec<OwnSto
     (render, own)
 }
 
+/// The step, with the embedding model's tokenizer put in place and opened
+/// when a source is searched: the keyword pass cuts chunks in its tokens.
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
     params: &Params,
+    models_dir: Option<std::path::PathBuf>,
+    now: Option<&str>,
+    emitter: &Emitter,
+    stop: &StopFlag,
+) -> Result<Vec<OutputClaim>> {
+    let (render_inputs, _) = split_inputs(data_root, &env.inputs);
+    let searched = params.searched(&crate::index_steps::groups_from_inputs(&render_inputs));
+    let model = match searched.is_empty() {
+        true => None,
+        false => Some(crate::index_steps::open_model(data_root, models_dir).await?),
+    };
+    let ends = |text: &str| match &model {
+        Some((_, tokenizer)) => tokenizer.ends(text),
+        None => anyhow::bail!("no source is searched, so no tokenizer was opened"),
+    };
+    run_with(data_root, env, params, &ends, now, emitter, stop).await
+}
+
+/// [`run`] with `ends` the tokenizer's: a test's stand-in, or the model's.
+pub(crate) async fn run_with(
+    data_root: &Path,
+    env: &StepEnv,
+    params: &Params,
+    ends: datalib_search_index::chunk::TokenEnds<'_>,
     now: Option<&str>,
     emitter: &Emitter,
     stop: &StopFlag,
@@ -179,7 +205,7 @@ pub async fn run(
         if stop.requested() {
             break;
         }
-        let done = crate::search_index::update_keywords(data_root, source, &progress, stop)
+        let done = crate::search_index::update_keywords(data_root, source, ends, &progress, stop)
             .await
             .with_context(|| format!("keyword-index {source}"))?;
         progress.metric(
@@ -295,6 +321,7 @@ mod tests {
             data_root,
             &env,
             &Params::default(),
+            None,
             Some("2026-01-01T00:00:00+00:00"),
             &Emitter::new("test".into()),
             &StopFlag::new(),

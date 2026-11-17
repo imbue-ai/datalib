@@ -12,6 +12,15 @@ use chrono::{DateTime, Duration, FixedOffset, NaiveDate, TimeZone};
 
 use crate::IsoOffsetTimestamp;
 
+/// The furthest an offset from now reaches, about 5,000 years: any
+/// further and `now` plus it can pass the last instant a timestamp holds.
+const LONGEST_DAYS: i64 = 5_000 * 365;
+
+/// The last day a bound can name: its midnight is in range on any clock.
+fn last_day() -> NaiveDate {
+    NaiveDate::from_ymd_opt(9999, 12, 29).expect("a real day")
+}
+
 /// The start of two windows that add up, `None` being no start at all: a
 /// thing two config sections select is fetched as far back as either asks.
 pub fn widest_start(
@@ -69,15 +78,19 @@ impl TimeBound {
                 'w' => Duration::try_weeks(n),
                 _ => None,
             }
+            .filter(|span| *span <= Duration::days(LONGEST_DAYS))
             .ok_or_else(unreadable)?;
             return Ok(Self::Relative(span * sign));
         }
         if let Ok(t) = DateTime::parse_from_rfc3339(s) {
+            IsoOffsetTimestamp::try_from(t).map_err(|_| unreadable())?;
             return Ok(Self::Instant(t));
         }
         NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .ok()
+            .filter(|d| *d <= last_day())
             .map(Self::Day)
-            .map_err(|_| unreadable())
+            .ok_or_else(unreadable)
     }
 
     /// `s` as an RFC 3339 instant on this run: an instant as written, a
@@ -90,17 +103,18 @@ impl TimeBound {
     }
 
     pub fn instant(&self, now: &IsoOffsetTimestamp) -> IsoOffsetTimestamp {
-        match *self {
+        let at = match *self {
             Self::Day(d) => now
                 .inner()
                 .offset()
                 .from_local_datetime(&d.and_hms_opt(0, 0, 0).expect("midnight exists"))
                 .single()
-                .expect("a fixed offset has one reading of every local time")
-                .into(),
-            Self::Instant(t) => t.into(),
-            Self::Relative(span) => (now.inner() + span).into(),
-        }
+                .expect("a fixed offset has one reading of every local time"),
+            Self::Instant(t) => t,
+            Self::Relative(span) => now.inner() + span,
+        };
+        IsoOffsetTimestamp::try_from(at)
+            .expect("parse keeps a bound within a few thousand years of now")
     }
 
     pub fn day(&self, now: &IsoOffsetTimestamp) -> NaiveDate {
@@ -379,5 +393,24 @@ mod tests {
         );
         let err = TimeWindow::check("google", Some("-1d"), Some("-2d")).unwrap_err();
         assert_eq!(err, "`google`: `until` (-2d) is before `since` (-1d)");
+    }
+
+    /// A bound past the last instant a timestamp holds is refused when
+    /// the config is read, rather than failing the run that resolves it.
+    #[test]
+    fn a_bound_past_year_9999_is_unreadable() {
+        for s in [
+            "9999-12-30",
+            "9999-12-31",
+            "9999-12-31T00:00:00Z",
+            "-2000000d",
+            "+300000w",
+        ] {
+            assert!(TimeBound::parse(s).is_err(), "{s}");
+        }
+        let now = now();
+        for s in ["9999-12-29", "-1800000d", "+260000w"] {
+            TimeBound::parse(s).unwrap().instant(&now);
+        }
     }
 }

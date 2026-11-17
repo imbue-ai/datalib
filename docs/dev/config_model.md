@@ -448,9 +448,11 @@ reads its render store at one commit and is skipped when neither that
 commit nor the index text's version has moved since its last finished
 pass (`search_sources` in the search index). The step's version is the
 grid's generation and the search index's together, so a keyword change
-alone still reaches the embeds. A source's `embed` (input: `grid_index`)
-fetches the embedding model, only when a chunk of its source has no
-vector, and fills the vectors. `qmd_aggregator` reads `grid_index` and
+alone still reaches the embeds. The pass cuts the chunks with the
+embedding model's tokenizer, so `grid_index` needs the model file when
+any source is searched. A source's `embed` (input: `grid_index`) loads
+the model and fills the vectors. Both fetch the model when it is
+missing. `qmd_aggregator` reads `grid_index` and
 every `embed`, so it runs after all of them: it sweeps the vectors no
 chunk names and reports each source's counts. Nothing of a source's
 reads the aggregator, and that is what lets each source's `embed`

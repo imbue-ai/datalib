@@ -497,9 +497,10 @@ fn require_update_mode() {
 fn manual_e2e_live_sync_golden() {
     require_update_mode();
 
-    let src_config = match std::env::var("DATALIB_TEST_CONFIG") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => e2e_dir()
+    let explicit = std::env::var("DATALIB_TEST_CONFIG").ok();
+    let src_config = match &explicit {
+        Some(p) => PathBuf::from(p),
+        None => e2e_dir()
             .expect(
                 "set DATALIB_MANUAL_E2E_DIR to the external test-data dir \
                  (holding dag.toml + sources/ + snapshots/), or set \
@@ -514,7 +515,11 @@ fn manual_e2e_live_sync_golden() {
          DATALIB_TEST_CONFIG to a config explicitly.",
         src_config.display()
     );
-    let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
+    let cfg_text = upgraded_config(
+        &src_config,
+        std::fs::read_to_string(&src_config).expect("read config"),
+        explicit.is_none(),
+    );
 
     // Persist the run dir pytest-`tmp_path`-style (see `persistent_run_root`)
     // rather than a self-deleting tempdir, so you can always peek at the last
@@ -1967,6 +1972,35 @@ fn summarize_file(path: &Path) -> SnapValue {
             }
         }
     }
+}
+
+/// The config as `datalib-http` would leave it. The bake runs
+/// `datalib-dag`, which loads a config but never upgrades one, so a shape
+/// the app rewrites on sight (the index group's old name) would fail the
+/// bake rather than be carried forward. A rewrite that refuses fails it
+/// here, by name, since the app would then run the config as it is. With
+/// `write_back`, the data repo's `dag.toml` takes the upgrade, so its diff
+/// shows it and git keeps what it replaced.
+fn upgraded_config(path: &Path, text: String, write_back: bool) -> String {
+    let up = datalib_migrate_config::upgrade_unattended(&text);
+    assert!(
+        up.refused.is_empty(),
+        "{}: the app would leave this config as it is: {}",
+        path.display(),
+        up.refused
+            .iter()
+            .map(|(why, e)| format!("it {why}, and the rewrite refused: {e:#}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    if up.done.is_empty() {
+        return text;
+    }
+    eprintln!("[test] upgraded {}: {}", path.display(), up.done.join("; "));
+    if write_back {
+        std::fs::write(path, &up.text).expect("write the upgraded config back");
+    }
+    up.text
 }
 
 fn rewrite_config(text: &str) -> String {

@@ -337,6 +337,10 @@ Design notes:
   minutes on CPU. An embed is resumable, so stopping and re-running is
   safe, and turning one source's `embed` off leaves the rest running.
   Once the backlog drains, re-runs are no-ops.
+- **Chunks are cut in the model's tokens**: 900 a chunk, so every prompt
+  fits the 2,048 the model reads. The keyword pass reads the tokenizer
+  from the model file without its weights, so it needs the file as the
+  embed does (`search_index/src/chunk.rs`).
 - **Models cache**: the embedding model (~300 MB) is shared across data
   roots in `~/.cache/qmd/models` (`$XDG_CACHE_HOME/qmd/models` when that
   is set), unless a root has its own `unified_grid_and_search_index/models`.

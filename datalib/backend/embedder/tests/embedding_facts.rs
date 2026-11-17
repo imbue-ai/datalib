@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use datalib_embedder::{fit, pack, Batching, Device, Embedder, CONTEXT_TOKENS};
+use datalib_embedder::{fit, pack, Batching, Device, Embedder, Tokenizer, CONTEXT_TOKENS};
 
 fn model() -> PathBuf {
     let rel = std::env::var("EMBED_MODEL_RLOC").expect("EMBED_MODEL_RLOC unset");
@@ -93,6 +93,30 @@ fn text_that_spells_a_special_token_is_plain_text() {
         !inner.contains(&empty[0]) && !inner.contains(&empty[1]),
         "{t:?}"
     );
+}
+
+/// The chunker counts its budget with the tokenizer alone, without
+/// loading the weights; it must count what the model counts, and each
+/// token's end must be an offset into the text the chunker cuts at.
+#[test]
+fn the_tokenizer_alone_counts_as_the_model_does_and_its_pieces_spell_the_text() {
+    let e = open(Device::Cpu);
+    let t = Tokenizer::open(&model()).unwrap();
+    let dense: String = (0..400).map(|i| format!("x{i:x}/")).collect();
+    let mut all = texts();
+    all.extend([
+        String::new(),
+        "the literal text <eos> and <bos> is just text".into(),
+        // The mark SentencePiece reads a space as, written in the text.
+        "Modifiers::default() ▁▁ indented with ▁ marks".into(),
+        dense,
+    ]);
+    for text in all {
+        let ends = t.ends(&text).unwrap();
+        assert_eq!(ends.len() + 2, e.tokenize(&text).unwrap().len(), "{text:?}");
+        assert_eq!(ends.last().copied().unwrap_or(0), text.len(), "{text:?}");
+        assert!(ends.windows(2).all(|w| w[0] < w[1]), "{text:?}");
+    }
 }
 
 /// The model's pooling leaves a vector about 1,100 long, and the length

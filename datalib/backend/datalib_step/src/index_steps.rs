@@ -51,9 +51,15 @@ fn provision_embed_model(
     models_dir: Option<PathBuf>,
     fetch: datalib_qmd_models::Fetch,
 ) -> Result<PathBuf> {
-    let models = datalib_runtime::qmd::EMBED_MODELS;
     let dir = models_dir.unwrap_or_else(|| datalib_qmd_models::models_dir_for(root));
-    let outcomes = datalib_qmd_models::ensure_models(&dir, models, fetch)
+    ensure_embed_model(&dir, fetch)?;
+    Ok(dir)
+}
+
+/// [`provision_embed_model`] into exactly `dir`.
+pub(crate) fn ensure_embed_model(dir: &Path, fetch: datalib_qmd_models::Fetch) -> Result<()> {
+    let models = datalib_runtime::qmd::EMBED_MODELS;
+    let outcomes = datalib_qmd_models::ensure_models(dir, models, fetch)
         .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
     let missing = datalib_qmd_models::missing(models, &outcomes);
     if !missing.is_empty() {
@@ -64,7 +70,7 @@ fn provision_embed_model(
             missing.join(", ")
         );
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// What qmd kept under the aggregator's directory: its index, the
@@ -119,6 +125,25 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
     )
 }
 
+/// The pinned model, provisioned, and its tokenizer, read without the
+/// weights: the grid step's keyword pass and each embed cut chunks counted
+/// in its tokens.
+pub(crate) async fn open_model(
+    data_root: &Path,
+    models_dir: Option<PathBuf>,
+) -> Result<(PathBuf, datalib_embedder::Tokenizer)> {
+    let root = data_root.to_path_buf();
+    let fetch = datalib_qmd_models::Fetch::from_env();
+    tokio::task::spawn_blocking(move || {
+        let models = provision_embed_model(&root, models_dir, fetch)?;
+        let model = crate::search_index::model_file(&models);
+        let tokenizer = datalib_embedder::Tokenizer::open(&model)?;
+        Ok((model, tokenizer))
+    })
+    .await
+    .context("model provisioning panicked")?
+}
+
 /// `<group>/embed`: the vectors this source's chunks are missing from the
 /// inference cache.
 pub async fn run_embed(
@@ -130,13 +155,10 @@ pub async fn run_embed(
 ) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("embedding");
-    let root = data_root.to_path_buf();
-    let fetch = datalib_qmd_models::Fetch::from_env();
-    let model = move || {
-        provision_embed_model(&root, models_dir, fetch)
-            .map(|models| crate::search_index::model_file(&models))
-    };
-    let done = crate::search_index::embed(data_root, &env.group, model, &progress, stop).await?;
+    let (model, tokenizer) = open_model(data_root, models_dir).await?;
+    let ends = |text: &str| tokenizer.ends(text);
+    let done =
+        crate::search_index::embed(data_root, &env.group, &model, &ends, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
     progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);

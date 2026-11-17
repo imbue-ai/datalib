@@ -14,6 +14,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl_render::indexed_markdown::{index_key, IndexedMarkdownStore};
 use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
+use datalib_search_index::chunk::TokenEnds;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
 use datalib_search_index::{Index, IndexDoc, InferenceCache, Reader};
@@ -103,6 +104,7 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
 pub(crate) async fn update_keywords(
     root: &Path,
     group: &str,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -117,7 +119,7 @@ pub(crate) async fn update_keywords(
     let index = Index::open(&layout::grid_index_db(root)).await;
     let out = match index {
         Ok(index) => {
-            let out = keyword_pass(&index, group, store.clone(), progress, stop).await;
+            let out = keyword_pass(&index, group, store.clone(), ends, progress, stop).await;
             index.close().await;
             out
         }
@@ -146,6 +148,7 @@ async fn keyword_pass(
     index: &Index,
     group: &str,
     store: Option<Arc<IndexedMarkdownStore>>,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -206,7 +209,7 @@ async fn keyword_pass(
             .await
             .context("render store read panicked")??;
         done.unsettled += batch.len() - docs.len();
-        index.put(&docs).await?;
+        index.put(&docs, ends).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
     }
@@ -220,7 +223,7 @@ async fn keyword_pass(
 
 /// What the embed pass asks of a model: each prompt's vector, cut to fit
 /// its context, and whether it had to be.
-trait EmbedPrompt: Send + 'static {
+pub(crate) trait EmbedPrompt: Send + 'static {
     fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>>;
 }
 
@@ -231,18 +234,17 @@ impl EmbedPrompt for Embedder {
 }
 
 /// `<group>/embed`'s half: every chunk of this source the inference cache
-/// has no vector for, embedded and cached. `model_path` puts the model in
-/// place and says where; it is asked only when a chunk is owed, since
-/// every pass of the grid step wakes every embed.
+/// has no vector for, embedded and cached.
 pub(crate) async fn embed(
     root: &Path,
     group: &str,
-    model_path: impl FnOnce() -> Result<PathBuf> + Send + 'static,
+    model_path: &Path,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
+    let model_path = model_path.to_path_buf();
     let open = move || {
-        let model_path = model_path()?;
         let embedder = Embedder::open(&model_path, Device::Best, 0)?;
         let batching = embedder.batching();
         tracing::info!(
@@ -254,7 +256,7 @@ pub(crate) async fn embed(
         );
         Ok(embedder)
     };
-    embed_with(root, group, open, progress, stop).await
+    embed_with(root, group, open, ends, progress, stop).await
 }
 
 /// [`embed`] with the model `open` loads, which it calls only when a chunk
@@ -263,6 +265,7 @@ async fn embed_with<E: EmbedPrompt>(
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -280,16 +283,18 @@ async fn embed_with<E: EmbedPrompt>(
     reader.close().await;
     let spans = spans?;
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
-    let out = embed_into(&cache, root, group, open, spans, progress, stop).await;
+    let out = embed_into(&cache, root, group, open, ends, spans, progress, stop).await;
     cache.close().await;
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn embed_into<E: EmbedPrompt>(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    ends: TokenEnds<'_>,
     spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
@@ -322,7 +327,7 @@ async fn embed_into<E: EmbedPrompt>(
     'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
         for doc in draw_batch(root, group, uuids.to_vec()).await? {
             let wanted = &by_doc[doc.markdown_uuid.as_str()];
-            let prompts = prompts_for(&doc, wanted);
+            let prompts = prompts_for(&doc, wanted, ends)?;
             let Some(prompts) = prompts else {
                 done.unsettled += 1;
                 continue;
@@ -369,14 +374,18 @@ async fn embed_into<E: EmbedPrompt>(
 /// `(hash, prompt)` for each chunk of `doc` the cache lacks, or `None`
 /// when the document no longer draws one of them: it changed after the
 /// keyword pass, and the next one re-chunks it.
-fn prompts_for(doc: &IndexDoc, wanted: &HashSet<&str>) -> Option<Vec<(String, String)>> {
+fn prompts_for(
+    doc: &IndexDoc,
+    wanted: &HashSet<&str>,
+    ends: TokenEnds<'_>,
+) -> Result<Option<Vec<(String, String)>>> {
     let prompts: BTreeMap<String, String> = doc
-        .prompted()
+        .prompted(ends)?
         .into_iter()
         .filter(|p| wanted.contains(p.hash.as_str()))
         .map(|p| (p.hash, p.prompt))
         .collect();
-    (prompts.len() == wanted.len()).then(|| prompts.into_iter().collect())
+    Ok((prompts.len() == wanted.len()).then(|| prompts.into_iter().collect()))
 }
 
 /// Each prompt's vector, and how many had to be cut to fit the context.
@@ -477,6 +486,7 @@ mod tests {
     use datalib_etl_render::section::{join, Section};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
+    use datalib_search_index::chunk::four_bytes_a_token;
 
     const GROUP: &str = "ten-forward";
 
@@ -578,9 +588,15 @@ mod tests {
     }
 
     async fn update_of(root: &Path, group: &str) -> Done {
-        update_keywords(root, group, &Progress::noop(), &StopFlag::new())
-            .await
-            .unwrap()
+        update_keywords(
+            root,
+            group,
+            &four_bytes_a_token,
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap()
     }
 
     async fn indexed(root: &Path) -> BTreeMap<String, String> {
@@ -699,7 +715,7 @@ mod tests {
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
         let stop = StopFlag::new();
         stop.request();
-        let done = update_keywords(root, GROUP, &Progress::noop(), &stop)
+        let done = update_keywords(root, GROUP, &four_bytes_a_token, &Progress::noop(), &stop)
             .await
             .unwrap();
         assert_eq!(done.put, 0);
@@ -723,7 +739,7 @@ mod tests {
         commit(root, &docs, &[]);
         let bar = Recorder::default();
         let stop = StopFlag::new();
-        update_keywords(root, GROUP, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
         let events = bar.take();
@@ -737,13 +753,13 @@ mod tests {
             .sum();
         assert_eq!(filled, 2, "{events:?}");
 
-        update_keywords(root, GROUP, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
         assert_eq!(bar.take(), [], "the store has not moved");
 
         one_doc(root, GROUP, "d-quarters", "Captain's quarters");
-        update_keywords(root, GROUP, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
         assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
@@ -774,10 +790,11 @@ mod tests {
         let run = |not_searched: Vec<String>| {
             let env = &env;
             async move {
-                crate::grid_index::run(
+                crate::grid_index::run_with(
                     root,
                     env,
                     &crate::grid_index::Params { not_searched },
+                    &four_bytes_a_token,
                     Some("2026-01-01T00:00:00+00:00"),
                     &crate::events::Emitter::new("test".into()),
                     &StopFlag::new(),
@@ -818,9 +835,16 @@ mod tests {
                     flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(Fixed(calls))
                 };
-                let done = embed_with(root, group, open, &Progress::noop(), &StopFlag::new())
-                    .await
-                    .unwrap();
+                let done = embed_with(
+                    root,
+                    group,
+                    open,
+                    &four_bytes_a_token,
+                    &Progress::noop(),
+                    &StopFlag::new(),
+                )
+                .await
+                .unwrap();
                 (done, opened.load(std::sync::atomic::Ordering::SeqCst))
             }
         };
@@ -1038,13 +1062,16 @@ mod tests {
                 &text::Facts::default(),
             ),
         };
-        let drawn = doc.prompted();
+        let drawn = doc.prompted(&four_bytes_a_token).unwrap();
         let good: HashSet<&str> = [drawn[0].hash.as_str()].into();
         assert_eq!(
-            prompts_for(&doc, &good),
+            prompts_for(&doc, &good, &four_bytes_a_token).unwrap(),
             Some(vec![(drawn[0].hash.clone(), drawn[0].prompt.clone())])
         );
         let stale: HashSet<&str> = ["not-a-chunk-of-it"].into();
-        assert_eq!(prompts_for(&doc, &stale), None);
+        assert_eq!(
+            prompts_for(&doc, &stale, &four_bytes_a_token).unwrap(),
+            None
+        );
     }
 }

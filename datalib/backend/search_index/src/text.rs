@@ -15,7 +15,7 @@ use crate::IndexSection;
 /// document was drawn with and draws it again when this moves;
 /// `text_tests::the_golden_draw_is_this_versions` fails when the drawing
 /// changes and this does not.
-pub const INDEX_TEXT_VERSION: u32 = 5;
+pub const INDEX_TEXT_VERSION: u32 = 7;
 
 /// What ends the key the index files a document under: the version it was
 /// drawn and chunked with.
@@ -390,8 +390,132 @@ struct Tag {
     len: usize,
 }
 
-/// The HTML tag `s` opens with: `<name …>`, `</name>` or `<!-- … -->`. A
-/// `<` that opens no tag (`<https://…>`, `<picard@…>`, `< 9`) is `None`.
+/// HTML's elements, by name. A `<word>` that names none (`<unnamed>` in a
+/// panic message, `Vec<String>`, `<T>`) is text a person wrote, not a tag.
+const HTML_ELEMENTS: &[&str] = &[
+    "a",
+    "abbr",
+    "address",
+    "area",
+    "article",
+    "aside",
+    "audio",
+    "b",
+    "base",
+    "bdi",
+    "bdo",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "canvas",
+    "caption",
+    "center",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "data",
+    "datalist",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "font",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "i",
+    "iframe",
+    "img",
+    "input",
+    "ins",
+    "kbd",
+    "label",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "map",
+    "mark",
+    "menu",
+    "meta",
+    "meter",
+    "nav",
+    "noscript",
+    "object",
+    "ol",
+    "optgroup",
+    "option",
+    "output",
+    "p",
+    "param",
+    "picture",
+    "pre",
+    "progress",
+    "q",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "script",
+    "search",
+    "section",
+    "select",
+    "slot",
+    "small",
+    "source",
+    "span",
+    "strike",
+    "strong",
+    "style",
+    "sub",
+    "summary",
+    "sup",
+    "svg",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "title",
+    "tr",
+    "track",
+    "tt",
+    "u",
+    "ul",
+    "var",
+    "video",
+    "wbr",
+];
+
+/// The HTML tag `s` opens with: `<name …>`, `</name>` or `<!-- … -->`,
+/// where `name` is one of [`HTML_ELEMENTS`]. A `<` that opens no tag
+/// (`<https://…>`, `<picard@…>`, `< 9`, `<unnamed>`) is `None`.
 /// `<a class="source-link" …>↗</a>`, the page's link to its upstream, goes
 /// whole.
 fn tag_at(s: &str) -> Option<Tag> {
@@ -415,6 +539,10 @@ fn tag_at(s: &str) -> Option<Tag> {
     ) {
         return None;
     }
+    let element = name[..name_len].to_ascii_lowercase();
+    if !HTML_ELEMENTS.contains(&element.as_str()) {
+        return None;
+    }
     let close = s.find('>')?;
     let tag = &s[..=close];
     if tag.starts_with("<a ") && tag.contains("source-link") {
@@ -422,7 +550,7 @@ fn tag_at(s: &str) -> Option<Tag> {
         return Some(Tag { says: "", len: end });
     }
     let closing = s[1..].starts_with('/');
-    let says = match name[..name_len].to_ascii_lowercase().as_str() {
+    let says = match element.as_str() {
         "br" => "\n",
         "dt" if closing => ": ",
         _ => "",

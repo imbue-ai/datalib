@@ -5,7 +5,7 @@
 //! drawn differently from the step's fails here rather than caching a
 //! vector under the wrong text.
 //!
-//! Usage: search_prompts <root> <out>
+//! Usage: search_prompts <root> <model.gguf> <out>
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,10 +17,12 @@ use datalib_search_index::Reader;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let [_, root, out] = args.as_slice() else {
-        bail!("usage: search_prompts <root> <out>");
+    let [_, root, model, out] = args.as_slice() else {
+        bail!("usage: search_prompts <root> <model.gguf> <out>");
     };
     let root = PathBuf::from(root);
+    let tokenizer = datalib_embedder::Tokenizer::open(Path::new(model))?;
+    let ends = |text: &str| tokenizer.ends(text);
     let Some(index) = Reader::open(
         &datalib_runtime::layout::grid_index_db(&root),
         &datalib_runtime::layout::inference_cache_db(&root),
@@ -43,7 +45,7 @@ async fn main() -> Result<()> {
         };
         let mut drawn: BTreeMap<String, String> = BTreeMap::new();
         for doc in &docs {
-            for p in doc.prompted() {
+            for p in doc.prompted(&ends)? {
                 drawn.insert(p.hash, p.prompt);
             }
         }

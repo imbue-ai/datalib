@@ -4,7 +4,7 @@
 // the second sync picks it up.
 
 import { test, expect, type Page } from "@playwright/test";
-import { reviewToml } from "./wizard-helpers";
+import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
   cardOf,
@@ -33,6 +33,19 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
+/// Keeps the source the wizard is adding out of the keyword search. The
+/// grid step cuts a searched source's chunks with the embedding model's
+/// tokenizer, and a library made from an empty folder has no model and
+/// may not fetch one here. What this spec checks reads the grid alone.
+async function leaveOutOfSearch(page: Page) {
+  await openAdvanced(page);
+  await page
+    .getByRole("dialog")
+    .locator(".wiz-section .wiz-choice", { hasText: "Keyword-index the markdown" })
+    .locator("input.wiz-bool")
+    .uncheck();
+}
+
 /// The folder the source scans. Seeded by playwright.config.ts with the
 /// two Captain's Log PDFs; the third arrives mid-test.
 const SCAN_DIR = process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR;
@@ -196,6 +209,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText('function = "render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 
@@ -352,6 +366,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The render step has a `period` option, shown under the Rendering
     // heading of the same form. Its default is what we want.
     await expect(wizard.locator(".wiz-section-head")).toHaveText("Rendering");
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 

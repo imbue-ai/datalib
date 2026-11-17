@@ -1,9 +1,10 @@
 # Embedding a source on Modal's GPUs
 
-**Status: proposal (2026-11-12). Step 1 is done: the CUDA module under
-Bazel (#1750), the embedder loading it (#1752), and the module run on
-Modal's T4, A100 and H100 in the published image (2026-11-17, § "Measured
-on Modal"). The rest is not. Facts marked _to check_ have not been
+**Status: proposal (2026-11-12). Steps 1 and 2 are done: the CUDA module
+under Bazel (#1750), the embedder loading it (#1752), the module run on
+Modal's T4, A100 and H100 in the published image with several prompts
+per call (#1801, § "Measured on Modal"), and `datalib-step
+embed-prompts`. The rest is not. Facts marked _to check_ have not been
 measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
@@ -60,10 +61,13 @@ Modal runs a container from an image in a registry, so the remote side is
 **`ghcr.io/imbue-ai/datalib`, the docker image we already ship**. It
 holds `datalib-step` and the pinned embedding model, which
 `datalib-step pull-models` puts in place at build time and which
-`DATALIB_NO_FETCH` keeps from being fetched again. A new `datalib-step
-embed-prompts` reads `(hash, prompt)` lines on stdin and writes `(hash,
-vector)` lines on stdout, through the same `datalib_embedder` the local
-step uses, `fit` included. So the prompts, the chunking, the hashing and
+`DATALIB_NO_FETCH` keeps from being fetched again. `datalib-step
+embed-prompts` reads one `{"hash", "prompt"}` JSON object a line on
+stdin and writes one `{"hash", "vector", "cut"}` object a line on
+stdout, in order and 64 at a time, through the same `datalib_embedder`
+the local step uses, `fit` and the device's batching included. A vector
+is about 8 KB of JSON (768 floats, each exact through the round trip),
+so 710k of them are some 5.6 GB back from the GPU. So the prompts, the chunking, the hashing and
 the model are one code path wherever they run, and there is no second
 embedder to keep in line with the first.
 
@@ -231,8 +235,10 @@ and the next run sends only what is still missing.
 1. ~~The CUDA build: `libggml-cuda.so` under Bazel
    with the pinned toolkit, the embedder loading it when it can; built
    in CI, run by hand on a Modal GPU.~~ Done; § "Measured on Modal".
-2. `datalib-step embed-prompts`: stdin to stdout over `datalib_embedder`,
-   tested here on the CPU against the step's own vectors.
+2. ~~`datalib-step embed-prompts`: stdin to stdout over `datalib_embedder`,
+   tested here on the CPU against the step's own vectors.~~ Done:
+   `datalib_step/src/embed_prompts.rs`, and its end-to-end test in
+   `tests/step_tests/embed_prompts.rs` against the TNG fixture's cache.
 3. The module as a release asset, its license notices, and the fetch.
 4. The Modal half behind `embed_on = "modal"`, measured on one small
    source of a real library, then a large one.
