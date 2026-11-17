@@ -240,7 +240,7 @@ genrule(
         # It lives under the `unified_grid_and_search_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_grid_and_search_index/grid_index/db.sqlite $(execpath ingested/backend_index.sqlite)",
-        # The grid alone: the sync's grid step wrote the search index's
+        # The grid alone: the sync's `grid_index` step wrote the search index's
         # tables beside it, which `:ingested_tng_search_index` makes again.
         "python3 $(execpath grid_alone.py) $(execpath ingested/backend_index.sqlite)",
         # The sources as render-only groups, for materialize_tng_root.sh

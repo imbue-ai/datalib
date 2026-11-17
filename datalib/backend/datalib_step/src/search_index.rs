@@ -1,5 +1,5 @@
 //! The search index (docs/dev/plans/search_index_from_ram.md): what the
-//! grid step's keyword pass, each source's `embed`, and the aggregator do
+//! `grid_index` step's keyword pass, each source's `embed`, and the aggregator do
 //! with it.
 
 use std::collections::{BTreeMap, HashSet};
@@ -97,7 +97,7 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
 }
 
 /// One source's documents in the search index, brought in line with its
-/// render store: the grid step's keyword pass, once per searched source.
+/// render store: the `grid_index` step's keyword pass, once per searched source.
 /// The store is read at one commit for the whole pass, and a source whose
 /// store and text version are where its last finished pass left them is
 /// not read at all.
@@ -446,7 +446,7 @@ async fn sweep_index(index: &Index) -> Result<(HashSet<String>, Vec<String>)> {
     Ok((index.all_hashes().await?, index.sources().await?))
 }
 
-/// The grid step's half after its keyword passes: every document of a
+/// The `grid_index` step's half after its keyword passes: every document of a
 /// source it does not search goes, whether the source left the config or
 /// was put in `not_searched`. Returns how many went.
 pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<usize> {
@@ -765,7 +765,7 @@ mod tests {
         assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
     }
 
-    /// The grid step searches every source it reads but those its
+    /// The `grid_index` step searches every source it reads but those its
     /// `not_searched` lists: a listed source's documents leave the index,
     /// and come back once it is off the list, though its store has not
     /// moved since its last pass.

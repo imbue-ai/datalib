@@ -1,4 +1,4 @@
-//! The search's steps beside the grid step's keyword pass: each source's
+//! The search's steps beside the `grid_index` step's keyword pass: each source's
 //! `embed`, which fills the vectors its chunks lack (`search_index.rs`),
 //! and `unified_grid_and_search_index/qmd_aggregator`, which runs after
 //! every embed, sweeps the vectors no chunk names and reports on the
@@ -126,7 +126,7 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
 }
 
 /// The pinned model, provisioned, and its tokenizer, read without the
-/// weights: the grid step's keyword pass and each embed cut chunks counted
+/// weights: the `grid_index` step's keyword pass and each embed cut chunks counted
 /// in its tokens.
 pub(crate) async fn open_model(
     data_root: &Path,

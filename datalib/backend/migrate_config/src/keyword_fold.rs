@@ -300,7 +300,7 @@ inputs = ["*/keyword_index", "*/embed"]
     }
 
     /// The keyword step and its comment go; the embed and the aggregator
-    /// read the grid step; the source that had no keyword step is listed
+    /// read the `grid_index` step; the source that had no keyword step is listed
     /// in `not_searched`, so it stays out of search; the result loads
     /// whole, and a second pass finds nothing to do.
     #[test]
@@ -344,7 +344,7 @@ inputs = ["*/keyword_index", "*/embed"]
         check(&after);
     }
 
-    /// With no grid step, the rewrite adds one reading every render, so
+    /// With no `grid_index` step, the rewrite adds one reading every render, so
     /// the keyword search the steps did goes on.
     #[test]
     fn a_config_with_no_grid_step_gets_one() {
