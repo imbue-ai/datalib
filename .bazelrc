@@ -25,7 +25,7 @@ common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 # Undeclared test outputs as one downloadable `outputs.zip` rather than
 # a loose directory tree.
 #
-# `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
+# Each part of `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
 # trace per test, with the trace viewer bundled — into
 # TEST_UNDECLARED_OUTPUTS_DIR. Zipped, it arrives as a single artifact
 # on the BuildBuddy invocation page that you can download and open;

@@ -113,7 +113,13 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
-    "datalib/ui:e2e_test": (
+    "datalib/ui:e2e_chromium_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_sandboxes_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_webkit_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
     "datalib/ui:e2e_auth_test": (
