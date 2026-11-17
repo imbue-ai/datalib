@@ -124,8 +124,7 @@ pub(crate) async fn run_with(
 
     // The stores to read come from the graph, not from a directory scan:
     // the same rule the search step follows, so the two indexes agree on
-    // what a source is. A `render_time_series` or `render_occurrences`
-    // input is read for its problem rows alone.
+    // what a source is.
     let render_inputs = render_inputs(&env.inputs);
     let sources = crate::index_steps::groups_from_inputs(&render_inputs);
     tracing::debug!(sources = %sources.join(", "), "the render stores the graph names");
