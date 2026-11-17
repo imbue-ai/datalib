@@ -36,7 +36,9 @@ fn ts_base() -> DateTime<Utc> {
 }
 
 fn render_synth_ts(ts: DateTime<Utc>) -> String {
-    datalib_time::IsoOffsetTimestamp::from(ts).to_rfc3339()
+    datalib_time::IsoOffsetTimestamp::try_from(ts)
+        .expect("a reading-order stamp is in 2026")
+        .to_rfc3339()
 }
 
 #[derive(Debug, Default, Clone)]
