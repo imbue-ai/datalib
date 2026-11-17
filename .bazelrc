@@ -323,6 +323,12 @@ build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
 # the CUDA runtime linked into the module statically, so the module asks
 # the host for the driver and cuBLAS alone. `.github/workflows/cuda.yml` builds it.
 build:cuda --@rules_cuda//cuda:runtime=@cuda//:cuda_runtime_static
+# nvcc compiles host code with the C++ toolchain's compiler, and CUDA
+# 12.9's takes no clang from 20 on, so this build alone uses the
+# machine's gcc rather than the LLVM toolchain (MODULE.bazel). Its
+# actions are then the machine's, and share no cache with another.
+build:cuda --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+build:cuda --extra_toolchains=@local_config_cc_toolchains//:all
 
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
 # BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an

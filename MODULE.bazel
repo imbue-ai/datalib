@@ -520,6 +520,11 @@ use_repo(llvm_toolchain, "llvm_toolchains")
 
 register_toolchains("@llvm_toolchains//:all")
 
+# The machine's own gcc, for `--config=cuda` alone: CUDA 12.9's nvcc
+# refuses a host clang from 20 on, and the LLVM toolchain's is newer.
+cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
+use_repo(cc_configure, "local_config_cc_toolchains")
+
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
 # Route `libsqlite3-sys` at our bazel-built doltlite static archive
