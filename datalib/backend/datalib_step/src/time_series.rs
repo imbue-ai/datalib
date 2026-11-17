@@ -377,6 +377,7 @@ mod tests {
         crate::grid_index::run(
             root,
             &index_with(vec!["riker/render_time_series".into()]),
+            &crate::grid_index::Params::default(),
             Some(NOW),
             &Emitter::new("test".into()),
             &stop,
@@ -396,6 +397,7 @@ mod tests {
         crate::grid_index::run(
             root,
             &index_with(vec![]),
+            &crate::grid_index::Params::default(),
             Some(NOW),
             &Emitter::new("test".into()),
             &stop,

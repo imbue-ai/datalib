@@ -841,8 +841,8 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
 }
 
 /// Drops the grid's own tables when they were written in another shape,
-/// under the write lock: a source's `keyword_index` may be writing the
-/// search index's tables in the same file meanwhile.
+/// under the write lock: the aggregator's sweep may be writing the search
+/// index's tables in the same file meanwhile.
 async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let have = datalib_store_meta::schema_hash_in(&mut tx)
@@ -913,8 +913,8 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
             "journal_size_limit",
             datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
         )
-        // Each source's `keyword_index` writes the search index's tables in
-        // this file too, a batch of documents at a time.
+        // The keyword pass and the aggregator write the search index's
+        // tables in this file too, a batch of documents at a time.
         .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)

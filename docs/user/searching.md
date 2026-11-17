@@ -73,8 +73,9 @@ Free text made only of ids and addresses (`picard@enterprise.org`,
 own id for a record counts too, where it is a uuid, dashed or not, and so
 does a link that ends in one: paste a Notion page's link to find the page.
 
-A source's words are searchable once its `keyword_index` step has run;
-until then free text finds nothing there and the answer says why.
+A source's words are searchable once `grid_index` has run after its
+render; until then free text finds nothing there and the answer says
+why. A source `grid_index` lists in `not_searched` is never searched.
 
 What the words and the meaning search over is each item drawn plainly:
 who wrote it (with their address, where it is an email or a phone

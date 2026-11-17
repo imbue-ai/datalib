@@ -659,8 +659,8 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
-    // The search index: the per-source split the keyword_index and embed
-    // steps exist for.
+    // The search index: what each searched source holds, and what its
+    // embed step left.
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
@@ -760,7 +760,6 @@ fn manual_e2e_live_sync_golden() {
     );
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
-    assert_index_steps_follow_their_render(&summary2);
 
     // Run 1's problems are all still standing minutes later, and a problem
     // recorded again unchanged keeps its row, stamps and all, so run 2
@@ -1272,13 +1271,13 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
-/// Every source with a keyword index holds one document per markdown file
+/// Every searched source holds one document per markdown file
 /// its render tree has outside `unindexed/`, a source with an `embed` step
 /// has nothing left to embed, and one without still has all of it left: the
 /// embed stayed in its own source.
 fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
     let embedded = groups_with(cfg_text, "embed");
-    let keyword: Vec<String> = groups_with(cfg_text, "keyword_index").into_iter().collect();
+    let keyword: Vec<String> = searched_groups(cfg_text).into_iter().collect();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1289,7 +1288,7 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
     assert_eq!(
         held.len(),
         keyword.len(),
-        "the search index was never made, though {} sources have a keyword_index",
+        "the search index was never made, though {} sources are searched",
         keyword.len()
     );
 
@@ -1342,6 +1341,26 @@ fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<Str
         .collect()
 }
 
+/// The sources `grid_index` puts in the search: every one with a render,
+/// but those its `params.not_searched` lists.
+fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    let not_searched: Vec<String> = cfg
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some("grid_index"))
+        .filter_map(|s| s.get("params")?.get("not_searched")?.as_array().cloned())
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    groups_with(cfg_text, "render_markdown")
+        .into_iter()
+        .filter(|g| !not_searched.contains(g))
+        .collect()
+}
+
 /// The markdown files the search covers under `dir`: every one a renderer
 /// did not file under `UNINDEXED_DIR`.
 fn searchable_markdown_files(dir: &Path) -> u64 {
@@ -1354,52 +1373,6 @@ fn searchable_markdown_files(dir: &Path) -> u64 {
             parts.next().map(|c| c.as_os_str()) != Some(UNINDEXED_DIR.as_ref())
         })
         .count() as u64
-}
-
-/// Run 2's search-index work is only where a render moved: a source's
-/// `keyword_index` reads only its render and its `embed` only that, so a
-/// source whose render did not move skips both, whatever other sources did.
-fn assert_index_steps_follow_their_render(summary: &Value) {
-    let steps = summary
-        .get("steps")
-        .and_then(Value::as_array)
-        .expect("run_summary.steps");
-    let find = |id: &str| {
-        steps
-            .iter()
-            .find(|s| s.get("step").and_then(Value::as_str) == Some(id))
-    };
-    let status = |s: &Value| {
-        s.get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let moved = |id: &str| {
-        find(id).is_some_and(|s| {
-            s.get("outputs").and_then(Value::as_array).is_some_and(|o| {
-                o.iter()
-                    .any(|x| x.get("changed") == Some(&Value::Bool(true)))
-            })
-        })
-    };
-    for step in steps {
-        let id = step.get("step").and_then(Value::as_str).unwrap_or("");
-        let Some(group) = id
-            .strip_suffix("/keyword_index")
-            .or_else(|| id.strip_suffix("/embed"))
-        else {
-            continue;
-        };
-        if moved(&format!("{group}/render_markdown")) {
-            continue;
-        }
-        assert_eq!(
-            status(step),
-            "skipped_up_to_date",
-            "{id} ran in run 2 though {group}'s render did not move"
-        );
-    }
 }
 
 fn step_id_list(summary: &Value) -> String {
@@ -1751,13 +1724,13 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 /// for the overall manifest assertion.
 /// Every searchable document's text as the search index embeds it, chunk
 /// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
-/// for each source with a `keyword_index`, the ones search reads.
+/// for each source `grid_index` searches.
 /// Drawn by `datalib-step index-text --chunks`, the call the keyword and
 /// embed passes make, so a change to what search reads (the envelope line,
 /// a flattened link, where a chunk is cut, the prompt) is a diff here even
 /// when the page looks the same.
 fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<String>) {
-    let searched = groups_with(cfg_text, "keyword_index");
+    let searched = searched_groups(cfg_text);
     let out = Command::new(bin_dir().join("datalib-step"))
         .arg("index-text")
         .arg(data_root)

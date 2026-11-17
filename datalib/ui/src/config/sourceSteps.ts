@@ -26,7 +26,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
-import { expandInputs, namesStep } from "./inputPattern";
+import { expandInputs, namesStep, patternFunction } from "./inputPattern";
 import { catalogForStep } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
@@ -68,6 +68,9 @@ export type ConfiguredStep = {
   command: string | null;
   /// The ids this step reads: its `inputs`, each pattern expanded.
   inputs: string[];
+  /// The patterns among its `inputs` as written (`*/embed`), which also
+  /// name a step not in the file yet.
+  patterns?: string[];
   params: Record<string, unknown>;
   /// [start, end) character offsets covering this entry's TOML tables,
   /// for splice-based edit and delete.
@@ -101,7 +104,6 @@ function groupedName(
   if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (fn === "render_occurrences") return `${group.name} (render occurrences)`;
   if (phase === "render") return `${group.name} (render markdown)`;
-  if (fn === "keyword_index") return `${group.name} (Keyword index)`;
   if (fn === "embed") return `${group.name} (Semantic indexing)`;
   return defaultName(id);
 }
@@ -117,7 +119,6 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   grid_index: "index",
   time_series_index: "index",
   qmd_aggregator: "index",
-  keyword_index: "index",
   embed: "index",
   embedding_map: "index",
 };
@@ -359,7 +360,10 @@ export function listSteps(text: string): ConfiguredStep[] {
   // A pattern (`*/render_markdown`) is read as the ids it names, as the
   // loader reads it; the text keeps the pattern.
   const ids = steps.map((s) => s.id);
-  for (const s of steps) s.inputs = expandInputs(s.id, s.inputs, ids);
+  for (const s of steps) {
+    s.patterns = s.inputs.filter((i) => patternFunction(i) !== null);
+    s.inputs = expandInputs(s.id, s.inputs, ids);
+  }
 
   const applets: ConfiguredStep[] = [];
   if (Array.isArray(root.applets)) {
@@ -1228,72 +1232,85 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   return wireIntoFanIns(next, id, "grid_index");
 }
 
-/// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
-/// which reads its render, and its embeddings, which read the keyword
-/// index.
-export function buildQmdSteps(group: string): { id: string; body: string }[] {
-  const keywordId = `${group}/keyword_index`;
-  const block = (fn: string, inputs: string[]) => ({
-    id: `${group}/${fn}`,
-    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = ${quote(fn)}\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${inputs.map(quote).join(", ")}]`,
-  });
-  return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
+/// The step that puts every source it reads in the keyword search.
+const GRID_ID = "unified_grid_and_search_index/grid_index";
+
+/// A source's own search step, as a `[[steps]]` block: its embeddings,
+/// which read the grid step, whose keyword pass cuts what they embed.
+export function buildEmbedStep(group: string): { id: string; body: string } {
+  return {
+    id: `${group}/embed`,
+    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = "embed"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(GRID_ID)}]`,
+  };
 }
 
-/// How far into qmd a source's markdown goes: not at all, a keyword
-/// index, or a keyword index and the embeddings that read it. There is
-/// no embeddings-only: the embed step reads the keyword index.
+/// How far into search a source goes: not at all, by its words, or by its
+/// words and its meaning. There is no meaning alone: the embeddings are
+/// of what the keyword pass cut.
 export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
 
-/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
-export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
-  const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
-  if (!has("keyword_index")) return "none";
-  return has("embed") ? "keyword_and_embed" : "keyword";
+/// The sources the grid step keeps out of search (`params.not_searched`).
+function notSearched(steps: ConfiguredStep[]): string[] {
+  const listed = steps.find((s) => s.kind === "step" && s.id === GRID_ID)?.params?.not_searched;
+  return Array.isArray(listed) ? listed.filter((g): g is string => typeof g === "string") : [];
 }
 
-/// Give a source the qmd steps `asked` for — those it lacks — and a place
-/// in the aggregator's inputs, and take away the ones it does not ask
-/// for, with every step that reads them. Never an `embed` step for a
-/// type that may not have one (`embedAllowed`). Only where the config has the
-/// aggregator: search is off without one, and the aggregator is what
-/// retires a source's collection once it goes.
+/// How far into search the config puts a source, as a `QmdIndexing`.
+export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
+  const grid = steps.some((s) => s.kind === "step" && s.id === GRID_ID);
+  if (!grid || notSearched(steps).includes(group)) return "none";
+  return steps.some((s) => s.id === `${group}/embed`) ? "keyword_and_embed" : "keyword";
+}
+
+/// Put `group` in the grid step's `not_searched`, or take it out.
+function setNotSearched(text: string, group: string, out: boolean): string {
+  const steps = listSteps(text).filter((s) => s.kind === "step");
+  const at = steps.findIndex((s) => s.id === GRID_ID);
+  if (at < 0) return text;
+  const had = notSearched(steps);
+  const want = out ? (had.includes(group) ? had : [...had, group]) : had.filter((g) => g !== group);
+  if (want.length === had.length) return text;
+  const ref = { array: "steps", index: at };
+  const path = ["params", "not_searched"];
+  return want.length
+    ? setIn(text, ref, path, `[${want.map(quote).join(", ")}]`)
+    : deleteIn(text, ref, path);
+}
+
+/// Put a source in search as far as `asked` says: out of the grid step's
+/// `not_searched` for its words, and an `embed` step for its meaning, or
+/// back. Never an `embed` step for a type that may not have one
+/// (`embedAllowed`), nor where the config has no aggregator, which sweeps
+/// after the embeds; taking one away takes every step that reads it.
 export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
-  const [keyword, embed] = buildQmdSteps(group);
-  const all = listSteps(text);
   const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
-  const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
-  const wanted =
-    !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
-  const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
-  const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
-  let next = gone.length ? removeSteps(text, gone) : text;
-  const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
-  if (missing.length) next = insertEntries(next, missing.map((b) => b.body).join("\n\n"));
-  for (const b of [keyword, embed]) {
-    next = wanted.includes(b)
-      ? wireIntoFanIns(next, b.id, "qmd_aggregator")
-      : unwireFromFanIns(next, b.id, "qmd_aggregator");
+  let next = setNotSearched(text, group, indexing === "none");
+  const steps = listSteps(next);
+  const aggregated = steps.some(
+    (s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
+  );
+  const embed = buildEmbedStep(group);
+  const has = steps.some((s) => s.id === embed.id);
+  if (aggregated && indexing === "keyword_and_embed") {
+    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "qmd_aggregator");
+  } else if (has) {
+    const gone = [...steps.filter((s) => s.id === embed.id), ...readersOf([embed.id], steps)];
+    next = unwireFromFanIns(removeSteps(next, gone), embed.id, "qmd_aggregator");
   }
   return next;
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
 /// them ([`readersOf`]), and, when the qmd aggregator is among them, every
-/// source's own qmd steps — search is off without it, and nothing would
-/// retire what they index.
+/// source's `embed` — search by meaning is off without it, and nothing
+/// would sweep what they embed.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
   const aggregatorGoes = all.some(
     (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
   );
   const qmdSteps = aggregatorGoes
-    ? all.filter(
-        (s) =>
-          s.kind === "step" &&
-          !ids.includes(s.id) &&
-          (s.function === "keyword_index" || s.function === "embed"),
-      )
+    ? all.filter((s) => s.kind === "step" && !ids.includes(s.id) && s.function === "embed")
     : [];
   const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
   return [...qmdSteps, ...readers];
@@ -1346,10 +1363,22 @@ function placeFor(text: string, body: string): number | null {
   const addedIds = new Set(added.map((s) => s.id));
   const reads = new Set(added.flatMap((s) => s.inputs).filter((id) => !addedIds.has(id)));
   const earliest = Math.max(0, ...steps.filter((s) => reads.has(s.id)).map((s) => s.end));
+  const isIndex = (s: ConfiguredStep) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null;
+  // A source's entries go above the index that reads them all; one that
+  // reads the index itself (an `embed`) goes below it, above whatever
+  // reads it in turn.
+  const readsIndex = steps.some((s) => reads.has(s.id) && isIndex(s));
+  const readsAdded = (s: ConfiguredStep) =>
+    s.inputs.some((id) => addedIds.has(id)) ||
+    (s.patterns ?? []).some((p) => [...addedIds].some((id) => namesStep(p, id)));
+  // The aggregator reads every embed, though one written as a list only
+  // names a new one once it is wired in.
+  const embeds = added.some((s) => s.function === "embed");
   const readers = [
-    ...steps.filter((s) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null),
-    ...steps.filter((s) => s.inputs.some((id) => addedIds.has(id))),
-    ...groups.filter((g) => g.id === INDEX_GROUP),
+    ...(readsIndex ? [] : steps.filter(isIndex)),
+    ...steps.filter(readsAdded),
+    ...(embeds ? steps.filter((s) => fanInFunctionOf(s) === "qmd_aggregator") : []),
+    ...(readsIndex ? [] : groups.filter((g) => g.id === INDEX_GROUP)),
   ];
   const latest = Math.min(text.length, ...readers.map((r) => extendOverComments(text, r.start)));
   const own = new Set(added.map((s) => s.group).filter((g) => g !== null));
@@ -1359,7 +1388,8 @@ function placeFor(text: string, body: string): number | null {
         ...steps.filter((s) => s.group !== null && own.has(s.group)),
         ...groups.filter((g) => own.has(g.id)),
       ];
-  const at = beside.length ? Math.max(...beside.map((e) => e.end)) : latest;
+  const besideAt = beside.length ? Math.max(...beside.map((e) => e.end)) : null;
+  const at = besideAt !== null && besideAt >= earliest ? besideAt : latest;
   return earliest <= at && at <= latest ? at : null;
 }
 

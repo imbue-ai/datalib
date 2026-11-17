@@ -135,9 +135,9 @@ inputs = ["picard/ingest"]
 
 [[steps]]
 group = "picard"
-function = "keyword_index"
+function = "embed"
 command = "datalib-step"
-inputs = ["picard/render_markdown"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 [[groups]]
 id = "riker"
@@ -177,7 +177,7 @@ inputs = [
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["picard/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index", "picard/embed"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
@@ -233,7 +233,7 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
         );
         assert_eq!(
             written_inputs(&after, aggregator),
-            ["*/keyword_index", "*/embed"]
+            ["unified_grid_and_search_index/grid_index", "*/embed"]
         );
         assert_eq!(written_inputs(&after, map), written_inputs(BEFORE, map));
         for step in [grid, aggregator, map] {

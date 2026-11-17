@@ -594,7 +594,7 @@ pub fn unanswered(answer: &SearchResponse) -> Vec<String> {
     if echo["qmd_index_missing"].as_bool() == Some(true) {
         why.push(
             "this root has no search index yet, so free text finds nothing: a source's \
-             words are searchable once its `keyword_index` step has run"
+             words are searchable once `grid_index` has run after its render"
                 .to_string(),
         );
     }
@@ -1685,7 +1685,7 @@ pub struct QmdStateRequest {
 /// its fields keep the names they had when qmd's index answered them.
 #[derive(Debug, Serialize)]
 pub struct QmdStateResponse {
-    /// False when no `keyword_index` step has written the search index
+    /// False when no `grid_index` keyword pass has written the search index
     /// yet, so every document is legitimately un-indexed rather than
     /// unknown.
     pub index_present: bool,

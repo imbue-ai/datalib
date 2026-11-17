@@ -29,7 +29,7 @@ inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["*/keyword_index", "*/embed"]
+inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
@@ -54,15 +54,9 @@ inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
 group = "gmail-takeout"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
-group = "gmail-takeout"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail-takeout/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
 # (see the "Register Slack with latchkey" section in the first-time
@@ -111,15 +105,9 @@ inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
 # `latchkey` at runtime (see the "Register Claude web with latchkey"
@@ -148,15 +136,9 @@ inputs = ["claude-api/ingest"]
 
 [[steps]]
 group = "claude-api"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
-group = "claude-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

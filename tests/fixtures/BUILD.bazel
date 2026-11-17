@@ -156,6 +156,7 @@ genrule(
     ],
     tools = [
         "check_ingested.py",
+        "grid_alone.py",
         "make_beeper_texts.py",
         "quiet.sh",
         "run_sync_pipeline.py",
@@ -239,6 +240,9 @@ genrule(
         # It lives under the `unified_grid_and_search_index/` tree the index steps own
         # (see core::layout).
         "cp $(RULEDIR)/sync_workspace/unified_grid_and_search_index/grid_index/db.sqlite $(execpath ingested/backend_index.sqlite)",
+        # The grid alone: the sync's grid step wrote the search index's
+        # tables beside it, which `:ingested_tng_search_index` makes again.
+        "python3 $(execpath grid_alone.py) $(execpath ingested/backend_index.sqlite)",
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
@@ -408,8 +412,8 @@ py_test(
     size = "large",
 )
 
-# The search index over the TNG fixture, built as a sync builds it: each
-# source's `keyword_index` (the real `datalib-step`) over `:ingested_tng`'s
+# The search index over the TNG fixture, built as a sync builds it:
+# `grid_index`'s keyword pass (the real `datalib-step`) over `:ingested_tng`'s
 # rendered tree, then every chunk embedded into an inference cache. Three
 # actions, because the first's inputs change on every run (wall-clock
 # stamps in the render stores, tar_qmd.py) and the second is the slow

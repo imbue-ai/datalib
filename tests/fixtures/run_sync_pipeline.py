@@ -567,16 +567,16 @@ params = {params}
             )
             root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{group}/render_markdown"')
-        # The fan-in names its inputs; there is no glob to stand in for
-        # "every render step".
+        # The fan-ins read every source by pattern, as the starter config
+        # and the app's config upgrade write them. `grid_index` also reads
+        # each `render_time_series` and `render_occurrences`, for their
+        # problem rows.
         groups = [r.strip('"').split("/")[0] for r in rendered]
-        qmd_list = ", ".join(
-            f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
-        )
-        # `grid_index` also reads each `render_time_series`, for its
-        # problem rows; wired here, as the app's config upgrade would.
+        qmd_list = '"unified_grid_and_search_index/grid_index", "*/embed"'
         series = [g for g in groups if g in time_series_groups]
-        grid_list = ", ".join(rendered + [f'"{g}/render_time_series"' for g in series])
+        grid_list = (
+            '"*/render_markdown", "*/render_time_series", "*/render_occurrences"'
+        )
         blocks.append(
             f"""[[groups]]
 id = "unified_grid_and_search_index"
@@ -590,14 +590,14 @@ inputs = [{grid_list}]"""
         # Declared here, so the app's config upgrade (which adds it to a
         # config without one) leaves this config as written.
         series_index = (
-            f"""[[groups]]
+            """[[groups]]
 id = "unified_time_series_index"
 name = "Time Series Index"
 
 [[steps]]
 group = "unified_time_series_index"
 function = "time_series_index"
-inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
+inputs = ["*/render_time_series"]"""
             if series
             else ""
         )
@@ -624,16 +624,14 @@ group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = [{qmd_list}]"""
         )
-        # Each source fills its own qmd collection: a keyword index and
-        # its embeddings. The index arrives pre-built here too.
+        # Each source embeds what the grid step's keyword pass cut of it.
+        # The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
-                f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
-                f'inputs = ["{group}/render_markdown"]\n\n'
                 f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
-                f'inputs = ["{group}/keyword_index"]'
+                f'inputs = ["unified_grid_and_search_index/grid_index"]'
             )
         root_text = "\n\n".join(root_blocks) + "\n"
         return _with_step_commands(dag_text), _with_step_commands(root_text)

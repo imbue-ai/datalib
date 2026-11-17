@@ -38,11 +38,3 @@ group = "airvisual"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["airvisual/ingest"]
-
-# Keyword (BM25) search over the page. A time-series source takes no
-# `embed` step: its pages are summaries of numbers.
-[[steps]]
-group = "airvisual"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["airvisual/render_markdown"]

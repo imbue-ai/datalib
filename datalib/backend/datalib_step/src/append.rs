@@ -87,9 +87,9 @@ pub struct Appended {
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
-    /// The config has search, and the stanza has no `keyword_index`, so
-    /// free text will not find this source until one is added.
-    pub left_out_of_search: bool,
+    /// The config searches by meaning, and the stanza has no `embed`, so
+    /// the source is found by its words alone until one is added.
+    pub found_by_words_alone: bool,
 }
 
 /// The minimal stanza for `t` by `method` (needed only when `t` has more
@@ -164,7 +164,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             .iter()
             .any(|s| s.function.as_deref() == Some(function))
     };
-    let left_out_of_search = config_has_search && has("render_markdown") && !has("keyword_index");
+    let found_by_words_alone = config_has_search && has("render_markdown") && !has("embed");
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut wired = Vec::new();
@@ -270,7 +270,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         wired,
         unread,
         added_time_series_index,
-        left_out_of_search,
+        found_by_words_alone,
     })
 }
 
@@ -394,13 +394,11 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
             "  nothing reads {step}: the config has no {index}, so it is not indexed there"
         );
     }
-    if appended.left_out_of_search {
+    if appended.found_by_words_alone {
         status_line!(
-            "  free-text search will not find it yet: the minimal stanza has no \
-             `{group}/keyword_index` step (words) or `{group}/embed` (meaning). Copy them \
-             from the complete stanza (`datalib-step examples {t} --method {method}`), and \
-             add them to the inputs of `{}`.",
-            qmd_aggregator()
+            "  search finds it by its words, not yet by its meaning: the minimal stanza has \
+             no `{group}/embed` step. Copy it from the complete stanza \
+             (`datalib-step examples {t} --method {method}`)."
         );
     }
     status_line!(
@@ -480,8 +478,8 @@ mod tests {
             ["slack/render_markdown"]
         );
         assert!(
-            appended.left_out_of_search,
-            "the starter has search and the minimal stanza no keyword_index"
+            appended.found_by_words_alone,
+            "the starter searches by meaning and the minimal stanza has no embed"
         );
         assert_eq!(
             appended.wired,
@@ -491,20 +489,14 @@ mod tests {
             )]
         );
         // Above the index block, whose comments stay with it, and the
-        // block itself untouched but for the one array.
+        // block itself untouched: its patterns read the new source.
         let source_at = appended.text.find("[[groups]]\nid = \"slack\"").unwrap();
         let index_at = appended
             .text
             .find("# ── the unified grid and search index")
             .unwrap();
         assert!(source_at < index_at, "{}", appended.text);
-        assert_eq!(
-            appended.text.replace(
-                "inputs = [\"slack/render_markdown\"]\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\"",
-                "inputs = []\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\""
-            )[index_at..],
-            *starter
-        );
+        assert_eq!(appended.text[index_at..], *starter);
     }
 
     #[test]
@@ -548,10 +540,10 @@ inputs = [
             appended.text
         );
         assert_eq!(appended.group, "work-mail");
-        // No qmd_aggregator here, and the minimal stanza has no search
-        // steps for one to read.
+        // No qmd_aggregator here, and the minimal stanza has no embed
+        // for one to read.
         assert!(appended.unread.is_empty());
-        assert!(!appended.left_out_of_search, "a config without search");
+        assert!(!appended.found_by_words_alone, "a config without search");
     }
 
     #[test]

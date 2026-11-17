@@ -35,9 +35,9 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
 # `[steps.params.export]`, …, and the options every method shares);
 # `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`; `keyword_index` and `embed` put them in the
-# search index; a source whose data is also numbers over time adds
-# `render_time_series`. Neither writes a `command`: a step without one is
+# `<group>/render_markdown`, which the grid index puts in the keyword
+# search; `embed` puts them in the search by meaning; a source whose data
+# is also numbers over time adds `render_time_series`. Neither writes a `command`: a step without one is
 # the built-in `datalib-step`. A step's id is `<group>/<function>`, never
 # written; it is what another step's `inputs` name.
 #
@@ -108,10 +108,11 @@ fn generate() -> String {
     out.push('\n');
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
-        "\n# The SQL index behind the grid and search reads every source's documents,\n\
-         # and the problem rows of its time-series and occurrences steps;\n\
-         # the search index's aggregator reads every source's keyword index and\n\
-         # embeddings, and keeps the search index to the sources it names.\n\
+        "\n# The SQL index behind the grid and search reads every source's documents\n\
+         # into the grid and the keyword search, and the problem rows of its\n\
+         # time-series and occurrences steps; `params.not_searched` would keep a\n\
+         # source out of search. The aggregator runs after every embed and keeps\n\
+         # only the vectors the index still names.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
          [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
          [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\ncommand = \"datalib-step\"\n{}\n\
@@ -129,7 +130,7 @@ fn generate() -> String {
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
         inputs(&["render_markdown", "render_time_series", "render_occurrences"]),
-        inputs(&["keyword_index", "embed"]),
+        "inputs = [\"unified_grid_and_search_index/grid_index\", \"*/embed\"]\n",
         inputs(&["render_time_series"]),
     ));
     for s in &sources {

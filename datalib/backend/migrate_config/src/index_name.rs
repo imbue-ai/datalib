@@ -292,7 +292,7 @@ command = "datalib-applet unified_index" # serves the grid
     }
 
     fn step_ids(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
         check.cfg.steps.iter().map(|s| s.id.clone()).collect()
     }
@@ -308,7 +308,6 @@ command = "datalib-applet unified_index" # serves the grid
             [
                 "picard/ingest",
                 "picard/render_markdown",
-                "picard/keyword_index",
                 "unified_grid_and_search_index/grid_index",
                 "unified_grid_and_search_index/qmd_aggregator",
                 "unified_grid_and_search_index/embedding_map",

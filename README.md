@@ -193,13 +193,12 @@ ready-made steps:
 - `ingest` brings the raw data in.
 - `render_markdown` turns the raw records into readable markdown (most
   sources have one).
-- `keyword_index` adds that markdown to a keyword search index.
 - `embed` adds semantic search, which matches on meaning rather than
   words. It is slow, so you can turn it off per source.
 
 Across all the sources, `grid_index` builds one SQL table of every
-message and document (`grid_rows`), and a single search box reads it
-together with the search index. A local web UI, also shipped as a desktop
+message and document (`grid_rows`) and puts their words in a keyword
+search index beside it, and a single search box reads both. A local web UI, also shipped as a desktop
 app (Tauri), manages your sources and syncs, searches, and browses the
 results.
 

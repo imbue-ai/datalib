@@ -88,7 +88,6 @@ impl Phase {
             Some("grid_index")
             | Some("time_series_index")
             | Some("qmd_aggregator")
-            | Some("keyword_index")
             | Some("embed")
             | Some("embedding_map") => Phase::Index,
             _ => Phase::Other,
@@ -620,7 +619,6 @@ fn child_label(step: &WrittenStep) -> String {
         Some("time_series_index") => "Time series index",
         Some("grid_index") => "Grid index",
         Some("qmd_aggregator") => "QMD aggregator",
-        Some("keyword_index") => "Keyword index",
         Some("embed") => "Semantic indexing",
         Some("embedding_map") => "Embedding map",
         Some(other) => other,

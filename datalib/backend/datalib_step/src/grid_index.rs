@@ -1,5 +1,7 @@
 //! The `grid_index` function: every source's render store, stacked into
-//! the unified grid table at `unified_grid_and_search_index/grid_index`.
+//! the unified grid table at `unified_grid_and_search_index/grid_index`,
+//! then each searched source's documents into the search index's keyword
+//! tables in the same file.
 
 use std::path::Path;
 
@@ -7,6 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_render::grid_index::{build_grid_index_for, open_index, OwnStore};
 use datalib_schema::problems::{Severity, Stage, METRIC};
+use serde::Deserialize;
 
 use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
@@ -20,6 +23,35 @@ pub fn out_rel() -> String {
         datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         datalib_core::layout::GRID_DIR
     )
+}
+
+/// What a config may say to `grid_index`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Params {
+    /// Sources kept out of search: in the grid, and not found by their
+    /// words or their meaning. Every other source this step reads is
+    /// searched.
+    #[serde(default)]
+    pub not_searched: Vec<String>,
+}
+
+impl Params {
+    pub fn from_json(params: serde_json::Value) -> Result<Params> {
+        if params.is_null() {
+            return Ok(Params::default());
+        }
+        serde_json::from_value(params).context("read grid_index's params")
+    }
+
+    /// `sources` less the ones kept out of search.
+    fn searched(&self, sources: &[String]) -> Vec<String> {
+        sources
+            .iter()
+            .filter(|s| !self.not_searched.contains(s))
+            .cloned()
+            .collect()
+    }
 }
 
 /// The inputs whose render store this step indexes, and the stores of
@@ -56,6 +88,7 @@ fn split_inputs(data_root: &Path, inputs: &[String]) -> (Vec<String>, Vec<OwnSto
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
+    params: &Params,
     now: Option<&str>,
     emitter: &Emitter,
     stop: &StopFlag,
@@ -139,12 +172,45 @@ pub async fn run(
         );
     }
 
-    // The generation, whether or not this pass sealed anything: the
-    // builder raises it once per source that moved, and a pass that moved
-    // none must still report the version it left, or the runner takes it
-    // as new.
-    let version = datalib_etl_render::grid_index::version(&pool).await?;
     datalib_etl_render::grid_index::close_index(pool).await?;
+
+    let searched = params.searched(&sources);
+    for source in &searched {
+        if stop.requested() {
+            break;
+        }
+        let done = crate::search_index::update_keywords(data_root, source, &progress, stop)
+            .await
+            .with_context(|| format!("keyword-index {source}"))?;
+        progress.metric(
+            "search_index_unsettled",
+            &[("source", source.as_str())],
+            done.unsettled as i64,
+        );
+        if done != crate::search_index::Done::default() {
+            tracing::info!(
+                source = %source,
+                put = done.put,
+                removed = done.removed,
+                unsettled = done.unsettled,
+                "the source's keywords are done"
+            );
+        }
+    }
+    if !stop.requested() {
+        let dropped = crate::search_index::keep_searched(data_root, &searched).await?;
+        if dropped > 0 {
+            tracing::info!(
+                dropped,
+                "documents of sources no longer searched left the search index"
+            );
+        }
+    }
+
+    // The version, whether or not this pass changed anything: a pass that
+    // moved nothing must still report the version it left, or the runner
+    // takes it as new.
+    let version = version(data_root).await?;
 
     // Every other source is sealed by now; this one is still a failure,
     // and the Manage row should say so.
@@ -171,6 +237,40 @@ pub async fn run(
     }
 }
 
+/// What the step has published: the grid's generation, which the builder
+/// raises once per source that moved, and the search index's, which every
+/// keyword write raises. Each embed reads this step, so a keyword change
+/// alone must move it too. `None` before the grid has a file.
+pub async fn version(data_root: &Path) -> Result<Option<String>> {
+    let path = datalib_core::layout::grid_index_db(data_root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let pool = datalib_pin::open_reader(&path).await?;
+    let grid = datalib_pin::generation(&pool).await;
+    pool.close().await;
+    let Some(grid) = grid? else {
+        return Ok(None);
+    };
+    let reader = datalib_search_index::Reader::open(
+        &path,
+        &datalib_core::layout::inference_cache_db(data_root),
+    )
+    .await?;
+    let search = match reader {
+        Some(reader) => {
+            let generation = reader.generation().await;
+            reader.close().await;
+            Some(generation?)
+        }
+        None => None,
+    };
+    Ok(Some(match search {
+        Some(search) => format!("{grid}+search{search}"),
+        None => grid,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +294,7 @@ mod tests {
         run(
             data_root,
             &env,
+            &Params::default(),
             Some("2026-01-01T00:00:00+00:00"),
             &Emitter::new("test".into()),
             &StopFlag::new(),

@@ -765,14 +765,12 @@ async fn run_function(
         }
         Function::GridIndex => {
             writes_the_index_tree(&env, &grid_index::out_rel())?;
-            grid_index::run(data_root, &env, Some(now), emitter, &control.stop).await
+            let params = grid_index::Params::from_json(params)?;
+            grid_index::run(data_root, &env, &params, Some(now), emitter, &control.stop).await
         }
         Function::QmdAggregator => {
             writes_the_index_tree(&env, &index_steps::aggregator_rel())?;
             index_steps::run_aggregator(data_root, &env, emitter, &control.stop).await
-        }
-        Function::KeywordIndex => {
-            index_steps::run_keyword(data_root, &env, emitter, &control.stop).await
         }
         Function::Embed => {
             index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await

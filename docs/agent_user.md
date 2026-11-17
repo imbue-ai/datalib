@@ -36,10 +36,11 @@ steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → markdown + a per-source index
 database), `grid_index` under the `unified_grid_and_search_index` group (the SQL
-index), and, for a searched source, `<group>/keyword_index` and
-`<group>/embed`, which fill that source's part of the search index.
-`unified_grid_and_search_index/qmd_aggregator` runs after every source's pair
-and keeps the search index to the sources it names. A step's function
+index, which also puts every source it reads in the keyword search but
+those its `params.not_searched` lists), and, for a source searched by
+meaning, `<group>/embed`, which embeds that source's part of the search
+index. `unified_grid_and_search_index/qmd_aggregator` runs after every
+embed and keeps only the embeddings the index still names. A step's function
 is the directory it writes (the search steps are the exception: they
 write the search index's tables in the grid index's file, and the
 vectors in `unified_grid_and_search_index/search_index/`):
@@ -394,8 +395,8 @@ Pick the surface that fits the question:
   It exits 1, with each reason on stderr, when the answer is not the
   search you asked for: a query it refused (`refused`), an error, a
   free-text search the search index could not answer, or free text on a root with no
-  search index yet (a source's words are searchable once its
-  `keyword_index` step has run), or part of a search that could not
+  search index yet (a source's words are searchable once `grid_index`
+  has run after its render), or part of a search that could not
   answer (`query_echo.partial`, with the rows the rest found). An empty
   answer with exit 0 means nothing matched. Free text loads the embedding
   model and the vectors first, each command afresh, which on a large root

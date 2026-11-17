@@ -20,7 +20,7 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         content_commit_at_path, content_version_at_path, head_commit_at_path,
     };
     if matches!(env.function, Function::GridIndex) {
-        return grid_index_generation(data_root).await;
+        return crate::grid_index::version(data_root).await;
     }
     let Some(store) = store(env, data_root) else {
         return Ok(None);
@@ -45,21 +45,9 @@ pub fn store(env: &StepEnv, data_root: &Path) -> Option<PathBuf> {
         }
         Function::GridIndex
         | Function::QmdAggregator
-        | Function::KeywordIndex
         | Function::Embed
         | Function::EmbeddingMap => return None,
     })
-}
-
-async fn grid_index_generation(data_root: &Path) -> Result<Option<String>> {
-    let path = datalib_core::layout::grid_index_db(data_root);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let pool = datalib_pin::open_reader(&path).await?;
-    let generation = datalib_pin::generation(&pool).await;
-    pool.close().await;
-    Ok(generation?)
 }
 
 /// The time-series store a `render_time_series` or `time_series_index`

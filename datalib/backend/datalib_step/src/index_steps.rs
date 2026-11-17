@@ -1,9 +1,9 @@
-//! The search's steps: each source's `keyword_index` and `embed`, which
-//! fill its part of the search index (`search_index.rs`), and
-//! `unified_grid_and_search_index/qmd_aggregator`, which reads every source's
-//! pair, drops the sources it no longer reads, sweeps the inference cache
-//! and reports on the whole. The aggregator's id is qmd's, whose index
-//! this replaced; it deletes what qmd left in its directory.
+//! The search's steps beside the grid step's keyword pass: each source's
+//! `embed`, which fills the vectors its chunks lack (`search_index.rs`),
+//! and `unified_grid_and_search_index/qmd_aggregator`, which runs after
+//! every embed, sweeps the vectors no chunk names and reports on the
+//! whole. The aggregator's id is qmd's, whose index this replaced; it
+//! deletes what qmd left in its directory.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -81,8 +81,7 @@ fn retire_qmd(root: &Path) -> Result<()> {
     }
 }
 
-/// `unified_grid_and_search_index/qmd_aggregator`: drop every source the search
-/// index holds that this step no longer reads, keep only the vectors a
+/// `unified_grid_and_search_index/qmd_aggregator`: keep only the vectors a
 /// chunk still names, and report what each source holds.
 pub async fn run_aggregator(
     data_root: &Path,
@@ -93,10 +92,9 @@ pub async fn run_aggregator(
     let progress = emitter.progress();
     progress.set_message("sweeping the search index");
     retire_qmd(data_root)?;
-    let groups = groups_from_inputs(&env.inputs);
-    let (dropped, swept) = crate::search_index::sweep(data_root, &groups).await?;
-    tracing::info!(dropped, swept, "the search index is swept");
-    let held = datalib_search_index::holdings(data_root, &groups).await?;
+    let (swept, sources) = crate::search_index::sweep(data_root).await?;
+    tracing::info!(swept, "the search index is swept");
+    let held = datalib_search_index::holdings(data_root, &sources).await?;
     for h in &held {
         let labels = [("source", h.source.as_str())];
         progress.metric("search_documents", &labels, h.documents as i64);
@@ -121,40 +119,6 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
     )
 }
 
-/// `<group>/keyword_index`: this source's documents in the search index,
-/// brought in line with its render store.
-pub async fn run_keyword(
-    data_root: &Path,
-    env: &StepEnv,
-    emitter: &Emitter,
-    stop: &StopFlag,
-) -> Result<Vec<OutputClaim>> {
-    let progress = emitter.progress();
-    progress.set_message("keyword index");
-    let done = crate::search_index::update_keywords(data_root, &env.group, &progress, stop).await?;
-    report_unsettled(&progress, &env.group, done.unsettled);
-    tracing::info!(
-        put = done.put,
-        removed = done.removed,
-        unsettled = done.unsettled,
-        "the search index's keywords are done"
-    );
-    // The chunks follow the index's version as well as the render, so the
-    // embed after a new chunking embeds what it cut.
-    Ok(claim_reads(env)
-        .into_iter()
-        .map(|c| OutputClaim {
-            version: keyword_version(&c.version),
-            ..c
-        })
-        .collect())
-}
-
-/// The keyword pass's version: what it read, and the index text's version.
-fn keyword_version(read: &str) -> String {
-    format!("{read}{}", datalib_search_index::text::key_suffix())
-}
-
 /// `<group>/embed`: the vectors this source's chunks are missing from the
 /// inference cache.
 pub async fn run_embed(
@@ -168,12 +132,11 @@ pub async fn run_embed(
     progress.set_message("embedding");
     let root = data_root.to_path_buf();
     let fetch = datalib_qmd_models::Fetch::from_env();
-    let models =
-        tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir, fetch))
-            .await
-            .context("model provisioning panicked")??;
-    let model = crate::search_index::model_file(&models);
-    let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
+    let model = move || {
+        provision_embed_model(&root, models_dir, fetch)
+            .map(|models| crate::search_index::model_file(&models))
+    };
+    let done = crate::search_index::embed(data_root, &env.group, model, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
     progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);
@@ -229,20 +192,6 @@ fn version_of_reads(reads: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The keyword pass's version moves with the index text's version as
-    /// well as with what it read: a new chunking moves no render, and the
-    /// embed after it must still run.
-    #[test]
-    fn the_keyword_pass_claims_the_index_version_too() {
-        let read = version_of_reads(r#"{"mail/render_markdown":"v1"}"#).unwrap();
-        let claimed = keyword_version(&read);
-        assert!(claimed.starts_with(&read), "{claimed}");
-        assert!(
-            claimed.ends_with(&datalib_search_index::text::key_suffix()),
-            "{claimed}"
-        );
-    }
 
     /// A per-source step's version follows what it read, and nothing
     /// else: a run with nothing from the runner claims none.

@@ -362,12 +362,11 @@ mod tests {
         let got = group_status(&[
             child("s/ingest", "succeeded", Step, None),
             child("s/render_markdown", "succeeded", Step, None),
-            child("s/keyword_index", "succeeded", Step, None),
             child("s/embed", "never_run", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "succeeded");
-        assert_eq!(got.1, "s/keyword_index");
+        assert_eq!(got.1, "s/render_markdown");
 
         let nothing_yet = group_status(&[
             child("s/ingest", "never_run", Step, None),
@@ -385,13 +384,12 @@ mod tests {
     fn group_status_passes_over_a_child_that_is_turned_off() {
         let got = group_status(&[
             child("s/ingest", "succeeded", Step, None),
-            child("s/render_markdown", "succeeded", Step, None),
-            child("s/keyword_index", "skipped_up_to_date", Step, None),
+            child("s/render_markdown", "skipped_up_to_date", Step, None),
             child("s/embed", "off", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "skipped_up_to_date");
-        assert_eq!(got.1, "s/keyword_index");
+        assert_eq!(got.1, "s/render_markdown");
 
         let failed = group_status(&[
             child("s/ingest", "failed", Step, None),

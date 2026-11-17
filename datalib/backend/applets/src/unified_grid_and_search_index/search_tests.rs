@@ -261,7 +261,7 @@ async fn the_old_spellings_of_free_text_answer_as_free_text() {
 }
 
 /// Structured terms alone light up the map without a search index, which
-/// a root no `keyword_index` has run on shows.
+/// a root no keyword pass has run on shows.
 #[tokio::test]
 async fn the_map_matches_structured_terms_without_a_search_index() {
     let root = tempfile::tempdir().unwrap();

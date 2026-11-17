@@ -278,7 +278,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              table and only what it cannot do without, so everything else takes its \
              default. `complete` sets every option the params take, each with a comment \
              saying what it does and what leaving it out means; most also add the \
-             `keyword_index` and `embed` steps that put the source in free-text search. \
+             `embed` step that puts the source in the search by meaning. \
              Start from either: trim the complete one, or add to the minimal one. \
              `datalib-step help {t} <method>` lists every option with its type and default."
         ),
@@ -302,8 +302,8 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              Their steps read every source by pattern (`inputs = [\"*/render_markdown\"]`), \
              so a source appended by hand is read with no further edit. A config whose \
              index steps name their inputs one by one needs `<id>/render_markdown` added to \
-             `unified_grid_and_search_index/grid_index`'s, and the stanza's `keyword_index` \
-             and `embed` to `unified_grid_and_search_index/qmd_aggregator`'s.{}",
+             `unified_grid_and_search_index/grid_index`'s, and the stanza's `embed` to \
+             `unified_grid_and_search_index/qmd_aggregator`'s.{}",
             if t.renders_time_series() {
                 " There `<id>/render_time_series` goes in \
                  `unified_time_series_index/time_series_index`'s and `grid_index`'s too."
@@ -601,9 +601,7 @@ fn function_page(f: Function) -> String {
 
 fn example_step_id(f: Function) -> String {
     let group = match f {
-        Function::Ingest | Function::RenderMarkdown | Function::KeywordIndex | Function::Embed => {
-            "slack"
-        }
+        Function::Ingest | Function::RenderMarkdown | Function::Embed => "slack",
         Function::RenderTimeSeries => "garmin",
         Function::RenderOccurrences => "calendar",
         Function::GridIndex | Function::QmdAggregator | Function::EmbeddingMap => {

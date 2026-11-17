@@ -32,8 +32,8 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. Every step names the program it runs in `command`.
 Datalib's own steps write `command = "datalib-step"` (the functions
-`ingest`, `render_markdown`, `keyword_index`, `embed`, `grid_index`,
-`qmd_aggregator` and `embedding_map`); a custom step names its own. `[[applets]]` is the app surface —
+`ingest`, `render_markdown`, `embed`, `grid_index`, `qmd_aggregator`
+and `embedding_map`); a custom step names its own. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
@@ -73,26 +73,22 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["slack/ingest"]
 
-# The source's own part of free-text search: its keyword index, then
-# its embeddings (the slow one). Leave both out to keep it out of
-# search.
-[[steps]]
-group = "slack"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["slack/render_markdown"]
-
+# The source's search by meaning: the embeddings of what `grid_index`
+# put in the keyword search (the slow one). Leave it out and keyword
+# search still finds the source.
 [[steps]]
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 # The shared fan-in steps. Each reads every source's steps of one
 # function by pattern, so a source added above needs no edit here:
-# `*/render_markdown` is every source's render. `qmd_aggregator` runs
-# after the search steps and drops from search any source it does not
-# read. Name steps one by one instead to leave a source out on purpose.
+# `*/render_markdown` is every source's render. `grid_index` puts every
+# source it reads in the keyword search but those it lists in
+# `params.not_searched`; `qmd_aggregator` runs after every `embed` and
+# keeps only the embeddings a chunk still names. Name steps one by one
+# instead to leave a source out of the grid on purpose.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -106,7 +102,7 @@ inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["*/keyword_index", "*/embed"]
+inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
@@ -178,9 +174,11 @@ with
 `datalib-migrate-config <data_root> --force`. There is no API for it,
 and you should not try to translate the file yourself. A `qmd_index`
 step is different: the server rewrites it into `qmd_aggregator` and each
-source's own `keyword_index` and `embed` steps as soon as it reads the
-file, keeping the old one as `config.toml.bak`, so re-read the config
-after writing one. The same goes for an index group under an earlier
+source's own `embed` step as soon as it reads the file, keeping the old
+one as `config.toml.bak`, so re-read the config after writing one. So
+is a `keyword_index` step: `grid_index` does that work now, and the
+server takes the step out, listing in `grid_index`'s `not_searched` each
+source that had none. The same goes for an index group under an earlier
 name, `unified_index` or `unified_document_index`: the server renames
 it, its steps and its applet to `unified_grid_and_search_index`. And for an id with capitals in it: every
 group, step and applet id is lower case, since each names a folder,

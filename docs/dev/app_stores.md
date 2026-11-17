@@ -134,9 +134,8 @@ ours.
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
-the grid index's tables, and each source's `keyword_index` and the
-`qmd_aggregator` own the search index's `search_*` tables in the same
-file; `datalib-http` owns feedback, usage and remote media;
+the grid index's tables and, with `qmd_aggregator`, the search index's
+`search_*` tables in the same file; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
@@ -150,12 +149,12 @@ does it at the end of every pass (`grid_index::close_index`). The two
 owners of the grid index's file share it by SQLite's own lock: each
 write transaction starts with `BEGIN IMMEDIATE`, so it waits for the
 other's rather than failing, and the search index writes in batches of
-a few hundred documents. A `keyword_index` can wait as long as
+a few hundred documents. The aggregator's sweep can wait as long as
 `grid_index` takes to load one source: seconds in an ordinary sync, many
 minutes for a large source loaded whole. When either owner's shape
 changes it drops only its own tables. Deleting the file by hand deletes
-the search index's rows with it; a source's `keyword_index` puts them
-back the next time its render changes. `runs.sqlite` is the other exception to doltlite: plain
+the search index's rows with it; `grid_index` puts them back on its
+next run. `runs.sqlite` is the other exception to doltlite: plain
 SQLite in WAL mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
 up, two while a `datalib-dag` runs the loop — which SQLite's own locking

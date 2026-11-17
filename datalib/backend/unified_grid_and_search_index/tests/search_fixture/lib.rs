@@ -64,7 +64,7 @@ pub fn materialize_root(dst: &Path) {
 }
 
 /// The fixture's grid index as its sync left it, before any search
-/// index step wrote into it: a root no `keyword_index` has run on.
+/// index step wrote into it: a root no keyword pass has run on.
 pub fn copy_grid_index(dst: &Path) {
     copy_writable(
         "SEARCH_FIXTURE_PLAIN_GRID_RLOC",

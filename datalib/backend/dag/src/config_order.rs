@@ -497,17 +497,17 @@ id = "unified_grid_and_search_index"
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
-inputs = ["slack/keyword_index", "notes/keyword_index"]
+inputs = ["slack/embed", "notes/embed"]
 
 # slack's search
 [[steps]]
 group = "slack"
-function = "keyword_index"
+function = "embed"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "notes"
-function = "keyword_index"
+function = "embed"
 inputs = ["notes/render_markdown"]
 
 [[applets]]
@@ -521,9 +521,9 @@ command = "datalib-applet unified_grid_and_search_index"
             [
                 "slack/ingest",
                 "slack/render_markdown",
-                "slack/keyword_index",
+                "slack/embed",
                 "notes/render_markdown",
-                "notes/keyword_index",
+                "notes/embed",
                 "unified_grid_and_search_index/qmd_aggregator",
             ]
         );
@@ -535,7 +535,7 @@ command = "datalib-applet unified_grid_and_search_index"
         assert!(sorted.starts_with("data_root = \"~/datalib\"\n\n# ── slack ──\n"));
         // A comment travels with the entry under it, a sub-table with its step.
         let at = |s: &str| sorted.find(s).unwrap();
-        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"keyword_index\""));
+        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"embed\""));
         assert!(
             at("# slack's search")
                 > at("function = \"render_markdown\"\ninputs = [\"slack/ingest\"]")
