@@ -13,7 +13,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::ENTITY_KIND_CONVERSATION;
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
-    NormalizedReaction, Recipient, RecipientRole,
+    NormalizedReaction, Recipient, RecipientRole, UpstreamRef,
 };
 use datalib_etl_chat_common::{RecordStampPrecision, RenderProfile, TextFormat};
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
@@ -139,6 +139,7 @@ fn riker_email() -> NormalizedChat {
         },
     ];
     item.labels = vec!["Inbox".into(), "Away Missions".into()];
+    item.source_ref = Some(UpstreamRef::new("email", "M-ncc1701-0042"));
     let mut thread = chat(
         "riker-thread",
         "Away team roster",
@@ -631,7 +632,12 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("contact:*", vec!["picard-card", "senior-staff-card"]),
         ("email:picard@enterprise.org", vec!["picard-card"]),
         // A document, and every row in it.
-        ("convo:riker-thread", vec!["riker-email", "riker-thread"]),
+        (
+            "datalib_document_id:riker-thread",
+            vec!["riker-email", "riker-thread"],
+        ),
+        // A row by the id its source gave it: here an email's.
+        ("id:M-ncc1701-0042", vec!["riker-email"]),
         // Keys combine with AND.
         ("with:picard kind:Email", vec!["riker-email"]),
     ] {
@@ -657,7 +663,10 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // Column keys: the whole value, case and all.
         "kind:email",
         "contact:Picard",
-        "convo:riker",
+        "datalib_document_id:riker",
+        // `id:` is the source's id, whole: not part of it, not datalib's.
+        "id:ncc1701",
+        "id:riker-email",
         // The email column holds a card's first address only.
         "email:jean-luc@chateau-picard.example",
         // `email:` is that column, not a person's address: Riker has no
@@ -704,16 +713,14 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         assert_eq!(found(&s, q, fields).await, want, "fields: {q}");
     }
 
-    // There is no `id:` key; a row's id is found on the fields.
-    for q in ["id:riker", r#"id:"riker""#] {
-        let r = search(&s, q, None, 50, None).await;
-        assert!(r.rows.is_empty(), "{q}: {:?}", uuids(&r));
-        assert!(
-            r.refused.iter().any(|why| why.contains("`id:`")),
-            "{q}: {:?}",
-            r.refused
-        );
-    }
+    // `convo:` was `datalib_document_id:`'s old name, and is gone: refused by name.
+    let r = search(&s, "convo:riker-thread", None, 50, None).await;
+    assert!(r.rows.is_empty(), "{:?}", uuids(&r));
+    assert!(
+        r.refused.iter().any(|why| why.contains("`convo:`")),
+        "{:?}",
+        r.refused
+    );
 }
 
 /// A result opens through its link: a message links to its page at itself,
