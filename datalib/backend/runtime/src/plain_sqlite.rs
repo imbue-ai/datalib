@@ -11,6 +11,12 @@
 
 use std::path::Path;
 
+/// What a plain file in WAL mode sets `journal_size_limit` to: the size
+/// its `-wal` is cut back to at the first write after a checkpoint. A
+/// checkpoint alone lets the WAL start over but leaves the file as large
+/// as the largest transaction made it.
+pub const WAL_SIZE_LIMIT_BYTES: &str = "67108864";
+
 pub fn uri(path: &Path) -> String {
     // SQLite percent-decodes a URI's path, so anything that would
     // terminate it or be decoded away has to be escaped. Spaces are fine
