@@ -17,6 +17,7 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
         markdown_uuid: uuid.into(),
         content_hash: format!("h-{uuid}"),
         title: uuid.into(),
+        head: None,
         sections: messages
             .iter()
             .map(|(m, text)| IndexSection {
@@ -137,6 +138,7 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
         markdown_uuid: "thread".into(),
         content_hash: "h-thread".into(),
         title: "thread".into(),
+        head: None,
         sections: ["m1", "m2"]
             .into_iter()
             .map(|m| IndexSection {
