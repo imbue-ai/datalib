@@ -362,18 +362,19 @@ the program it runs in `command`; datalib's own steps run
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
-name into the SQL index the grid reads, and the problem rows of the
-time-series and occurrences steps it names. A searched source fills its own
-part of the search index (`search_*` tables in the grid index's file, and
-the vectors in `search_index/inference_cache.sqlite`) with two more steps
-of its own, `keyword_index` and then `embed`, so the slow embedding can be
-turned off or run by hand per source. `qmd_aggregator` reads every
-source's pair: it drops any source it does not name, sweeps vectors no
-chunk names, and reports on the whole, and removing it turns search off.
-Its id is qmd's, whose index this replaced
-(`docs/dev/plans/search_index_from_ram.md`).
-`embedding_map` reads the aggregator and lays the embeddings out on a
-plane for the map card (`datalib/backend/embedding_map/README.md`).
+name (`*/render_markdown`, every source's) into the SQL index the grid
+reads, and the problem rows of the time-series and occurrences steps it
+names. It then puts each source in the keyword search, the `search_*`
+tables in the same file, but those its `params.not_searched` lists. A
+source searched by meaning has one more step of its own, `embed`, which
+reads `grid_index` and fills the vectors in
+`search_index/inference_cache.sqlite`, so the slow embedding can be
+turned off or run by hand per source. `grid_index` also sweeps the
+vectors no chunk names and reports what search holds of each source
+(`docs/dev/plans/search_index_from_ram.md` is how the search index came
+to replace qmd's). `embedding_map` reads every `embed` and lays the
+embeddings out on a plane for the map card
+(`datalib/backend/embedding_map/README.md`).
 A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `render_time_series` step beside its `render_markdown`, and
 `time_series_index` under `unified_time_series_index` indexes every
@@ -478,8 +479,8 @@ The rules, none optional. How our code enforces them is in
   per-file lock refuses it. `datalib-http` owns feedback, usage and
   remote media; the applet only reads. (The grid index is not doltlite:
   it is plain SQLite in WAL mode, which keeps no history and needs none
-  of these rules. `grid_index`, every `keyword_index` and `qmd_aggregator`
-  write it, one at a time under the runner's `qmd_keyword` lock.) A download takes its store as an input
+  of these rules. `grid_index` alone writes it, under the runner's
+  `qmd_keyword` lock.) A download takes its store as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a

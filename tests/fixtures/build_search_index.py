@@ -1,6 +1,7 @@
 """The fixture's search index: `:ingested_tng`'s rendered tree and grid
-index, with each source's `keyword_index` step run over them by the real
-`datalib-step`, as a sync runs it.
+index, with the `grid_index` step run over them by the real
+`datalib-step`, as a sync runs it: the grid is already loaded, so the
+step's keyword pass over every source is what it writes.
 
 Writes the grid index with the search index's tables in it, and every
 chunk's prompt (`search_prompts`), which `:ingested_tng_vectors` embeds.
@@ -45,17 +46,16 @@ def main() -> int:
         groups = sorted(
             p.name for p in root.iterdir() if (p / "render_markdown").is_dir()
         )
-        for group in groups:
-            env = {
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "DATALIB_DAG_DATA_ROOT": str(root),
-                "DATALIB_DAG_GROUP": group,
-                "DATALIB_DAG_FUNCTION": "keyword_index",
-                "DATALIB_DAG_STEP": f"{group}/keyword_index",
-                "DATALIB_DAG_INPUTS": f"{group}/render_markdown",
-                "DATALIB_MODELS_NO_FETCH": "1",
-            }
-            subprocess.run([step], env=env, check=True)
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "DATALIB_DAG_DATA_ROOT": str(root),
+            "DATALIB_DAG_GROUP": "unified_grid_and_search_index",
+            "DATALIB_DAG_FUNCTION": "grid_index",
+            "DATALIB_DAG_STEP": "unified_grid_and_search_index/grid_index",
+            "DATALIB_DAG_INPUTS": "\n".join(f"{g}/render_markdown" for g in groups),
+            "DATALIB_MODELS_NO_FETCH": "1",
+        }
+        subprocess.run([step], env=env, check=True)
         subprocess.run([prompts_bin, str(root), model, out_prompts], check=True)
         # One file, no write-ahead log beside it.
         with sqlite3.connect(db) as conn:

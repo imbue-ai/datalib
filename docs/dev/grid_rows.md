@@ -460,7 +460,7 @@ caption is a `caption:` term.
 
 **A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and every source's `keyword_index` leaves
+its rows and opens like any other, and `grid_index`'s keyword pass leaves
 that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found

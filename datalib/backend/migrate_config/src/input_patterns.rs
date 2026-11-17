@@ -135,9 +135,9 @@ inputs = ["picard/ingest"]
 
 [[steps]]
 group = "picard"
-function = "keyword_index"
+function = "embed"
 command = "datalib-step"
-inputs = ["picard/render_markdown"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 [[groups]]
 id = "riker"
@@ -175,15 +175,14 @@ inputs = [
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["picard/keyword_index"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
 function = "embedding_map"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/qmd_aggregator"]
+inputs = ["picard/embed"]
+
+[[steps]]
+id = "exports/csv"
+command = "my-exporter"
+inputs = ["picard/render_markdown", "riker/render_markdown"]
 "#;
 
     fn loaded_inputs(text: &str, step: &str) -> Vec<String> {
@@ -221,8 +220,8 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
         assert!(is_retired(BEFORE).unwrap());
         let after = rewrite(BEFORE).unwrap();
         let grid = "unified_grid_and_search_index/grid_index";
-        let aggregator = "unified_grid_and_search_index/qmd_aggregator";
         let map = "unified_grid_and_search_index/embedding_map";
+        let export = "exports/csv";
         assert_eq!(
             written_inputs(&after, grid),
             [
@@ -231,12 +230,12 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
                 "*/render_occurrences"
             ]
         );
+        assert_eq!(written_inputs(&after, map), ["*/embed"]);
         assert_eq!(
-            written_inputs(&after, aggregator),
-            ["*/keyword_index", "*/embed"]
+            written_inputs(&after, export),
+            written_inputs(BEFORE, export)
         );
-        assert_eq!(written_inputs(&after, map), written_inputs(BEFORE, map));
-        for step in [grid, aggregator, map] {
+        for step in [grid, map, export] {
             assert_eq!(
                 loaded_inputs(&after, step),
                 loaded_inputs(BEFORE, step),

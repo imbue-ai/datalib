@@ -53,10 +53,3 @@ group = "garmin"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["garmin/ingest"]
-
-# Free-text search by keyword (BM25).
-[[steps]]
-group = "garmin"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["garmin/render_markdown"]
