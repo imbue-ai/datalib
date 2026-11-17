@@ -21,7 +21,7 @@ use datalib_unified_grid_and_search_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The `grid_index` step's handle on the root's index, for seeding: a
+/// The `unified_grid_and_search_index` step's handle on the root's index, for seeding: a
 /// plain WAL file with its generation row, as `open_index` makes it. The
 /// repo under test opens its own, read-only, once the file exists — which
 /// is exactly how the applet reads what the step wrote.
@@ -307,7 +307,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
 }
 
 /// An index an older build wrote has no `markdowns.section_layout` until
-/// `grid_index` rebuilds it, and opening any document there was a 500
+/// `unified_grid_and_search_index` rebuilds it, and opening any document there was a 500
 /// for the whole re-render an upgrade starts.
 #[tokio::test]
 async fn a_document_opens_in_an_index_without_section_layouts() {

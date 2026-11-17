@@ -456,14 +456,14 @@ inputs = ["claude/ingest"]
 group = "claude"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = ["*/render_markdown"]
 
@@ -596,8 +596,8 @@ faster.
   first.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
-- The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_grid_and_search_index/grid_index/db.sqlite`,
+- The `unified_grid_and_search_index` step: one row per message or document written into
+  the SQL store at `<data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
   then each source's words into the keyword search beside them.
 - An `embed` step per source: the embeddings of that source's part of
   search, which let a search match on meaning. The first `embed`
@@ -627,7 +627,7 @@ faster.
 ├── gmail-takeout/
 │   └── …
 ├── unified_grid_and_search_index/                  # the shared indexes, rebuildable
-│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges + the search index
+│   ├── unified_grid_and_search_index/db.sqlite  #   grid rows + markdowns + edges + the search index
 │   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
@@ -752,7 +752,7 @@ are already in open formats you can read with no datalib at all:
   Attachments are not in those: their bytes live beside them in
   `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
   opens as it is. So is the grid's table,
-  `unified_grid_and_search_index/grid_index/db.sqlite`, which is rebuilt from
+  `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`, which is rebuilt from
   the stores and keeps no history; the same pipe makes a copy of it
   that opens anywhere.
 

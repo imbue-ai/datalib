@@ -143,12 +143,12 @@ describe("the sources of a pass", () => {
       steps: [
         step("enterprise-mail/ingest", "done"),
         step("enterprise-mail/render_markdown", "failed", "no datalib-step"),
-        step("unified_grid_and_search_index/grid_index", "done"),
+        step("unified_grid_and_search_index/unified_grid_and_search_index", "done"),
       ],
       rerender: [
         "ten-forward/render_markdown",
         "ten-forward/embed",
-        "unified_grid_and_search_index/grid_index",
+        "unified_grid_and_search_index/unified_grid_and_search_index",
       ],
     };
     expect(sourceRows(upgrade.steps)).toEqual([

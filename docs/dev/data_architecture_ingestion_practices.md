@@ -115,7 +115,7 @@ Reach for the simplest existing provider that's shaped like yours,
    render side. See
    [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
 
-The grid index needs no per-provider change: the `grid_index` step
+The grid index needs no per-provider change: the `unified_grid_and_search_index` step
 (`build_grid_index` in `etl/render/src/grid_index.rs`) picks up the new
 source's render store on its next run.
 

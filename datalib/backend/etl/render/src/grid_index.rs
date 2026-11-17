@@ -3,8 +3,8 @@
 //!
 //! Two entry points, which are the same write path from two sides.
 //! [`apply_one`] writes one rendered document; [`build_grid_index`] stacks
-//! every source's store into the unified grid and search index, which is the `grid_index` DAG
-//! step's whole job.
+//! every source's store into the unified grid and search index, which is
+//! the `unified_grid_and_search_index` DAG step's whole job.
 //!
 //! A re-render replaces a document's rows rather than accumulating them,
 //! writing only those that differ, and the search terms of what it wrote
@@ -656,7 +656,7 @@ fn index_name(ddl: &str) -> Option<&str> {
         .next()
 }
 
-/// The `grid_index` step's handle on the index: the one way to open it
+/// The `unified_grid_and_search_index` step's handle on the index: the one way to open it
 /// for writing. One connection, never recycled, as every pool here
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
@@ -1074,7 +1074,7 @@ pub async fn build_grid_index(
 }
 
 /// Stack the render stores of exactly `sources` into the index — the
-/// `grid_index` DAG step's whole job. The step passes the groups its
+/// `unified_grid_and_search_index` DAG step's whole job. The step passes the groups its
 /// declared inputs name, so a source dropped from the config stops being
 /// read on the next run even while its tree is still on disk, and its
 /// documents leave the index — and a directory that is not in the config
@@ -1680,7 +1680,7 @@ impl SealCounts {
 
     fn message(self, source: &str) -> String {
         format!(
-            "datalib-step grid_index: source={source} markdowns_read={} \
+            "datalib-step unified_grid_and_search_index: source={source} markdowns_read={} \
              markdowns_loaded={} markdowns_removed={} rows_inserted={}",
             self.read, self.loaded, self.removed, self.rows
         )

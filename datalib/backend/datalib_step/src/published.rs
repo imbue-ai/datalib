@@ -19,8 +19,8 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
     use datalib_etl::doltlite_raw::{
         content_commit_at_path, content_version_at_path, head_commit_at_path,
     };
-    if matches!(env.function, Function::GridIndex) {
-        return crate::grid_index::version(data_root).await;
+    if matches!(env.function, Function::UnifiedGridAndSearchIndex) {
+        return crate::unified_grid_and_search_index::version(data_root).await;
     }
     let Some(store) = store(env, data_root) else {
         return Ok(None);
@@ -43,7 +43,9 @@ pub fn store(env: &StepEnv, data_root: &Path) -> Option<PathBuf> {
         Function::RenderOccurrences => {
             datalib_etl::layout::render_occurrences_db(data_root, &env.group)
         }
-        Function::GridIndex | Function::Embed | Function::EmbeddingMap => return None,
+        Function::UnifiedGridAndSearchIndex | Function::Embed | Function::EmbeddingMap => {
+            return None;
+        }
     })
 }
 

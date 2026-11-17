@@ -143,6 +143,9 @@ pub enum Retired {
     /// A `qmd_aggregator` step, from before `grid_index` swept the vectors
     /// and reported (`aggregator_drop.rs`).
     AggregatorStep,
+    /// The index step under its old function, `grid_index`
+    /// (`index_step_name.rs`).
+    GridIndexStep,
     /// A `grid_index` that names a `render_time_series` or
     /// `render_occurrences` step it does not read (`unread_inputs.rs`).
     UnreadGridInputs,

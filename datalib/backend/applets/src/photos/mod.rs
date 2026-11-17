@@ -145,7 +145,7 @@ fn not_found(why: impl Into<String>) -> ApiError {
 
 // ── The index ────────────────────────────────────────────────────────────
 
-/// The grid index, read-only, or `None` before the first `grid_index`.
+/// The grid index, read-only, or `None` before the first `unified_grid_and_search_index`.
 async fn open_index(root: &Path) -> Result<Option<SqlitePool>> {
     let db = datalib_runtime::layout::grid_index_db(root);
     if !db.exists() {

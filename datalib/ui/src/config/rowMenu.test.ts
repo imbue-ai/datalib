@@ -121,10 +121,10 @@ describe("rowMenu", () => {
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
     const gridIndexStep = target({
-      id: "unified_grid_and_search_index/grid_index",
+      id: "unified_grid_and_search_index/unified_grid_and_search_index",
       kind: "step",
       type: null,
-      func: "grid_index",
+      func: "unified_grid_and_search_index",
     });
     expect(has(rowMenu([gridIndexStep], opts), "reset")).toBe(false);
   });
@@ -227,7 +227,7 @@ describe("rowMenu", () => {
 
   it("names the trees that keep no store", () => {
     expect(noStoreReason(target({ kind: "step", func: "ingest" }))).toBeNull();
-    expect(noStoreReason(target({ kind: "step", func: "grid_index" }))).toBe(
+    expect(noStoreReason(target({ kind: "step", func: "unified_grid_and_search_index" }))).toBe(
       "The grid index is plain SQLite, with no commit history",
     );
     expect(

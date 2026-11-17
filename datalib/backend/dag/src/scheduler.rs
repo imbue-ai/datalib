@@ -1318,7 +1318,7 @@ mod tests {
     /// hop, exactly as a checkpoint is. Without that a chain streams one
     /// hop only -- the first consumer runs early, but nothing downstream of
     /// it moves until it goes terminal, which is after the producer has
-    /// finished. For `ingest -> render -> grid_index` that meant no row
+    /// finished. For `ingest -> render -> unified_grid_and_search_index` that meant no row
     /// reached the grid until the download was over.
     #[tokio::test]
     async fn an_early_pass_that_produced_output_dispatches_its_own_consumers() {
@@ -1541,7 +1541,7 @@ mod tests {
         );
     }
 
-    /// At most one instance of a step in flight. `grid_index` is a fan-in
+    /// At most one instance of a step in flight. `unified_grid_and_search_index` is a fan-in
     /// that every source pokes, so two producers checkpointing at once is
     /// the ordinary case — and a second dispatch would put two writers on
     /// one tree, which single-writer-per-file forbids everywhere here.
@@ -1693,7 +1693,7 @@ mod tests {
         let slack = producer("slack", always, Arc::new(AtomicBool::new(false)));
         let email = producer("email", in_pass.clone(), email_sealed.clone());
 
-        let grid_index = {
+        let index_step = {
             let (passes, concurrent, max_seen, in_pass, email_sealed) = (
                 passes.clone(),
                 concurrent.clone(),
@@ -1737,7 +1737,7 @@ mod tests {
             .input("email/rendered_md")
         };
 
-        let graph = Graph::build(vec![slack, email, grid_index]).unwrap();
+        let graph = Graph::build(vec![slack, email, index_step]).unwrap();
         let rec = Arc::new(Recorder::default());
         let mut r = runner(root.path());
         r.sink = rec.clone();
@@ -1855,7 +1855,7 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (passes, concurrent, max_seen, in_pass, sealed) = (
                 passes.clone(),
                 concurrent.clone(),
@@ -1899,7 +1899,7 @@ mod tests {
         let graph = Graph::build(vec![
             producer("slack", slack_saw.clone()),
             producer("email", email_saw.clone()),
-            grid_index,
+            index_step,
         ])
         .unwrap();
         let rec = Arc::new(Recorder::default());
@@ -2055,7 +2055,7 @@ mod tests {
         );
     }
 
-    /// The `render -> grid_index` shape specifically: several producers
+    /// The `render -> unified_grid_and_search_index` shape specifically: several producers
     /// that both checkpoint *and* finish at about the same moment.
     ///
     /// Two different code paths can make the fan-in ready — a checkpoint
@@ -2102,7 +2102,7 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (concurrent, max_seen, passes) =
                 (concurrent.clone(), max_seen.clone(), passes.clone());
             StepSpec::new(
@@ -2131,7 +2131,7 @@ mod tests {
         let graph = Graph::build(vec![
             render("slack", barrier.clone()),
             render("email", barrier),
-            grid_index,
+            index_step,
         ])
         .unwrap();
         let report = tokio::time::timeout(Duration::from_secs(10), runner(root.path()).run(&graph))
@@ -2174,7 +2174,7 @@ mod tests {
     /// A producer *finishing* should start the fan-in, not just a
     /// checkpoint from one.
     ///
-    /// With several renders feeding `grid_index`, the fast ones are done
+    /// With several renders feeding `unified_grid_and_search_index`, the fast ones are done
     /// long before the slow one. Waiting for `remaining_deps` to reach zero
     /// means none of their documents reach the grid until the slowest
     /// source finishes — which for a mirror with one big source is nearly
@@ -2242,7 +2242,7 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (slow_done, ran_early, passes) =
                 (slow_done.clone(), ran_early.clone(), passes.clone());
             StepSpec::new(
@@ -2267,7 +2267,7 @@ mod tests {
             .input("slow/rendered_md")
         };
 
-        let graph = Graph::build(vec![fast, slow, grid_index]).unwrap();
+        let graph = Graph::build(vec![fast, slow, index_step]).unwrap();
         let report = tokio::time::timeout(Duration::from_secs(15), runner(root.path()).run(&graph))
             .await
             .expect("the fan-in never ran, so the slow producer never returned")

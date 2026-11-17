@@ -1,11 +1,13 @@
-//! A config whose `grid_index` still names `render_time_series` or
+//! A config whose index step still names `render_time_series` or
 //! `render_occurrences` steps in its `inputs`, as a pattern
-//! (`*/render_time_series`) or by id. They were wired in so `grid_index`
+//! (`*/render_time_series`) or by id. They were wired in so the step
 //! could copy their problem rows; problems are now read in each step's
-//! own store, and `grid_index` passes over those inputs
-//! (`render_inputs` in `datalib_step/src/grid_index.rs`). All they still
-//! did was run `grid_index` again after every such render. The rewrite
-//! takes them out of `grid_index`'s `inputs`, and changes nothing else.
+//! own store, and the step passes over those inputs (`render_inputs` in
+//! `datalib_step/src/unified_grid_and_search_index.rs`). All they still
+//! did was run the step again after every such render. The rewrite takes
+//! them out of the step's `inputs`, and changes nothing else. It runs
+//! after `index_step_name.rs`, so it finds the step by its current
+//! function.
 
 use anyhow::{Context as _, Result};
 use datalib_dag::config::names_datalib_step;
@@ -14,10 +16,10 @@ use serde::Deserialize;
 
 use crate::index_name::NEW as UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 
-/// The functions `grid_index` no longer reads; the same list
+/// The functions the index step no longer reads; the same list
 /// `render_inputs` passes over.
 const UNREAD: &[&str] = &["render_time_series", "render_occurrences"];
-const GRID_INDEX: &str = "grid_index";
+const INDEX_STEP: &str = crate::index_step_name::NEW;
 
 #[derive(Deserialize)]
 struct View {
@@ -40,12 +42,12 @@ struct StepView {
 }
 
 impl StepView {
-    fn is_grid_index(&self) -> bool {
+    fn is_index_step(&self) -> bool {
         let id = match (&self.group, &self.function) {
             (Some(g), Some(f)) => format!("{g}/{f}"),
             _ => self.id.clone().unwrap_or_default(),
         };
-        id == format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/{GRID_INDEX}")
+        id == format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/{INDEX_STEP}")
             && names_datalib_step(self.command.as_deref())
     }
 }
@@ -56,12 +58,12 @@ fn unread(input: &str) -> bool {
         .is_some_and(|(_, function)| UNREAD.contains(&function))
 }
 
-/// `grid_index`'s `inputs` and what is left of them, when any goes.
+/// The index step's `inputs` and what is left of them, when any goes.
 fn edit(view: &View) -> Option<(&toml::Spanned<Vec<String>>, Vec<String>)> {
     let inputs = view
         .steps
         .iter()
-        .find(|s| s.is_grid_index())?
+        .find(|s| s.is_index_step())?
         .inputs
         .as_ref()?;
     let kept: Vec<String> = inputs
@@ -146,7 +148,7 @@ id = "unified_grid_and_search_index"
 # every source's documents
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = [
     "*/render_markdown", # the logs
@@ -176,15 +178,15 @@ inputs = ["*/render_time_series"]
         step.inputs.clone()
     }
 
-    /// The time-series and occurrences inputs leave `grid_index`, whether
+    /// The time-series and occurrences inputs leave the index step, whether
     /// written as a pattern or by id; its other input keeps its comment,
     /// every other line of the file is as it was, the time-series index
     /// still reads every time series, and a second pass finds nothing to do.
     #[test]
-    fn grid_index_stops_naming_the_steps_it_does_not_read() {
+    fn the_index_step_stops_naming_the_steps_it_does_not_read() {
         assert!(is_retired(BEFORE).unwrap());
         let after = rewrite(BEFORE).unwrap();
-        let grid = "unified_grid_and_search_index/grid_index";
+        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         let ts_index = "unified_time_series_index/time_series_index";
         let check = check(&after);
         assert_eq!(
@@ -207,13 +209,13 @@ inputs = ["*/render_time_series"]
         assert_eq!(rewrite(&after).unwrap(), after);
     }
 
-    /// A `grid_index` that is someone's own program reads what it reads,
+    /// An index step that is someone's own program reads what it reads,
     /// and a config with nothing to take out is returned as it was.
     #[test]
-    fn a_custom_grid_index_and_a_current_config_are_left_alone() {
+    fn a_custom_index_step_and_a_current_config_are_left_alone() {
         let custom = BEFORE.replace(
-            "function = \"grid_index\"\ncommand = \"datalib-step\"\n",
-            "function = \"grid_index\"\ncommand = \"my-grid\"\n",
+            "function = \"unified_grid_and_search_index\"\ncommand = \"datalib-step\"\n",
+            "function = \"unified_grid_and_search_index\"\ncommand = \"my-grid\"\n",
         );
         assert!(!is_retired(&custom).unwrap());
         assert_eq!(rewrite(&custom).unwrap(), custom);

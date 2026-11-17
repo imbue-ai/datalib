@@ -1,6 +1,6 @@
 //! The search index (docs/dev/plans/search_index_from_ram.md): what the
-//! `grid_index` step's keyword pass and sweep, and each source's `embed`, do with
-//! it.
+//! `unified_grid_and_search_index` step's keyword pass and sweep, and
+//! each source's `embed`, do with it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
 }
 
 /// One source's documents in the search index, brought in line with its
-/// render store: the `grid_index` step's keyword pass, once per searched source.
+/// render store: the `unified_grid_and_search_index` step's keyword pass, once per searched source.
 /// The store is read at one commit for the whole pass, and a source whose
 /// store and text version are where its last finished pass left them is
 /// not read at all.
@@ -646,9 +646,9 @@ async fn embed_batch<E: EmbedPrompt>(
     })
 }
 
-/// The `grid_index` step's sweep: the cache keeps only the vectors a chunk of the
-/// index still names. Answers how many went. Touches nothing that does not
-/// exist yet.
+/// The `unified_grid_and_search_index` step's sweep: the cache keeps only
+/// the vectors a chunk of the index still names. Answers how many went.
+/// Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path) -> Result<u64> {
     retire_separate_file(root)?;
     let index_path = layout::grid_index_db(root);
@@ -668,7 +668,7 @@ pub(crate) async fn sweep(root: &Path) -> Result<u64> {
     gone
 }
 
-/// The `grid_index` step's half after its keyword passes: every document of a
+/// The `unified_grid_and_search_index` step's half after its keyword passes: every document of a
 /// source it does not search goes, whether the source left the config or
 /// was put in `not_searched`. Returns how many went.
 pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<usize> {
@@ -987,7 +987,7 @@ mod tests {
         assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
     }
 
-    /// The `grid_index` step searches every source it reads but those its
+    /// The `unified_grid_and_search_index` step searches every source it reads but those its
     /// `not_searched` lists: a listed source's documents leave the index,
     /// and come back once it is off the list, though its store has not
     /// moved since its last pass.
@@ -998,12 +998,12 @@ mod tests {
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
         one_doc(root, OTHER, "d-hypo", "a hypospray");
         let env = crate::source::StepEnv {
-            step: "unified_grid_and_search_index/grid_index".into(),
+            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
             group: "unified_grid_and_search_index".into(),
             group_type: None,
             source_group: None,
             source_group_type: None,
-            function: crate::function::Function::GridIndex,
+            function: crate::function::Function::UnifiedGridAndSearchIndex,
             inputs: vec![
                 format!("{GROUP}/render_markdown"),
                 format!("{OTHER}/render_markdown"),
@@ -1012,10 +1012,10 @@ mod tests {
         let run = |not_searched: Vec<String>| {
             let env = &env;
             async move {
-                crate::grid_index::run_with(
+                crate::unified_grid_and_search_index::run_with(
                     root,
                     env,
-                    &crate::grid_index::Params { not_searched },
+                    &crate::unified_grid_and_search_index::Params { not_searched },
                     &four_bytes_a_token,
                     Some("2026-01-01T00:00:00+00:00"),
                     &crate::events::Emitter::new("test".into()),

@@ -1,4 +1,4 @@
-// How far into search the wizard puts a source: out of the `grid_index` step's
+// How far into search the wizard puts a source: out of the `unified_grid_and_search_index` step's
 // `not_searched` for its words, an `embed` step for its meaning. A
 // time-series source never gets an embed step, whichever caller asks for
 // one; any other source still can.
@@ -25,7 +25,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
 
 [[steps]]
@@ -40,7 +40,7 @@ const embeds = (text: string) =>
     .map((s) => s.id);
 
 const notSearched = (text: string) =>
-  listSteps(text).find((s) => s.function === "grid_index")?.params?.not_searched;
+  listSteps(text).find((s) => s.function === "unified_grid_and_search_index")?.params?.not_searched;
 
 describe("setSearchSteps", () => {
   it("gives a garmin source its words and no embed step", () => {
@@ -50,16 +50,16 @@ describe("setSearchSteps", () => {
     expect(searchIndexingOf(listSteps(out), "away-team")).toBe("keyword");
   });
 
-  it("still embeds a source of any other type, reading the `grid_index` step", () => {
+  it("still embeds a source of any other type, reading the `unified_grid_and_search_index` step", () => {
     const out = setSearchSteps(config("email"), "away-team", "keyword_and_embed");
     expect(embeds(out)).toEqual(["away-team/embed"]);
     expect(listSteps(out).find((s) => s.id === "away-team/embed")?.inputs).toEqual([
-      "unified_grid_and_search_index/grid_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
     ]);
     expect(searchIndexingOf(listSteps(out), "away-team")).toBe("keyword_and_embed");
   });
 
-  /// Out of search is said on the `grid_index` step, and in again takes it back
+  /// Out of search is said on the `unified_grid_and_search_index` step, and in again takes it back
   /// off the list, leaving no empty one behind.
   it("lists a source kept out of search in not_searched, and takes it off again", () => {
     const embedded = setSearchSteps(config("email"), "away-team", "keyword_and_embed");

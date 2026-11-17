@@ -16,7 +16,6 @@ mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
-mod grid_index;
 mod help;
 mod hints;
 mod index_steps;
@@ -41,6 +40,7 @@ mod source_type;
 mod synth;
 mod time_series;
 mod topo_sort_config;
+mod unified_grid_and_search_index;
 
 #[cfg(test)]
 mod agent_docs_test;
@@ -66,9 +66,9 @@ use crate::source::StepEnv;
 const LONG_ABOUT: &str = "\
 The built-in step program: datalib-dag runs it for every step in a config \
 with no `command`, and tells it through the environment which function to \
-perform (ingest, render_markdown, grid_index, …) for which group. To run one \
-step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
-it, and every step that reads it after it, and records what it published. \
+perform (ingest, render_markdown, unified_grid_and_search_index, …) for \
+which group. To run one step in a data root, `datalib-dag <config> --sync \
+<group>/<function>` runs it, and every step that reads it after it, and records what it published. \
 `datalib-step help <function>` shows how for each. Run by hand, with the \
 variables `datalib-step help step-protocol` lists under \"Running \
 datalib-step by hand\", it works the same, but no step that reads it learns \
@@ -184,7 +184,7 @@ struct Cli {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `grid_index` and `embed`: the directory holding the embedding
+    /// `unified_grid_and_search_index` and `embed`: the directory holding the embedding
     /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
@@ -850,10 +850,10 @@ async fn run_function(
             hints::emit_hint_on_failure(emitter, source_type, &res);
             res
         }
-        Function::GridIndex => {
-            writes_the_index_tree(&env, &grid_index::out_rel())?;
-            let params = grid_index::Params::from_json(params)?;
-            grid_index::run(
+        Function::UnifiedGridAndSearchIndex => {
+            writes_the_index_tree(&env, &unified_grid_and_search_index::out_rel())?;
+            let params = unified_grid_and_search_index::Params::from_json(params)?;
+            unified_grid_and_search_index::run(
                 data_root,
                 &env,
                 &params,

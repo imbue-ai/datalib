@@ -23,7 +23,7 @@ use strum::VariantArray;
 pub enum Function {
     Ingest,
     RenderMarkdown,
-    GridIndex,
+    UnifiedGridAndSearchIndex,
     Embed,
     EmbeddingMap,
     RenderTimeSeries,
@@ -62,9 +62,9 @@ impl Function {
                  shows, under <group>/render_markdown/. One per source; \
                  inputs = [\"<group>/ingest\"]."
             }
-            Function::GridIndex => {
+            Function::UnifiedGridAndSearchIndex => {
                 "Stack every source's rendered rows into the one SQL index the grid and \
-                 search read, unified_grid_and_search_index/grid_index/db.sqlite, and put \
+                 search read, unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite, and put \
                  each searched source's documents in the search index's keyword (BM25) \
                  tables beside them. Goes under the `unified_grid_and_search_index` group; \
                  inputs = [\"*/render_markdown\", \"*/render_time_series\", \
@@ -76,7 +76,7 @@ impl Function {
                  search by meaning. The slow one: turn it off for a source with \
                  `datalib-dag turn-off <config> <group>/embed`, and keyword search still \
                  works. One per source searched by meaning; \
-                 inputs = [\"unified_grid_and_search_index/grid_index\"]. Param \
+                 inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]. Param \
                  `embed_on_modal_from_n_chunks`: a run that owes at least that many \
                  chunks embeds them on the person's own Modal account; absent, \
                  nothing leaves the machine."
@@ -146,7 +146,10 @@ mod tests {
             Function::RenderOccurrences.as_str(),
             datalib_etl::layout::RENDER_OCCURRENCES_DIR
         );
-        assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
+        assert_eq!(
+            Function::UnifiedGridAndSearchIndex.as_str(),
+            datalib_core::layout::INDEX_STEP_DIR
+        );
         assert_eq!(
             Function::TimeSeriesIndex.as_str(),
             datalib_core::layout::TIME_SERIES_INDEX_DIR

@@ -30,7 +30,7 @@ pub async fn run(
 ) -> Result<Vec<OutputClaim>> {
     // A render store is a doltlite store, and a consumer that pins a commit
     // reads a stable view of it while this step keeps writing. That is P2 of
-    // the sink contract, and it is what lets `grid_index` start before this
+    // the sink contract, and it is what lets `unified_grid_and_search_index` start before this
     // finishes. Said before any work, so the runner knows by the time the
     // first checkpoint arrives.
     emitter.declare_streams_output(true);
@@ -273,7 +273,7 @@ pub fn render_source(
     // Everything again, in place: a renderer version or a param change
     // means every document is rendered fresh and the ones the walk did
     // not produce are swept at the end. The store — its history, and
-    // the commit `grid_index` last consumed — is kept, so a re-keyed
+    // the commit `unified_grid_and_search_index` last consumed — is kept, so a re-keyed
     // document reaches the index as a deletion plus an addition rather
     // than as an old row nobody ever removes.
     let plan = RenderPlan::decide(
@@ -1250,7 +1250,7 @@ enum RenderPlan {
     /// Render everything, for the reason given. The stored cursor is
     /// kept: the sweep at the end of the run is what removes documents
     /// the new version or params no longer produce, and the range is
-    /// still the one `grid_index` diffs the store over.
+    /// still the one `unified_grid_and_search_index` diffs the store over.
     Everything(&'static str),
 }
 
@@ -1883,7 +1883,7 @@ mod stale_tree_tests {
     }
 
     /// A tree at an older version is rendered again in full. The store
-    /// itself is kept — its history is what `grid_index` diffs over, so
+    /// itself is kept — its history is what `unified_grid_and_search_index` diffs over, so
     /// a re-keyed document reaches the index as a deletion plus an
     /// addition rather than as an old row nobody removes.
     #[tokio::test(flavor = "multi_thread")]

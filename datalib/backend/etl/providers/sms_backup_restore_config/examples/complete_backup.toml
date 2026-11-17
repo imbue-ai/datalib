@@ -32,4 +32,4 @@ inputs = ["sms_backup_restore/ingest"]
 group = "sms_backup_restore"
 function = "embed"
 command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

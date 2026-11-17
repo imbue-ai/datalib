@@ -1,6 +1,6 @@
 //! The embedding model search runs, pinned; and where qmd, which search
 //! used before its own index, kept its index in a data root, so
-//! `grid_index` can delete what an older build left there.
+//! `unified_grid_and_search_index` can delete what an older build left there.
 
 use std::path::{Path, PathBuf};
 

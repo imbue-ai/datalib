@@ -4,7 +4,7 @@
 # Runs the staged `datalib-*` binaries (`//datalib/backend:bin_unstamped`
 # — `:bin` minus the per-commit `git-hash`, so this test stays cached
 # across commits — in whatever configuration it is built with) over the two-vCard
-# fixture — ingest, render, grid_index — and reads the raw store's commit
+# fixture — ingest, render, unified_grid_and_search_index — and reads the raw store's commit
 # log back through the doltlite shell, and the grid index's rows (the index
 # is plain SQLite, the one store with no log). A binary linked against
 # stock SQLite writes files the shell refuses (`dolt version-control
@@ -76,7 +76,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["contacts/render_markdown"]
 [steps.params]
 not_searched = ["contacts"]
@@ -165,7 +165,7 @@ commits() {  # <store> — prints the commit count, or fails loudly
 }
 
 raw="$root/contacts/ingest/entities.doltlite_db"
-grid="$root/unified_grid_and_search_index/grid_index/db.sqlite"
+grid="$root/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
 n_raw="$(commits "$raw")"
 rows="$("$shell" -readonly "$grid" "SELECT count(*) FROM grid_rows;")"
 echo "raw store commits: $n_raw; grid_rows: $rows"

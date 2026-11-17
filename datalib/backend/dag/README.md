@@ -37,7 +37,7 @@ step whose `command` is `datalib-step` runs the step program datalib
 ships, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `embed`, …), and why the loader requires such a step to
+`unified_grid_and_search_index`, `embed`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
@@ -297,7 +297,7 @@ appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
 migrated in place, and the step reports its new head, which the record
 takes as its version while keeping the step's last success. A render
 store or the index in another shape is rebuilt by running the step, so
-that step answers `needs_rerun`, and so does `grid_index` when a source
+that step answers `needs_rerun`, and so does `unified_grid_and_search_index` when a source
 it reads was drawn into the search index by another version of the index
 text or its chunking (`INDEX_TEXT_VERSION`), which no render moved: the record keeps the flag
 (`steps.needs_rerun`), the tick holds the step due until it next
@@ -324,7 +324,10 @@ renames forward (`http/src/config_upgrade.rs`): it moves
 `<root>/unified_document_index/` or `<root>/unified_index/` to
 `<root>/unified_grid_and_search_index/` and the record's rows for those
 steps to their new ids
-(`Store::rename_group_steps`), and moves each folder an older config
+(`Store::rename_group_steps`), moves the index step's tree from
+`grid_index/` to `unified_grid_and_search_index/` under it, with the
+record's rows for that step (`move_index_step_dir`,
+`Store::rename_step`), and moves each folder an older config
 spelled with capitals to the lowercase spelling the config now uses
 (`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
 has the config side.
@@ -357,12 +360,12 @@ follows from it:
   rate limit never keeps a render from starting. The other two,
   `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
   they once guarded), are held by the built-in index steps that name no
-  locks: `grid_index` takes `qmd_keyword`, because it writes the grid
-  index's file, which the runner cannot see as shared, and a writer left
-  to wait inside SQLite times out; `embed` takes `qmd_embed`, so one embedding model is loaded
-  at a time. A `[[locks]]`
-  entry of the same name resizes one, and `--parallelism N` sets
-  `network` and `cpu` to N, over the config.
+  locks: `unified_grid_and_search_index` takes `qmd_keyword`, because
+  it writes the grid index's file, which the runner cannot see as
+  shared, and a writer left to wait inside SQLite times out; `embed`
+  takes `qmd_embed`, so one embedding model is loaded at a time. A
+  `[[locks]]` entry of the same name resizes one, and `--parallelism N`
+  sets `network` and `cpu` to N, over the config.
 
 None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only them
@@ -449,7 +452,7 @@ and the hash of that commit's tree, which also stays put when the
 store's history is folded into fewer commits
 ([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
 `render_markdown` reports the tree, since nothing reads its history;
-`grid_index`, whose index is plain SQLite, reports its generation, a
+`unified_grid_and_search_index`, whose index is plain SQLite, reports its generation, a
 count it raises only when a reader would see a change; the time-series
 steps report the head commit, since the time-series index reads each
 store at the commit it recorded. An ingest reports a commit too, so a

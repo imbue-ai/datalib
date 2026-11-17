@@ -1,6 +1,6 @@
 //! One side of a two-process doltlite concurrency test: a writer that
 //! commits, a reader that pins, a reader that keeps re-opening and pinning
-//! the way `grid_index` does, a reader that holds a transaction as its
+//! the way `unified_grid_and_search_index` does, a reader that holds a transaction as its
 //! snapshot, or a probe that reports a store's committed state. Driven by
 //! `tests/doltlite_two_process.rs`, which is where the scenarios and the
 //! assertions live; `seal-existing` also drives a full-size measurement
@@ -199,7 +199,7 @@ async fn read(args: &Args) -> Result<Value> {
     }))
 }
 
-/// What `grid_index` does to a render store on every streaming pass, in a
+/// What `unified_grid_and_search_index` does to a render store on every streaming pass, in a
 /// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
 /// anything -- this is the role that finds out. `--dolt-status` adds a
 /// `SELECT * FROM dolt_status` to every round.
@@ -211,7 +211,7 @@ async fn churn(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut opened = 0usize;
     let mut pinned = 0usize;
-    // The commit the previous round read to, as `grid_index` keeps a cursor.
+    // The commit the previous round read to, as `unified_grid_and_search_index` keeps a cursor.
     let mut cursor: Option<String> = None;
     for round in 0..rounds {
         if until.as_deref().is_some_and(Path::exists) {
@@ -295,7 +295,7 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
-    // `grid_index` asks a render store's shape before it reads anything.
+    // `unified_grid_and_search_index` asks a render store's shape before it reads anything.
     anyhow::ensure!(
         datalib_store_meta::read(pool).await?.is_some(),
         "no _datalib_meta at {}",
@@ -469,7 +469,7 @@ async fn probe(args: &Args) -> Result<Value> {
     Ok(json!({ "role": "probe", "head": head, "committed_rows": committed }))
 }
 
-/// What `grid_index` does to the index on every pass, one step at a time:
+/// What `unified_grid_and_search_index` does to the index on every pass, one step at a time:
 /// seed and commit, then inside one SQL transaction delete every row and
 /// load a different number back, then `COMMIT`, then `dolt_commit`. Each
 /// step waits for a go-file from the test and announces itself with an
@@ -1179,7 +1179,7 @@ async fn commit_a_chunk(pool: &sqlx::SqlitePool, chunk: usize) -> Result<String>
         .ok_or_else(|| anyhow!("chunk {chunk} committed nothing"))
 }
 
-/// A render store's checkpoint or a `grid_index` pass: the rows go in one
+/// A render store's checkpoint or a `unified_grid_and_search_index` pass: the rows go in one
 /// SQL transaction that stays open for `hold`, then the seal.
 async fn commit_a_chunk_in_a_held_transaction(
     pool: &sqlx::SqlitePool,
