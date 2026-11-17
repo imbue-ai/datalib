@@ -3,7 +3,7 @@
 One document per child, from the `kids`, `users` and `entries` tables
 (`../baby_connect/INGEST.md`). A child with no entry has no document.
 Months are a grouping a search chooses, not a document of their own
-(`docs/dev/plans/messages_not_documents.md`).
+(`docs/dev/plans/documents_to_blocks.md`).
 
 ## The document
 

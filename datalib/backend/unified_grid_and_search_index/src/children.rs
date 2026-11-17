@@ -1,5 +1,5 @@
 //! A container's children, a page at a time around an anchor
-//! (docs/dev/plans/messages_not_documents.md, "A list starts at an anchor
+//! (docs/dev/plans/documents_to_blocks.md, "A list starts at an anchor
 //! and grows both ways"). Its children are the rows it holds, the
 //! containers it holds that have no row, and whatever is filed under it.
 //! The SQL here reads each of those three in `(sort_key, uuid)` order past

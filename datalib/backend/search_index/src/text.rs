@@ -1,5 +1,5 @@
 //! The text the search indexes and embeds for a document, drawn from what
-//! the render store keeps of it (docs/dev/plans/messages_not_documents.md,
+//! the render store keeps of it (docs/dev/plans/documents_to_blocks.md,
 //! step 3b). An item is its envelope line (who, to whom, when), then its
 //! body. A page, a document whose first piece is kept whole, opens with a
 //! line of the facts its front matter holds, then its pieces without their

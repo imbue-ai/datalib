@@ -3,7 +3,7 @@
 *Proposal (2026-11-16), partly built: steps 1 and 2 below are in
 #1766. It replaces the problem rows that render and `grid_index` copy
 downstream (`datalib/backend/etl/README.md` §"Problems flow downstream
-with the data"). It leans on `messages_not_documents.md`, which gives
+with the data"). It leans on `documents_to_blocks.md`, which gives
 every row a place in a tree of data nodes.*
 
 ## The problem

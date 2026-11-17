@@ -5,7 +5,7 @@ is built (`//datalib/backend/search_index`, `//datalib/backend/embedder`):
 search reads only the search index, nothing runs qmd, and qmd's code,
 its runtime, the release's share of it and `third-party/qmd` are
 deleted (#1797), as are the names in the code (#1805). Three names
-remain and are left to [`messages_not_documents.md`](messages_not_documents.md):
+remain and are left to [`documents_to_blocks.md`](documents_to_blocks.md):
 the `qmd_aggregator` step id and the `qmd_keyword` and `qmd_embed`
 locks go in step 3c's config upgrade, and `qmd_path` goes in step 5,
 when the markdown files stop being written.** Numbers were
@@ -442,7 +442,7 @@ that matched. Meaning search fills back in over the first day.
    that reruns only when a chunk's prompt changes; qmd's code, its
    runtime, the release's share of it and `third-party/qmd` are deleted,
    and the code that still said qmd is renamed. Left to
-   [`messages_not_documents.md`](messages_not_documents.md): the
+   [`documents_to_blocks.md`](documents_to_blocks.md): the
    `qmd_aggregator` step id and the `qmd_keyword` and `qmd_embed` locks
    (step 3c), and `qmd_path` (step 5).
 

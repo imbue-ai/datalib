@@ -116,7 +116,7 @@ database per source, at
     the calendar, the repository …), then each framed piece as the words
     a person reads, without its front matter, tags, link targets or
     escapes. The grid index does not copy it
-    ([`messages_not_documents.md`](plans/messages_not_documents.md)
+    ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
