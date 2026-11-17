@@ -22,7 +22,7 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its

@@ -1,5 +1,7 @@
 //! A release tarball without `runtime/` fetches the runtime its manifest
-//! names on first use, verifies it, and refuses one that hashes wrong.
+//! names on first use, verifies it, and refuses one that hashes wrong; and
+//! the CUDA module likewise, by `pull-cuda` (an embed fetches it only where
+//! there is an NVIDIA driver, which no test machine has).
 //!
 //! The shape of a tarball install is rebuilt in a temp dir: the real
 //! `datalib-step` beside a `runtime.manifest`, no `runtime/`, a local
@@ -86,6 +88,23 @@ impl Install {
 
     fn write_manifest(&self, manifest: &Manifest) {
         fs::write(self.dir.join(MANIFEST_FILE), manifest.render()).unwrap();
+    }
+
+    fn pull_cuda(&self, cache_home: &Path, no_fetch: bool) -> std::process::Output {
+        let child = {
+            let _spawning = copy_or_spawn();
+            let mut cmd = Command::new(self.dir.join("datalib-step"));
+            cmd.arg("pull-cuda")
+                .env("XDG_CACHE_HOME", cache_home)
+                .env_remove("DATALIB_NO_FETCH")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if no_fetch {
+                cmd.env("DATALIB_NO_FETCH", "1");
+            }
+            spawn_once_free(&mut cmd)
+        };
+        child.wait_with_output().unwrap()
     }
 
     fn pull_runtime(&self, cache_home: &Path) -> std::process::Output {
@@ -360,4 +379,126 @@ fn into_puts_the_runtime_beside_the_binaries() {
         "{stderr}"
     );
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+/// A `.tar.gz` laid out as the CUDA asset is: the module under `lib/`.
+fn fake_cuda_tarball(base: &Path) -> Vec<u8> {
+    let src = base.join("cuda-src");
+    fs::create_dir_all(src.join("lib")).unwrap();
+    fs::write(src.join("lib/libggml-cuda.so"), b"not really a module\n").unwrap();
+    let mut buf = Vec::new();
+    {
+        let gz = flate2::write::GzEncoder::new(&mut buf, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(gz);
+        tar.append_dir_all(".", &src).unwrap();
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    buf
+}
+
+/// The cpu line names an asset nothing serves: `pull-cuda` must not need it.
+fn manifest_with_cuda(url_base: &str, body_len: usize, sha256: &str) -> Manifest {
+    let cpu = "c".repeat(64);
+    manifest_for("https://example.invalid", 1, &cpu).with_cuda(RuntimeAsset {
+        kind: AssetKind::Cuda,
+        name: "ggml-cuda-test.tar.gz".to_string(),
+        sha256: sha256.to_string(),
+        bytes: body_len as u64,
+        url: format!("{url_base}/ggml-cuda-test.tar.gz"),
+    })
+}
+
+fn stdout_and_stderr(out: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// The first `pull-cuda` fetches the module the manifest names into the
+/// cache and says where; the second finds it there and fetches nothing.
+#[test]
+fn pull_cuda_fetches_the_manifests_module_once() {
+    let base = tempfile::tempdir().unwrap();
+    let body = fake_cuda_tarball(base.path());
+    let sha = sha256_hex(&body);
+    let (url, hits) = serve(body.clone());
+    let install = Install::new(base.path());
+    install.write_manifest(&manifest_with_cuda(&url, body.len(), &sha));
+    let cache_home = base.path().join("cache");
+
+    let out = install.pull_cuda(&cache_home, false);
+    let said = stdout_and_stderr(&out);
+    assert!(out.status.success(), "{said}");
+    let module = cache_home
+        .join("datalib/cuda")
+        .join(&sha[..12])
+        .join("lib/libggml-cuda.so");
+    assert!(
+        said.contains(&format!("cuda module: {}", module.display())),
+        "{said}"
+    );
+    assert_eq!(fs::read(&module).unwrap(), b"not really a module\n");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    let again = install.pull_cuda(&cache_home, false);
+    assert!(again.status.success(), "{}", stdout_and_stderr(&again));
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "fetched a second time");
+}
+
+#[test]
+fn pull_cuda_refuses_a_module_that_hashes_wrong() {
+    let base = tempfile::tempdir().unwrap();
+    let body = fake_cuda_tarball(base.path());
+    let (url, _hits) = serve(body.clone());
+    let install = Install::new(base.path());
+    install.write_manifest(&manifest_with_cuda(&url, body.len(), &"0".repeat(64)));
+    let cache_home = base.path().join("cache");
+
+    let out = install.pull_cuda(&cache_home, false);
+    let said = stdout_and_stderr(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("ggml-cuda-test.tar.gz"), "{said}");
+    let cache = cache_home.join("datalib/cuda");
+    let kept: Vec<_> = fs::read_dir(&cache)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".lock" && n != "CACHEDIR.TAG")
+        .collect();
+    assert!(kept.is_empty(), "left behind: {kept:?}");
+}
+
+/// An install that ships what it runs fetches nothing, the CUDA module
+/// included, and says which URL it would have wanted.
+#[test]
+fn no_fetch_refuses_the_cuda_module() {
+    let base = tempfile::tempdir().unwrap();
+    let body = fake_cuda_tarball(base.path());
+    let sha = sha256_hex(&body);
+    let (url, hits) = serve(body.clone());
+    let install = Install::new(base.path());
+    install.write_manifest(&manifest_with_cuda(&url, body.len(), &sha));
+
+    let out = install.pull_cuda(&base.path().join("cache"), true);
+    let said = stdout_and_stderr(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("DATALIB_NO_FETCH"), "{said}");
+    assert!(
+        said.contains(&format!("{url}/ggml-cuda-test.tar.gz")),
+        "{said}"
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// Every tarball but x86_64 gnu has a manifest without a `cuda` line.
+#[test]
+fn pull_cuda_says_when_the_release_names_no_module() {
+    let base = tempfile::tempdir().unwrap();
+    let install = Install::new(base.path());
+    install.write_manifest(&manifest_for("https://example.invalid", 1, &"c".repeat(64)));
+    let out = install.pull_cuda(&base.path().join("cache"), false);
+    let said = stdout_and_stderr(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("names none for this build"), "{said}");
 }

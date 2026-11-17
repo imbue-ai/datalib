@@ -44,8 +44,7 @@ data_root = "~/datalib"
 # --- The indexes every source feeds -------------------------------------
 
 # The SQL index behind the grid and search reads every source's documents
-# into the grid and the keyword search, and the problem rows of its
-# time-series and occurrences steps; `params.not_searched` would keep a
+# into the grid and the keyword search; `params.not_searched` would keep a
 # source out of search.
 [[groups]]
 id = "unified_grid_and_search_index"
@@ -55,7 +54,7 @@ name = "Grid and Search Index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+inputs = ["*/render_markdown"]
 
 # The app's search, grid and document view.
 [[applets]]

@@ -1104,9 +1104,9 @@ describe("a source's search steps", () => {
     expect(searchIndexingOf(listSteps(next), "slack")).toBe("keyword_and_embed");
   });
 
-  /// Keyword search without the slow embeddings: the embed step and the
-  /// aggregator's edge to it go, and the source stays searched by its
-  /// words. Ticking embeddings back on restores both.
+  /// Keyword search without the slow embeddings: the embed step goes,
+  /// and the source stays searched by its words. Ticking embeddings back
+  /// on restores it.
   it("keeps the keyword search when only the embeddings go", () => {
     const both = setSearchSteps(MAPPED, "slack", "keyword_and_embed");
     const keyword = setSearchSteps(both, "slack", "keyword");
@@ -1136,8 +1136,7 @@ inputs = ["slack/embed"]
   });
 
   /// Turning search off for a source lists it in the `grid_index` step's
-  /// `not_searched` and takes its embed and the aggregator's edge to it;
-  /// the grid keeps the source.
+  /// `not_searched` and takes its embed out; the grid keeps the source.
   it("lists the source as not searched and takes its embed back out", () => {
     const off = setSearchSteps(
       setSearchSteps(MAPPED, "slack", "keyword_and_embed"),
@@ -1304,7 +1303,7 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
     // Its divider stays above its group, and the index's above the index.
     // Its embed reads the `grid_index` step, so it sits below it, above the
-    // aggregator that reads the embed.
+    // map that reads the embed.
     expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
     expect(next.indexOf('function = "embed"')).toBeGreaterThan(
       next.indexOf('function = "grid_index"'),
@@ -1328,8 +1327,8 @@ command = "datalib-applet unified_grid_and_search_index"
 
   /// Search by meaning turned on for a source that is not the last: its
   /// embed reads the `grid_index` step, so it goes below that and above the
-  /// aggregator that reads it, whichever source it belongs to.
-  it("puts a source's embed between the `grid_index` step and the aggregator", () => {
+  /// map that reads it, whichever source it belongs to.
+  it("puts a source's embed between the `grid_index` step and the map", () => {
     const both = setSearchSteps(FLOWING, "slack", "keyword_and_embed");
     expect(listSteps(both).map((s) => s.id)).toEqual([
       "slack/ingest",
@@ -1379,7 +1378,7 @@ command = "datalib-applet unified_grid_and_search_index"
     expect(flowsDown(wireIntoFanIns(next, built.renderId))).toEqual([]);
   });
 
-  /// A file written with the aggregator above the `grid_index` step has no place
+  /// A file written with the map above the `grid_index` step has no place
   /// below the one and above the other; the embed goes at the end, as
   /// entries always did there, and the file still loads.
   it("falls back to the end of a file already out of order", () => {
@@ -1600,7 +1599,7 @@ function = "ingest"
     expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
     ]);
-    expect(inputsOf(added, "unified_grid_and_search_index/grid_index")).toContain(
+    expect(inputsOf(added, "unified_grid_and_search_index/grid_index")).not.toContain(
       "riker/render_time_series",
     );
     expect(listGroups(added).map((g) => g.id)).toContain("unified_time_series_index");
@@ -1665,11 +1664,12 @@ function = "ingest"
     expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
   });
 
-  /// Its problem rows reach the problems list only through `grid_index`.
-  it("is read by grid_index for its problem rows", () => {
+  /// Its problems are read in its own store, so wiring it into
+  /// `grid_index` would only re-run the grid after every occurrences run.
+  it("is not wired into grid_index", () => {
     const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
     const grid = listSteps(added).find((s) => s.id === "unified_grid_and_search_index/grid_index");
-    expect(grid?.inputs).toContain("bridge/render_occurrences");
+    expect(grid?.inputs).not.toContain("bridge/render_occurrences");
   });
 
   /// The wizard edits a source's render step; written first, the

@@ -363,8 +363,7 @@ the program it runs in `command`; datalib's own steps run
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
 name (`*/render_markdown`, every source's) into the SQL index the grid
-reads, and the problem rows of the time-series and occurrences steps it
-names. It then puts each source in the keyword search, the `search_*`
+reads. It then puts each source in the keyword search, the `search_*`
 tables in the same file, but those its `params.not_searched` lists. A
 source searched by meaning has one more step of its own, `embed`, which
 reads `grid_index` and fills the vectors in
@@ -382,9 +381,9 @@ such store without copying its points (`docs/dev/time_series.md`). The document 
 queried by the `unified_grid_and_search_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`), and the index's problem rows,
-which it counts, less the muted ones, for the Manage counts
-(`datalib/backend/problem_mutes/README.md`). A render
+(`datalib/backend/blob_store/README.md`), and every step's `problems`,
+each read where its step keeps it, which it counts, less the muted
+ones, for the Manage counts (`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -615,7 +614,12 @@ bazelisk run //:precommit          # the one command to run before pushing
 
 That is `//:lint_repo`, `//:lint`, a `bazelisk build //...` (which runs
 the rustfmt and clippy aspects over every crate) and every hermetic
-test. Measured on one warm mac:
+test. On x86_64 Linux with a BuildBuddy key in `.bazelrc.user` it
+builds with CI's pull-request flags (`-c opt --config=release --nostamp
+--config=pr-tests`), since an action's cache key holds its flags and a
+fastbuild gate can never reuse what CI built; anywhere else it builds in
+fastbuild ([`ci.md`](docs/dev/ci.md) §"The local gate and CI's cache").
+Measured on one warm mac:
 
 | loop | command | cost |
 |---|---|---|

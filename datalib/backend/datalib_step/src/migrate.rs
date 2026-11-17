@@ -118,6 +118,7 @@ async fn migrate_raw_store(
     tracing::info!(step = %env.step, "migrate: {UPDATING}");
     emitter.progress().set_message(UPDATING);
     crate::dispatch::migrate(env.source_type()?, tree).await?;
+    adopt_sourceless_problems(env, tree).await?;
     tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
     Ok(crate::ingest::raw_store_version(tree)
         .await?
@@ -128,6 +129,31 @@ async fn migrate_raw_store(
         })
         .into_iter()
         .collect())
+}
+
+/// Name the source on the problems an older build wrote naming none, so
+/// they count on the source's row from launch rather than from its next
+/// sync. Committed only when there was one to name.
+async fn adopt_sourceless_problems(env: &StepEnv, tree: &Path) -> Result<()> {
+    let pool = datalib_etl::doltlite_raw::open(&entities_db(tree), &[]).await?;
+    let adopted = async {
+        let n = datalib_etl::doltlite_raw::adopt_sourceless_problems(&pool, &env.group).await?;
+        if n > 0 {
+            datalib_etl::doltlite_raw::commit_run(
+                &pool,
+                &format!("migrate {}: name the source on {n} problems", env.group),
+            )
+            .await?;
+        }
+        anyhow::Ok(n)
+    }
+    .await;
+    pool.close().await;
+    let n = adopted.with_context(|| format!("name {}'s source on its problems", env.step))?;
+    if n > 0 {
+        tracing::info!(step = %env.step, problems = n, "migrate: named the source on older problems");
+    }
+    Ok(())
 }
 
 /// Answer `needs_rerun` when `store` exists and its `_datalib_meta` names

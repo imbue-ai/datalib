@@ -7,12 +7,12 @@
 //! no ingest machinery and `datalib-http` can read the store through it.
 //! The design: `README.md` beside this file.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl_macros::PortableTable;
-use datalib_problems::{CountedBy, ScopeKind, Severity, Stage};
+use datalib_problems::{CountedBy, ProblemRow, Severity};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -213,71 +213,59 @@ pub struct Counted {
     pub muted: Tally,
 }
 
-/// The index's error and warning rows, counted by [`Counter`], each
-/// either muted or not by its id. The one place a Manage count comes
-/// from, so it is the rows [`query`] opens and nothing else.
+/// The error and warning rows, counted by whose they are
+/// ([`CountedBy::of`]) and whether a person muted them.
+pub fn count_rows(rows: &[ProblemRow], muted: &HashSet<String>) -> HashMap<Counter, Counted> {
+    let mut out: HashMap<Counter, Counted> = HashMap::new();
+    for row in rows
+        .iter()
+        .filter(|r| matches!(r.severity, Severity::Error | Severity::Warning))
+    {
+        let own_key = if row.scope_key == datalib_problems::INDEX_OWN_SCOPE_KEY {
+            row.scope_key.as_str()
+        } else {
+            ""
+        };
+        let by = CountedBy::of(row.stage, row.scope_kind, own_key);
+        let entry = out.entry(counter_of(&row.source_id, by)).or_default();
+        if muted.contains(&row.problem_uuid) {
+            entry.muted.add(row.severity, 1);
+        } else {
+            entry.shown.add(row.severity, 1);
+        }
+    }
+    out
+}
+
+/// [`count_rows`] over every row of `index`'s `problems`.
 pub async fn count_in_index(
     index: &SqlitePool,
     muted: &[String],
 ) -> Result<HashMap<Counter, Counted>> {
-    let rows = match sqlx::query(
-        "SELECT source_id, stage, scope_kind, \
-           CASE WHEN scope_key = ? THEN scope_key ELSE '' END AS own_key, severity, \
-           problem_uuid IN (SELECT value FROM json_each(?)) AS muted, COUNT(*) AS n \
-         FROM problems WHERE severity IN (?, ?) \
-         GROUP BY source_id, stage, scope_kind, own_key, severity, muted",
-    )
-    .bind(datalib_problems::INDEX_OWN_SCOPE_KEY)
-    .bind(serde_json::to_string(muted)?)
-    .bind(Severity::Error.as_str())
-    .bind(Severity::Warning.as_str())
-    .fetch_all(index)
-    .await
-    {
+    let rows = match sqlx::query("SELECT * FROM problems").fetch_all(index).await {
         Ok(rows) => rows,
         Err(e) if datalib_pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
-        Err(e) => return Err(e).context("count the problems in the index"),
+        Err(e) => return Err(e).context("read the problems in the index"),
     };
-    let mut out: HashMap<Counter, Counted> = HashMap::new();
-    for r in rows {
-        let word = |col: &str| -> Result<String> { Ok(r.try_get::<String, _>(col)?) };
-        let (stage, severity, scope_kind) =
-            (word("stage")?, word("severity")?, word("scope_kind")?);
-        let (Some(stage), Some(severity), Some(scope_kind)) = (
-            Stage::parse(&stage),
-            Severity::parse(&severity),
-            ScopeKind::parse(&scope_kind),
-        ) else {
-            anyhow::bail!(
-                "problems: rows in words this build does not know \
-                 ({stage:?}, {severity:?}, {scope_kind:?})"
-            );
-        };
-        let by = CountedBy::of(stage, scope_kind, &word("own_key")?);
-        let entry = out.entry(counter_of(&word("source_id")?, by)).or_default();
-        let n: i64 = r.try_get("n")?;
-        if r.try_get::<bool, _>("muted")? {
-            entry.muted.add(severity, n);
-        } else {
-            entry.shown.add(severity, n);
-        }
-    }
-    Ok(out)
+    let rows: Vec<ProblemRow> = rows
+        .iter()
+        .map(ProblemRow::from_row)
+        .collect::<Result<_>>()?;
+    Ok(count_rows(&rows, &muted.iter().cloned().collect()))
 }
 
-/// [`count_in_index`] over the root's grid index, read-only, with the
-/// mutes the store has published. `None` when there is no index yet, so
-/// nothing has been counted.
+/// [`count_rows`] over every step's problems, each read where its step
+/// keeps it (`datalib_step_problems::of_steps`), less the muted.
 pub async fn counts(data_root: &Path) -> Result<Option<HashMap<Counter, Counted>>> {
-    let index = datalib_runtime::layout::grid_index_db(data_root);
-    if !index.exists() {
-        return Ok(None);
+    let muted: HashSet<String> = read_published(data_root).await?.into_keys().collect();
+    let mut rows = Vec::new();
+    for step in datalib_step_problems::of_steps(data_root).await {
+        for why in &step.unread {
+            tracing::error!(step = %step.step_id, error = %why, "could not read a step's problems");
+        }
+        rows.extend(step.rows);
     }
-    let muted: Vec<String> = read_published(data_root).await?.into_keys().collect();
-    let pool = datalib_pin::open_reader(&index).await?;
-    let counted = count_in_index(&pool, &muted).await;
-    pool.close().await;
-    counted.map(Some)
+    Ok(Some(count_rows(&rows, &muted)))
 }
 
 /// What every query below ends in: a count leaves out info rows and
@@ -361,7 +349,7 @@ pub fn group_query(counters: &[Counter]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, INDEX_OWN_SCOPE_KEY};
+    use datalib_problems::{Outcome, Problem, Reason, Scope, Stage, INDEX_OWN_SCOPE_KEY};
 
     /// strum writes the store, serde the wire: two spellings of one value
     /// would read a stored mute back as unknown.
@@ -576,7 +564,7 @@ mod tests {
     async fn a_root_with_no_store_has_no_mutes_and_gets_none() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_published(dir.path()).await.unwrap().is_empty());
-        assert_eq!(counts(dir.path()).await.unwrap(), None);
+        assert_eq!(counts(dir.path()).await.unwrap(), Some(HashMap::new()));
         assert!(!store_path(dir.path()).exists());
     }
 }

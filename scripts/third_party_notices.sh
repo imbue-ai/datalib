@@ -114,8 +114,10 @@ directory is those notices.
 | `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 
 The runtime asset itself carries the same Node notice beside its
-binary, and the `latchkey` package tree in it carries each package's
-own license file inside `node_modules/`.
+binary. The `latchkey` and `modal` package trees in it carry each
+package's own license file inside `node_modules/`, but for `modal`
+itself, whose npm package has none: its Apache-2.0 license is
+`modal/<version>/LICENSE`.
 EOF
 
 for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md emoji-data/LICENSE node/LICENSE curl-impersonate/LICENSE-curl latchkey-garmin/LICENSE llama.cpp/LICENSE llama.cpp/LICENSE-llamafile-sgemm; do

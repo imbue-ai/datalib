@@ -8,8 +8,9 @@ projection of its records into one table, **`grid_rows`**, and the
 branches.
 
 The index holds one more table the grid does not read: `problems`,
-every source's render-store `problems` copied in whole by `grid_index`
-and served by the applet at `/problems`, which filters, sorts, groups
+`grid_index`'s own rows about a render store it could not read. The
+applet serves every step's problems at `/problems`, each read where its
+step keeps it, which filters, sorts, groups
 (`/problems/groups`) and pages the way `/search` does, through the keys
 declared on `ProblemRow`.
 

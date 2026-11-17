@@ -16,6 +16,7 @@ pub mod graph;
 pub mod input_pattern;
 pub mod lock;
 pub mod memory;
+mod problems_relay;
 pub mod run_state;
 pub mod runs_sink;
 pub mod scheduler;

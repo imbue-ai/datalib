@@ -184,7 +184,7 @@ async fn replace_file_problem(
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let row = ProblemRow::new(
-        "",
+        datalib_problems::step_source(),
         Stage::Fetch,
         Scope::Entity(&key),
         None,

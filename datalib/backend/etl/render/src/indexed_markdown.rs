@@ -158,6 +158,15 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// Which grid row a raw record a download's problem names belongs to,
+/// where this store holds that row: `<table>:<id>` as the problem spells
+/// it, and the row's uuid. A reader joins a download's problems to it,
+/// since the download never sees the ids rows are minted under.
+pub const ENTITY_ITEMS_DDL: &[(&str, &str)] = &[(
+    "entity_items",
+    "CREATE TABLE IF NOT EXISTS entity_items (\n    entity_key TEXT PRIMARY KEY NOT NULL,\n    item_uuid TEXT NOT NULL\n)",
+)];
+
 /// `(table, CREATE TABLE)` for every table this store holds but
 /// `_datalib_meta`, in creation order.
 pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -172,6 +181,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
         .chain(PROBLEMS_DDL.iter())
+        .chain(ENTITY_ITEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
@@ -1234,11 +1244,29 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Make [`ENTITY_ITEMS_DDL`]'s table hold `items` and nothing else.
+    pub fn replace_entity_items(&self, items: &[(String, String)]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM entity_items")
+                .execute(&mut **conn)
+                .await
+                .context("clear the entity items")?;
+            for (entity_key, item_uuid) in items {
+                sqlx::query("INSERT INTO entity_items (entity_key, item_uuid) VALUES (?, ?)")
+                    .bind(entity_key)
+                    .bind(item_uuid)
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("record {entity_key}'s item"))?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replace every row of one stage with `rows`, stamps carried as
-    /// they are. How the fetch stage reaches this store: the render
-    /// step reads the raw store's `problems` at the commit it rendered
-    /// from — the complete truth about what the download could not do
-    /// — and hands them here whole, so there is nothing to sweep.
+    /// they are.
     pub fn replace_stage_problems(&self, stage: Stage, rows: &[ProblemRow]) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
@@ -1806,7 +1834,9 @@ mod tests {
     /// `grid_rows` for the document's old rows, so a full render was
     /// quadratic: a 20k-thread mailbox spent minutes there. Compared
     /// against a small store in the same process, so a slow machine
-    /// slows both sides alike.
+    /// slows both sides alike; each side's best of three, taken in turn,
+    /// so a burst of load on a shared CI runner during one measurement
+    /// is not read as a scan.
     #[test]
     fn replacing_a_document_does_not_slow_down_as_the_store_grows() {
         const REPLACED: usize = 700;
@@ -1815,8 +1845,11 @@ mod tests {
         let small = store_holding(small_dir.path(), REPLACED);
         let big_dir = tempfile::tempdir().unwrap();
         let big = store_holding(big_dir.path(), GROWTH * REPLACED);
-        let small_s = seconds_to_replace(small_dir.path(), &small, REPLACED);
-        let big_s = seconds_to_replace(big_dir.path(), &big, REPLACED);
+        let (mut small_s, mut big_s) = (f64::MAX, f64::MAX);
+        for _ in 0..3 {
+            small_s = small_s.min(seconds_to_replace(small_dir.path(), &small, REPLACED));
+            big_s = big_s.min(seconds_to_replace(big_dir.path(), &big, REPLACED));
+        }
         assert!(
             big_s < 5.0 * small_s,
             "{GROWTH}x the documents made replacing {REPLACED} take {:.1}x as long \

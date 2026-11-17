@@ -20,7 +20,7 @@ fn ddl(kind: StoreKind) -> Vec<&'static str> {
         StoreKind::TimeSeriesIndex => datalib_time_series_schema::index_ddl(),
         _ => {
             let mut ddl = datalib_time_series_schema::store_ddl();
-            ddl.push(datalib_etl::step_problems::ddl());
+            ddl.push(datalib_problems::DDL[0].1);
             ddl
         }
     }

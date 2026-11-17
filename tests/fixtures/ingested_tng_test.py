@@ -123,10 +123,9 @@ MAX_STAMP_MS = (1 << 48) - 1
 # saved place with no date; the files no feed reads; and what the
 # account's Chat membership says of a space.
 #
-# A fetch row about an attachment names the grid row of what owns it,
-# so the screen can open it: the conversation for claude (minted from
-# the raw key), the message for Takeout (looked up by its upstream id,
-# since the message's uuid carries a date the raw key does not).
+# A fetch row names only the raw record its download held, in the
+# download's own store; render says which grid row that record belongs
+# to (`entity_items`), and the reader links the two when it reads them.
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -142,8 +141,7 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "|||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
     "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
@@ -240,8 +238,7 @@ TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
     "|warning|fetch|entity"
     "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
-    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
-    "||not_found|<name>.png is not in the export"
+    "|||not_found|<name>.png is not in the export"
 )
 # Every kind of file no feed reads is a row, named by the shape of its
 # path: a warning where nothing reads it, a note where it is left out on
@@ -1038,9 +1035,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
-        # Every store a step keeps problems in: the render's, and the
-        # time-series and occurrences steps' own.
+        # Every store a step keeps problems in: the download's, the
+        # render's, and the time-series and occurrences steps' own.
         stores = [
+            *self.workspace.glob("*/ingest/entities.doltlite_db"),
             *self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db"),
             *self.workspace.glob("*/render_time_series/time_series.doltlite_db"),
             *self.workspace.glob("*/render_occurrences/occurrences.doltlite_db"),
@@ -1057,8 +1055,36 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 out[source] = sorted(out.get(source, []) + rows)
         return out
 
+    def _linked_fetch_problems(self) -> dict[str, str]:
+        """`problem_uuid -> item_uuid` for each download problem its
+        source's render links to a grid row: the raw store's fetch rows
+        joined, by the record they name, to the render store's
+        `entity_items`, as the problems reader joins them."""
+        out: dict[str, str] = {}
+        for raw in sorted(self.workspace.glob("*/ingest/entities.doltlite_db")):
+            render = (
+                raw.parent.parent / "render_markdown" / "indexed_markdown.doltlite_db"
+            )
+            if not render.exists():
+                continue
+            items = dict(
+                line.split("|", 1)
+                for line in self._query(
+                    render, "SELECT entity_key, item_uuid FROM entity_items;"
+                )
+            )
+            for line in self._query(
+                raw,
+                "SELECT problem_uuid, scope_key FROM problems "
+                "WHERE stage = 'fetch' AND scope_kind = 'entity';",
+            ):
+                problem, scope_key = line.split("|", 1)
+                if scope_key in items:
+                    out[problem] = items[scope_key]
+        return out
+
     def _index_problems(self) -> list[str]:
-        """The index's copy of every source's problems, same columns."""
+        """The index's own problems, same columns: none of a source's."""
         return self._query(
             self._index_db,
             "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
@@ -1913,9 +1939,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # failure anywhere. Here it does: any row outside the expected
         # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
-        # real render, into the source's store, and copied into the
-        # index — and every id is pinned so a later run mints the same
-        # one (asserted after run 2 and run 4).
+        # real render, into the source's store, where a reader finds it
+        # — and every id is pinned so a later run mints the same one
+        # (asserted after run 2 and run 4).
         problems1 = self._problems()
         self.assertEqual(
             problems1,
@@ -1926,8 +1952,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertEqual(
             self._index_problems(),
-            sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
-            "grid_index copies every source's problems into the index",
+            [],
+            "grid_index copies no source's problems; each is read in its own store",
+        )
+        # A download names only its raw record; render says which grid row
+        # that record belongs to, and the reader links the two. These are
+        # the rows a person opens from the problem: the claude
+        # conversation (its uuid minted from the raw key) and Riker's
+        # Takeout message (found by its upstream id).
+        self.assertEqual(
+            self._linked_fetch_problems(),
+            {
+                CLAUDE_ATTACHMENT_WITHOUT_BYTES.split("|")[0]: (
+                    "00000000-0000-89b3-8bed-0eecc97d45ce"
+                ),
+                TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
+                    "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            },
+            "each download problem whose record has a row links to it",
         )
         self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 

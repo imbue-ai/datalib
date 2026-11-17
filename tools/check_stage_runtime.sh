@@ -26,6 +26,8 @@ script="$(rlocation _main/scripts/release/stage_runtime_asset.sh)"
 tree="${script%/scripts/release/stage_runtime_asset.sh}"
 latchkey_pin="$(grep -E -m1 '^pub const LATCHKEY_VERSION:' "$tree/datalib/backend/runtime/src/node_runtime.rs" | sed -E 's/.*"([^"]+)".*/\1/')"
 [[ -n "$latchkey_pin" ]] || { echo "ERROR: no LATCHKEY_VERSION pin found" >&2; exit 1; }
+modal_pin="$(grep -E -m1 '^pub const MODAL_SDK_VERSION:' "$tree/datalib/backend/runtime/src/node_runtime.rs" | sed -E 's/.*"([^"]+)".*/\1/')"
+[[ -n "$modal_pin" ]] || { echo "ERROR: no MODAL_SDK_VERSION pin found" >&2; exit 1; }
 
 shell="${RELEASE_SHELL:-bash}"
 echo ">>> running under $("$shell" -c 'echo "$BASH_VERSION"')"
@@ -67,3 +69,12 @@ package="unpacked/latchkey/$latchkey_pin/node_modules/latchkey/package.json"
 got="$(unpacked/node/bin/node -p "require('./$package').version")"
 [[ "$got" == "$latchkey_pin" ]] || { echo "ERROR: the asset's latchkey says '$got', not $latchkey_pin" >&2; exit 1; }
 [[ ! -e unpacked/qmd ]] || { echo "ERROR: the asset still carries qmd" >&2; exit 1; }
+# Modal's SDK, for the embed step's Modal driver: its package at the pin,
+# its license beside it, and an entry the staged Node imports.
+modal_package="unpacked/modal/$modal_pin/node_modules/modal/package.json"
+[[ -f "$modal_package" ]] || { echo "ERROR: no modal $modal_pin in the unpacked asset" >&2; ls unpacked/modal >&2; exit 1; }
+got="$(unpacked/node/bin/node -p "require('./$modal_package').version")"
+[[ "$got" == "$modal_pin" ]] || { echo "ERROR: the asset's modal says '$got', not $modal_pin" >&2; exit 1; }
+grep -q 'Apache License' "unpacked/modal/$modal_pin/LICENSE" || { echo "ERROR: no Apache license beside modal" >&2; exit 1; }
+unpacked/node/bin/node --input-type=module -e "const m = await import('$PWD/unpacked/modal/$modal_pin/node_modules/modal/dist/index.js'); if (typeof m.ModalClient !== 'function') process.exit(1);" \
+    || { echo "ERROR: the staged Node cannot import the staged modal SDK" >&2; exit 1; }

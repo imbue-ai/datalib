@@ -76,6 +76,10 @@ rust_test(
     env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "INSTA_WORKSPACE_ROOT": ".",
+        # Nothing here fetches the embedding model: a root that holds none,
+        # in a test or in an applet binary a test starts, fails rather than
+        # downloading 300 MB into the cache under `HOME` (TEST_TMPDIR).
+        "DATALIB_MODELS_NO_FETCH": "1",
     },
     # Its tests run in parallel and llama.cpp embeds on every core; with
     # other tests beside it on CI's four vCPUs, an embed waits on threads

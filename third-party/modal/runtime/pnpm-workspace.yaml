@@ -1,0 +1,4 @@
+# pnpm 10+ reads these here rather than from package.json#pnpm; kept the
+# same as there, which aspect_rules_js reads with the lockfile.
+overrides:
+  cbor-extract: '-'
