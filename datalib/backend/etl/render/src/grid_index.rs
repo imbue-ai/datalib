@@ -894,10 +894,6 @@ async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-/// How long opening or writing the grid index waits for another writer of
-/// its file.
-const OTHER_WRITER_WAIT: Duration = Duration::from_secs(5 * 60);
-
 async fn connect(db_path: &Path) -> Result<SqlitePool> {
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(datalib_core::plain_sqlite::uri(db_path))
@@ -915,13 +911,9 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
         .pragma("temp_store", "memory")
         // Each source's `keyword_index` writes the search index's tables in
         // this file too, a batch of documents at a time.
-        .busy_timeout(OTHER_WRITER_WAIT);
-    // The pool waits as long as SQLite does: its own default (30s) gives
-    // up on the connection's first statement while a keyword pass holds
-    // the file, whatever `busy_timeout` says.
+        .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
-        .acquire_timeout(OTHER_WRITER_WAIT)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
