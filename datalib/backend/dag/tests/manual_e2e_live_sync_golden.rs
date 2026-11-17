@@ -613,9 +613,10 @@ fn manual_e2e_live_sync_golden() {
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
-    // the on-disk per-group layout. `system/` and the `unified_grid_and_search_index` group
-    // (the grid and search index) are skipped — see the module header.
+    // Snapshot each group's stores, mirroring the on-disk per-group layout:
+    // `ingest/`, `render_markdown/`, a time-series source's
+    // `render_time_series/` and the time-series index's `time_series_index/`.
+    // `system/` and the grid and search index are skipped.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
@@ -627,7 +628,7 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["ingest", "render_markdown"] {
+        for sub in TREE_SNAPSHOTS {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
@@ -639,7 +640,7 @@ fn manual_e2e_live_sync_golden() {
     // insta's `INSTA_UNREFERENCED=delete` is a cargo-insta feature that does
     // not fire under `bazel run` and would not scan our external snapshot
     // tree anyway. Update mode only.
-    prune_orphan_snapshots(&manifest);
+    prune_orphan_snapshots(&manifest, &data_root);
 
     // Manifest pins which files we expect to find. Catches additions /
     // removals without having to diff every per-file snapshot.
@@ -1885,13 +1886,36 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
 /// Delete per-stanza `.snap` files that no longer correspond to a manifest
 /// key — orphans from a run whose produced paths have since changed. No-op
 /// outside update mode, which must never mutate the version-controlled golden.
-fn prune_orphan_snapshots(manifest: &[String]) {
+/// The step trees snapshotted file by file, under each group.
+const TREE_SNAPSHOTS: [&str; 4] = [
+    "ingest",
+    "render_markdown",
+    "render_time_series",
+    "time_series_index",
+];
+
+/// Deletes the snapshots this bake no longer writes: a tree snapshot whose
+/// file is gone, and a top-level folder whose group is gone from the data
+/// root, which is what a renamed group leaves.
+fn prune_orphan_snapshots(manifest: &[String], data_root: &Path) {
     if !insta_update_mode() {
         return;
     }
     let base = snap_base();
     if !base.is_dir() {
         return;
+    }
+    for entry in std::fs::read_dir(&base)
+        .expect("read snapshot tree")
+        .flatten()
+    {
+        let name = entry.file_name();
+        let written_later = name == datalib_contacts::CURATED_DIR;
+        if entry.path().is_dir() && !written_later && !data_root.join(&name).is_dir() {
+            std::fs::remove_dir_all(entry.path()).unwrap_or_else(|e| {
+                panic!("delete orphan snapshots {}: {e}", entry.path().display())
+            });
+        }
     }
     let keys: std::collections::HashSet<&str> = manifest.iter().map(String::as_str).collect();
     for entry in WalkDir::new(&base) {
@@ -1904,16 +1928,12 @@ fn prune_orphan_snapshots(manifest: &[String]) {
             continue;
         }
         // Snapshot path mirrors the data layout, so only the per-group
-        // tree snaps are manifest-keyed — hence pruning only under an
-        // `ingest/`, `render_markdown/`, `render_occurrences/` or
-        // `index_text/` segment.
+        // tree snaps are manifest-keyed — hence pruning only under one of
+        // `TREE_SNAPSHOTS`, `render_occurrences/` or `index_text/`.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
         let is_tree_snap = key.split('/').any(|seg| {
-            matches!(
-                seg,
-                "ingest" | "render_markdown" | "render_occurrences" | "index_text"
-            )
+            TREE_SNAPSHOTS.contains(&seg) || matches!(seg, "render_occurrences" | "index_text")
         });
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)

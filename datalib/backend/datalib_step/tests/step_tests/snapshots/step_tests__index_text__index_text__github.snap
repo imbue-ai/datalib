@@ -4,7 +4,7 @@ expression: text
 ---
 === github 00000000-0000-86ca-b619-fba6c161d728 github storage
 --- chunk 0
-title: github storage | text: Source: datalib
+title: github storage | text: Source: github
 
 # github — storage
 
@@ -23,7 +23,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 
 === github 0b75b9f9-4400-87fe-99ef-2db45ad92cb6 Recalibrate replicator templates for Earl Grey, hot
 --- chunk 0
-title: Recalibrate replicator templates for Earl Grey, hot | text: Source: github
+title: Recalibrate replicator templates for Earl Grey, hot | text: Source: GitHub
 Repository: enterprise-d/replicator-firmware
 Pull request: 42
 State: closed
@@ -57,7 +57,7 @@ Quite right, Number One. Fixed in the next push.
 
 === github 0b75bad4-fe00-82b8-ab37-5a103480b51c Add holodeck safety interlock for live phaser fire
 --- chunk 0
-title: Add holodeck safety interlock for live phaser fire | text: Source: github
+title: Add holodeck safety interlock for live phaser fire | text: Source: GitHub
 Repository: enterprise-d/replicator-firmware
 Pull request: 43
 State: open
