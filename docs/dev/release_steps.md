@@ -203,8 +203,7 @@ and one for an Apple-silicon Mac:
 On Linux, a library's symbol versions come from the libc it is linked against,
 which is why each one is compiled in an old image rather than by Bazel on the
 runner. The source and flags still come from Bazel
-(`//third-party/doltlite:rename_amalgamation`, `:library_copts` and
-`:blake3_kernel_sources`, BLAKE3's SIMD kernels with each one's flags), so there
+(`//third-party/doltlite:rename_amalgamation` and `:library_copts`), so there
 is no second list of them. A Mac's floor is `--macos_minimum_os` in `.bazelrc`, whatever
 SDK the runner has, so the same build serves. It has no Intel wheel, as a release
 has no Intel tarball.
