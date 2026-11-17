@@ -1,0 +1,20 @@
+load("@npm_modal//:defs.bzl", "npm_link_all_packages")
+
+# The Modal SDK pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
+# Modal's JavaScript SDK and its 40 transitive packages, materialized from
+# pnpm-lock.yaml: every tarball is integrity-checked and no install script
+# runs. `scripts/stage_runtime.sh` copies it into the runtime beside
+# latchkey, where `datalib-step embed` runs it on the bundled Node to embed
+# a source on the person's own Modal account
+# (docs/dev/plans/embed_on_modal.md).
+npm_link_all_packages(name = "node_modules")
+
+# The whole package store, as for latchkey: `modal` resolves its
+# dependencies from directories inside `node_modules/.aspect_rules_js/`.
+alias(
+    name = "modal_tree",
+    actual = ":node_modules",
+    visibility = ["//visibility:public"],
+)

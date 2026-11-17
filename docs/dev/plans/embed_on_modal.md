@@ -9,8 +9,11 @@ as a release asset with NVIDIA's licenses beside it, the `-cuda` image
 whose CUDA layers keep their digests from one release to the next
 (docs/dev/docker.md § "The CUDA variant"), and a tarball install
 fetching the module on first use (docs/dev/runtime_fetch.md § "The CUDA
-module"). The rest is not. Facts marked _to check_ have not been
-measured or read from source yet.**
+module"). Step 4 is built and tested against a stand-in for Modal's
+SDK, not yet run against Modal: `embed_on_modal_from_n_chunks`, and the
+driver in `datalib/backend/datalib_step/src/modal/`. Step 5 is not done.
+Facts marked _to check_ have not been measured or read from source
+yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
 hours on an M-series Mac for one large library (710k chunks at ~12 a
@@ -28,7 +31,7 @@ On a source's `embed` step, and nowhere else:
 group = "gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 [steps.params]
 embed_on_modal_from_n_chunks = 5000
 ```
@@ -241,21 +244,41 @@ with a GPU, and write to its stdin and read its stdout. It cannot
 deploy a Function, and cannot `map` one.
 
 So the step's Modal half is a small script beside the step on that Node,
-and it uses Sandboxes:
+and it uses Sandboxes. The script is
+`datalib/backend/datalib_step/src/modal/embed_on_modal.mjs`, compiled
+into `datalib-step` and run with `node --eval`; it imports npm's `modal`
+(pinned in `third-party/modal/runtime/`, staged into the runtime as
+`modal/<v>/`) by its path, and the step's side is `src/modal.rs` and
+`embed_on_modal` in `src/search_index.rs`:
 
 - **The step asks the cache what is missing**, as it does locally, and
-  cuts those prompts into slices of a few thousand, a few minutes of a
-  GPU each.
-- **One Sandbox per slice**, from the `-cuda` image with a GPU, several
-  at once, each running `datalib-step embed-prompts` with its slice on
-  stdin. Splitting one embed across many cheap GPUs costs the same
+  writes those prompts to the driver's stdin as it reads the documents;
+  the driver cuts them into slices of 4,096, a minute or two of a T4
+  each.
+- **One Sandbox per slice**, from the `-cuda` image with a GPU (a T4;
+  ten at once), each running `/opt/datalib/datalib-step embed-prompts
+  --models-dir /root/.cache/qmd/models` (the model the image bakes in)
+  with its slice on stdin, under the Modal App `datalib-embed`.
+  `DATALIB_MODAL_IMAGE`, `DATALIB_MODAL_GPU` and
+  `DATALIB_MODAL_SANDBOXES` change the image, the GPU and how many run
+  at once, for measuring. Splitting one embed across many cheap GPUs costs the same
   GPU-seconds as one and divides the wait (§ "Measured on Modal").
 - **Each slice's vectors go into the inference cache as it returns**,
   and the step counts what failed. A slice that fails is re-sent once,
   then reported.
 - **Nothing about the remote work is stored.** An interrupted run loses
-  the slices in flight and nothing already written; the next run owes
-  what is still missing and sends only that.
+  the slices in flight and nothing already written: a stop sends the
+  driver SIGTERM, and it ends every Sandbox it started before it exits.
+  The next run owes what is still missing and sends only that.
+- **The driver is handed only what it needs** of the step's environment:
+  what every child gets, and Modal's own variables (`MODAL_TOKEN_ID`,
+  `MODAL_TOKEN_SECRET`, `MODAL_PROFILE`, `MODAL_CONFIG_PATH`,
+  `MODAL_ENVIRONMENT`, `MODAL_SERVER_URL`; `datalib_env::Child::Modal`).
+  A sync's runner hands a step none of those, so under a sync the
+  sign-in is `~/.modal.toml`, unless `DATALIB_CHILD_ENV` names them.
+- **A Sandbox lives at most 15 minutes.** A driver killed outright
+  (SIGKILL, a crash) cannot end its Sandboxes; they stop at that limit
+  (_to check_: whether one whose stdin is never closed runs to it).
 
 A Sandbox's GPU-seconds cost what a Function's do; its CPU and memory
 cost three times a Function's, a small share of the bill. Its output is
@@ -305,7 +328,9 @@ supported"; the issue says what to check for in a new SDK release.
    where there is a driver. Whether releases carry NVIDIA's files at all
    is the user's decision.
 4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
-   the `-cuda` image driven by the JavaScript SDK, measured on one small
-   source of a real library, then a large one.
+   the `-cuda` image driven by the JavaScript SDK. Built and tested
+   against a stand-in for the SDK whose Sandboxes run locally; to be
+   measured on one small source of a real library, then a large one,
+   which is where the _to check_ items above get answered.
 5. The security posture section, and `docs/dev/config_model.md` and
    `configs/dag_example.toml` for the parameter.
