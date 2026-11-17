@@ -123,5 +123,17 @@ fn manual_e2e_config_loads_and_plans() {
         "missing {} — expected the DAG-format config in the manual-e2e data dir",
         path.display()
     );
-    validate_config("dag.toml", &path);
+    // As the bake does: the config as `datalib-http` would leave it.
+    let up = datalib_migrate_config::upgrade_unattended(
+        &std::fs::read_to_string(&path).expect("read dag.toml"),
+    );
+    assert!(
+        up.refused.is_empty(),
+        "dag.toml: a rewrite refused: {:?}",
+        up.refused
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let upgraded = dir.path().join("dag.toml");
+    std::fs::write(&upgraded, &up.text).expect("write the upgraded config");
+    validate_config("dag.toml", &upgraded);
 }

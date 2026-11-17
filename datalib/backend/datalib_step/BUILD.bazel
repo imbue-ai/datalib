@@ -246,6 +246,7 @@ rust_test(
         "//tests/fixtures:ingested/inference_cache.sqlite",
         "//tests/fixtures:ingested/qmd.tar",
         "//tests/fixtures:ingested/search_index.sqlite",
+        "//tests/fixtures:ingested/search_prompts.tsv",
         "//third-party/doltlite:doltlite",
         "//third-party/qmd_models:embeddinggemma",
     ],
@@ -260,6 +261,7 @@ rust_test(
         "INSTA_WORKSPACE_ROOT": ".",
         "SEARCH_INDEX_CACHE": "$(rootpath //tests/fixtures:ingested/inference_cache.sqlite)",
         "SEARCH_INDEX_GRID": "$(rootpath //tests/fixtures:ingested/search_index.sqlite)",
+        "SEARCH_PROMPTS": "$(rootpath //tests/fixtures:ingested/search_prompts.tsv)",
         "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [

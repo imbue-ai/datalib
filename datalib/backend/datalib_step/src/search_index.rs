@@ -188,7 +188,7 @@ async fn update_keywords_in(
 
 /// What the embed pass asks of a model: each prompt's vector, cut to fit
 /// its context, and whether it had to be.
-trait EmbedPrompt: Send + 'static {
+pub(crate) trait EmbedPrompt: Send + 'static {
     fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>>;
 }
 
