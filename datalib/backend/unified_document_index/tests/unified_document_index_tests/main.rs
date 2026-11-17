@@ -4,7 +4,5 @@
 mod children;
 mod dolt_backend_integration;
 mod fixture_db_snapshot;
-mod qmd_index_state;
-mod qmd_mapping;
-mod qmd_vectors;
+mod fixture_vectors;
 mod search_index;

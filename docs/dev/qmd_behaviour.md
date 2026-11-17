@@ -13,18 +13,11 @@ and 11 on one of 22 groups and 111 documents. File references are into
 ([`qmd_vendored.md`](qmd_vendored.md)); function names are given so a
 line number that drifts is still findable.
 
-Read this before touching `qmd_indexer/src/lib.rs`,
-`qmd_indexer/src/js/qmd_sdk.mjs` or anything that drives `qmd embed`.
-Finding 6 is why the embed step calls past `store.embed()`. Findings 1
-and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
-which drives the real qmd through `Index`. Search reads qmd's index
-itself (its keyword table and stored vectors) and asks qmd only to
-embed a query, so nothing here is about qmd's own search. The search
-applet reads the vectors into memory at launch, ranks against what it
-holds while a sync is writing the index, and once the index is still reads
-only the vectors added since (`INDEX_SETTLE` and `warm.rs` in
-`applets/src/unified_document_index/`, `VectorCache` in
-`unified_document_index/src/qmd/vectors.rs`).
+No sync drives qmd now: search keeps its own index
+(`datalib/backend/search_index`), built in process. These facts stay as
+the record behind what still bears qmd's mark — the one-slot
+`qmd_keyword` and `qmd_embed` locks (findings 4, 5 and 12) and the
+shared model cache's path — until those are revisited.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,

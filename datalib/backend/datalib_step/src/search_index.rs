@@ -150,12 +150,46 @@ async fn update_keywords_in(
     Ok(done)
 }
 
+/// What the embed pass asks of a model: a prompt's vector, cut to fit its
+/// context, and whether it had to be.
+trait EmbedPrompt: Send + 'static {
+    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)>;
+}
+
+impl EmbedPrompt for Embedder {
+    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)> {
+        Embedder::embed_fitted(self, prompt)
+    }
+}
+
 /// `<group>/embed`'s half: every chunk of this source the inference cache
 /// has no vector for, embedded and cached.
 pub(crate) async fn embed(
     root: &Path,
     group: &str,
     model_path: &Path,
+    progress: &Progress,
+    stop: &StopFlag,
+) -> Result<Done> {
+    let model_path = model_path.to_path_buf();
+    let open = move || {
+        let embedder = Embedder::open(&model_path, Device::Best, 0)?;
+        tracing::info!(
+            device = %embedder.device(),
+            cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
+            "loaded the search model"
+        );
+        Ok(embedder)
+    };
+    embed_with(root, group, open, progress, stop).await
+}
+
+/// [`embed`] with the model `open` loads, which it calls only when a chunk
+/// is owed.
+async fn embed_with<E: EmbedPrompt>(
+    root: &Path,
+    group: &str,
+    open: impl FnOnce() -> Result<E> + Send + 'static,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -173,16 +207,16 @@ pub(crate) async fn embed(
     reader.close().await;
     let spans = spans?;
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
-    let out = embed_into(&cache, root, group, model_path, spans, progress, stop).await;
+    let out = embed_into(&cache, root, group, open, spans, progress, stop).await;
     cache.close().await;
     out
 }
 
-async fn embed_into(
+async fn embed_into<E: EmbedPrompt>(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
-    model_path: &Path,
+    open: impl FnOnce() -> Result<E> + Send + 'static,
     spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
@@ -204,19 +238,11 @@ async fn embed_into(
     progress.set_message("search index: embedding");
     progress.set_length(Some(queued.len() as u64));
 
-    let model_path = model_path.to_path_buf();
     let mut embedder = Some(
-        tokio::task::spawn_blocking(move || Embedder::open(&model_path, Device::Best, 0))
+        tokio::task::spawn_blocking(open)
             .await
             .context("embedder open panicked")??,
     );
-    if let Some(embedder) = &embedder {
-        tracing::info!(
-            device = %embedder.device(),
-            cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
-            "loaded the search model"
-        );
-    }
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut result = Ok(());
     let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
@@ -283,8 +309,8 @@ fn prompts_for(doc: &IndexDoc, wanted: &HashSet<&str>) -> Option<Vec<(String, St
 }
 
 /// Each prompt's vector, and how many had to be cut to fit the context.
-async fn embed_batch(
-    embedder: &mut Option<Embedder>,
+async fn embed_batch<E: EmbedPrompt>(
+    embedder: &mut Option<E>,
     batch: Vec<(String, String)>,
 ) -> Result<(Vec<(String, Vec<f32>)>, usize)> {
     let mut e = embedder.take().context("the embedder is gone")?;
@@ -369,13 +395,30 @@ mod tests {
 
     const GROUP: &str = "ten-forward";
 
+    /// A second source, beside `GROUP`.
+    const OTHER: &str = "sickbay";
+
     fn render_root(root: &Path) -> PathBuf {
-        datalib_etl::layout::render_markdown_root(root, GROUP)
+        render_root_of(root, GROUP)
+    }
+
+    fn render_root_of(root: &Path, group: &str) -> PathBuf {
+        datalib_etl::layout::render_markdown_root(root, group)
     }
 
     /// A document as a renderer hands it over, its file written.
     fn rendered_doc(
         root: &Path,
+        uuid: &str,
+        sections: Vec<Section>,
+        md_path: PathBuf,
+    ) -> RenderedMarkdown {
+        rendered_doc_of(root, GROUP, uuid, sections, md_path)
+    }
+
+    fn rendered_doc_of(
+        root: &Path,
+        group: &str,
         uuid: &str,
         sections: Vec<Section>,
         md_path: PathBuf,
@@ -402,7 +445,7 @@ mod tests {
             section_layout: None,
             content_hash: None,
             markdown_uuid: uuid.to_string(),
-            source_id: GROUP.to_string(),
+            source_id: group.to_string(),
             upstream_cursor: None,
             bucket_key: None,
             md_path,
@@ -430,7 +473,11 @@ mod tests {
     }
 
     fn commit(root: &Path, docs: &[RenderedMarkdown], removed: &[String]) {
-        let store = IndexedMarkdownStore::open(&render_root(root)).unwrap();
+        commit_of(root, GROUP, docs, removed)
+    }
+
+    fn commit_of(root: &Path, group: &str, docs: &[RenderedMarkdown], removed: &[String]) {
+        let store = IndexedMarkdownStore::open(&render_root_of(root, group)).unwrap();
         for d in docs {
             store.put_document(root, d).unwrap();
         }
@@ -442,16 +489,213 @@ mod tests {
     }
 
     async fn update(root: &Path) -> Done {
-        update_keywords(root, GROUP, &Progress::noop(), &StopFlag::new())
+        update_of(root, GROUP).await
+    }
+
+    async fn update_of(root: &Path, group: &str) -> Done {
+        update_keywords(root, group, &Progress::noop(), &StopFlag::new())
             .await
             .unwrap()
     }
 
     async fn indexed(root: &Path) -> BTreeMap<String, String> {
+        indexed_of(root, GROUP).await
+    }
+
+    async fn indexed_of(root: &Path, group: &str) -> BTreeMap<String, String> {
         let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
-        let out = index.indexed(GROUP).await.unwrap();
+        let out = index.indexed(group).await.unwrap();
         index.close().await;
         out
+    }
+
+    /// One document, `uuid`, saying `text`, committed under `group`.
+    fn one_doc(root: &Path, group: &str, uuid: &str, text: &str) {
+        let rr = render_root_of(root, group);
+        let doc = rendered_doc_of(root, group, uuid, thread(text), doc_md_path(&rr, uuid));
+        commit_of(root, group, &[doc], &[]);
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Ev {
+        Length(Option<u64>),
+        Inc(u64),
+    }
+
+    /// The bar's lengths and increments, in the order they were reported.
+    #[derive(Default, Clone)]
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<Ev>>>);
+
+    impl datalib_etl::progress::ProgressSink for Recorder {
+        fn set_length(&self, total: Option<u64>) {
+            self.0.lock().unwrap().push(Ev::Length(total));
+        }
+        fn inc(&self, delta: u64) {
+            self.0.lock().unwrap().push(Ev::Inc(delta));
+        }
+    }
+
+    impl Recorder {
+        fn progress(&self) -> Progress {
+            Progress::new(std::sync::Arc::new(self.clone()))
+        }
+        fn take(&self) -> Vec<Ev> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    /// A model that answers every prompt with the same vector, counting
+    /// them.
+    struct Fixed(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl EmbedPrompt for Fixed {
+        fn embed_fitted(&mut self, _prompt: &str) -> Result<(Vec<f32>, bool)> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok((vec![0.6, 0.8], false))
+        }
+    }
+
+    /// Which of `group`'s chunks the cache has no vector for.
+    async fn unembedded(root: &Path, group: &str) -> usize {
+        let reader = Reader::open(
+            &layout::grid_index_db(root),
+            &layout::inference_cache_db(root),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let hashes: Vec<String> = reader
+            .chunk_hashes(group)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, h)| h)
+            .collect();
+        reader.close().await;
+        assert!(!hashes.is_empty(), "{group} has chunks");
+        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+            .await
+            .unwrap();
+        let missing = cache
+            .missing(&datalib_search_index::model_key(), &hashes)
+            .await
+            .unwrap();
+        cache.close().await;
+        missing.len()
+    }
+
+    /// A keyword pass is one source's: it indexes that source's documents,
+    /// and removing one of them leaves every other source's as they were.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keyword_pass_touches_only_its_own_source() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        one_doc(root, OTHER, "d-hypo", "a hypospray");
+
+        assert_eq!(update(root).await.put, 1);
+        assert!(indexed_of(root, OTHER).await.is_empty(), "not its source");
+        assert_eq!(update_of(root, OTHER).await.put, 1);
+        let other = indexed_of(root, OTHER).await;
+
+        commit(root, &[], &["d-tea".to_string()]);
+        assert_eq!(update(root).await.removed, 1);
+        assert!(indexed(root).await.is_empty());
+        assert_eq!(indexed_of(root, OTHER).await, other);
+    }
+
+    /// A stop asked for before a keyword pass begins puts nothing; the
+    /// next pass, not stopped, does the work.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stopped_keyword_pass_puts_nothing_and_the_next_one_catches_up() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        let stop = StopFlag::new();
+        stop.request();
+        let done = update_keywords(root, GROUP, &Progress::noop(), &stop)
+            .await
+            .unwrap();
+        assert_eq!(done.put, 0);
+        assert!(indexed(root).await.is_empty());
+        assert_eq!(update(root).await.put, 1);
+    }
+
+    /// The Manage row's bar: its length is the documents owed, and it
+    /// fills to that length; a pass that owes nothing says so.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keyword_progress_counts_the_documents_owed() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let rr = render_root(root);
+        let docs: Vec<RenderedMarkdown> = ["d-tea", "d-hush"]
+            .into_iter()
+            .map(|u| rendered_doc(root, u, thread(u), doc_md_path(&rr, u)))
+            .collect();
+        commit(root, &docs, &[]);
+        let bar = Recorder::default();
+        let stop = StopFlag::new();
+        update_keywords(root, GROUP, &bar.progress(), &stop)
+            .await
+            .unwrap();
+        let events = bar.take();
+        assert_eq!(events.first(), Some(&Ev::Length(Some(2))), "{events:?}");
+        let filled: u64 = events
+            .iter()
+            .map(|e| match e {
+                Ev::Inc(n) => *n,
+                Ev::Length(_) => 0,
+            })
+            .sum();
+        assert_eq!(filled, 2, "{events:?}");
+
+        update_keywords(root, GROUP, &bar.progress(), &stop)
+            .await
+            .unwrap();
+        assert_eq!(bar.take(), [Ev::Length(Some(0))]);
+    }
+
+    /// An embed is one source's: it embeds that source's chunks and no
+    /// other's, and with nothing owed it loads no model at all.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_embed_fills_only_its_own_source() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        one_doc(root, OTHER, "d-hypo", "a hypospray");
+        update(root).await;
+        update_of(root, OTHER).await;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run = |group: &'static str| {
+            let calls = calls.clone();
+            async move {
+                let opened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let flag = opened.clone();
+                let open = move || {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(Fixed(calls))
+                };
+                let done = embed_with(root, group, open, &Progress::noop(), &StopFlag::new())
+                    .await
+                    .unwrap();
+                (done, opened.load(std::sync::atomic::Ordering::SeqCst))
+            }
+        };
+
+        let (done, opened) = run(GROUP).await;
+        assert!(opened);
+        assert_eq!(done.embedded, 1);
+        assert_eq!(unembedded(root, GROUP).await, 0);
+        assert_eq!(unembedded(root, OTHER).await, 1, "not its source");
+
+        let (done, _) = run(OTHER).await;
+        assert_eq!(done.embedded, 1);
+        assert_eq!(unembedded(root, OTHER).await, 0);
+
+        let (done, opened) = run(GROUP).await;
+        assert_eq!(done, Done::default());
+        assert!(!opened, "nothing owed, no model loaded");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     /// The keyword pass takes what the render store holds, by its content

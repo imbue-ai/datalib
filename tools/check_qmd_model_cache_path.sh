@@ -2,7 +2,7 @@
 # Asserts that the vendored qmd snapshot under `third-party/qmd/`
 # resolves its model cache to `$XDG_CACHE_HOME/qmd/models` (with a
 # `$HOME/.cache/qmd/models` fallback) — i.e. the same path
-# `datalib_qmd_indexer::default_models_dir()` returns.
+# `datalib_qmd_models::shared_models_dir()` returns.
 #
 # This is about the SHIPPED app, not the build: a sync run by the app
 # downloads models to that path, and the indexer has to look for them
@@ -14,8 +14,8 @@
 # catches the case where upstream qmd changes its cache-path constant —
 # we'd otherwise notice only when a user's app quietly re-downloaded
 # multiple GB into a second directory. Pairs with the rust-side
-# `default_models_dir_matches_qmd_default` unit test in
-# //datalib/backend/qmd_indexer:qmd_indexer_unittests.
+# `the_shared_cache_is_where_qmd_kept_its_models` unit test in
+# //datalib/backend/qmd_models:qmd_models_unittests.
 #
 # The matched line in third-party/qmd/src/llm.ts:
 #   const MODEL_CACHE_DIR = process.env.XDG_CACHE_HOME
@@ -58,7 +58,7 @@ qmd model cache path drift detected.
   XDG_CACHE_HOME with ("qmd", "models").
 
 If upstream qmd intentionally moved the cache, update:
-  * datalib/backend/qmd_indexer/src/lib.rs (default_models_dir)
+  * datalib/backend/qmd_models/src/lib.rs  (shared_models_dir)
   * datalib/dev_perseus.sh                   (SHARED_MODELS)
   * README.md / docs/user/first_time_user.md
 …then re-run this test.

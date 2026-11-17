@@ -3,8 +3,10 @@
 **Status: proposal (2026-11-11). Steps 1 to 8 of "Order of work" and
 the first half of step 9 are built (`//datalib/backend/search_index`,
 `//datalib/backend/embedder`): search reads only the search index, the
-steps no longer run qmd, and the aggregator deletes qmd's index. The
-second half, deleting qmd's code, runtime and names, is not.** Numbers were
+steps no longer run qmd, and the aggregator deletes qmd's index. Of the
+second half, qmd's code is deleted (`qmd_indexer`, the readers of qmd's
+index, the fixture's qmd index); its runtime, the release's share of it,
+`third-party/qmd` and the names are not.** Numbers were
 measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
