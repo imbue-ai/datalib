@@ -444,6 +444,13 @@ common --enable_platform_specific_config
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
 
+# Every Linux C/C++ compile and link goes through the LLVM toolchain
+# MODULE.bazel registers, so the same action has the same cache key on a
+# CI runner, in a cloud VM and on a laptop. Without this, Bazel would
+# still detect the machine's own gcc, and a target that reached it would
+# build quietly and miss the shared cache; with it, that target fails.
+common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+
 # rustfmt-check is **always on** for every bazel build/test. This
 # forbids `bazelisk test //...` from running against unformatted code,
 # which would otherwise mean: developer runs tests → formats at commit

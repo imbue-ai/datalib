@@ -507,6 +507,25 @@ use_repo(toolchains_musl, "musl_toolchains_hub")
 # target linux at all.)
 register_toolchains("@musl_toolchains_hub//:all")
 
+# The C/C++ toolchain every Linux build uses, gnu legs and build tools
+# alike: a prebuilt clang with its own glibc headers and stubs, libc++
+# and compiler-rt, all fetched by hash (hermeticbuild/hermetic-llvm).
+# Bazel's autodetected toolchain linked with whatever gcc the machine
+# had, so a proc-macro or build script built on a CI runner and one
+# built in a cloud VM differed, and so did the cache key of everything
+# built on them. Registered after the musl toolchains: these match any
+# Linux platform of their CPU, the musl ones included.
+bazel_dep(name = "llvm", version = "0.8.26")
+
+llvm_toolchain = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchain.exec(arch = "x86_64", os = "linux")
+llvm_toolchain.exec(arch = "aarch64", os = "linux")
+llvm_toolchain.target(arch = "x86_64", os = "linux")
+llvm_toolchain.target(arch = "aarch64", os = "linux")
+use_repo(llvm_toolchain, "llvm_toolchains")
+
+register_toolchains("@llvm_toolchains//:all")
+
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
 # Route `libsqlite3-sys` at our bazel-built doltlite static archive
