@@ -99,15 +99,27 @@ own `LICENSE` for the component there (`licenses/nvidia/cudart/`,
 reuse them.** The Dockerfile's `CUDA` build argument picks a stage
 between the OS layers and the tarball: `none`, or `12`, which adds the
 two archives with `ADD --link`, which builds a layer apart from the
-layers under it, from archives whose file times are fixed
-(`scripts/release/stage_cuda.sh`). Whether that keeps the pushed CUDA
-layers' digests from one release to the next, when Ubuntu's packages
-have moved, is _not yet shown_: two builds over different Ubuntus,
-loaded into the local Docker store with `--load`, gave different CUDA
-layers, and what a registry holds after a push, which is what a pull
-sees, has not been compared. `.github/workflows/cuda.yml` builds the
-variant up to its demo (`--target app`) on every change that could move
-it. A machine with no GPU runs the variant on the
+layers under it. A layer is reused only if its digest is the same, and
+its digest is the hash of every byte of the layer, directory times
+included. So `scripts/release/stage_docker_context.sh` roots each
+archive at `/` (`cuda/rootfs-cuda-libs.tar` holds
+`usr/local/lib/datalib-cuda/…`, `cuda/rootfs-ggml-cuda.tar` holds
+`opt/datalib/…`), every entry dated 1970 as `stage_cuda.sh` dates its
+own. Added to a directory instead (`ADD … /opt/datalib/`), BuildKit
+makes the destination and its parents itself and stamps them with the
+build's clock, so each build gets new digests for the same bytes:
+measured with BuildKit v0.34.2, two builds from a cold cache a few
+minutes apart gave different layers, over the same Ubuntu and over
+different ones, and the rooted archives gave the same two layers both
+times (583 MB and 105 MB compressed). The comparison is of what a
+registry holds after a push, which is what a pull compares; a `--load`
+into the local Docker store says nothing about it.
+`.github/workflows/cuda.yml` builds the variant up to its demo
+(`--target app`) twice from a cold cache, the second time over Ubuntu
+24.04, pushes both to a registry on the runner, and fails if the two
+CUDA layers' digests differ (`scripts/release/cuda_layer_digests.py`).
+It runs on every change that could move them.
+A machine with no GPU runs the variant on the
 CPU, as the plain image does: `docker-publish-cuda` checks the
 walkthrough against it on a runner that has none.
 
