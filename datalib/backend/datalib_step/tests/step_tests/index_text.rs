@@ -13,7 +13,7 @@ use std::process::Command;
 #[test]
 fn every_sources_index_text_is_this() {
     let td = tempfile::tempdir().unwrap();
-    let tarball = std::env::var_os("INGESTED_QMD_TAR").expect("INGESTED_QMD_TAR");
+    let tarball = std::env::var_os("INGESTED_RENDERED_TAR").expect("INGESTED_RENDERED_TAR");
     tar::Archive::new(std::fs::File::open(tarball).unwrap())
         .unpack(td.path())
         .unwrap();
@@ -21,7 +21,7 @@ fn every_sources_index_text_is_this() {
     // chunks with its tokenizer.
     let model =
         std::fs::canonicalize(std::env::var_os("EMBED_MODEL").expect("EMBED_MODEL")).unwrap();
-    let models = td.path().join("qmd/unified_grid_and_search_index/models");
+    let models = td.path().join("root/unified_grid_and_search_index/models");
     std::fs::create_dir_all(&models).unwrap();
     std::os::unix::fs::symlink(
         &model,
@@ -30,7 +30,7 @@ fn every_sources_index_text_is_this() {
     .unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .arg("index-text")
-        .arg(td.path().join("qmd"))
+        .arg(td.path().join("root"))
         .arg("--chunks")
         .output()
         .unwrap();

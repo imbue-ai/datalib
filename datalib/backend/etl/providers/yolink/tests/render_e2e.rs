@@ -192,7 +192,7 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     // the reason a rendered tree was never byte-identical to its previous
     // self — and so re-ran the fixture's ~90s CPU-only embed on CI for
     // changes that altered nothing the embedder reads. See
-    // `render_store_section` and `tests/fixtures/tar_qmd.py`.
+    // `render_store_section` and `tests/fixtures/tar_rendered.py`.
     assert!(
         !md.contains("test seed"),
         "the doltlite commit log is back in the rendered page, which makes \
