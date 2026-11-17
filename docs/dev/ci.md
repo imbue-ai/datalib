@@ -48,13 +48,20 @@ reference behind them.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 
-Each bazel job first deletes the runner's unused preinstalls (Android
-SDK, .NET, GHC), which the job mounts into its container for the
-purpose (`prepare-bazel`'s "Free the runner's disk"). A runner starts
-with about 14 GB free, and the image and the build have left as little
-as 2.6 GB of it: under the pipeline's 10 GB `[disk_space]` floor, so
-every test that syncs waited on `waiting for disk space` until it timed
-out. The step prints `df -h /` before and after.
+Each bazel job mounts the runner's unused preinstalls (Android SDK,
+.NET, GHC) into its container, and `prepare-bazel`'s "Free the runner's
+disk" deletes them when the runner starts with under 40 GB free. Some
+runners have started with about 14 GB, and the image and the build have
+left as little as 2.6 GB of it: under the pipeline's 10 GB
+`[disk_space]` floor, so every test that syncs waited on `waiting for
+disk space` until it timed out (2026-11-02). Every job measured from
+2026-11-03 to 2026-11-17 started with about 80 GB free of 145 GB
+instead, and deleting the preinstalls, which frees about 17 GB, took 50
+to 130 s there; so a runner with room keeps them. The step prints
+`df -h /` first. `prepare-bazel` also samples the free space every 10 s
+for the rest of the job, and each bazel job ends with
+`.github/actions/disk-low-point`, which prints the lowest it saw: the
+number to judge the 40 GB threshold by.
 
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
