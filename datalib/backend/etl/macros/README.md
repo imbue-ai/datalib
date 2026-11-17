@@ -167,7 +167,7 @@ compile error.
 
 On a `#[col(...)]` or a `#[derived(...)]`:
 
-- `search` (the key is the column's name) or `search = "convo"`; with
+- `search` (the key is the column's name) or `search = "datalib_id"`; with
   `alias = "old_name"` (repeatable) for a spelling people already type,
   and `uuid` when a value may come as `slug-uuid`.
   On an `enum` column the key takes only the enum's words
