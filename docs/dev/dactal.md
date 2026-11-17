@@ -158,7 +158,7 @@ fallback, which serves the main app instead.
 ## Caveats
 
 1. **Client-side, in-memory — no query pushdown.** DACTAL loads the working set
-   into browser memory and queries it locally; it does not translate to SQL/qmd.
+   into browser memory and queries it locally; it does not translate to SQL or to the search index.
    You pull a bounded slice via `/applet/unified_grid_and_search_index/search`, then explore it. It does **not**
    scale to the full corpus — frame it as a power-tool over a working set, not a
    replacement for the main grid.

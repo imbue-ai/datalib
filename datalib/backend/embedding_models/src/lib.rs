@@ -102,18 +102,6 @@ impl Fetch {
     }
 }
 
-/// Where qmd read a data root's models: the target of the
-/// `<qmd_state_dir>/models` link when one exists (the indexer made it
-/// on an earlier run, or the test fixture pointed it at bazel outputs),
-/// else `default` — the directory the indexer will link on this run.
-pub fn effective_models_dir(qmd_state_dir: &Path, default: &Path) -> PathBuf {
-    let link = qmd_state_dir.join("models");
-    match fs::symlink_metadata(&link) {
-        Ok(meta) if meta.file_type().is_symlink() => fs::canonicalize(&link).unwrap_or(link),
-        _ => default.to_path_buf(),
-    }
-}
-
 /// Every model in `models` is in `models_dir` under its cache name with
 /// the pinned sha256 when this returns `Ok` — unless `fetch` is `Never`,
 /// in which case the ones that are not come back as `Outcome::Missing`
@@ -449,21 +437,5 @@ mod tests {
         assert_eq!(outcomes, [Outcome::Verified, Outcome::Missing]);
         assert_eq!(missing(&models, &outcomes), ["absent.gguf"]);
         assert!(!dir.path().join(models[1].cache_name()).exists());
-    }
-
-    #[test]
-    fn effective_dir_follows_an_existing_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("qmd");
-        let target = dir.path().join("elsewhere");
-        fs::create_dir_all(&state).unwrap();
-        fs::create_dir_all(&target).unwrap();
-        let default = dir.path().join("default");
-        assert_eq!(effective_models_dir(&state, &default), default);
-        std::os::unix::fs::symlink(&target, state.join("models")).unwrap();
-        assert_eq!(
-            effective_models_dir(&state, &default),
-            fs::canonicalize(&target).unwrap()
-        );
     }
 }

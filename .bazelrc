@@ -53,11 +53,11 @@ test --zip_undeclared_test_outputs=true
 # bazel doesn't propagate it into the action graph.
 # Resolver:
 #   * NPX_BIN  — datalib_etl_web::latchkey::latchkey_command (the manual
-#                `*_live` tests). Nothing qmd-shaped reaches npx under
-#                bazel any more: both consumers stage a
+#                `*_live` tests). Nothing else reaches npx under
+#                bazel: //datalib/ui:e2e_test stages a
 #                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so
-#                `bundled_command` wins before the npx fallback —
-#                //datalib/ui:e2e_test (see run_e2e.sh).
+#                `bundled_command` wins before the npx fallback
+#                (see run_e2e.sh).
 #
 # That second one matters because of the PATH pinned just below. The
 # e2e test `env_inherit`s PATH, so it ran under the developer's `node`
@@ -89,24 +89,11 @@ test:macos --test_env=LANG=C.UTF-8
 build:macos --macos_minimum_os=11.0
 build:macos --host_macos_minimum_os=11.0
 
-# There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
-# here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
-# from inside the sandbox instead of re-downloading it. Nothing in the
-# build reads that directory any more: the models are pinned in
-# fetched by a build action (`//third-party/embedding_models`) and reach what
-# needs them — the fixture's vectors and `:materialize_tng_root` — as
-# ordinary bazel inputs. Dropping the mount also drops its onboarding
-# cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
-# directory turned into a build failure rather than a warning.
-#
-# The host cache still exists and still matters — it is where the SHIPPED
-# app puts models at sync time, where qmd kept them before search had its
-# own index (`datalib_embedding_models::shared_models_dir()`, held there by the
-# rust unit test `the_shared_cache_is_where_qmd_kept_its_models`).
-#
-# `--action_env=HOME` stays. It was introduced alongside the mount, but
-# it is not specific to it, and the actions that would notice its
-# absence have not been enumerated.
+# Nothing in the build reads the host's model cache (`~/.cache/qmd/models`,
+# where the shipped app keeps the embedding model): the model is fetched by
+# a build action (`//third-party/embedding_models`) and reaches what needs
+# it as an ordinary input. `HOME` is passed through because which actions
+# would notice its absence has not been enumerated.
 build --action_env=HOME
 
 # Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +

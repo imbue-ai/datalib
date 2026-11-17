@@ -20,7 +20,7 @@ brew install uv
 # latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
 # A sync's first `embed` step fetches the pinned embedding model,
-# sha256-verified, into qmd's cache (`~/.cache/qmd/models`).
+# sha256-verified, into the shared cache (`~/.cache/qmd/models`).
 ```
 
 ### Linux iteration via devcontainer

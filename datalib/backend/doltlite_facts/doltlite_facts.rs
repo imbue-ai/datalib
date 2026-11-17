@@ -2246,8 +2246,8 @@ mod compat {
     }
 
     /// Doltlite reads a WAL another program wrote: a stock-SQLite file
-    /// in WAL mode, as qmd's index is between checkpoints, reads with the
-    /// rows its `-wal` holds. Without the `-wal` the same file holds only
+    /// in WAL mode, between checkpoints, reads with the rows its `-wal`
+    /// holds. Without the `-wal` the same file holds only
     /// what was checkpointed. `scripts/make_doltlite_wal_fixture.py` wrote the
     /// pair.
     #[tokio::test]

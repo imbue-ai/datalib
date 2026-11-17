@@ -1,8 +1,8 @@
 // A Linux devcontainer with the Bazel build toolchain, built from
 // `.devcontainer/Dockerfile` (its own `ubuntu:24.04` image — the same
 // one CI runs in, minus CI's pre-fetched output base), so contributors
-// can repro Linux-only build issues locally. The qmd models are bazel
-// outputs (`//third-party/embedding_models`), not image content.
+// can repro Linux-only build issues locally. The embedding model is a bazel
+// output (`//third-party/embedding_models`), not image content.
 // Spin up via VS Code's "Reopen in Container"
 // or `devcontainer up --workspace-folder .`. Bazel + npm caches are
 // persisted in named volumes so the second `bazel build` doesn't

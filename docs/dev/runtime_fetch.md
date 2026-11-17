@@ -102,7 +102,7 @@ once per process; a failed fetch is reported, not retried by the next
    trees, and unpack directories a crash left behind.
 
 The cache directory is `$XDG_CACHE_HOME/datalib/runtime`, else
-`~/.cache/datalib/runtime`, beside qmd's model cache, and carries a
+`~/.cache/datalib/runtime`, beside the embedding model's cache, and carries a
 `CACHEDIR.TAG`. A cache directory rather than the data root, because
 two data roots on one machine then share one copy and the `latchkey` launcher can find it without a data root in
 hand.
@@ -132,7 +132,7 @@ the models.
 ## When anything may be fetched
 
 One rule covers every download datalib makes for itself (the runtime
-here, qmd's models, the perseus embedder's model files, a package): it
+here, the embedding model, the perseus embedder's model files, a package): it
 is pinned by sha256 before it is fetched, it is fetched on first use
 only because the install did not ship it, and a miss fails loudly. All
 of them go through `datalib_fetch` (`download_verified`, and

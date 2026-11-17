@@ -179,7 +179,7 @@ one binary would be indistinguishable.
   `data-sources-*` specs and a few more), each against a backend and
   root of its own, so no two specs ever share a queue.
 * **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
-* **`warmup`** — qmd's cold model load, paid once before `chromium`
+* **`warmup`** — the search model's cold load, paid once before `chromium`
   and `webkit` start.
 
 The `webkit` project exists because the Tauri desktop app renders in a
@@ -240,15 +240,15 @@ the spec's own, not as a collision.
 suite gates merges like everything else. Two things make it work in the
 CI image:
 
-* **The qmd GGUFs are bazel inputs.** A build action
-  (`//third-party/embedding_models`) fetches them into the remote cache, and
-  they reach the materializer and the fixture's index genrule as
+* **The embedding model is a bazel input.** A build action
+  (`//third-party/embedding_models`) fetches it into the remote cache, and
+  it reaches the materializer and the fixture's index genrules as
   runfiles; the image has no `/root/.cache/qmd/models`. The e2e suite
   runs on the runner itself, so its runfiles *are* downloaded before it
-  starts — which is why it uses `materialize_tng_root_embed_only`: the
-  embedding model is all it loads, and the other two are 1.8 GB. The
-  suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports them
-  absent instead of fetching them into the fixture root.
+  starts — which is why `materialize_tng_root` carries the embedding
+  model alone: it is all a search loads, and the other two pins are
+  1.8 GB. The suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports
+  a missing model absent instead of fetching it into the fixture root.
 * **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
   GitHub forces `HOME=/github/home` for container steps, while the image
   bakes its browsers under `/root`; without the flag `run_e2e.sh`'s
@@ -267,7 +267,7 @@ reporting "UI bundle not embedded in this binary").
 The target sets `timeout = "long"` (900s). Bazel's default for a test
 with no `size` or `timeout` is `medium` — **300s** — and this suite does
 not fit in that: the suite runs across two engines behind nine backend
-processes, plus a qmd cold model load of 1.2-1.5 min (qmd 2.8.3).
+processes, plus the search model's cold load.
 Measured wall clock is ~70s warm and 200-270s on a loaded machine,
 so the default budget made `bazelisk test //...` flaky in a way that
 pointed at nothing. Bazel enforces the ceiling but does not wait for it,
@@ -588,7 +588,7 @@ commit (`logging.md` § "Every line has an author").
 The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
 Free-text search works there: the golden config keyword-indexes every
 source and embeds two small ones (whatsapp, google_calendar_window), so
-semantic search reaches those two alone. The qmd index is not
+semantic search reaches those two alone. The search index is not
 snapshotted.
 
 The normalization machinery — the volatile keys the snapshots redact, each
@@ -724,10 +724,9 @@ suite. Write what you find as a dated audit under `audits/`
 is one). Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
-Everything is plain SQLite. Open it with `sqlite3 -readonly`. qmd's
-`index.sqlite` needs `file:<path>?immutable=1`, and the grid index
-needs `datalib-doltlite -readonly`. Run ids are in `runs`. What to look
-at, and where:
+Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
+grid index (with the search index's `search_*` tables) included. Run
+ids are in `runs`. What to look at, and where:
 
 | question | where it shows |
 |---|---|
@@ -742,7 +741,7 @@ at, and where:
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
-| what was left behind | files under each `render_markdown/` against its documents; qmd's `documents` with `active = 0`; a directory under the root that no `[[groups]]` names |
+| what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)
 

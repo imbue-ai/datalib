@@ -34,7 +34,7 @@ The per-stage modules within a provider crate form a strict layer with a single 
 upstream → download → render → grid_index
 ```
 
-- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
+- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the search index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
 - **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `ingest::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<group>/ingest/` (`RenderCommon::raw_path`); it must never reach back into upstream (the API) or into a file-backed method's `path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
 - **`grid_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
 
@@ -248,7 +248,7 @@ Two rules follow:
 
 One upstream field moves out of the payload rather than staying in it: whether the person has read something, and on mail whether its thread is muted. It changes often and on its own, so it lives in the store's narrow `read_marks` table (`datalib_etl::read_marks`), still in the same store, and the payload leaves it out (SMS's `read`, Signal's `IncomingMessageDetails.read`).
 
-Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or index into qmd can be recomputed from raw without re-touching the network. A provider's `RENDER_VERSION` is the explicit lever for "force a rebake of every document even when payloads are unchanged."
+Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or put in the search index can be recomputed from raw without re-touching the network. A provider's `RENDER_VERSION` is the explicit lever for "force a rebake of every document even when payloads are unchanged."
 
 ## Verifiable via a reset
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.

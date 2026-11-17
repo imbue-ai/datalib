@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run python
-"""The qmd model pins exist twice; make them agree.
+"""The model pins exist twice; make them agree.
 
 `third-party/embedding_models/BUILD.bazel` fetches the build's copies of the
 three GGUFs (repo, revision, file, sha256), and
@@ -53,7 +53,7 @@ def main() -> int:
         )
         return 1
     if build == rust:
-        print(f"OK: {len(rust)} qmd model pins agree between {BUILD} and {RUST}.")
+        print(f"OK: {len(rust)} model pins agree between {BUILD} and {RUST}.")
         return 0
     for row in sorted(build - rust):
         print(f"only in {BUILD}: {row}", file=sys.stderr)

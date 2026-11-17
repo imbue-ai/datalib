@@ -510,8 +510,8 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     let (s, emitted) = h.render().await?;
 
     // Exactly the four renderable documents, and 5 pages between them.
-    // Pinned rather than bounded: every page here is embedded by the qmd
-    // indexer on every full fixture build, so growth should be a deliberate
+    // Pinned rather than bounded: every page here is embedded when the
+    // fixture's search index is built, so growth should be a deliberate
     // edit rather than silent drift.
     assert_eq!(s.converted, 4, "four renderable documents");
     assert_eq!(s.failed, 0);

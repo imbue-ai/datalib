@@ -526,10 +526,10 @@ nothing to render or search.
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_grid_and_search_index` group, its qmd steps right
-after its render, and each step below the steps it reads. A file already
-out of that order where no place fits gets the new entries at the end.
-The runner itself reads only `inputs`.
+the last one and above the `unified_grid_and_search_index` group, and
+each step below the steps it reads, so a source's `embed` goes below
+`grid_index`. A file already out of that order where no place fits gets
+the new entries at the end. The runner itself reads only `inputs`.
 
 Dragging a group by the grip at the left of its row is how a person
 changes that order (`moveGroup`). The group's `[[groups]]` entry and

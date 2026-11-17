@@ -287,7 +287,7 @@ enum Cmd {
     /// through the embedder the `embed` step uses. Needs no data root.
     EmbedPrompts {
         /// The model's directory, put in place as `pull-models` does;
-        /// default is qmd's own cache.
+        /// default is the same shared cache.
         #[arg(long, conflicts_with = "model")]
         models_dir: Option<PathBuf>,
         /// A model file to load as it is, with no check that it is the

@@ -310,9 +310,9 @@ filegroup(
     urls = ["https://github.com/thadd3us/lightroom_db_diff/archive/d8d1364926a3e0acb08af57951df94b0f8ef361d.tar.gz"],
 )
 
-# qmd's GGUF models are fetched by a build action, not a repository
-# rule: see //third-party/embedding_models. As `http_file` repositories they were
-# downloaded whenever `//...` was analysed, needed or not.
+# The embedding model is fetched by a build action, not a repository
+# rule (//third-party/embedding_models): a repository is downloaded
+# whenever `//...` is analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.4.5")
