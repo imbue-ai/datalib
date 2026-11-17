@@ -107,9 +107,15 @@ database per source, at
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and it is
-    not kept. The search index draws its text from it, each item as an
-    envelope line (who, to whom, when), its labels and its body
-    (`search_index/src/text.rs`). The grid index does not copy it
+    not kept. A renderer that keeps its whole page as one piece keeps
+    its front matter at the start of it. The search index draws its text
+    from it (`search_index/src/text.rs`): each item as an envelope line
+    (who, to whom, when), its labels and its body; a page, a document
+    whose first piece is framed, as a line of the facts worth searching
+    for from its front matter (`markdowns.front`: the source, the kind,
+    the calendar, the repository …), then each framed piece as the words
+    a person reads, without its front matter, tags, link targets or
+    escapes. The grid index does not copy it
     ([`messages_not_documents.md`](plans/messages_not_documents.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it

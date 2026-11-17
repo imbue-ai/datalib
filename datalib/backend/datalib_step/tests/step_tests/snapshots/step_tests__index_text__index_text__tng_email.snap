@@ -39,35 +39,29 @@ Ask Quark
 
 === tng_email 00000000-0000-8781-ba6c-a1937ea67209 tng_email storage
 --- -
----
-title: tng_email storage
-source: tng_email
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [tng_email](datalib:group/tng_email "tng_email") — storage
+# tng_email — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest` | <size> | 3 files | <span id="m-00000000-0000-8781-ba6c-a1937ea67209" data-section-uuid="00000000-0000-8781-ba6c-a1937ea67209">`00000000`</span> |
-| Store | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8ce1-9fb1-8079e525103e" data-section-uuid="00000000-0000-8ce1-9fb1-8079e525103e">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/blobs.sqlite#cas_objects` |  | 8 rows | <span id="m-00000000-0000-8963-af57-ff7ea30c7928" data-section-uuid="00000000-0000-8963-af57-ff7ea30c7928">`00000000`</span> |
-| Store | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8041-86fe-47f969d71ffd" data-section-uuid="00000000-0000-8041-86fe-47f969d71ffd">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#accounts` |  | 1 row | <span id="m-00000000-0000-8db7-9777-0d7f1fb0b4f5" data-section-uuid="00000000-0000-8db7-9777-0d7f1fb0b4f5">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#email_blobs` |  | 8 rows | <span id="m-00000000-0000-890a-b12a-c6351971874b" data-section-uuid="00000000-0000-890a-b12a-c6351971874b">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#email_keywords` |  | 3 rows | <span id="m-00000000-0000-8d70-818d-8220c52ca9ef" data-section-uuid="00000000-0000-8d70-818d-8220c52ca9ef">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#email_mailboxes` |  | 11 rows | <span id="m-00000000-0000-847d-9efc-3b3db55d2efd" data-section-uuid="00000000-0000-847d-9efc-3b3db55d2efd">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#emails` |  | 8 rows | <span id="m-00000000-0000-8fce-a776-1d28657f23c2" data-section-uuid="00000000-0000-8fce-a776-1d28657f23c2">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | <span id="m-00000000-0000-8f17-8b9e-86120856503b" data-section-uuid="00000000-0000-8f17-8b9e-86120856503b">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#listed_messages` |  | 0 rows | <span id="m-00000000-0000-8169-be0d-93a71a7ba19f" data-section-uuid="00000000-0000-8169-be0d-93a71a7ba19f">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#listed_whole` |  | 0 rows | <span id="m-00000000-0000-80fb-8c74-e2d4e510b404" data-section-uuid="00000000-0000-80fb-8c74-e2d4e510b404">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#mailboxes` |  | 3 rows | <span id="m-00000000-0000-880a-ab20-07ad907efcd1" data-section-uuid="00000000-0000-880a-ab20-07ad907efcd1">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#read_marks` |  | 8 rows | <span id="m-00000000-0000-80af-a044-96f0460da202" data-section-uuid="00000000-0000-80af-a044-96f0460da202">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#thread_members` |  | 0 rows | <span id="m-00000000-0000-8900-ac70-7d65045cf29f" data-section-uuid="00000000-0000-8900-ac70-7d65045cf29f">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_email/ingest "tng_email/ingest") | `tng_email/ingest/entities.doltlite_db#threads` |  | 6 rows | <span id="m-00000000-0000-8cac-83db-20879a948708" data-section-uuid="00000000-0000-8cac-83db-20879a948708">`00000000`</span> |
-
+| Source Size | ingest | `tng_email/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `tng_email/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `tng_email/ingest/blobs.sqlite#cas_objects` |  | 8 rows | `00000000` |
+| Store | ingest | `tng_email/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#accounts` |  | 1 row | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_blobs` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_keywords` |  | 3 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_mailboxes` |  | 11 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#emails` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#listed_messages` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#listed_whole` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#mailboxes` |  | 3 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#read_marks` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#thread_members` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#threads` |  | 6 rows | `00000000` |
 === tng_email 00000000-0000-89ac-8ef1-ba5e79d09b76 Your bar tab
 --- 019ba48f-1880-8caa-a85b-c2355321c4d0
 Quark's Bar <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Fri 9 Jan 2026 21:00

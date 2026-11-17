@@ -41,27 +41,21 @@ Curious. The closing couplet is satisfying. Thank you.
 
 === chatgpt-api 00000000-0000-81f5-a220-ad1cdf647ea8 chatgpt-api storage
 --- -
----
-title: chatgpt-api storage
-source: chatgpt-api
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [chatgpt-api](datalib:group/chatgpt-api "chatgpt-api") — storage
+# chatgpt-api — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest` | <size> | 3 files | <span id="m-00000000-0000-81f5-a220-ad1cdf647ea8" data-section-uuid="00000000-0000-81f5-a220-ad1cdf647ea8">`00000000`</span> |
-| Store | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8e8e-bfa6-85f21f6d0e1c" data-section-uuid="00000000-0000-8e8e-bfa6-85f21f6d0e1c">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8df9-b479-b68a1e1d758f" data-section-uuid="00000000-0000-8df9-b479-b68a1e1d758f">`00000000`</span> |
-| Store | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8fd8-b664-94a14eee4f42" data-section-uuid="00000000-0000-8fd8-b664-94a14eee4f42">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#chatgpt_attachments` |  | 4 rows | <span id="m-00000000-0000-865b-b49c-a7e4111ac63e" data-section-uuid="00000000-0000-865b-b49c-a7e4111ac63e">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#conversations` |  | 5 rows | <span id="m-00000000-0000-8710-b041-6c312503e484" data-section-uuid="00000000-0000-8710-b041-6c312503e484">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#ingested_files` |  | 0 rows | <span id="m-00000000-0000-8207-bdc6-98a375b46e9f" data-section-uuid="00000000-0000-8207-bdc6-98a375b46e9f">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#me` |  | 1 row | <span id="m-00000000-0000-896c-8fe3-23e37a758fb7" data-section-uuid="00000000-0000-896c-8fe3-23e37a758fb7">`00000000`</span> |
-
+| Source Size | ingest | `chatgpt-api/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `chatgpt-api/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `chatgpt-api/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#chatgpt_attachments` |  | 4 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#conversations` |  | 5 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#ingested_files` |  | 0 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#me` |  | 1 row | `00000000` |
 === chatgpt-api 00000000-0000-89af-8390-876943e6455b I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
 --- 0b80f8bc-2800-8a69-bb7f-1e0df1cbf549
 Me — Mon 26 Oct 2370 08:00

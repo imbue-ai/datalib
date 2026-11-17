@@ -4,184 +4,105 @@ expression: text
 ---
 === github 00000000-0000-86ca-b619-fba6c161d728 github storage
 --- -
----
-title: github storage
-source: github
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [github](datalib:group/github "github") — storage
+# github — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest` | <size> | 2 files | <span id="m-00000000-0000-86ca-b619-fba6c161d728" data-section-uuid="00000000-0000-86ca-b619-fba6c161d728">`00000000`</span> |
-| Store | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-887f-aea4-079c9a9e9672" data-section-uuid="00000000-0000-887f-aea4-079c9a9e9672">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#coverage` |  | 3 rows | <span id="m-00000000-0000-8c2e-a137-2ecc420d8ff7" data-section-uuid="00000000-0000-8c2e-a137-2ecc420d8ff7">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#issue_comments` |  | 2 rows | <span id="m-00000000-0000-807e-a559-48305780a165" data-section-uuid="00000000-0000-807e-a559-48305780a165">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | <span id="m-00000000-0000-8802-961d-39e21e69c6e5" data-section-uuid="00000000-0000-8802-961d-39e21e69c6e5">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#pr_review_comments` |  | 4 rows | <span id="m-00000000-0000-852c-be03-025788d85ce7" data-section-uuid="00000000-0000-852c-be03-025788d85ce7">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#pr_reviews` |  | 2 rows | <span id="m-00000000-0000-8ce1-b502-62bc7e903a1f" data-section-uuid="00000000-0000-8ce1-b502-62bc7e903a1f">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#pull_requests` |  | 2 rows | <span id="m-00000000-0000-89d7-a154-e8f316e5d9c2" data-section-uuid="00000000-0000-89d7-a154-e8f316e5d9c2">`00000000`</span> |
-| Table | [ingest](datalib:step/github/ingest "github/ingest") | `github/ingest/entities.doltlite_db#self_identity` |  | 1 row | <span id="m-00000000-0000-85ec-a721-a8f6f1be439a" data-section-uuid="00000000-0000-85ec-a721-a8f6f1be439a">`00000000`</span> |
-
+| Source Size | ingest | `github/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `github/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#coverage` |  | 3 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#issue_comments` |  | 2 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#pr_review_comments` |  | 4 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#pr_reviews` |  | 2 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#pull_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `github/ingest/entities.doltlite_db#self_identity` |  | 1 row | `00000000` |
 === github 0b75b9f9-4400-87fe-99ef-2db45ad92cb6 Recalibrate replicator templates for Earl Grey, hot
 --- -
----
-provider: github
-repo: "enterprise-d/replicator-firmware"
-pr_number: 42
-title: "Recalibrate replicator templates for Earl Grey, hot"
-state: "closed"
-author: "jlpicard"
-created_at: "2369-04-15T08:00:00Z"
-updated_at: "2369-04-15T11:30:00Z"
-merged_at: "2369-04-15T11:30:00Z"
-head_sha: "1701d00042aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-base_sha: "1701d000basebasebasebasebasebasebasebase"
-head_ref: "picard/earl-grey-temp"
-base_ref: "main"
----
+Source: github
+Repository: enterprise-d/replicator-firmware
+Pull request: 42
+State: closed
+Author: jlpicard
+Branch: picard/earl-grey-temp
+Into: main
 
-<h1 class="page-title" data-page-title-uuid="0b75b9f9-4400-87fe-99ef-2db45ad92cb6">Recalibrate replicator templates for Earl Grey, hot (#42) <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42" target="_blank" rel="noopener noreferrer">↗</a></h1>
+Recalibrate replicator templates for Earl Grey, hot (#42)
 
-*closed* — [jlpicard](datalib:handle/github/jlpicard "jlpicard") — `picard/earl-grey-temp` → `main`
+*closed* — jlpicard — `picard/earl-grey-temp` → `main`
 
 ## Description
-
 --- 0b75b9f9-4400-87fe-99ef-2db45ad92cb6
-<div id="m-0b75b9f9-4400-87fe-99ef-2db45ad92cb6" data-section-uuid="0b75b9f9-4400-87fe-99ef-2db45ad92cb6" class="msg msg--github">
-
 Adjusts the steeping target to 85 degC. Tea is meant to be HOT.
-
-</div>
-
 --- -
 ## Reviews
-
 --- 0b75ba67-2100-8e00-a40a-a94d0cda3e7d
-<div id="m-0b75ba67-2100-8e00-a40a-a94d0cda3e7d" data-section-uuid="0b75ba67-2100-8e00-a40a-a94d0cda3e7d" class="msg msg--github">
-
-[wtriker](datalib:handle/github/wtriker "wtriker") *(APPROVED)* · <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#pullrequestreview-4200077" target="_blank" rel="noopener noreferrer">↗</a>
+wtriker *(APPROVED)* · Tue Apr 15th, 2369 at 10:00
 
 LGTM, Captain. Make it so.
-
-</div>
-
 --- -
 ## General discussion
-
 --- 0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3
-<div id="m-0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3" data-section-uuid="0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3" class="msg msg--github">
-
-[geordi-laforge](datalib:handle/github/geordi-laforge "geordi-laforge") · <time class="msg-ts" datetime="2369-04-15T09:30:00Z" title="2369-04-15 09:30:00 UTC">Tue Apr 15th, 2369 at 09:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#issuecomment-4242001" target="_blank" rel="noopener noreferrer">↗</a>
+geordi-laforge · Tue Apr 15th, 2369 at 09:30
 
 Did you account for water temperature drift on long-duration replicator runs?
-
-</div>
-
 --- -
 ## Inline comments
 
 ### `src/replicator/tea.c:17`
-
 --- 0b75ba67-24e8-805b-9bd2-36cb40a41cb8
-<div id="m-0b75ba67-24e8-805b-9bd2-36cb40a41cb8" data-section-uuid="0b75ba67-24e8-805b-9bd2-36cb40a41cb8" class="msg msg--github">
-
-[wtriker](datalib:handle/github/wtriker "wtriker") · <time class="msg-ts" datetime="2369-04-15T10:00:01Z" title="2369-04-15 10:00:01 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200201" target="_blank" rel="noopener noreferrer">↗</a>
+wtriker · Tue Apr 15th, 2369 at 10:00
 
 Should be 85 degC, not 82. Earl Grey wants it HOT.
-
-</div>
-
 --- 0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091
-<div id="m-0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091" data-section-uuid="0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091" class="msg msg--github">
-
-[jlpicard](datalib:handle/github/jlpicard "jlpicard") *(reply)* · <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200202" target="_blank" rel="noopener noreferrer">↗</a>
+jlpicard *(reply)* · Tue Apr 15th, 2369 at 10:05
 
 Quite right, Number One. Fixed in the next push.
-
-</div>
 === github 0b75bad4-fe00-82b8-ab37-5a103480b51c Add holodeck safety interlock for live phaser fire
 --- -
----
-provider: github
-repo: "enterprise-d/replicator-firmware"
-pr_number: 43
-title: "Add holodeck safety interlock for live phaser fire"
-state: "open"
-author: "jlpicard"
-created_at: "2369-04-15T12:00:00Z"
-updated_at: "2369-04-15T14:30:00Z"
-merged_at: null
-head_sha: "1701d00043bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-base_sha: "1701d000basebasebasebasebasebasebasebase"
-head_ref: "picard/holodeck-safety"
-base_ref: "main"
----
+Source: github
+Repository: enterprise-d/replicator-firmware
+Pull request: 43
+State: open
+Author: jlpicard
+Branch: picard/holodeck-safety
+Into: main
 
-<h1 class="page-title" data-page-title-uuid="0b75bad4-fe00-82b8-ab37-5a103480b51c">Add holodeck safety interlock for live phaser fire (#43) <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43" target="_blank" rel="noopener noreferrer">↗</a></h1>
+Add holodeck safety interlock for live phaser fire (#43)
 
-*open* — [jlpicard](datalib:handle/github/jlpicard "jlpicard") — `picard/holodeck-safety` → `main`
+*open* — jlpicard — `picard/holodeck-safety` → `main`
 
 ## Description
-
 --- 0b75bad4-fe00-82b8-ab37-5a103480b51c
-<div id="m-0b75bad4-fe00-82b8-ab37-5a103480b51c" data-section-uuid="0b75bad4-fe00-82b8-ab37-5a103480b51c" class="msg msg--github">
-
 Disables holodeck weapons fire when safeties are off, with audible warning.
 
 Fixes #41.
-
-</div>
-
 --- -
 ## Reviews
-
 --- 0b75bb42-db00-8e46-8fa7-79619e17107e
-<div id="m-0b75bb42-db00-8e46-8fa7-79619e17107e" data-section-uuid="0b75bb42-db00-8e46-8fa7-79619e17107e" class="msg msg--github">
-
-[data-soong](datalib:handle/github/data-soong "data-soong") *(COMMENTED)* · <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#pullrequestreview-4300088" target="_blank" rel="noopener noreferrer">↗</a>
+data-soong *(COMMENTED)* · Tue Apr 15th, 2369 at 14:00
 
 I have run 47 simulations against this branch. Two edge cases warrant attention; see inline.
-
-</div>
-
 --- -
 ## General discussion
-
 --- 0b75bb27-63c0-8116-b4ff-00bdd74fe630
-<div id="m-0b75bb27-63c0-8116-b4ff-00bdd74fe630" data-section-uuid="0b75bb27-63c0-8116-b4ff-00bdd74fe630" class="msg msg--github">
-
-[worf-rozhenko](datalib:handle/github/worf-rozhenko "worf-rozhenko") · <time class="msg-ts" datetime="2369-04-15T13:30:00Z" title="2369-04-15 13:30:00 UTC">Tue Apr 15th, 2369 at 13:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#issuecomment-4343001" target="_blank" rel="noopener noreferrer">↗</a>
+worf-rozhenko · Tue Apr 15th, 2369 at 13:30
 
 Approved. Honor demands no compromise on safety.
-
-</div>
-
 --- -
 ## Inline comments
 
 ### `src/holodeck/safety.c:200`
-
 --- 0b75bb42-dee8-86c3-b802-bc72e8807da8
-<div id="m-0b75bb42-dee8-86c3-b802-bc72e8807da8" data-section-uuid="0b75bb42-dee8-86c3-b802-bc72e8807da8" class="msg msg--github">
-
-[data-soong](datalib:handle/github/data-soong "data-soong") · <time class="msg-ts" datetime="2369-04-15T14:00:01Z" title="2369-04-15 14:00:01 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300301" target="_blank" rel="noopener noreferrer">↗</a>
+data-soong · Tue Apr 15th, 2369 at 14:00
 
 If `safeties_engaged` is read after `weapons_armed` is set, there is a 12-microsecond window in which a discharge could occur. I recommend reordering the checks.
-
-</div>
-
 --- -
 ### `src/holodeck/safety.c:215`
-
 --- 0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e
-<div id="m-0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e" data-section-uuid="0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e" class="msg msg--github">
-
-[data-soong](datalib:handle/github/data-soong "data-soong") · <time class="msg-ts" datetime="2369-04-15T14:00:02Z" title="2369-04-15 14:00:02 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300302" target="_blank" rel="noopener noreferrer">↗</a>
+data-soong · Tue Apr 15th, 2369 at 14:00
 
 The audible warning loops indefinitely. Counsellor Troi has noted that this may induce undue anxiety in trainees; consider capping the loop at 10 cycles.
-
-</div>

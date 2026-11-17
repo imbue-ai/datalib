@@ -4,115 +4,58 @@ expression: text
 ---
 === tng_pdfs 00000000-0000-80f8-80ef-0e1b900a6c4f tng_pdfs storage
 --- -
----
-title: tng_pdfs storage
-source: tng_pdfs
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [tng_pdfs](datalib:group/tng_pdfs "tng_pdfs") — storage
+# tng_pdfs — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/tng_pdfs/ingest "tng_pdfs/ingest") | `tng_pdfs/ingest` | <size> | 2 files | <span id="m-00000000-0000-80f8-80ef-0e1b900a6c4f" data-section-uuid="00000000-0000-80f8-80ef-0e1b900a6c4f">`00000000`</span> |
-| Store | [ingest](datalib:step/tng_pdfs/ingest "tng_pdfs/ingest") | `tng_pdfs/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-86db-b59e-adf17b7357bb" data-section-uuid="00000000-0000-86db-b59e-adf17b7357bb">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_pdfs/ingest "tng_pdfs/ingest") | `tng_pdfs/ingest/entities.doltlite_db#pdf_documents` |  | 6 rows | <span id="m-00000000-0000-8d2b-a299-75bf28616556" data-section-uuid="00000000-0000-8d2b-a299-75bf28616556">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_pdfs/ingest "tng_pdfs/ingest") | `tng_pdfs/ingest/entities.doltlite_db#pdf_paths` |  | 7 rows | <span id="m-00000000-0000-8862-8246-ce1516b500d8" data-section-uuid="00000000-0000-8862-8246-ce1516b500d8">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_pdfs/ingest "tng_pdfs/ingest") | `tng_pdfs/ingest/entities.doltlite_db#pdf_scan_meta` |  | 1 row | <span id="m-00000000-0000-8dbe-81fa-07e2c924532b" data-section-uuid="00000000-0000-8dbe-81fa-07e2c924532b">`00000000`</span> |
-
+| Source Size | ingest | `tng_pdfs/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `tng_pdfs/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_documents` |  | 6 rows | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_paths` |  | 7 rows | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_scan_meta` |  | 1 row | `00000000` |
 === tng_pdfs 00000000-0000-8a13-8568-fa91d9598906 Hull Integrity Survey
 --- -
----
-provider: pdf
-blake3: "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2"
-title: "Hull Integrity Survey"
-page_count: 2
-pdf_type: "mixed"
-source_path: "engineering/hull_survey.pdf"
----
-
 --- -
+Source: pdf
+Pages: 2
+
 # Hull Integrity Survey
-
 --- 00000000-0000-8304-97dd-79bdf3daf5a9
-<div id="m-00000000-0000-8304-97dd-79bdf3daf5a9" data-section-uuid="00000000-0000-8304-97dd-79bdf3daf5a9" class="msg msg--pdf">
-
 Hull Integrity Survey, Stardate 41209.2 Ablative plating on decks nine through twelve shows microfracturing consistent with prolonged warp stress. The scanned schematic follows on the next page.
-</div>
-
 --- -
 *Page 2 — no extractable text (image-only or scanned; OCR is not available yet).*
-
 === tng_pdfs 00000000-0000-8ccc-b967-791c3561a091 warp_core_manual.pdf
 --- -
----
-provider: pdf
-blake3: "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf"
-title: "warp_core_manual.pdf"
-author: "Geordi La Forge"
-page_count: 1
-pdf_type: "text_based"
-source_path: "engineering/warp_core_manual.pdf"
----
-
 --- -
+Source: pdf
+Author: Geordi La Forge
+Pages: 1
+
 # warp_core_manual.pdf
-
 --- 00000000-0000-8d04-9829-adab9230b668
-<div id="m-00000000-0000-8d04-9829-adab9230b668" data-section-uuid="00000000-0000-8d04-9829-adab9230b668" class="msg msg--pdf">
-
 Warp Core Maintenance, Galaxy Class Recalibrate the dilithium articulation frame every four hundred hours of continuous warp operation. Misalignment induces antimatter containment cascade.
-</div>
-
 === tng_pdfs 0b50f5ba-0c60-856f-8ff1-ea60e22c037d Captain's Log
 --- -
----
-provider: pdf
-blake3: "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4"
-title: "Captain's Log"
-author: "Jean-Luc Picard"
-page_count: 1
-pdf_type: "text_based"
-source_path: "archive/captains_log_copy.pdf"
-copies: 2
-created_at: "2364-04-13T08:45:00-07:00"
----
-
 --- -
+Source: pdf
+Author: Jean-Luc Picard
+Pages: 1
+
 # Captain's Log
-
 --- 0b50f5ba-0c60-8a87-b679-02b6594b484d
-<div id="m-0b50f5ba-0c60-8a87-b679-02b6594b484d" data-section-uuid="0b50f5ba-0c60-8a87-b679-02b6594b484d" class="msg msg--pdf">
-
 Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
-</div>
-
 === tng_pdfs 0b50f5ba-0c60-8e25-aebf-920f19049521 Captain's Log
 --- -
----
-provider: pdf
-blake3: "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545"
-title: "Captain's Log"
-author: "Jean-Luc Picard"
-page_count: 2
-pdf_type: "text_based"
-source_path: "captains_log_v2.pdf"
-created_at: "2364-04-13T08:45:00-07:00"
----
-
 --- -
+Source: pdf
+Author: Jean-Luc Picard
+Pages: 2
+
 # Captain's Log
-
 --- 0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5
-<div id="m-0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" data-section-uuid="0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" class="msg msg--pdf">
-
 Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
-</div>
-
 --- 0b50f5ba-0c60-828f-a3f2-f7e158ffca66
-<div id="m-0b50f5ba-0c60-828f-a3f2-f7e158ffca66" data-section-uuid="0b50f5ba-0c60-828f-a3f2-f7e158ffca66" class="msg msg--pdf">
-
 Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Command. The alien entity known as Q has confronted us.
-</div>

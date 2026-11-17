@@ -98,26 +98,21 @@ Shields up. Red alert.
 
 === beeper 00000000-0000-8e89-ade7-0034cbfbbf3b beeper storage
 --- -
----
-title: beeper storage
-source: beeper
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [beeper](datalib:group/beeper "beeper") — storage
+# beeper — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest` | <size> | 3 files | <span id="m-00000000-0000-8e89-ade7-0034cbfbbf3b" data-section-uuid="00000000-0000-8e89-ade7-0034cbfbbf3b">`00000000`</span> |
-| Store | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8ddf-8c7c-a461ab616caa" data-section-uuid="00000000-0000-8ddf-8c7c-a461ab616caa">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8938-af40-d9d73386596e" data-section-uuid="00000000-0000-8938-af40-d9d73386596e">`00000000`</span> |
-| Store | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8981-a851-1084589395fd" data-section-uuid="00000000-0000-8981-a851-1084589395fd">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#beeper_media_files` |  | 4 rows | <span id="m-00000000-0000-8dad-9a6a-cc4e1a00c391" data-section-uuid="00000000-0000-8dad-9a6a-cc4e1a00c391">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#message` |  | 11 rows | <span id="m-00000000-0000-8106-985c-1d75dc5ec19a" data-section-uuid="00000000-0000-8106-985c-1d75dc5ec19a">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#mx_reactions` |  | 2 rows | <span id="m-00000000-0000-8d11-9a3c-5c2f908c5d7e" data-section-uuid="00000000-0000-8d11-9a3c-5c2f908c5d7e">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#mx_room_messages` |  | 17 rows | <span id="m-00000000-0000-8538-8d35-6537bc9c8f71" data-section-uuid="00000000-0000-8538-8d35-6537bc9c8f71">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#participant_identifiers` |  | 4 rows | <span id="m-00000000-0000-8411-b340-21f776cf2dd4" data-section-uuid="00000000-0000-8411-b340-21f776cf2dd4">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#participants` |  | 11 rows | <span id="m-00000000-0000-8734-8dd9-e7384e373644" data-section-uuid="00000000-0000-8734-8dd9-e7384e373644">`00000000`</span> |
-| Table | [ingest](datalib:step/beeper/ingest "beeper/ingest") | `beeper/ingest/entities.doltlite_db#threads` |  | 6 rows | <span id="m-00000000-0000-8f0e-a84e-253dfe991df0" data-section-uuid="00000000-0000-8f0e-a84e-253dfe991df0">`00000000`</span> |
+| Source Size | ingest | `beeper/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `beeper/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `beeper/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `beeper/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#beeper_media_files` |  | 4 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#message` |  | 11 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#mx_reactions` |  | 2 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#mx_room_messages` |  | 17 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#participant_identifiers` |  | 4 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#participants` |  | 11 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#threads` |  | 6 rows | `00000000` |

@@ -414,32 +414,26 @@ Added Lieutenant Worf as chief of security. The roster now lists five officers.
 
 === claude-api 00000000-0000-8bd9-b6c0-1c0e35f193d1 claude-api storage
 --- -
----
-title: claude-api storage
-source: claude-api
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [claude-api](datalib:group/claude-api "claude-api") — storage
+# claude-api — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest` | <size> | 3 files | <span id="m-00000000-0000-8bd9-b6c0-1c0e35f193d1" data-section-uuid="00000000-0000-8bd9-b6c0-1c0e35f193d1">`00000000`</span> |
-| Store | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-872d-b3c1-3c9f93c8ad82" data-section-uuid="00000000-0000-872d-b3c1-3c9f93c8ad82">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8615-9fce-74ab65b75df9" data-section-uuid="00000000-0000-8615-9fce-74ab65b75df9">`00000000`</span> |
-| Store | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8089-8b86-ef7e782745fe" data-section-uuid="00000000-0000-8089-8b86-ef7e782745fe">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#claude_attachments` |  | 6 rows | <span id="m-00000000-0000-8c3c-bf55-1f2a0a4044ae" data-section-uuid="00000000-0000-8c3c-bf55-1f2a0a4044ae">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#conversations` |  | 6 rows | <span id="m-00000000-0000-8ab5-a82e-6456a9de5e12" data-section-uuid="00000000-0000-8ab5-a82e-6456a9de5e12">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#cowork_events` |  | 16 rows | <span id="m-00000000-0000-8fa4-8cd0-1d4bbfcd0448" data-section-uuid="00000000-0000-8fa4-8cd0-1d4bbfcd0448">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#cowork_sessions` |  | 1 row | <span id="m-00000000-0000-88bf-aeef-a9cf6805fd2c" data-section-uuid="00000000-0000-88bf-aeef-a9cf6805fd2c">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#orgs` |  | 1 row | <span id="m-00000000-0000-86c3-875a-c09c15edb0ab" data-section-uuid="00000000-0000-86c3-875a-c09c15edb0ab">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#project_docs` |  | 3 rows | <span id="m-00000000-0000-84e5-a4ed-acb0492627a5" data-section-uuid="00000000-0000-84e5-a4ed-acb0492627a5">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#project_docs_listings` |  | 2 rows | <span id="m-00000000-0000-8e2b-907d-c9c692d6e7e6" data-section-uuid="00000000-0000-8e2b-907d-c9c692d6e7e6">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#projects` |  | 2 rows | <span id="m-00000000-0000-861d-a3cd-92d168229e42" data-section-uuid="00000000-0000-861d-a3cd-92d168229e42">`00000000`</span> |
-| Table | [ingest](datalib:step/claude-api/ingest "claude-api/ingest") | `claude-api/ingest/entities.doltlite_db#users` |  | 1 row | <span id="m-00000000-0000-83f6-bb40-b9a8689cbd30" data-section-uuid="00000000-0000-83f6-bb40-b9a8689cbd30">`00000000`</span> |
-
+| Source Size | ingest | `claude-api/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `claude-api/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `claude-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `claude-api/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#claude_attachments` |  | 6 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#conversations` |  | 6 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#cowork_events` |  | 16 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#cowork_sessions` |  | 1 row | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#orgs` |  | 1 row | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#project_docs` |  | 3 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#project_docs_listings` |  | 2 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#projects` |  | 2 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#users` |  | 1 row | `00000000` |
 === claude-api 00000000-0000-8c06-8231-9340b6e3de70 Holodeck Malfunction Report
 --- 0b7611f3-3d00-860c-b617-7d38a26b9806
 Me — Fri 2 May 2369 10:00

@@ -104,30 +104,25 @@ William Riker <+17015550101> — Sat 11 Apr 2364 00:12
 
 === whatsapp 00000000-0000-8f4c-b365-c0f656f665bf whatsapp storage
 --- -
----
-title: whatsapp storage
-source: whatsapp
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [whatsapp](datalib:group/whatsapp "whatsapp") — storage
+# whatsapp — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest` | <size> | 3 files | <span id="m-00000000-0000-8f4c-b365-c0f656f665bf" data-section-uuid="00000000-0000-8f4c-b365-c0f656f665bf">`00000000`</span> |
-| Store | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8aab-9ba6-c5f2c049032b" data-section-uuid="00000000-0000-8aab-9ba6-c5f2c049032b">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/blobs.sqlite#cas_objects` |  | 3 rows | <span id="m-00000000-0000-8b05-9923-3abbc7fb6ab4" data-section-uuid="00000000-0000-8b05-9923-3abbc7fb6ab4">`00000000`</span> |
-| Store | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-88d4-b909-5cffe1f0080e" data-section-uuid="00000000-0000-88d4-b909-5cffe1f0080e">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#chat` |  | 5 rows | <span id="m-00000000-0000-8cb4-b98c-60bc00798d96" data-section-uuid="00000000-0000-8cb4-b98c-60bc00798d96">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#jid` |  | 10 rows | <span id="m-00000000-0000-8fb2-a5af-76881264e236" data-section-uuid="00000000-0000-8fb2-a5af-76881264e236">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#jid_map` |  | 2 rows | <span id="m-00000000-0000-8b16-b968-0cd4b67e29ed" data-section-uuid="00000000-0000-8b16-b968-0cd4b67e29ed">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#lid_display_name` |  | 1 row | <span id="m-00000000-0000-8024-9a71-6d8b2a2ac5f4" data-section-uuid="00000000-0000-8024-9a71-6d8b2a2ac5f4">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message` |  | 18 rows | <span id="m-00000000-0000-839e-93c1-084e32d78d96" data-section-uuid="00000000-0000-839e-93c1-084e32d78d96">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_add_on` |  | 6 rows | <span id="m-00000000-0000-858a-b53a-61f86211ab71" data-section-uuid="00000000-0000-858a-b53a-61f86211ab71">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_add_on_reaction` |  | 6 rows | <span id="m-00000000-0000-86e8-bc0d-1acca6b26fe5" data-section-uuid="00000000-0000-86e8-bc0d-1acca6b26fe5">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_media` |  | 4 rows | <span id="m-00000000-0000-8527-9c90-ffde95a52cf7" data-section-uuid="00000000-0000-8527-9c90-ffde95a52cf7">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_text` |  | 0 rows | <span id="m-00000000-0000-8dd2-8024-dfdfd002609e" data-section-uuid="00000000-0000-8dd2-8024-dfdfd002609e">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#wa_db_contacts` |  | 5 rows | <span id="m-00000000-0000-8b75-8023-b9a9fd362c0f" data-section-uuid="00000000-0000-8b75-8023-b9a9fd362c0f">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#wa_media_files` |  | 3 rows | <span id="m-00000000-0000-8dfa-be76-1f64c2e7efd7" data-section-uuid="00000000-0000-8dfa-be76-1f64c2e7efd7">`00000000`</span> |
+| Source Size | ingest | `whatsapp/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `whatsapp/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/blobs.sqlite#cas_objects` |  | 3 rows | `00000000` |
+| Store | ingest | `whatsapp/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#chat` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid` |  | 10 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid_map` |  | 2 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#lid_display_name` |  | 1 row | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message` |  | 18 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on_reaction` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_media` |  | 4 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_text` |  | 0 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_db_contacts` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_media_files` |  | 3 rows | `00000000` |

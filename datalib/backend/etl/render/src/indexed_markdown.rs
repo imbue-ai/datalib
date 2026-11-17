@@ -1015,12 +1015,13 @@ impl IndexedMarkdownStore {
                     .into_iter()
                     .map(KeptSection::piece)
                     .collect();
+                let facts = index_facts(&row);
                 Some(datalib_search_index::IndexDoc {
                     source_id: source_id.to_string(),
                     markdown_uuid: row.markdown_uuid,
                     content_hash,
                     title: row.title.unwrap_or_default(),
-                    sections: datalib_search_index::text::draw(&pieces),
+                    sections: datalib_search_index::text::draw(&pieces, &facts),
                 })
             })
             .collect())
@@ -1040,6 +1041,31 @@ impl IndexedMarkdownStore {
                 .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
                 .collect()
         })
+    }
+}
+
+/// A document's front matter as the search index draws its facts line
+/// from it. A `front` this build cannot read is no facts, as from a store
+/// an older build wrote.
+fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_index::text::Facts {
+    use crate::front_matter::{Front, FrontValue};
+    let front = row
+        .front
+        .as_deref()
+        .and_then(Front::from_json)
+        .unwrap_or_default();
+    datalib_search_index::text::Facts {
+        provider: row.provider.clone(),
+        front: front
+            .facts()
+            .iter()
+            .filter_map(|f| match &f.value {
+                FrontValue::Plain(v) | FrontValue::Text(v) | FrontValue::Name(v) => {
+                    Some((f.key.clone(), v.clone()))
+                }
+                FrontValue::Null => None,
+            })
+            .collect(),
     }
 }
 

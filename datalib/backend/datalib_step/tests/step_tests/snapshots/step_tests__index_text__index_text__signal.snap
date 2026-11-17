@@ -22,30 +22,24 @@ delta-shield.png
 
 === signal 00000000-0000-8364-9834-5ee3a255888f signal storage
 --- -
----
-title: signal storage
-source: signal
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [signal](datalib:group/signal "signal") — storage
+# signal — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest` | <size> | 3 files | <span id="m-00000000-0000-8364-9834-5ee3a255888f" data-section-uuid="00000000-0000-8364-9834-5ee3a255888f">`00000000`</span> |
-| Store | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8c47-9b4e-24b8197929c7" data-section-uuid="00000000-0000-8c47-9b4e-24b8197929c7">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/blobs.sqlite#cas_objects` |  | 1 row | <span id="m-00000000-0000-8aa9-9068-5875590d7614" data-section-uuid="00000000-0000-8aa9-9068-5875590d7614">`00000000`</span> |
-| Store | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-82c6-8563-07ed5be3d79a" data-section-uuid="00000000-0000-82c6-8563-07ed5be3d79a">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#account` |  | 0 rows | <span id="m-00000000-0000-8a18-9a9f-6f4772fac079" data-section-uuid="00000000-0000-8a18-9a9f-6f4772fac079">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chat_item_attachments` |  | 1 row | <span id="m-00000000-0000-8a0b-9756-86a62a38b50c" data-section-uuid="00000000-0000-8a0b-9756-86a62a38b50c">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chat_items` |  | 13 rows | <span id="m-00000000-0000-878b-a402-92723d558a31" data-section-uuid="00000000-0000-878b-a402-92723d558a31">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#chats` |  | 2 rows | <span id="m-00000000-0000-8694-b1fc-af0d937793ed" data-section-uuid="00000000-0000-8694-b1fc-af0d937793ed">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#ingested_backups` |  | 2 rows | <span id="m-00000000-0000-8630-aec6-7850098ad7d3" data-section-uuid="00000000-0000-8630-aec6-7850098ad7d3">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#read_marks` |  | 10 rows | <span id="m-00000000-0000-868b-920f-4183a5065ff3" data-section-uuid="00000000-0000-868b-920f-4183a5065ff3">`00000000`</span> |
-| Table | [ingest](datalib:step/signal/ingest "signal/ingest") | `signal/ingest/entities.doltlite_db#recipients` |  | 11 rows | <span id="m-00000000-0000-893c-b4fe-cd5e638fdcbf" data-section-uuid="00000000-0000-893c-b4fe-cd5e638fdcbf">`00000000`</span> |
-
+| Source Size | ingest | `signal/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `signal/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `signal/ingest/blobs.sqlite#cas_objects` |  | 1 row | `00000000` |
+| Store | ingest | `signal/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#account` |  | 0 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chat_item_attachments` |  | 1 row | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chat_items` |  | 13 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chats` |  | 2 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#ingested_backups` |  | 2 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#read_marks` |  | 10 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#recipients` |  | 11 rows | `00000000` |
 === signal 00000000-0000-8dcb-b58e-bf4dc9fb57a8 Bridge Crew
 --- 0b50e80d-fcc0-8650-ac5f-b407eafe4e47
 Data Soong <+17015550102> — Sat 11 Apr 2364 00:02

@@ -54,42 +54,36 @@ Of course. Boothby's garden, wasn't it?
 
 === facebook 00000000-0000-86e3-ad4e-e82f016fe3d4 facebook storage
 --- -
----
-title: facebook storage
-source: facebook
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [facebook](datalib:group/facebook "facebook") — storage
+# facebook — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest` | <size> | 3 files | <span id="m-00000000-0000-86e3-ad4e-e82f016fe3d4" data-section-uuid="00000000-0000-86e3-ad4e-e82f016fe3d4">`00000000`</span> |
-| Store | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-83a9-b667-ce7baf8edeca" data-section-uuid="00000000-0000-83a9-b667-ce7baf8edeca">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8d40-ab7b-19ac32970891" data-section-uuid="00000000-0000-8d40-ab7b-19ac32970891">`00000000`</span> |
-| Store | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-816a-bf9a-537544ae1dce" data-section-uuid="00000000-0000-816a-bf9a-537544ae1dce">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days` |  | 1 row | <span id="m-00000000-0000-8713-8004-72b721cef54e" data-section-uuid="00000000-0000-8713-8004-72b721cef54e">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#connections_friends_your_friends` |  | 3 rows | <span id="m-00000000-0000-84de-9616-1d43a199a9c2" data-section-uuid="00000000-0000-84de-9616-1d43a199a9c2">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#ingested_files` |  | 30 rows | <span id="m-00000000-0000-8286-b7b7-87f33e17e32e" data-section-uuid="00000000-0000-8286-b7b7-87f33e17e32e">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history` |  | 1 row | <span id="m-00000000-0000-8008-b1b6-6c112d28b291" data-section-uuid="00000000-0000-8008-b1b6-6c112d28b291">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#media_blobs` |  | 11 rows | <span id="m-00000000-0000-8bbc-9e79-a277d7105d38" data-section-uuid="00000000-0000-8bbc-9e79-a277d7105d38">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#messenger_messages` |  | 25 rows | <span id="m-00000000-0000-8387-8437-864f902ea529" data-section-uuid="00000000-0000-8387-8437-864f902ea529">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#messenger_threads` |  | 7 rows | <span id="m-00000000-0000-82b1-8548-e3c6a5a366e6" data-section-uuid="00000000-0000-82b1-8548-e3c6a5a366e6">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information` |  | 1 row | <span id="m-00000000-0000-8a0b-bbf3-5f23c9d36cff" data-section-uuid="00000000-0000-8a0b-bbf3-5f23c9d36cff">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments` |  | 3 rows | <span id="m-00000000-0000-83da-afbe-24cf41409c2f" data-section-uuid="00000000-0000-83da-afbe-24cf41409c2f">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions` |  | 4 rows | <span id="m-00000000-0000-8b81-901e-eb88245e78b1" data-section-uuid="00000000-0000-8b81-901e-eb88245e78b1">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_your_comment_edits` |  | 2 rows | <span id="m-00000000-0000-841d-8511-b32c470b5ef6" data-section-uuid="00000000-0000-841d-8511-b32c470b5ef6">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | <span id="m-00000000-0000-8920-a8b3-51eabaca011d" data-section-uuid="00000000-0000-8920-a8b3-51eabaca011d">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | <span id="m-00000000-0000-837b-a346-46c46ca06072" data-section-uuid="00000000-0000-837b-a346-46c46ca06072">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | <span id="m-00000000-0000-8a43-ac98-a646d562b9a4" data-section-uuid="00000000-0000-8a43-ac98-a646d562b9a4">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | <span id="m-00000000-0000-8b8d-b81c-16182e43b448" data-section-uuid="00000000-0000-8b8d-b81c-16182e43b448">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | <span id="m-00000000-0000-8cda-9c3e-ff535a5e9231" data-section-uuid="00000000-0000-8cda-9c3e-ff535a5e9231">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | <span id="m-00000000-0000-89a8-87bc-3b60e695daab" data-section-uuid="00000000-0000-89a8-87bc-3b60e695daab">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos` |  | 4 rows | <span id="m-00000000-0000-8d94-a739-dc44db29b642" data-section-uuid="00000000-0000-8d94-a739-dc44db29b642">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos` |  | 1 row | <span id="m-00000000-0000-8c94-99a6-a363328076ba" data-section-uuid="00000000-0000-8c94-99a6-a363328076ba">`00000000`</span> |
-
+| Source Size | ingest | `facebook/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `facebook/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `facebook/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `facebook/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#connections_friends_your_friends` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#ingested_files` |  | 30 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#media_blobs` |  | 11 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#messenger_messages` |  | 25 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#messenger_threads` |  | 7 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions` |  | 4 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_your_comment_edits` |  | 2 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos` |  | 4 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos` |  | 1 row | `00000000` |
 === facebook 00000000-0000-8709-9b9f-6daf23a20dfe Away team to Risa. Bring the horga'hn, Number One.
 --- 0b758cb8-cb00-8cdb-9093-e1e57b64491b
 Jean-Luc Picard — Sun 6 Apr 2369 13:06
@@ -100,30 +94,13 @@ Away team to Risa. Bring the horga'hn, Number One.
 
 === facebook 00000000-0000-8768-85df-b763ceaebe85 Beverly Crusher
 --- -
----
-markdown_uuid: 00000000-0000-8768-85df-b763ceaebe85
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "d949e946-6aae-5f6f-a21b-5fca0ada59c8"
-title: "Beverly Crusher"
-created_at: "2364-02-14T18:30:00+00:00"
----
-
 --- 00000000-0000-8768-85df-b763ceaebe85
-<div class="contact-head" data-page-title-uuid="00000000-0000-8768-85df-b763ceaebe85">
+Source: facebook
+Group: Friends
 
-<div class="contact-who">
+# Beverly Crusher
 
-# [Beverly Crusher](datalib:handle/facebook/name/Beverly%20Crusher "Beverly Crusher (facebook:name/Beverly Crusher)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-02-14T18:30:00+00:00</dd>
-</dl>
-
+Friends since: 2364-02-14T18:30:00+00:00
 === facebook 00000000-0000-88f7-a8ca-8020c717b96b Class of 2327: reunion at Boothby's garden. Bring your own trowel.
 --- 0b753f3c-5e00-8e06-b236-c6aac8793f4d
 Jean-Luc Picard — Sat 22 Mar 2369 12:00
@@ -132,56 +109,22 @@ Class of 2327: reunion at Boothby's garden. Bring your own trowel.
 
 === facebook 00000000-0000-8a3c-a66b-d2616975dbfc William Riker
 --- -
----
-markdown_uuid: 00000000-0000-8a3c-a66b-d2616975dbfc
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "630810df-4ebd-567b-a423-2010262f9c38"
-title: "William Riker"
-created_at: "2364-01-06T10:00:00+00:00"
----
-
 --- 00000000-0000-8a3c-a66b-d2616975dbfc
-<div class="contact-head" data-page-title-uuid="00000000-0000-8a3c-a66b-d2616975dbfc">
+Source: facebook
+Group: Friends
 
-<div class="contact-who">
+# William Riker
 
-# [William Riker](datalib:handle/facebook/name/William%20Riker "William Riker (facebook:name/William Riker)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-01-06T10:00:00+00:00</dd>
-</dl>
-
+Friends since: 2364-01-06T10:00:00+00:00
 === facebook 00000000-0000-8a95-8e69-5d9ef0dcdf0c Data
 --- -
----
-markdown_uuid: 00000000-0000-8a95-8e69-5d9ef0dcdf0c
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "6ef7f338-8446-5f9f-835b-1b7e7dd7ab93"
-title: "Data"
-created_at: "2364-01-06T10:05:00+00:00"
----
-
 --- 00000000-0000-8a95-8e69-5d9ef0dcdf0c
-<div class="contact-head" data-page-title-uuid="00000000-0000-8a95-8e69-5d9ef0dcdf0c">
+Source: facebook
+Group: Friends
 
-<div class="contact-who">
+# Data
 
-# [Data](datalib:handle/facebook/name/Data "Data (facebook:name/Data)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-01-06T10:05:00+00:00</dd>
-</dl>
-
+Friends since: 2364-01-06T10:05:00+00:00
 === facebook 00000000-0000-8b03-b202-0ecc96ba797c Comments
 --- 0b751fe8-5900-8112-b919-93e76f91f97d
 Jean-Luc Picard — Sun 16 Mar 2369 10:00

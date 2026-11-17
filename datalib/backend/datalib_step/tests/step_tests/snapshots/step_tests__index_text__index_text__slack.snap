@@ -39,36 +39,30 @@ Warp core efficiency at 99.7%.
 
 === slack 00000000-0000-828b-b39d-73c49d6cb65c slack storage
 --- -
----
-title: slack storage
-source: slack
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [slack](datalib:group/slack "slack") — storage
+# slack — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest` | <size> | 3 files | <span id="m-00000000-0000-828b-b39d-73c49d6cb65c" data-section-uuid="00000000-0000-828b-b39d-73c49d6cb65c">`00000000`</span> |
-| Store | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-82dc-b3bb-cac0a58e1932" data-section-uuid="00000000-0000-82dc-b3bb-cac0a58e1932">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | <span id="m-00000000-0000-8e1d-8172-8ddcd05eb415" data-section-uuid="00000000-0000-8e1d-8172-8ddcd05eb415">`00000000`</span> |
-| Store | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8910-acae-05b085c15fd2" data-section-uuid="00000000-0000-8910-acae-05b085c15fd2">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | <span id="m-00000000-0000-832a-b8c5-bee251b65c0a" data-section-uuid="00000000-0000-832a-b8c5-bee251b65c0a">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | <span id="m-00000000-0000-8398-beee-d95388e81c61" data-section-uuid="00000000-0000-8398-beee-d95388e81c61">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | <span id="m-00000000-0000-84db-afe6-9a7dcc37a664" data-section-uuid="00000000-0000-84db-afe6-9a7dcc37a664">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | <span id="m-00000000-0000-832f-a345-ae979cf8e91d" data-section-uuid="00000000-0000-832f-a345-ae979cf8e91d">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | <span id="m-00000000-0000-8fd1-a783-56b261b146ca" data-section-uuid="00000000-0000-8fd1-a783-56b261b146ca">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | <span id="m-00000000-0000-8c70-9bd9-88037880fe89" data-section-uuid="00000000-0000-8c70-9bd9-88037880fe89">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | <span id="m-00000000-0000-8e11-bb52-ccb088e26eae" data-section-uuid="00000000-0000-8e11-bb52-ccb088e26eae">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | <span id="m-00000000-0000-8f9f-ab8b-629c47f1ef42" data-section-uuid="00000000-0000-8f9f-ab8b-629c47f1ef42">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | <span id="m-00000000-0000-8b2d-90f4-4d08d8ca2844" data-section-uuid="00000000-0000-8b2d-90f4-4d08d8ca2844">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | <span id="m-00000000-0000-8847-ab80-7567f44dac43" data-section-uuid="00000000-0000-8847-ab80-7567f44dac43">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | <span id="m-00000000-0000-81f5-9488-eaba3bd0fd05" data-section-uuid="00000000-0000-81f5-9488-eaba3bd0fd05">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | <span id="m-00000000-0000-80cd-b2f2-893abd0a6dbb" data-section-uuid="00000000-0000-80cd-b2f2-893abd0a6dbb">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | <span id="m-00000000-0000-84f3-9406-19d73c28936b" data-section-uuid="00000000-0000-84f3-9406-19d73c28936b">`00000000`</span> |
-
+| Source Size | ingest | `slack/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `slack/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Store | ingest | `slack/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | `00000000` |
 === slack 00000000-0000-84d6-b1f0-0b22f0528e5c #bridge
 --- 0b7698f2-dea0-84c2-a732-f51e3d0eed12
 Jean-Luc Picard — Wed 28 May 2369 15:08

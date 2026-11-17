@@ -4,38 +4,25 @@ expression: text
 ---
 === yolink 00000000-0000-882b-9a1a-116060d6a7ed yolink storage
 --- -
----
-title: yolink storage
-source: yolink
-measured_at: 2369-04-15T00:00:00+00:00
----
+Source: datalib
 
-# [yolink](datalib:group/yolink "yolink") — storage
+# yolink — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/yolink/ingest "yolink/ingest") | `yolink/ingest` | <size> | 2 files | <span id="m-00000000-0000-882b-9a1a-116060d6a7ed" data-section-uuid="00000000-0000-882b-9a1a-116060d6a7ed">`00000000`</span> |
-| Store | [ingest](datalib:step/yolink/ingest "yolink/ingest") | `yolink/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-842f-a143-abac13a4fd7d" data-section-uuid="00000000-0000-842f-a143-abac13a4fd7d">`00000000`</span> |
-| Table | [ingest](datalib:step/yolink/ingest "yolink/ingest") | `yolink/ingest/entities.doltlite_db#coverage` |  | 0 rows | <span id="m-00000000-0000-84d8-a026-26fd3c446a10" data-section-uuid="00000000-0000-84d8-a026-26fd3c446a10">`00000000`</span> |
-| Table | [ingest](datalib:step/yolink/ingest "yolink/ingest") | `yolink/ingest/entities.doltlite_db#yolink_devices` |  | 4 rows | <span id="m-00000000-0000-875d-8ed3-60005ce0f476" data-section-uuid="00000000-0000-875d-8ed3-60005ce0f476">`00000000`</span> |
-| Table | [ingest](datalib:step/yolink/ingest "yolink/ingest") | `yolink/ingest/entities.doltlite_db#yolink_readings` |  | 2304 rows | <span id="m-00000000-0000-80fd-ae6c-552f5b095dec" data-section-uuid="00000000-0000-80fd-ae6c-552f5b095dec">`00000000`</span> |
-
+| Source Size | ingest | `yolink/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `yolink/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `yolink/ingest/entities.doltlite_db#coverage` |  | 0 rows | `00000000` |
+| Table | ingest | `yolink/ingest/entities.doltlite_db#yolink_devices` |  | 4 rows | `00000000` |
+| Table | ingest | `yolink/ingest/entities.doltlite_db#yolink_readings` |  | 2304 rows | `00000000` |
 === yolink 00000000-0000-8bfa-9046-e6e84f594bf2 YoLink sensors — yolink
 --- -
----
-markdown_uuid: 00000000-0000-8bfa-9046-e6e84f594bf2
-source_id: yolink
-provider: yolink
-title: "YoLink sensors — yolink"
-created_at: "2369-04-14T00:00:00+00:00"
-modified_at: "2369-04-14T23:55:00+00:00"
----
+Source: yolink
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8bfa-9046-e6e84f594bf2">YoLink sensors — yolink</h1>
+YoLink sensors — yolink
 
-4 devices · 2,304 readings across 8 series, <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> — <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>.
+4 devices · 2,304 readings across 8 series, Mon Apr 14th, 2369 at 00:00 — Mon Apr 14th, 2369 at 23:55.
 
 Values are converted to SI on the way into each plot, so devices reporting in different units share one axis.
 
@@ -45,92 +32,57 @@ Values are converted to SI on the way into each plot, so devices reporting in di
 
 Every temperature-capable device, in degrees Celsius.
 
-3 series · 864 points · <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> — <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-8861-8cf0-7aa352fd2b62 00000000-0000-84a5-b51a-dee24bd3f391 00000000-0000-8789-bb87-f6f5cede185d"></div>
+3 series · 864 points · Mon Apr 14th, 2369 at 00:00 — Mon Apr 14th, 2369 at 23:55
 
 ### Relative humidity
 
 Relative humidity is already a dimensionless ratio — no conversion applies.
 
-3 series · 864 points · <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> — <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-80d4-9677-239ebdb27e1e 00000000-0000-8e19-b1a2-0f0d55f0ed93 00000000-0000-835c-80f4-5c59e589245a"></div>
+3 series · 864 points · Mon Apr 14th, 2369 at 00:00 — Mon Apr 14th, 2369 at 23:55
 
 ### Liquid volume
 
 Per-sample consumption, and the meter's lifetime total on a chart of its own.
 
-2 series · 576 points · <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> — <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-8084-955c-ce1aecbef85b"></div>
-
-<div class="time-series-chart" data-time-series="00000000-0000-8ef0-836b-5ce3944be359"></div>
+2 series · 576 points · Mon Apr 14th, 2369 at 00:00 — Mon Apr 14th, 2369 at 23:55
 
 ## Devices
 
 Per-device read credentials (`family_device_id`, `device_udid`) are deliberately omitted: the pair grants access to that device's entire history.
-
 --- 00000000-0000-8b59-84d5-1f5a9303f5f8
-<div id="m-00000000-0000-8b59-84d5-1f5a9303f5f8" data-section-uuid="00000000-0000-8b59-84d5-1f5a9303f5f8" class="msg msg--yolink">
-
 ### deck_12_water_main
 
-*watermeter · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>*
+*watermeter · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
 
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `water_consumption_gal` | L | 288 | 0.000 | 12.613 | 5.917 | 5.205 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-| `water_meter_gal` | L | 288 | 30667.635 | 32365.967 | 31592.693 | 32365.967 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-
-</div>
-
+| `water_consumption_gal` | L | 288 | 0.000 | 12.613 | 5.917 | 5.205 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
+| `water_meter_gal` | L | 288 | 30667.635 | 32365.967 | 31592.693 | 32365.967 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 --- 00000000-0000-81b2-aa2e-04f4bb40e79c
-<div id="m-00000000-0000-81b2-aa2e-04f4bb40e79c" data-section-uuid="00000000-0000-81b2-aa2e-04f4bb40e79c" class="msg msg--yolink">
-
 ### sickbay_plasma_fridge
 
-*temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>*
+*temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
 
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `humidity_pct` | %RH | 288 | 28.347 | 36.343 | 32.372 | 34.824 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-| `temperature_f` | °C | 288 | 5.362 | 8.360 | 6.861 | 6.861 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-
-</div>
-
+| `humidity_pct` | %RH | 288 | 28.347 | 36.343 | 32.372 | 34.824 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
+| `temperature_f` | °C | 288 | 5.362 | 8.360 | 6.861 | 6.861 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 --- 00000000-0000-8532-b55e-4c829ebad978
-<div id="m-00000000-0000-8532-b55e-4c829ebad978" data-section-uuid="00000000-0000-8532-b55e-4c829ebad978" class="msg msg--yolink">
-
 ### stasis_unit_alpha
 
-*temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>*
+*temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
 
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `humidity_pct` | %RH | 288 | 58.324 | 76.318 | 67.694 | 58.680 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-| `temperature_c` | °C | 288 | -20.757 | -16.357 | -18.557 | -18.844 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-
-</div>
-
+| `humidity_pct` | %RH | 288 | 58.324 | 76.318 | 67.694 | 58.680 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
+| `temperature_c` | °C | 288 | -20.757 | -16.357 | -18.557 | -18.844 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 --- 00000000-0000-872a-a430-a3e02e00742e
-<div id="m-00000000-0000-872a-a430-a3e02e00742e" data-section-uuid="00000000-0000-872a-a430-a3e02e00742e" class="msg msg--yolink">
-
 ### ten_forward_cooler
 
-*temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time>*
+*temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
 
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `humidity_pct` | %RH | 288 | 34.261 | 46.256 | 40.415 | 46.139 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-| `temperature_c` | °C | 288 | 1.381 | 4.966 | 3.240 | 3.824 | <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> | <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time> | 5.0m |
-
-</div>
-
+| `humidity_pct` | %RH | 288 | 34.261 | 46.256 | 40.415 | 46.139 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
+| `temperature_c` | °C | 288 | 1.381 | 4.966 | 3.240 | 3.824 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 --- -
 ## Store
 
-| | |
-| --- | --- |
 | Readings | 2,304 |
 | Readings with a recorded fetch error | 0 |

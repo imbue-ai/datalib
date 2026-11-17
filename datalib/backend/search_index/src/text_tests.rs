@@ -82,18 +82,175 @@ fn sender_named_with_address() -> Piece {
 /// their mail.
 #[test]
 fn a_name_that_carries_its_address_names_it_once() {
-    let drawn = draw(&[sender_named_with_address()]);
+    let drawn = draw(&[sender_named_with_address()], &Facts::default());
     assert_eq!(
         drawn[0].lead.as_deref(),
         Some("Beverly Crusher <Crusher@Enterprise.starfleet> — Fri 6 Mar 2026 07:30")
     );
 }
 
-fn drawn_golden() -> String {
-    draw(&golden())
+/// A page as a renderer keeps it: one piece whole, front matter, tags,
+/// links and escapes and all, and the facts its front matter holds.
+fn golden_page() -> (Vec<Piece>, Facts) {
+    let text = "---\nmarkdown_uuid: 00000000-0000-8000-8000-000000000001\nprovider: calendar\n\
+                kind: Recurring Event\ncalendar: \"Bridge\"\ntitle: \"Senior staff\"\n\
+                external_id: \"c_1701@group.calendar.test#a1\"\n---\n\n\
+                <h1 class=\"page-title\" data-page-title-uuid=\"p\">Senior staff \
+                <a class=\"source-link\" href=\"https://calendar.test/e\" target=\"_blank\">↗</a></h1>\n\n\
+                | | |\n| --- | --- |\n\
+                | When | <span class=\"time-range\"><time datetime=\"2026-03-03T09:00:00-08:00\" \
+                title=\"2026-03-03 09:00:00 -08:00\">Tue Mar 3rd, 2026 at 09:00</time></span> |\n\
+                | Organizer | [Will Riker](mailto:riker@enterprise.test \"Will Riker <riker@enterprise.test>\") |\n\n\
+                <dl class=\"contact-fields\">\n<dt>Room</dt><dd>Observation&nbsp;lounge</dd>\n</dl>\n\n\
+                Saucer \\| drive section &amp; [the log](datalib:doc/x \"Log\")<br>Q&A &bogus;\n\n\
+                `<b>kept</b> &amp;` and <https://enterprise.test> and <picard@enterprise.test>\n";
+    let page = vec![
+        Piece {
+            uuid: None,
+            text: text.into(),
+            framed: true,
+            ..Piece::default()
+        },
+        Piece {
+            uuid: Some("m-2".into()),
+            text: "---\nnot: front matter\n---\n<div id=\"m-2\">Page 2 &lt;draft&gt;</div>\n"
+                .into(),
+            framed: true,
+            ..Piece::default()
+        },
+    ];
+    let facts = Facts {
+        provider: "calendar".into(),
+        front: [
+            ("markdown_uuid", "00000000-0000-8000-8000-000000000001"),
+            ("provider", "calendar"),
+            ("kind", "Recurring Event"),
+            ("calendar", "Bridge"),
+            ("title", "Senior staff"),
+            ("external_id", "c_1701@group.calendar.test#a1"),
+        ]
         .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+    };
+    (page, facts)
+}
+
+fn drawn_golden() -> String {
+    let (page, facts) = golden_page();
+    draw(&golden(), &Facts::default())
+        .iter()
+        .chain(draw(&page, &facts).iter())
         .map(|s| format!("[{:?} lead={:?}]\n{}", s.uuid, s.lead, s.text))
         .collect()
+}
+
+/// A page was indexed as its rendered markdown: YAML front matter, tags
+/// and their ids, link targets and escapes, half of each chunk on some
+/// pages, and words like `class` and `data` matched every page. It is
+/// drawn as the words a person reads, after a line of the facts worth
+/// searching for.
+#[test]
+fn a_page_opens_with_its_facts_and_reads_as_its_words() {
+    let (page, facts) = golden_page();
+    let drawn = draw(&page, &facts);
+    assert_eq!(
+        drawn[0].text,
+        "Source: calendar\nKind: Recurring Event\nCalendar: Bridge\n\n\
+         Senior staff\n\n\
+         | When | Tue Mar 3rd, 2026 at 09:00 |\n\
+         | Organizer | Will Riker <riker@enterprise.test> |\n\n\
+         Room: Observation lounge\n\n\
+         Saucer | drive section & the log\nQ&A &bogus;\n\n\
+         `<b>kept</b> &amp;` and <https://enterprise.test> and <picard@enterprise.test>\n"
+    );
+    assert_eq!(drawn[0].lead, None);
+    assert_eq!(
+        drawn[1].text, "---\nnot: front matter\n---\nPage 2 <draft>\n",
+        "only the page's opening piece holds its front matter"
+    );
+}
+
+/// A page whose first piece is its front matter alone: the facts line
+/// stood as a chunk of its own, apart from every word it describes.
+#[test]
+fn the_facts_open_the_first_piece_with_words() {
+    let (_, facts) = golden_page();
+    let page = [
+        Piece {
+            text: "---\nprovider: calendar\n---\n\n".into(),
+            framed: true,
+            ..Piece::default()
+        },
+        Piece {
+            text: "# Senior staff\n".into(),
+            framed: true,
+            ..Piece::default()
+        },
+    ];
+    let drawn = draw(&page, &facts);
+    assert_eq!(drawn[0].text, "");
+    assert!(
+        drawn[1].text.starts_with("Source: calendar\n"),
+        "{}",
+        drawn[1].text
+    );
+}
+
+/// A conversation's front matter is not one of its pieces, and its
+/// messages are drawn as they were: drawing pages anew moves no vector of
+/// any chat.
+#[test]
+fn a_conversation_has_no_facts_line_and_its_bodies_keep_their_escapes() {
+    let (_, facts) = golden_page();
+    let body = item(
+        "Data",
+        "2026-03-03T22:05:00Z",
+        "&lt;#&gt; code \\| <b>x</b>",
+    );
+    let drawn = draw(&[body], &facts);
+    assert_eq!(
+        drawn[0].text,
+        "Data — Tue 3 Mar 2026 22:05\n\n&lt;#&gt; code \\| <b>x</b>\n\n"
+    );
+}
+
+/// The source is named as its renderer labels it, else by its provider
+/// tag; a fact with no value, and one not worth reading, says nothing.
+#[test]
+fn the_facts_line_names_the_source_and_the_facts_worth_reading() {
+    let facts = |provider: &str, front: &[(&str, &str)]| Facts {
+        provider: provider.into(),
+        front: front
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    };
+    assert_eq!(
+        facts_line(&facts(
+            "github",
+            &[
+                ("head_sha", "68ed9dc7"),
+                ("repo", "ncc-1701/engineering"),
+                ("pr_number", "1701"),
+                ("state", "merged"),
+                ("author", "laforge"),
+                ("head_ref", "warp-core"),
+                ("base_ref", "main"),
+            ]
+        )),
+        "Source: github\nRepository: ncc-1701/engineering\nPull request: 1701\n\
+         State: merged\nAuthor: laforge\nBranch: warp-core\nInto: main"
+    );
+    assert_eq!(
+        facts_line(&facts(
+            "google_drive",
+            &[("source_label", "Google Drive"), ("group", " ")]
+        )),
+        "Source: Google Drive"
+    );
+    assert_eq!(facts_line(&facts("pdf", &[])), "Source: pdf");
+    assert_eq!(facts_line(&facts("", &[])), "");
 }
 
 /// Each version and the blake3 of what it draws for [`golden`], oldest
@@ -117,6 +274,11 @@ const DRAWN: &[(u32, &str)] = &[
     (
         4,
         "4f89acbbbfb514fefb9b523fbe5eb6e55db339e747b6560d6ee0151aa62f1d31",
+    ),
+    // A page opens with its facts and is drawn as its words.
+    (
+        5,
+        "a3beb0258ed933166d0e0d1618b85f7cf8b0e7cc185a8eea4817f2a7ad0d2bf3",
     ),
 ];
 
@@ -151,7 +313,7 @@ fn the_golden_draw_is_this_versions() {
 /// (a Slack id) is left out.
 #[test]
 fn an_item_is_its_envelope_its_labels_then_its_body() {
-    let drawn = draw(&golden());
+    let drawn = draw(&golden(), &Facts::default());
     let lead = "Will Riker <riker@enterprise.starfleet> to Jean-Luc Picard \
                 <picard@enterprise.starfleet>, Data <+17015550101>, \
                 laforge@enterprise.starfleet; cc Deanna Troi; bcc Worf — Tue 3 Mar 2026 14:05";
@@ -182,17 +344,14 @@ fn a_date_keeps_the_offset_it_was_written_in() {
 }
 
 #[test]
-fn a_framed_piece_is_drawn_as_it_is_and_an_empty_item_as_its_envelope() {
-    let drawn = draw(&golden());
-    assert_eq!(
-        drawn[4].text,
-        "<div>Page 2: the warp core schematic</div>\n"
-    );
+fn a_framed_piece_is_drawn_as_its_words_and_an_empty_item_as_its_envelope() {
+    let drawn = draw(&golden(), &Facts::default());
+    assert_eq!(drawn[4].text, "Page 2: the warp core schematic\n");
     assert_eq!(drawn[4].lead, None);
     assert_eq!(drawn[5].text, "Geordi La Forge — Thu 5 Mar 2026 08:00\n\n");
     assert_eq!(drawn[3].lead, None);
     assert_eq!(drawn[3].text, "A note with no author and no time.\n\n");
-    assert_eq!(draw(&[item("", "", "")])[0].text, "");
+    assert_eq!(draw(&[item("", "", "")], &Facts::default())[0].text, "");
 }
 
 /// A body's links say what a person reads: a mention its name, an email
