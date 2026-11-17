@@ -225,12 +225,12 @@ build:buildbuddy --experimental_remote_downloader_local_fallback=true
 
 # BuildBuddy remote EXECUTION, on top of the cache above. Opt-in via
 # `--config=remote`. CI-only, and the reason is toolchain resolution
-# rather than policy: the C/C++ half of this build resolves through
-# bazel's autodetected `local_config_cc`, which is generated from the
-# CLIENT host. Run this from a mac and bazel hands a darwin cc
-# toolchain to a Linux executor. `test.yml` runs *inside* the same
-# devcontainer image the executors run, so there the client and the
-# worker agree — which is what makes it safe there and nowhere else.
+# rather than policy: toolchains are resolved on the CLIENT. A Linux
+# client resolves the hermetic LLVM toolchain MODULE.bazel registers,
+# which runs on any Linux executor; a mac client resolves Apple's and
+# hands a darwin cc toolchain to a Linux executor. `test.yml` runs
+# *inside* the same devcontainer image the executors run, so there the
+# client and the worker agree.
 #
 # The problem it solves is not the critical path, which is a chain of
 # rustc invocations no core count shortens. It is the queue behind it:
@@ -310,6 +310,12 @@ build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
 # the CUDA runtime linked into the module statically, so the module asks
 # the host for the driver and cuBLAS alone. `.github/workflows/cuda.yml` builds it.
 build:cuda --@rules_cuda//cuda:runtime=@cuda//:cuda_runtime_static
+# nvcc compiles host code with the C++ toolchain's compiler, and CUDA
+# 12.9's takes no clang from 20 on, so this build alone uses the
+# machine's gcc rather than the LLVM toolchain (MODULE.bazel). Its
+# actions are then the machine's, and share no cache with another.
+build:cuda --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+build:cuda --extra_toolchains=@local_config_cc_toolchains//:all
 
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
 # BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an
@@ -430,6 +436,13 @@ common --enable_platform_specific_config
 # `//tests/fixtures:ingested_tng`.
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
+
+# Every Linux C/C++ compile and link goes through the LLVM toolchain
+# MODULE.bazel registers, so the same action has the same cache key on a
+# CI runner, in a cloud VM and on a laptop. Without this, Bazel would
+# still detect the machine's own gcc, and a target that reached it would
+# build quietly and miss the shared cache; with it, that target fails.
+common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 
 # rustfmt-check is **always on** for every bazel build/test. This
 # forbids `bazelisk test //...` from running against unformatted code,

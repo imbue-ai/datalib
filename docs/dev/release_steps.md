@@ -388,21 +388,26 @@ image's binaries, run on **glibc 2.39 and newer: Ubuntu 24.04, Debian
 13, and anything later**. On an older glibc the installer picks the
 musl build, which needs no libc from the host (below).
 
-A binary built on Linux asks for the glibc of the machine that linked
-it: each libc function it calls is tied to the glibc version that
-introduced the function's current form (`atan2f@GLIBC_2.43`), and the
-loader refuses to start a binary whose versions the host's glibc lacks
-("version `GLIBC_2.43' not found"). Bazel builds the gnu legs with the
-runner's own C toolchain and glibc, so **the runner's Ubuntu is the
-floor**. v0.52.0's x86_64 tarball was built on `ubuntu-latest`, by then
-Ubuntu 26.04 with glibc 2.43, and would not start on 24.04, while its
-arm64 sibling, on the pinned `ubuntu-24.04-arm`, needed 2.39.
+A binary built on Linux asks for the glibc it was linked against: each
+libc function it calls is tied to the glibc version that introduced the
+function's current form (`atan2f@GLIBC_2.43`), and the loader refuses
+to start a binary whose versions the host's glibc lacks ("version
+`GLIBC_2.43' not found"). Bazel builds the gnu legs with the hermetic
+LLVM toolchain `MODULE.bazel` registers, which compiles against its own
+glibc 2.28 headers and links against 2.28 stubs, so **datalib's own
+binaries ask for glibc 2.28 at most, whatever the runner**, and link no
+`libgcc_s` or `libstdc++`. The declared floor stays 2.39, and the
+checks below still hold every Linux file to it, Node and the npm
+prebuilds in the runtime included, which someone else built. Lowering
+it is a decision of its own: `install.sh` would then hand hosts between
+the two the gnu build rather than the musl one.
 
 What holds it:
 
 - **Every job that builds or stages a shipped Linux file names a
   pinned runner**, `ubuntu-24.04` or `ubuntu-24.04-arm`, never
-  `ubuntu-latest`: `runtime`, every Linux `build` leg (the musl ones
+  `ubuntu-latest`, for what is staged rather than built by the
+  toolchain: `runtime`, every Linux `build` leg (the musl ones
   too, so their build scripts run where the gnu ones do),
   `cuda`, `docker-image` and `docker-image-cuda`, and
   `reader-wheels.yml`'s Linux legs. The wheels
