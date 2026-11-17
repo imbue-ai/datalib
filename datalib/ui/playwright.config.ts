@@ -149,7 +149,7 @@ name = "Grid and Search Index"
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "grid_index"
-inputs = []
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[applets]]
 group = "unified_grid_and_search_index"

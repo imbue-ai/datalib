@@ -1,18 +1,18 @@
 //! The `runtime.manifest` a release tarball carries beside its binaries:
-//! which runtime asset(s) of the same release to fetch, their sha256 and
-//! size, and where. The tarball's own sha256 is what the installer
-//! verifies, so the manifest is as pinned as the binaries, and the
-//! bytes it names are refused unless they hash as it says.
+//! which runtime asset of the same release to fetch, its sha256 and size,
+//! and where. The tarball's own sha256 is what the installer verifies, so
+//! the manifest is as pinned as the binaries, and the bytes it names are
+//! refused unless they hash as it says.
 //!
 //! One asset per line, whitespace-separated, `#` starts a comment:
 //!
 //! ```text
-//! cpu  runtime-x86_64-unknown-linux-gnu.tar.gz       <sha256> <bytes> <url>
-//! cuda runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  <sha256> <bytes> <url>
+//! cpu  runtime-x86_64-unknown-linux-gnu.tar.gz  <sha256> <bytes> <url>
 //! ```
 //!
 //! `release.yml` writes it; `scripts/stage_runtime.sh` says what the
-//! assets hold.
+//! asset holds. A shipped binary reads only the manifest its own release
+//! put beside it.
 
 use std::fmt;
 
@@ -21,19 +21,15 @@ pub const MANIFEST_FILE: &str = "runtime.manifest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetKind {
-    /// Node plus the qmd and latchkey trees with this platform's CPU
-    /// binding of node-llama-cpp. Always present; the tree qmd runs from.
+    /// Node plus the latchkey tree. The one asset; the tree every Node
+    /// tool runs from.
     Cpu,
-    /// The CUDA bindings alone, unpacked over the CPU tree on a machine
-    /// that has an NVIDIA driver. Linux x86_64 only.
-    Cuda,
 }
 
 impl AssetKind {
     fn parse(s: &str) -> Option<Self> {
         match s {
             "cpu" => Some(Self::Cpu),
-            "cuda" => Some(Self::Cuda),
             _ => None,
         }
     }
@@ -41,7 +37,6 @@ impl AssetKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
-            Self::Cuda => "cuda",
         }
     }
 }
@@ -56,8 +51,8 @@ pub struct RuntimeAsset {
 }
 
 impl RuntimeAsset {
-    /// The directory a fetched asset is filed under, and the CUDA
-    /// overlay's marker name: the first twelve hex digits of its sha256.
+    /// The directory a fetched asset is filed under: the first twelve hex
+    /// digits of its sha256.
     pub fn dir_name(&self) -> &str {
         &self.sha256[..12]
     }
@@ -70,13 +65,11 @@ impl RuntimeAsset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     cpu: RuntimeAsset,
-    cuda: Option<RuntimeAsset>,
 }
 
 impl Manifest {
     pub fn parse(text: &str) -> Result<Self, ParseError> {
         let mut cpu = None;
-        let mut cuda = None;
         for (i, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -85,7 +78,6 @@ impl Manifest {
             let asset = parse_line(line).map_err(|what| ParseError { line: i + 1, what })?;
             let slot = match asset.kind {
                 AssetKind::Cpu => &mut cpu,
-                AssetKind::Cuda => &mut cuda,
             };
             if slot.is_some() {
                 return Err(ParseError {
@@ -99,36 +91,29 @@ impl Manifest {
             line: 0,
             what: "no `cpu` asset".to_string(),
         })?;
-        Ok(Self { cpu, cuda })
+        Ok(Self { cpu })
     }
 
     pub fn cpu(&self) -> &RuntimeAsset {
         &self.cpu
     }
 
-    pub fn cuda(&self) -> Option<&RuntimeAsset> {
-        self.cuda.as_ref()
-    }
-
     /// Render in the file's own format — what `release.yml` writes and
     /// what a test writes to stand in for a release.
     pub fn render(&self) -> String {
-        let mut out = String::new();
-        for asset in std::iter::once(&self.cpu).chain(self.cuda.iter()) {
-            out.push_str(&format!(
-                "{} {} {} {} {}\n",
-                asset.kind.as_str(),
-                asset.name,
-                asset.sha256,
-                asset.bytes,
-                asset.url
-            ));
-        }
-        out
+        let asset = &self.cpu;
+        format!(
+            "{} {} {} {} {}\n",
+            asset.kind.as_str(),
+            asset.name,
+            asset.sha256,
+            asset.bytes,
+            asset.url
+        )
     }
 
-    pub fn new(cpu: RuntimeAsset, cuda: Option<RuntimeAsset>) -> Self {
-        Self { cpu, cuda }
+    pub fn new(cpu: RuntimeAsset) -> Self {
+        Self { cpu }
     }
 }
 
@@ -202,18 +187,17 @@ mod tests {
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
-    fn parses_cpu_and_optional_cuda() {
+    fn parses_the_cpu_asset() {
         let text = format!(
             "# written by release.yml\n\
-             cpu runtime-x.tar.gz {SHA_A} 100 https://example.com/r.tar.gz\n\
-             \n\
-             cuda runtime-x-cuda.tar.gz {SHA_B} 200 https://example.com/c.tar.gz # gpu\n"
+             cpu runtime-x.tar.gz {SHA_A} 100 https://example.com/r.tar.gz # node\n\
+             \n"
         );
         let m = Manifest::parse(&text).unwrap();
         assert_eq!(m.cpu().name, "runtime-x.tar.gz");
         assert_eq!(m.cpu().bytes, 100);
         assert_eq!(m.cpu().dir_name(), "aaaaaaaaaaaa");
-        assert_eq!(m.cuda().unwrap().url, "https://example.com/c.tar.gz");
+        assert_eq!(m.cpu().url, "https://example.com/r.tar.gz");
         // Round-trips through its own renderer.
         assert_eq!(Manifest::parse(&m.render()).unwrap(), m);
     }

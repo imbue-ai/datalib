@@ -1,9 +1,12 @@
 //! The text the search indexes and embeds for a document, drawn from what
 //! the render store keeps of it (docs/dev/plans/messages_not_documents.md,
 //! step 3b). An item is its envelope line (who, to whom, when), then its
-//! body; a piece kept whole is drawn as it is. Plain on purpose: a change
-//! here re-embeds every chunk it touches, so nothing for show goes in, and
-//! [`INDEX_TEXT_VERSION`] moves with every change to what is drawn.
+//! body. A page, a document whose first piece is kept whole, opens with a
+//! line of the facts its front matter holds, then its pieces without their
+//! front matter. A body and a piece alike are drawn as the words a person
+//! reads: no tags, link targets or escapes. Plain on purpose: a change here re-embeds every chunk it
+//! touches, so nothing for show goes in, and [`INDEX_TEXT_VERSION`] moves
+//! with every change to what is drawn.
 
 use crate::IndexSection;
 
@@ -12,7 +15,7 @@ use crate::IndexSection;
 /// document was drawn with and draws it again when this moves;
 /// `text_tests::the_golden_draw_is_this_versions` fails when the drawing
 /// changes and this does not.
-pub const INDEX_TEXT_VERSION: u32 = 4;
+pub const INDEX_TEXT_VERSION: u32 = 6;
 
 /// What ends the key the index files a document under: the version it was
 /// drawn and chunked with.
@@ -47,16 +50,99 @@ pub struct Addressed {
     pub handle: Option<String>,
 }
 
-/// A document's pieces as the sections the index takes.
-pub fn draw(pieces: &[Piece]) -> Vec<IndexSection> {
-    pieces.iter().map(draw_one).collect()
+/// What a document's front matter says, as its renderer handed it, and
+/// the provider tag it was rendered under.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Facts {
+    pub provider: String,
+    /// Each key with its value, in order; a value that is `null` left out.
+    pub front: Vec<(String, String)>,
 }
 
-fn draw_one(piece: &Piece) -> IndexSection {
+/// The facts a page's opening line names, and as what: what the page is,
+/// where it is filed, who made it, its numbers. Everything else stays
+/// out: ids, hashes, paths and stamps say nothing anyone searches for, and
+/// the title is already the prompt's frame.
+const PAGE_FACTS: &[(&str, &str)] = &[
+    ("kind", "Kind"),
+    ("calendar", "Calendar"),
+    ("group", "Group"),
+    ("project", "Project"),
+    ("repo", "Repository"),
+    ("pr_number", "Pull request"),
+    ("mr_iid", "Merge request"),
+    ("state", "State"),
+    ("author", "Author"),
+    ("head_ref", "Branch"),
+    ("source_branch", "Branch"),
+    ("base_ref", "Into"),
+    ("target_branch", "Into"),
+    ("book", "Book"),
+    ("chapter", "Chapter"),
+    ("edition", "Edition"),
+    ("language", "Language"),
+    ("page_count", "Pages"),
+];
+
+/// What every chunk of a document repeats: a page's facts line. `None`
+/// for a conversation, whose chunks repeat their item's envelope instead.
+pub fn head(pieces: &[Piece], facts: &Facts) -> Option<String> {
+    let page = pieces.first().is_some_and(|p| p.framed);
+    Some(facts_line(facts)).filter(|line| page && !line.is_empty())
+}
+
+/// A document's pieces as the sections the index takes.
+pub fn draw(pieces: &[Piece], facts: &Facts) -> Vec<IndexSection> {
+    let mut drawn: Vec<IndexSection> = pieces
+        .iter()
+        .enumerate()
+        .map(|(i, p)| draw_one(p, i == 0))
+        .collect();
+    if let Some(line) = head(pieces, facts) {
+        // A page whose opening piece was its front matter alone opens its
+        // first piece with words instead, so the facts share its chunk.
+        let at = drawn.iter().position(|s| !s.text.is_empty()).unwrap_or(0);
+        let opening = &mut drawn[at];
+        opening.text = format!("{line}\n\n{}", opening.text);
+    }
+    drawn
+}
+
+/// `Source: GitHub`, then each fact [`PAGE_FACTS`] names, a line apiece.
+fn facts_line(facts: &Facts) -> String {
+    let value = |key: &str| {
+        facts
+            .front
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.trim())
+            .filter(|v| !v.is_empty())
+    };
+    let source = value("source_label")
+        .map(str::to_string)
+        .or_else(|| Some(facts.provider.replace('_', " ")).filter(|p| !p.is_empty()));
+    source
+        .map(|s| format!("Source: {s}"))
+        .into_iter()
+        .chain(
+            PAGE_FACTS
+                .iter()
+                .filter_map(|(key, label)| value(key).map(|v| format!("{label}: {v}"))),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn draw_one(piece: &Piece, first: bool) -> IndexSection {
     if piece.framed {
+        let text = if first {
+            without_front_matter(&piece.text)
+        } else {
+            &piece.text
+        };
         return IndexSection {
             uuid: piece.uuid.clone(),
-            text: piece.text.clone(),
+            text: words(text),
             lead: None,
         };
     }
@@ -68,7 +154,10 @@ fn draw_one(piece: &Piece) -> IndexSection {
         .filter(|l| !l.is_empty())
         .collect();
     let labels = (!labels.is_empty()).then(|| format!("Labels: {}", labels.join(", ")));
-    let body = flatten_links(piece.text.trim());
+    // `flatten` alone, not `words`: a body keeps its whitespace as written,
+    // which says nothing to the model, so that tidying it re-embeds no
+    // message.
+    let body = flatten(piece.text.trim());
     let body = body.trim();
     let text: String = [lead.as_deref(), labels.as_deref(), Some(body)]
         .into_iter()
@@ -143,14 +232,54 @@ fn person(name: &str, handle: Option<&str>) -> Option<String> {
     }
 }
 
-/// A body's links as their text: `[@Jean-Luc Picard](slack://user?… "…")`
-/// says `@Jean-Luc Picard`, an image its alt text, and an email or phone
-/// link `Name <address>`, the address one would type. The rest of a link
-/// (an id, a URL, a hover) is for show. Code is left as written: a fenced
+/// A page's piece as the words a person reads on it: [`flatten`], then a
+/// table's rule rows and empty header gone, and runs of blank lines made
+/// one.
+fn words(text: &str) -> String {
+    let flat = flatten(text);
+    let lines: Vec<&str> = flat
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !is_table_rule(l))
+        .collect();
+    let mut joined = lines.join("\n");
+    while joined.contains("\n\n\n") {
+        joined = joined.replace("\n\n\n", "\n\n");
+    }
+    let joined = joined.trim();
+    if joined.is_empty() {
+        String::new()
+    } else {
+        format!("{joined}\n")
+    }
+}
+
+/// `| --- | :-: |` or `| | |`: layout, not words.
+fn is_table_rule(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+/// The YAML block a rendered document opens with, cut off: the facts line
+/// says what of it is worth reading.
+fn without_front_matter(text: &str) -> &str {
+    text.strip_prefix("---\n")
+        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
+        .unwrap_or(text)
+}
+
+/// Markdown as its text. A link says its text
+/// (`[@Jean-Luc Picard](slack://user?… "…")` says `@Jean-Luc Picard`), an
+/// image its alt text, and an email or phone link `Name <address>`, the
+/// address one would type; the rest of a link (an id, a URL, a hover) is
+/// for show. A tag goes and its text stays (`<summary>Tool use</summary>`
+/// says `Tool use`, `<br>` is a line break). `&amp;`-style references and
+/// markdown's backslash escapes are read. Code is left as written: a fenced
 /// block, and an inline span.
-fn flatten_links(body: &str) -> String {
+fn flatten(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fenced = false;
+    let mut after_dropped = false;
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
@@ -159,7 +288,21 @@ fn flatten_links(body: &str) -> String {
         } else if fenced {
             out.push_str(line);
         } else {
-            flatten_line(line, &mut out);
+            let mut flat = String::new();
+            flatten_line(line, &mut flat);
+            let blank = flat.trim().is_empty();
+            // A line that held only tags (`<audio …>`, `</details>`) goes
+            // whole, and so does the blank line after it where one is
+            // already before it: no blank lines appear where none were
+            // written.
+            if blank && !line.trim().is_empty() {
+                after_dropped = true;
+                continue;
+            }
+            if !(blank && after_dropped && (out.is_empty() || out.ends_with("\n\n"))) {
+                out.push_str(&flat);
+            }
+            after_dropped = false;
         }
     }
     out
@@ -167,9 +310,35 @@ fn flatten_links(body: &str) -> String {
 
 fn flatten_line(line: &str, out: &mut String) {
     let mut rest = line;
-    while let Some(at) = rest.find(['`', '[']) {
+    while let Some(at) = rest.find(['`', '[', '<', '\\']) {
         let (before, from) = rest.split_at(at);
-        out.push_str(before);
+        push_words(before, out);
+        if let Some(after) = from.strip_prefix('<') {
+            rest = match tag_at(from) {
+                Some(tag) => {
+                    out.push_str(tag.says);
+                    &from[tag.len..]
+                }
+                None => {
+                    out.push('<');
+                    after
+                }
+            };
+            continue;
+        }
+        if let Some(escaped) = from.strip_prefix('\\') {
+            match escaped.chars().next().filter(char::is_ascii_punctuation) {
+                Some(c) => {
+                    out.push(c);
+                    rest = &escaped[1..];
+                }
+                None => {
+                    out.push('\\');
+                    rest = escaped;
+                }
+            }
+            continue;
+        }
         if from.starts_with('`') {
             let ticks = from.len() - from.trim_start_matches('`').len();
             let fence = &from[..ticks];
@@ -190,7 +359,7 @@ fn flatten_line(line: &str, out: &mut String) {
                 if out.ends_with('!') {
                     out.pop();
                 }
-                out.push_str(text);
+                flatten_line(text, out);
                 let typed = dest
                     .strip_prefix("mailto:")
                     .or_else(|| dest.strip_prefix("tel:"))
@@ -206,7 +375,190 @@ fn flatten_line(line: &str, out: &mut String) {
             }
         }
     }
-    out.push_str(rest);
+    push_words(rest, out);
+}
+
+/// Text outside code, links and tags, its `&amp;`-style references read.
+fn push_words(text: &str, out: &mut String) {
+    out.push_str(&datalib_html_entities::decode(text));
+}
+
+struct Tag {
+    /// What the tag says in the text: nothing; a line break for `<br>`;
+    /// `: ` after a `<dt>`'s term, which its `<dd>` defines.
+    says: &'static str,
+    len: usize,
+}
+
+/// HTML's elements, by name. A `<word>` that names none (`<unnamed>` in a
+/// panic message, `Vec<String>`, `<T>`) is text a person wrote, not a tag.
+const HTML_ELEMENTS: &[&str] = &[
+    "a",
+    "abbr",
+    "address",
+    "area",
+    "article",
+    "aside",
+    "audio",
+    "b",
+    "base",
+    "bdi",
+    "bdo",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "canvas",
+    "caption",
+    "center",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "data",
+    "datalist",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "font",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "i",
+    "iframe",
+    "img",
+    "input",
+    "ins",
+    "kbd",
+    "label",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "map",
+    "mark",
+    "menu",
+    "meta",
+    "meter",
+    "nav",
+    "noscript",
+    "object",
+    "ol",
+    "optgroup",
+    "option",
+    "output",
+    "p",
+    "param",
+    "picture",
+    "pre",
+    "progress",
+    "q",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "script",
+    "search",
+    "section",
+    "select",
+    "slot",
+    "small",
+    "source",
+    "span",
+    "strike",
+    "strong",
+    "style",
+    "sub",
+    "summary",
+    "sup",
+    "svg",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "title",
+    "tr",
+    "track",
+    "tt",
+    "u",
+    "ul",
+    "var",
+    "video",
+    "wbr",
+];
+
+/// The HTML tag `s` opens with: `<name …>`, `</name>` or `<!-- … -->`,
+/// where `name` is one of [`HTML_ELEMENTS`]. A `<` that opens no tag
+/// (`<https://…>`, `<picard@…>`, `< 9`, `<unnamed>`) is `None`.
+/// `<a class="source-link" …>↗</a>`, the page's link to its upstream, goes
+/// whole.
+fn tag_at(s: &str) -> Option<Tag> {
+    if let Some(comment) = s.strip_prefix("<!--") {
+        let end = comment.find("-->")?;
+        return Some(Tag {
+            says: "",
+            len: 4 + end + 3,
+        });
+    }
+    let name = s[1..].strip_prefix('/').unwrap_or(&s[1..]);
+    let name_len = name
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(name.len());
+    if name_len == 0 || !name.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+    if !matches!(
+        name[name_len..].chars().next(),
+        Some('>' | '/' | ' ' | '\t')
+    ) {
+        return None;
+    }
+    let element = name[..name_len].to_ascii_lowercase();
+    if !HTML_ELEMENTS.contains(&element.as_str()) {
+        return None;
+    }
+    let close = s.find('>')?;
+    let tag = &s[..=close];
+    if tag.starts_with("<a ") && tag.contains("source-link") {
+        let end = s.find("</a>").map(|e| e + 4).unwrap_or(close + 1);
+        return Some(Tag { says: "", len: end });
+    }
+    let closing = s[1..].starts_with('/');
+    let says = match element.as_str() {
+        "br" => "\n",
+        "dt" if closing => ": ",
+        _ => "",
+    };
+    Some(Tag {
+        says,
+        len: close + 1,
+    })
 }
 
 /// The markdown link `s` opens with, `[text](dest "title")`: its text, its

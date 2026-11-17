@@ -41,8 +41,8 @@ const SETUP: &[SetupStep] = &[
     SetupStep {
         say: "Add a source: a [[groups]] entry with its `type`, and its steps. The source's \
               page says what it mirrors, how it signs in and which ingest methods it has. \
-              `examples --append` adds its least config and puts its steps in the index \
-              steps' `inputs`; name the method with `--method` when it has more than one, \
+              `examples --append` adds its least config, which the index steps read by \
+              pattern; name the method with `--method` when it has more than one, \
               and give it an id of its own with `--id` to add a second account. Then set \
               its options in the config; `examples` without `--append` shows every one.",
         commands: &[
@@ -298,18 +298,17 @@ fn examples_intro(t: SourceType) -> Vec<String> {
              `datalib-dag --check` would refuse."
         ),
         format!(
-            "A source's documents reach the grid and search only through the index groups, \
-             which name the steps they read. After appending by hand, add \
-             `<id>/render_markdown` to the `inputs` of `unified_grid_and_search_index/grid_index`, \
-             and if the stanza has `keyword_index` and `embed` steps, add both to the \
-             `inputs` of `unified_grid_and_search_index/qmd_aggregator`.{}",
+            "A source's documents reach the grid and search only through the index groups. \
+             Their steps read every source by pattern (`inputs = [\"*/render_markdown\"]`), \
+             so a source appended by hand is read with no further edit. A config whose \
+             index steps name their inputs one by one needs `<id>/render_markdown` added to \
+             `unified_grid_and_search_index/grid_index`'s, and the stanza's `keyword_index` \
+             and `embed` to `unified_grid_and_search_index/qmd_aggregator`'s.{}",
             if t.renders_time_series() {
-                " Add `<id>/render_time_series` to the `inputs` of \
-                 `unified_time_series_index/time_series_index`, and of \
-                 `unified_grid_and_search_index/grid_index`, which copies its problem rows."
+                " There `<id>/render_time_series` goes in \
+                 `unified_time_series_index/time_series_index`'s and `grid_index`'s too."
             } else if t.renders_occurrences() {
-                " Add `<id>/render_occurrences` to the `inputs` of \
-                 `unified_grid_and_search_index/grid_index`, which copies its problem rows."
+                " There `<id>/render_occurrences` goes in `grid_index`'s too."
             } else {
                 ""
             }

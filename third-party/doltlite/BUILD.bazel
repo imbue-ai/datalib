@@ -34,7 +34,7 @@ filegroup(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `//tools:version_pins_test`
 # enforces that.
-DOLTLITE_VERSION = "0.51.12"
+DOLTLITE_VERSION = "0.51.13"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -49,9 +49,6 @@ DOLTLITE_DEFINES = [
     "-DDOLTLITE_PROLLY=1",
     "-DDOLTLITE_VERSION=\\\"" + DOLTLITE_VERSION + "\\\"",
     "-DSQLITE_CORE",
-    # BLAKE3's SIMD kernels are compiled as objects of their own
-    # (`:blake3_kernels`), so the amalgamation leaves them on.
-    "-DDOLTLITE_BLAKE3_SIMD_OBJECTS",
     # SQLite vtable extensions doltlite enables by default; we
     # repeat them here so the amalgamation's extension init code
     # (statically compiled in) matches what sqlx-sqlite expects.
@@ -88,59 +85,6 @@ DOLTLITE_WARNING_SUPPRESSIONS = [
     "-Wno-deprecated-non-prototype",
 ]
 
-# Every global symbol BLAKE3's portable code and SIMD kernels define. The
-# Rust `blake3` crate links its own copies of these (C or assembly, under
-# the same names), and a static (musl) link refuses a second definition,
-# so doltlite's are renamed `doltlite_<name>`: in the amalgamation, which
-# calls them, and in the kernels, which define them.
-BLAKE3_KERNEL_SYMBOLS = [
-    "blake3_compress_in_place_portable",
-    "blake3_compress_xof_portable",
-    "blake3_hash_many_portable",
-    "blake3_compress_in_place_sse2",
-    "blake3_compress_xof_sse2",
-    "blake3_hash4_sse2",
-    "blake3_hash_many_sse2",
-    "blake3_compress_in_place_sse41",
-    "blake3_compress_xof_sse41",
-    "blake3_hash4_sse41",
-    "blake3_hash_many_sse41",
-    "blake3_hash8_avx2",
-    "blake3_hash_many_avx2",
-    "blake3_compress_in_place_avx512",
-    "blake3_compress_xof_avx512",
-    "blake3_hash4_avx512",
-    "blake3_xof4_avx512",
-    "blake3_hash8_avx512",
-    "blake3_xof8_avx512",
-    "blake3_hash16_avx512",
-    "blake3_xof16_avx512",
-    "blake3_hash_many_avx512",
-    "blake3_xof_many_avx512",
-    "blake3_hash_many_neon",
-]
-
-# BLAKE3's SIMD kernels per CPU, each with the flags that let the compiler
-# emit its instructions, as upstream's CMakeLists.txt gives them. Each is
-# its own compile, so only that kernel may use them: the amalgamation's
-# dispatcher asks cpuid at run time which one this CPU can run, and an x86
-# CPU without AVX2 still gets SSE4.1 or SSE2. NEON is part of every
-# aarch64 CPU and needs no flag.
-BLAKE3_KERNELS = {
-    "x86_64": {
-        "sse2": ["-msse2"],
-        "sse41": ["-msse4.1"],
-        "avx2": ["-mavx2"],
-        "avx512": [
-            "-mavx512f",
-            "-mavx512vl",
-        ],
-    },
-    "aarch64": {
-        "neon": [],
-    },
-}
-
 DOLTLITE_LIBRARY_COPTS = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
     # Force `-O2` regardless of bazel's compilation_mode: doltlite's
     # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
@@ -155,7 +99,7 @@ DOLTLITE_LIBRARY_COPTS = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
     # object". The amalgamation the crate used to compile itself was
     # built -fPIC by the `cc` crate; this keeps ours the same.
     "-fPIC",
-] + ["-D%s=doltlite_%s" % (symbol, symbol) for symbol in BLAKE3_KERNEL_SYMBOLS]
+]
 
 DOLTLITE_LINKOPTS = select({
     # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
@@ -212,34 +156,6 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
-# BLAKE3's SIMD kernels for doltlite's chunk hashing (BLAKE3_KERNELS
-# above), from `@blake3_c` at the version the amalgamation embeds. The
-# amalgamation ships with them turned off unless it is told they are built
-# as objects of their own (`DOLTLITE_BLAKE3_SIMD_OBJECTS`). Hashing chunks was over 40% of a Lightroom mirror's
-# writer thread on the portable code (README.md § "BLAKE3's SIMD kernels").
-[
-    cc_library(
-        name = "blake3_" + kernel,
-        srcs = select({
-            "@platforms//cpu:" + cpu: ["@blake3_c//:c/blake3_%s.c" % kernel],
-            "//conditions:default": [],
-        }),
-        copts = DOLTLITE_LIBRARY_COPTS + flags,
-        deps = ["@blake3_c//:headers"],
-    )
-    for cpu, kernels in BLAKE3_KERNELS.items()
-    for kernel, flags in kernels.items()
-]
-
-cc_library(
-    name = "blake3_kernels",
-    deps = [
-        ":blake3_" + kernel
-        for kernels in BLAKE3_KERNELS.values()
-        for kernel in kernels
-    ],
-)
-
 # cc_library named `sqlite3` so Bazel emits `libsqlite3.a` (Bazel's
 # convention is to prepend `lib` to the rule name). This matches what
 # `libsqlite3-sys`'s build script expects to find when it emits
@@ -252,7 +168,6 @@ cc_library(
     copts = DOLTLITE_LIBRARY_COPTS,
     linkopts = DOLTLITE_LINKOPTS,
     visibility = ["//visibility:public"],
-    deps = [":blake3_kernels"],
 )
 
 # `libdoltlite` — the same amalgamation as a shared library, for a program
@@ -281,7 +196,6 @@ cc_binary(
     copts = DOLTLITE_LIBRARY_COPTS,
     linkopts = DOLTLITE_LINKOPTS,
     linkshared = True,
-    deps = [":blake3_kernels"],
     target_compatible_with = select({
         ":musl": ["@platforms//:incompatible"],
         "@platforms//os:linux": [],
@@ -298,7 +212,6 @@ cc_binary(
     copts = DOLTLITE_LIBRARY_COPTS,
     linkopts = DOLTLITE_LINKOPTS,
     linkshared = True,
-    deps = [":blake3_kernels"],
     target_compatible_with = ["@platforms//os:macos"],
 )
 
@@ -311,46 +224,6 @@ write_file(
     out = "library_copts.txt",
     content = [copt.replace('\\"', '"') for copt in DOLTLITE_LIBRARY_COPTS],
     visibility = ["//datalib/reader:__pkg__"],
-)
-
-# The kernels, for the same compile: `blake3_kernels/` holds their sources
-# and headers and `kernels.txt`, one line per kernel, `<cpu> <source>
-# <flags>`, each compiled with library_copts.txt plus its own flags.
-write_file(
-    name = "blake3_kernel_list",
-    out = "blake3_kernel_list.txt",
-    content = [
-        " ".join([cpu, "blake3_%s.c" % kernel] + flags)
-        for cpu, kernels in BLAKE3_KERNELS.items()
-        for kernel, flags in kernels.items()
-    ],
-)
-
-BLAKE3_KERNEL_SOURCES = [
-    "blake3_%s.c" % kernel
-    for kernels in BLAKE3_KERNELS.values()
-    for kernel in kernels
-]
-
-genrule(
-    name = "blake3_kernel_sources",
-    srcs = [":blake3_kernel_list", "@blake3_c//:header_files"] + [
-        "@blake3_c//:c/" + source
-        for source in BLAKE3_KERNEL_SOURCES
-    ],
-    outs = ["blake3_kernels/" + f for f in [
-        "blake3.h",
-        "blake3_impl.h",
-        "kernels.txt",
-    ] + BLAKE3_KERNEL_SOURCES],
-    cmd = """
-        for f in $(SRCS); do
-            case $$f in
-                *blake3_kernel_list.txt) cp $$f $(RULEDIR)/blake3_kernels/kernels.txt ;;
-                *) cp $$f $(RULEDIR)/blake3_kernels/ ;;
-            esac
-        done
-    """,
 )
 
 # What this platform ships: `//datalib/backend:dist` takes it, so the
@@ -401,7 +274,6 @@ cc_library(
     copts = DOLTLITE_LIBRARY_COPTS + ["-DDOLTLITE_VEC1=1"],
     includes = ["."],
     linkopts = DOLTLITE_LINKOPTS,
-    deps = [":blake3_kernels"],
 )
 
 cc_binary(
@@ -430,9 +302,10 @@ sh_test(
 
 # What doltlite's chunk hashing computes, through the dispatcher as a store
 # write reaches it: BLAKE3's own test vectors, hashed whole and in pieces;
-# that the dispatcher has a SIMD kernel to pick (it had none while the
-# amalgamation turned them off); and that the kernels' BLAKE3 is the one
-# the amalgamation embeds. On x86 it covers the widest kernel this CPU has.
+# that the dispatcher has a SIMD kernel to pick (the amalgamation compiles
+# them itself); and that `@blake3_c`,
+# whose header and vectors the test takes, is the BLAKE3 the amalgamation
+# embeds. On x86 it covers the widest kernel this CPU has.
 cc_test(
     name = "blake3_kernels_test",
     size = "small",

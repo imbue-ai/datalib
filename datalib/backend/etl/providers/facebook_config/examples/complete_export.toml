@@ -21,7 +21,6 @@ command = "datalib-step"
 inputs = ["facebook/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "facebook"
 function = "keyword_index"

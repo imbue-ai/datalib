@@ -89,11 +89,11 @@ class FloatingNpxTest(unittest.TestCase):
             "bun x latchkey auth list",
             "npm exec latchkey -- auth list",
             "npm exec -- latchkey auth list",
-            "yarn dlx @tobilu/qmd status",
+            "yarn dlx latchkey auth list",
             "npx -y -p latchkey latchkey auth list",
             "npx --package=latchkey@next latchkey curl https://slack.test",
             "npx -y latchkey",
-            "run: npx -y @tobilu/qmd",
+            "run: npx -y latchkey auth list",
         ]:
             with self.subTest(line=line):
                 self.assertTrue(floating_npx(line))
@@ -105,7 +105,7 @@ class FloatingNpxTest(unittest.TestCase):
             'cmd = f"npx -y latchkey@{LATCHKEY_VERSION} auth list"',
             'npx -y "latchkey@${LATCHKEY_VERSION}" auth list',
             "npx -y -p latchkey@3.21.0 latchkey auth list",
-            "npx -y @tobilu/qmd@2.8.3 status",
+            "yarn dlx latchkey@3.21.0 auth list",
             "latchkey auth browser slack",
             "npx -y vite build",
             "pnpm exec vue-tsc",

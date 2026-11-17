@@ -26,6 +26,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
+import { expandInputs, namesStep } from "./inputPattern";
 import { catalogForStep } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
@@ -65,7 +66,7 @@ export type ConfiguredStep = {
   /// The `command` it declares; null when it declares none, which the
   /// loader reads as `datalib-step` (`isDatalibStep`).
   command: string | null;
-  /// The ids this step declares as inputs.
+  /// The ids this step reads: its `inputs`, each pattern expanded.
   inputs: string[];
   params: Record<string, unknown>;
   /// [start, end) character offsets covering this entry's TOML tables,
@@ -354,6 +355,11 @@ export function listSteps(text: string): ConfiguredStep[] {
       });
     });
   }
+
+  // A pattern (`*/render_markdown`) is read as the ids it names, as the
+  // loader reads it; the text keeps the pattern.
+  const ids = steps.map((s) => s.id);
+  for (const s of steps) s.inputs = expandInputs(s.id, s.inputs, ids);
 
   const applets: ConfiguredStep[] = [];
   if (Array.isArray(root.applets)) {
@@ -1123,12 +1129,13 @@ function editFanInInputs(
 /// rendered markdown, or into just the one `only` names — which is how
 /// an embed step reaches the map.
 ///
-/// The fan-ins name their inputs by id, so a source added without this renders
-/// happily and is never indexed — invisible in search, with nothing on screen
-/// to say why.
+/// A fan-in that reads by pattern (`*/render_markdown`) already names the
+/// step and is left as it is. One that names its inputs by id needs this,
+/// or the source renders happily and is never indexed — invisible in
+/// search, with nothing on screen to say why.
 export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
   return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
-    ids.includes(stepId) ? ids : [...ids, stepId],
+    ids.some((i) => namesStep(i, stepId)) ? ids : [...ids, stepId],
   );
 }
 
@@ -1194,7 +1201,7 @@ export function setTimeSeriesStep(
     next =
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
-      `function = "time_series_index"\ncommand = ${quote(DATALIB_STEP)}\ninputs = []\n\n[[applets]]\n` +
+      `function = "time_series_index"\ncommand = ${quote(DATALIB_STEP)}\ninputs = ["*/render_time_series"]\n\n[[applets]]\n` +
       `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
       `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
   }

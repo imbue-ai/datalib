@@ -115,20 +115,24 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     Ok(terms.len())
 }
 
+/// Every `(handle, author)` pair the grid shows, read from
+/// `grid_index::AUTHORS_INDEX` alone. Pinned, so a dropped or renamed
+/// index fails the pass instead of scanning every row's text (#1803).
+const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
+     FROM grid_rows INDEXED BY grid_rows_by_author \
+     WHERE author_handle IS NOT NULL AND author_handle != '' \
+     AND author IS NOT NULL AND author != ''";
+
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
 /// (`source_contacts`) gives for each handle it ties to them; and the
 /// handles of each source's own account. Written whole: it is a few
 /// thousand rows.
 pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<()> {
-    let authors: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT author_handle, author FROM grid_rows \
-         WHERE author_handle IS NOT NULL AND author_handle != '' \
-         AND author IS NOT NULL AND author != ''",
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .context("read the grid's authors")?;
+    let authors: Vec<(String, String)> = sqlx::query_as(AUTHORS)
+        .fetch_all(&mut *conn)
+        .await
+        .context("read the grid's authors")?;
     let contacts: Vec<(String, String)> = sqlx::query_as(
         "SELECT h.handle, c.contact_json FROM source_contact_handles h \
          JOIN source_contacts c \
@@ -461,6 +465,29 @@ mod tests {
 
     fn hit(uuid: &str, kind: &str) -> (String, String) {
         (uuid.to_string(), kind.to_string())
+    }
+
+    /// #1803: the authors were read by scanning `grid_rows`, every row's
+    /// text with them, on each pass. They must come from the index alone.
+    #[tokio::test]
+    async fn the_authors_are_read_from_their_index_alone() {
+        let g = Grid::new().await;
+        // Audited: a constant statement of ours.
+        let rows: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {AUTHORS}")))
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        assert!(
+            plan.iter()
+                .any(|p| p.starts_with("SEARCH grid_rows USING COVERING INDEX grid_rows_by_author")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|p| p.starts_with("SCAN grid_rows")),
+            "{plan:?}"
+        );
     }
 
     /// A forged `From: "picard@enterprise.org" <q@continuum.test>` made

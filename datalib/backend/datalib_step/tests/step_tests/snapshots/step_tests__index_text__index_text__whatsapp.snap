@@ -3,131 +3,140 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === whatsapp 00000000-0000-84f0-8faa-a404dacb63b6 WhatsApp user …0108
---- 0b50e81a-ce00-8ae8-9ea3-15b7547cac96
-WhatsApp user …0108 — Sat 11 Apr 2364 00:16
+--- chunk 0
+title: WhatsApp user …0108 | text: WhatsApp user …0108 — Sat 11 Apr 2364 00:16
 
 Is this the Enterprise? Wrong number, sorry.
 
+
 === whatsapp 00000000-0000-8891-ab80-dd17e867538b Bridge Crew
---- 0b50e80c-2800-80ba-ad92-7dade4f4d7f3
-Me — Sat 11 Apr 2364 00:00
+--- chunk 0
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:00
 
 Status report.
 
---- 0b50e80d-1260-8d9f-acd4-f839b7f89b1b
-William Riker <+17015550101> — Sat 11 Apr 2364 00:01
+
+--- chunk 1
+title: Bridge Crew | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:01
 
 All decks at green status, Captain.
 
---- 0b50e80d-fcc0-8005-909f-857e006cd9de
-Data <+17015550102> — Sat 11 Apr 2364 00:02
+
+--- chunk 2
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:02
 
 Sensors detect an unidentified vessel.
 
---- 0b50e80e-e720-89bf-8465-174dc07feb8c
-Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:03
+
+--- chunk 3
+title: Bridge Crew | text: Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:03
 
 Warp engines online. Ready for your order.
 
---- 0b50e80f-d180-8d67-a0c8-59eadba4b4c3
-Worf <+17015550104> — Sat 11 Apr 2364 00:04
+
+--- chunk 4
+title: Bridge Crew | text: Worf <+17015550104> — Sat 11 Apr 2364 00:04
 
 Shields at maximum, Captain.
 
---- 0b50e810-bbe0-817e-84fc-3b5903d9a10d
-Me — Sat 11 Apr 2364 00:05
+
+--- chunk 5
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:05
 
 bridge-viewscreen.jpg
 
---- 0b50e811-a640-8b94-a752-fe955e6453e0
-Data <+17015550102> — Sat 11 Apr 2364 00:06
+
+--- chunk 6
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:06
 
 Hailing frequencies open, sir.
 
---- 0b50e812-90a0-8688-bbc1-5a80e14d22f9
-Me — Sat 11 Apr 2364 00:07
+
+--- chunk 7
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:07
 
 Make it so.
 
---- 0b50e815-4fc0-80f2-af4f-05e409dee22b
-Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:10
 
-<video controls src="/data/whatsapp/ingest/blob/51e1f3961849ab15faa84794a82f08866a873b4cafc54169f82e2ab5a2978d27"></video>
+--- chunk 8
+title: Bridge Crew | text: Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:10
 
 🎞 warp-core-diagnostic.mp4 — 512 B
 
---- 0b50e816-3a20-8ba5-98f2-de7649752c7b
-Worf <+17015550104> — Sat 11 Apr 2364 00:11
 
-<audio controls src="/data/whatsapp/ingest/blob/72228b6ea7fc6ac5382863faabca9885887ecfa421138f5ecadc474acc933e89"></audio>
+--- chunk 9
+title: Bridge Crew | text: Worf <+17015550104> — Sat 11 Apr 2364 00:11
 
 🔊 tactical-briefing.opus — 640 B
 
---- 0b50e818-0ee0-86db-9aed-bf1f41862b26
-Data <+17015550102> — Sat 11 Apr 2364 00:13
+
+--- chunk 10
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:13
 
 Sensor sweep complete: nothing on long range.
 
+
 === whatsapp 00000000-0000-8a99-9206-1d7e42e1b482 Data
---- 0b50e818-f940-8338-a476-1e9f46231681
-Data <+17015550102> — Sat 11 Apr 2364 00:14
+--- chunk 0
+title: Data | text: Data <+17015550102> — Sat 11 Apr 2364 00:14
 
 Captain, I have a question about humour.
 
---- 0b50e819-e3a0-8671-a627-5f3eb75b189a
-Me — Sat 11 Apr 2364 00:15
+
+--- chunk 1
+title: Data | text: Me — Sat 11 Apr 2364 00:15
 
 Ask away, Data.
 
+
 === whatsapp 00000000-0000-8b1c-9241-3a10a9e8b6d0 Worf
---- 0b50e81b-b860-83fd-88c2-2f8ca4d6ba7d
-Worf <+17015550104> — Sat 11 Apr 2364 00:17
+--- chunk 0
+title: Worf | text: Worf <+17015550104> — Sat 11 Apr 2364 00:17
 
 Sir, I request permission to run a tactical drill.
 
+
 === whatsapp 00000000-0000-8d08-85b0-d2533cc3a460 William Riker
---- 0b50e813-7b00-8228-997a-4b68f85a4eb0
-William Riker <+17015550101> — Sat 11 Apr 2364 00:08
+--- chunk 0
+title: William Riker | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:08
 
 Captain, a private word about Commander Data?
 
---- 0b50e814-6560-8132-8c89-474f38b638c6
-Me — Sat 11 Apr 2364 00:09
+
+--- chunk 1
+title: William Riker | text: Me — Sat 11 Apr 2364 00:09
 
 Come in, Number One.
 
---- 0b50e817-2480-8dbf-8855-78fecef33dc9
-William Riker <+17015550101> — Sat 11 Apr 2364 00:12
+
+--- chunk 2
+title: William Riker | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:12
 
 🖼 *[holodeck-poker-night.jpg (not yet fetched)]*
 *(source: Media/WhatsApp Images/holodeck-poker-night.jpg)*
 
+
 === whatsapp 00000000-0000-8f4c-b365-c0f656f665bf whatsapp storage
---- -
----
-title: whatsapp storage
-source: whatsapp
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: whatsapp storage | text: Source: datalib
 
-# [whatsapp](datalib:group/whatsapp "whatsapp") — storage
+# whatsapp — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest` | <size> | 3 files | <span id="m-00000000-0000-8f4c-b365-c0f656f665bf" data-section-uuid="00000000-0000-8f4c-b365-c0f656f665bf">`00000000`</span> |
-| Store | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8aab-9ba6-c5f2c049032b" data-section-uuid="00000000-0000-8aab-9ba6-c5f2c049032b">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/blobs.sqlite#cas_objects` |  | 3 rows | <span id="m-00000000-0000-8b05-9923-3abbc7fb6ab4" data-section-uuid="00000000-0000-8b05-9923-3abbc7fb6ab4">`00000000`</span> |
-| Store | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-88d4-b909-5cffe1f0080e" data-section-uuid="00000000-0000-88d4-b909-5cffe1f0080e">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#chat` |  | 5 rows | <span id="m-00000000-0000-8cb4-b98c-60bc00798d96" data-section-uuid="00000000-0000-8cb4-b98c-60bc00798d96">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#jid` |  | 10 rows | <span id="m-00000000-0000-8fb2-a5af-76881264e236" data-section-uuid="00000000-0000-8fb2-a5af-76881264e236">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#jid_map` |  | 2 rows | <span id="m-00000000-0000-8b16-b968-0cd4b67e29ed" data-section-uuid="00000000-0000-8b16-b968-0cd4b67e29ed">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#lid_display_name` |  | 1 row | <span id="m-00000000-0000-8024-9a71-6d8b2a2ac5f4" data-section-uuid="00000000-0000-8024-9a71-6d8b2a2ac5f4">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message` |  | 18 rows | <span id="m-00000000-0000-839e-93c1-084e32d78d96" data-section-uuid="00000000-0000-839e-93c1-084e32d78d96">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_add_on` |  | 6 rows | <span id="m-00000000-0000-858a-b53a-61f86211ab71" data-section-uuid="00000000-0000-858a-b53a-61f86211ab71">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_add_on_reaction` |  | 6 rows | <span id="m-00000000-0000-86e8-bc0d-1acca6b26fe5" data-section-uuid="00000000-0000-86e8-bc0d-1acca6b26fe5">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_media` |  | 4 rows | <span id="m-00000000-0000-8527-9c90-ffde95a52cf7" data-section-uuid="00000000-0000-8527-9c90-ffde95a52cf7">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#message_text` |  | 0 rows | <span id="m-00000000-0000-8dd2-8024-dfdfd002609e" data-section-uuid="00000000-0000-8dd2-8024-dfdfd002609e">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#wa_db_contacts` |  | 5 rows | <span id="m-00000000-0000-8b75-8023-b9a9fd362c0f" data-section-uuid="00000000-0000-8b75-8023-b9a9fd362c0f">`00000000`</span> |
-| Table | [ingest](datalib:step/whatsapp/ingest "whatsapp/ingest") | `whatsapp/ingest/entities.doltlite_db#wa_media_files` |  | 3 rows | <span id="m-00000000-0000-8dfa-be76-1f64c2e7efd7" data-section-uuid="00000000-0000-8dfa-be76-1f64c2e7efd7">`00000000`</span> |
+| Source Size | ingest | `whatsapp/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `whatsapp/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/blobs.sqlite#cas_objects` |  | 3 rows | `00000000` |
+| Store | ingest | `whatsapp/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#chat` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid` |  | 10 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid_map` |  | 2 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#lid_display_name` |  | 1 row | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message` |  | 18 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on_reaction` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_media` |  | 4 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_text` |  | 0 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_db_contacts` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_media_files` |  | 3 rows | `00000000` |

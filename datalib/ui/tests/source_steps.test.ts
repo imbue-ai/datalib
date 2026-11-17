@@ -1612,9 +1612,13 @@ function = "ingest"
     expect(setTimeSeriesStep(PAIR, "slack", "slack")).toBe(PAIR);
   });
 
+  /// The index it adds reads every source's time series by pattern, so it
+  /// stops reading this one when the step goes, with no edge to take out.
   it("is unwired from the time-series index when the source goes", () => {
     const added = setTimeSeriesStep(WATCH, "riker", "garmin");
-    const gone = unwireFromFanIns(added, "riker/render_time_series");
+    expect(added).toContain('inputs = ["*/render_time_series"]');
+    const step = listSteps(added).find((s) => s.id === "riker/render_time_series")!;
+    const gone = unwireFromFanIns(removeSteps(added, [step]), step.id);
     expect(inputsOf(gone, "unified_time_series_index/time_series_index")).toEqual([]);
     expect(inputsOf(gone, "unified_grid_and_search_index/grid_index")).not.toContain(
       "riker/render_time_series",
@@ -1657,5 +1661,41 @@ function = "ingest"
     const first = setOccurrencesStep(CAL, "bridge", "calendar");
     const both = `${first}\n[[steps]]\ngroup = "bridge"\nfunction = "render_markdown"\ninputs = ["bridge/ingest"]\n`;
     expect(sourceStepsOf("bridge", listSteps(both)).render?.function).toBe("render_markdown");
+  });
+});
+
+describe("a fan-in that reads by pattern", () => {
+  const PATTERNED = `[[groups]]
+id = "picard"
+type = "email"
+
+[[steps]]
+group = "picard"
+function = "render_markdown"
+command = "datalib-step"
+
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
+`;
+
+  /// The pattern already names every render, so wiring a new one in
+  /// leaves the text as it is rather than naming the step beside it.
+  it("is left alone when a source is wired in", () => {
+    expect(wireIntoFanIns(PATTERNED, "picard/render_markdown")).toBe(PATTERNED);
+  });
+
+  /// What the wizard reads off the text is what the loader reads: the
+  /// ids the pattern names.
+  it("reads the steps the pattern names", () => {
+    const grid = listSteps(PATTERNED).find(
+      (s) => s.id === "unified_grid_and_search_index/grid_index",
+    );
+    expect(grid?.inputs).toEqual(["picard/render_markdown"]);
   });
 });

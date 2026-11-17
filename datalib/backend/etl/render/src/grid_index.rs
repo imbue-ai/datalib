@@ -459,6 +459,14 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
 
+/// What [`crate::search_terms::write_people`] reads the grid's authors
+/// from, so a pass reads two short columns rather than every row's text
+/// (#1803). Only the index's: never dropped for a remake, since the query
+/// names it, and out of [`schema_hash`], since it changes no row and
+/// adding it must not rebuild the index.
+pub(crate) const AUTHORS_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
+
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the
 /// row, owned by document; a row that moved left them behind (#1202).
@@ -491,6 +499,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl()
         .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX])
     {
         sqlx::query(ddl)
             .execute(pool)
@@ -2947,6 +2956,7 @@ mod shape_tests {
             markdown_uuid: uuid.into(),
             content_hash: format!("hash-{uuid}"),
             title: "Ten Forward".into(),
+            head: None,
             sections: vec![datalib_search_index::IndexSection {
                 uuid: Some("m1".into()),
                 text: "the warp core is stable".into(),

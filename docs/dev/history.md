@@ -37,10 +37,10 @@ The hashes are the same either way, so no stored hash moved.
 without the kernel. Turning NEON on surfaced a clash CI does not build:
 doltlite embeds blake3's portable C, and on aarch64 the blake3 crate
 exports `blake3_compress_in_place_portable` too, so the static musl
-link saw it twice. `third-party/doltlite/BUILD.bazel` renames
-doltlite's copy. doltlite's amalgamation turned its own SIMD kernels
-off, so it hashed every chunk with the portable code; it now builds
-them too, and every kernel symbol is renamed the same way
+link saw it twice. doltlite's amalgamation also turned its own SIMD
+kernels off, so it hashed every chunk with the portable code. For a
+while our build renamed doltlite's BLAKE3 symbols and compiled its
+kernels itself; since doltlite 0.51.13 the amalgamation does both
 (`third-party/doltlite/README.md` §"BLAKE3's SIMD kernels").
 
 ## The index group's three names

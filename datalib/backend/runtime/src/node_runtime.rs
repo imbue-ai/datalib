@@ -1,5 +1,5 @@
-//! Locate the Node runtime + npm package trees `latchkey` and `qmd` run
-//! from, so neither needs any Node/npm on the host. Three places, in
+//! Locate the Node runtime and the npm package tree `latchkey` runs
+//! from, so it needs no Node/npm on the host. Three places, in
 //! order: `$DATALIB_RUNTIME_DIR`; `runtime/` beside the binaries (the
 //! docker image, and the .app one level up); and the runtime a release
 //! tarball names in a manifest beside its binaries, which is fetched
@@ -41,8 +41,7 @@ pub const ALLOW_NPX_ENV: &str = "DATALIB_ALLOW_NPX";
 /// package.json `bin` target), equivalent to what `npx latchkey` execs.
 pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 
-/// The ONE canonical latchkey version pin (see the qmd twin,
-/// `DEFAULT_QMD_VERSION` in [`crate::qmd`]): used for the `npx` fallback
+/// The ONE canonical latchkey version pin: used for the `npx` fallback
 /// spec, as the key into the staged `runtime/latchkey/<version>/` tree,
 /// and re-exported by `datalib_etl_web::latchkey`.
 /// `scripts/stage_runtime.sh` greps this constant to decide
@@ -190,7 +189,7 @@ pub fn manifest() -> Result<&'static Manifest, FetchOutcome> {
 }
 
 /// Where fetched runtimes live: `runtime/` in the machine cache
-/// ([`crate::cache`]), beside qmd's model cache. A cache directory rather
+/// ([`crate::cache`]). A cache directory rather
 /// than the data root so two roots on one machine share one copy and the
 /// `latchkey` launcher can find it with no data root in hand.
 pub fn runtime_cache_dir() -> Option<PathBuf> {
@@ -214,7 +213,7 @@ pub trait RuntimeFetcher: Send + Sync {
 static FETCHER: OnceLock<Box<dyn RuntimeFetcher>> = OnceLock::new();
 
 /// Let a miss fetch. Called once, early, by the binaries that run
-/// `qmd` or `latchkey` from a release tarball; a second call is
+/// `latchkey` from a release tarball; a second call is
 /// ignored. Must precede the first resolution: the result is cached.
 pub fn enable_fetch(fetcher: Box<dyn RuntimeFetcher>) {
     let _ = FETCHER.set(fetcher);
@@ -400,30 +399,27 @@ pub fn bundled_command(kind: &str, version: &str, entry_rel: &str) -> Option<Com
     command_in(&runtime_root()?, kind, version, entry_rel)
 }
 
-/// A staged tool's Node binary and package directory, for a caller that
-/// runs its own script *against* the package rather than running the
-/// package's own entry point.
-///
-/// `None` under the `npx` fallback. There the package is unpacked into
-/// an npm cache under a name npm chooses, so there is no path a script
-/// could import from — a caller that needs one runs the CLI instead.
-pub fn staged_package(kind: &str, version: &str, pkg_rel: &str) -> Option<(PathBuf, PathBuf)> {
-    let root = runtime_root()?;
+/// The Node of the tree at `root`, as every tool there is run with.
+/// `None` when the tree has none.
+pub fn node_in(root: &Path) -> Option<Command> {
     let node = root.join(NODE_REL);
-    let pkg = root.join(kind).join(version).join(pkg_rel);
-    (node.is_file() && pkg.is_dir()).then_some((node, pkg))
+    if !node.is_file() {
+        return None;
+    }
+    let mut cmd = Command::new(node);
+    cmd.arg(DISABLE_DEBUG_SIGNAL);
+    Some(cmd)
 }
 
 /// [`bundled_command`] against a tree the caller names rather than the
 /// one the resolver would find.
 pub fn command_in(root: &Path, kind: &str, version: &str, entry_rel: &str) -> Option<Command> {
-    let node = root.join(NODE_REL);
     let entry = root.join(kind).join(version).join(entry_rel);
-    if !node.is_file() || !entry.is_file() {
+    if !entry.is_file() {
         return None;
     }
-    let mut cmd = Command::new(node);
-    cmd.arg(DISABLE_DEBUG_SIGNAL).arg(entry);
+    let mut cmd = node_in(root)?;
+    cmd.arg(entry);
     Some(cmd)
 }
 

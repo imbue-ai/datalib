@@ -20,8 +20,7 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
-# The readings as time series, for the charts. Add this step to
-# `unified_time_series_index/time_series_index`'s inputs.
+# The readings as time series, for the charts.
 [[steps]]
 group = "airvisual"
 function = "render_time_series"

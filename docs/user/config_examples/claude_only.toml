@@ -44,13 +44,13 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["claude_chats/render_markdown"]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
+inputs = ["*/keyword_index", "*/embed"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

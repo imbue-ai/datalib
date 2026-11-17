@@ -192,7 +192,8 @@ impl GridIndex {
     /// The row a hit lands on, with the lines quoted from its message,
     /// reading the document's file once: the work a page does for each hit
     /// it shows, and only for those. The document's own row for an
-    /// `is:document` search. `None` for a document the grid does not have.
+    /// `is:document` search, quoting the message the hit matched.
+    /// `None` for a document the grid does not have.
     pub fn land(&self, hit: &QmdHit, documents_only: bool) -> Option<(GridRowRef, String)> {
         let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
         let rows = if documents_only {
@@ -207,8 +208,14 @@ impl GridIndex {
             self.first_kept(text.as_deref(), &row.markdown_uuid)
                 .unwrap_or(row)
         };
+        let quoted_section = match &hit.place {
+            Some(Place::Item {
+                uuid: Some(matched),
+            }) if documents_only => matched.as_str(),
+            _ => row.uuid.as_str(),
+        };
         let quoted = match (&text, &hit.place) {
-            (Some(text), Some(Place::Item { .. })) => self.quote(text, &row.uuid),
+            (Some(text), Some(Place::Item { .. })) => self.quote(text, quoted_section),
             _ => None,
         };
         Some((row, quoted.unwrap_or_else(|| hit.snippet.clone())))
@@ -474,6 +481,26 @@ mod tests {
             with.land(&on_item(Some(SECOND)), true).unwrap().0.uuid,
             "conv"
         );
+    }
+
+    /// `is:document`: the row is the document's, but the quote is the
+    /// message the hit matched, so the list shows why the document was
+    /// found rather than its opening words. A hit naming no message quotes
+    /// as before.
+    #[test]
+    fn a_document_search_quotes_the_message_it_matched() {
+        let td = tempfile::tempdir().unwrap();
+        let mut rows = write_two_message_doc(td.path(), CHAT);
+        rows.push(document(CHAT, "Chat", CHAT, "claude"));
+        let idx = GridIndex::new(td.path(), rows)
+            .with_terms("second")
+            .within([CHAT.to_string()].into());
+        let (row, quoted) = idx.land(&on_item(Some(SECOND)), true).unwrap();
+        assert_eq!(row.uuid, CHAT);
+        assert!(quoted.starts_with("@@ -16,1 @@"), "{quoted}");
+        assert!(quoted.contains("second message text"), "{quoted}");
+        let (row, quoted) = idx.land(&on_item(None), true).unwrap();
+        assert_eq!((row.uuid.as_str(), quoted.as_str()), (CHAT, ""));
     }
 
     /// A hit lands nowhere when its path names a document the grid does

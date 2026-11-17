@@ -3,8 +3,8 @@
 # and //tools:stage_tarball_test inside the devcontainer — the image
 # .devcontainer/Dockerfile builds for this host's arch, the working tree
 # bind-mounted where devcontainer.json mounts it, the same named cache
-# volumes — so what node-llama-cpp does only on Linux (v0.35.0's fork
-# probe) shows up here rather than on a tag. Extra arguments go to
+# volumes — so what the release steps do only on Linux shows up here
+# rather than on a tag. Extra arguments go to
 # `bazelisk test` inside the container.
 #
 #   bazelisk run //tools:release_steps_docker [-- <bazel test args>]
@@ -12,8 +12,7 @@
 # DATALIB_DEVCONTAINER_IMAGE names an image to use instead of building
 # one — on an x86_64 host, ghcr.io/imbue-ai/datalib_devcontainer:latest
 # is the one CI runs in. The published image is amd64 only, and an
-# emulated node-llama-cpp is not a faithful test, so an arm64 host
-# builds its own.
+# emulated run is not a faithful test, so an arm64 host builds its own.
 #
 # The first run pays for the image build and a cold Linux build of the
 # shipped binaries (the better part of an hour); the volumes make the

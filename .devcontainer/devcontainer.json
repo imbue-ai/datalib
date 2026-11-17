@@ -8,7 +8,7 @@
 // persisted in named volumes so the second `bazel build` doesn't
 // pay the cold-cache cost.
 //
-// We run as `root` — that lets bazel and qmd share one HOME without any
+// We run as `root` — that lets bazel and the tools share one HOME without any
 // symlink-shenanigans. The tradeoff is that files the contributor
 // creates via the workspace bind mount end up owned by uid 0; that's
 // fine on Docker-Desktop-on-macOS (VirtioFS remaps to the host user),
@@ -49,8 +49,8 @@
     //                               written macOS-first, and Linux
     //                               happily creates the dir wherever
     //                               ~ resolves to)
-    //   /root/.npm                — npx download cache for the qmd
-    //                               npm pkg
+    //   /root/.npm                — npx download cache for the
+    //                               latchkey fallback
     //
     // Docker named volumes inherit the image's content at the mount
     // point on FIRST creation (the Dockerfile's cache-warmup step

@@ -20,8 +20,6 @@ datalib/backend/target
 datalib/ui/node_modules
 datalib/ui/dist
 datalib/tauri/target
-third-party/qmd/node_modules
-third-party/qmd/dist
 
 # VCS state — bazelisk never reads this.
 .git

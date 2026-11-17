@@ -18,6 +18,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, via tauri-plugin-opener -> zbus 5 (D-Bus on Linux)" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, via serde_with and trash; no known flaw" },
 ]
 
 [bans]

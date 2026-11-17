@@ -154,22 +154,14 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = [
-  "claude-export/render_markdown",
-  "gmail-takeout/render_markdown",
-  "google-takeout/render_markdown",
-  "sms-backup-restore/render_markdown",
-  "linkedin/render_markdown",
-  "contacts/render_markdown",
-  "pdfs/render_markdown",
-]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 
-# Each source's keyword (BM25) part of the qmd index. Cheap enough to
+# Each source's keyword (BM25) part of the search index. Cheap enough to
 # build with the image, so free-text search works the moment the demo
 # starts; the embeddings below the cut are what a first sync adds.
 
@@ -219,22 +211,7 @@ inputs = ["pdfs/render_markdown"]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
-inputs = [
-  "claude-export/keyword_index",
-  "claude-export/embed",
-  "gmail-takeout/keyword_index",
-  "gmail-takeout/embed",
-  "google-takeout/keyword_index",
-  "google-takeout/embed",
-  "sms-backup-restore/keyword_index",
-  "sms-backup-restore/embed",
-  "linkedin/keyword_index",
-  "linkedin/embed",
-  "contacts/keyword_index",
-  "contacts/embed",
-  "pdfs/keyword_index",
-  "pdfs/embed",
-]
+inputs = ["*/keyword_index", "*/embed"]
 
 # Each source's embeddings, over the keywords baked into the image.
 

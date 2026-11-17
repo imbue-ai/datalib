@@ -535,6 +535,13 @@ Read the bake with `git diff` in `$DATALIB_MANUAL_E2E_DIR` — it is a git
 repo, and the commit message is where the triage goes (deliberate /
 accidental / noise, per cluster).
 
+Both start by upgrading `dag.toml` as `datalib-http` would
+(`datalib_migrate_config::upgrade_unattended`): the bake runs
+`datalib-dag`, which loads a config but never upgrades one, so a rename
+the app makes on sight would otherwise fail the bake. The bake writes the
+upgraded text back over `dag.toml`, so the rename shows in the data repo's
+diff; a rewrite that refuses fails it by name.
+
 Start with `--config`. It parses the config, builds the graph, and round-trips
 every step's params against the provider schemas in seconds, without touching
 the network. Every provider's config schema is `deny_unknown_fields`, so a
@@ -647,7 +654,6 @@ sync does not move the answers between two runs:
 
 ```bash
 bazelisk build //datalib/backend:bin
-export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
 DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
 uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
 uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json

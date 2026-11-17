@@ -1,6 +1,8 @@
 //! Minimal MDL `outer-cell` walker, shared by `youtube_watch_history`
 //! and `gemini_apps`.
 
+use datalib_html_entities::decode;
+
 /// Yield each MDL outer-cell as a substring of `html`. The end of one
 /// cell is wherever the next cell starts; the final cell runs to
 /// EOF (the trailing `</body></html>` chrome is harmless for the
@@ -43,7 +45,7 @@ pub fn iter_anchors(cell: &str) -> Vec<(String, String)> {
             break;
         };
         let href_close = href_start + href_close_rel;
-        let href = decode_entities(&cell[href_start..href_close]);
+        let href = decode(&cell[href_start..href_close]).into_owned();
         // Body runs from the close of the opening tag to the next `</a>`.
         let Some(open_close_rel) = cell[href_close..].find('>') else {
             break;
@@ -53,7 +55,7 @@ pub fn iter_anchors(cell: &str) -> Vec<(String, String)> {
             break;
         };
         let body_end = body_start + close_rel;
-        let body = decode_entities(&cell[body_start..body_end]);
+        let body = decode(&cell[body_start..body_end]).into_owned();
         out.push((href, body));
         cursor = body_end + "</a>".len();
     }
@@ -68,7 +70,7 @@ pub fn iter_img_srcs(html: &str) -> Vec<String> {
             let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
             let (_, after) = tag.split_once("src=\"")?;
             let (src, _) = after.split_once('"')?;
-            Some(decode_entities(src))
+            Some(decode(src).into_owned())
         })
         .collect()
 }
@@ -95,51 +97,6 @@ pub fn div_contents<'a>(html: &'a str, opening_end: &str) -> Option<&'a str> {
                 at = close + "</div>".len();
             }
         }
-    }
-}
-
-/// Decode the character references Google's exporter writes: a handful
-/// of named ones (`&amp;`, `&quot;`, `&nbsp;`, …) and any numeric one
-/// (`&#39;`). A reference it does not know stays as written.
-pub fn decode_entities(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        rest = &rest[amp..];
-        let decoded = rest
-            .get(1..rest.len().min(12))
-            .and_then(|window| window.find(';'))
-            .and_then(|semi| Some((entity(&rest[1..1 + semi])?, semi + 2)));
-        match decoded {
-            Some((c, len)) => {
-                out.push(c);
-                rest = &rest[len..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn entity(name: &str) -> Option<char> {
-    let numeric = |digits: &str, radix| char::from_u32(u32::from_str_radix(digits, radix).ok()?);
-    match name {
-        "amp" => Some('&'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "nbsp" => Some('\u{a0}'),
-        "emsp" => Some('\u{2003}'),
-        _ => match name.strip_prefix('#')? {
-            hex if hex.starts_with(['x', 'X']) => numeric(&hex[1..], 16),
-            dec => numeric(dec, 10),
-        },
     }
 }
 
@@ -212,7 +169,7 @@ pub fn strip_tags(s: &str) -> String {
             last_was_space = false;
         }
     }
-    decode_entities(out.trim())
+    decode(out.trim()).into_owned()
 }
 
 #[cfg(test)]
@@ -278,17 +235,6 @@ mod tests {
             last_timestamp_chunk(cell).as_deref(),
             Some("Jun 5, 2026, 9:00:00 AM PDT")
         );
-    }
-
-    #[test]
-    fn decode_entities_handles_named_and_numeric_references() {
-        assert_eq!(decode_entities("a &amp; b"), "a & b");
-        assert_eq!(
-            decode_entities("I&#39;ve &quot;seen&quot; &#x2014; &lt;it&gt;"),
-            "I've \"seen\" \u{2014} <it>"
-        );
-        assert_eq!(decode_entities("&amp;#39;"), "&#39;", "decoded once");
-        assert_eq!(decode_entities("Q & A &bogus; &"), "Q & A &bogus; &");
     }
 
     #[test]

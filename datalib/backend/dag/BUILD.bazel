@@ -211,6 +211,7 @@ rust_test(
         ":datalib_dag",
         "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",

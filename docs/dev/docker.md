@@ -18,7 +18,7 @@ security model the walkthrough's bind-mount rules rest on.
   `latchkey` launcher, with `lib/libdoltlite.so` left in that tree; plus
   the release's `runtime-<triple>.tar.gz`
   asset unpacked beside them as `runtime/` — the Node runtime plus the
-  lockfile-pinned `qmd` and `latchkey` package trees the binaries
+  lockfile-pinned `latchkey` package tree the binaries
   resolve beside themselves, checked against its published sha256 at
   build time. There is no Node, npm or npx on the image's `PATH`;
   nothing is fetched from a registry at build or run time, and the first-use fetch

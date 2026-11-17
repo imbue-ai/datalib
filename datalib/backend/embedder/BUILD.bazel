@@ -43,6 +43,19 @@ rust_binary(
     ],
 )
 
+# Holds a machine's GPU to its CPU (tools/gpu_check.rs). Built in CI with
+# libggml-cuda.so (.github/workflows/cuda.yml), run where there is a GPU.
+rust_binary(
+    name = "gpu_check",
+    srcs = ["tools/gpu_check.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
 rust_test(
     name = "embedder_unittests",
     size = "small",
@@ -51,25 +64,39 @@ rust_test(
     deps = ["@datalib_crates//:tempfile"],
 )
 
-# The embedder against qmd itself: the pinned qmd package run by the
-# pinned node, on the pinned model, on the same texts.
+# The embedding behaviour datalib depends on (README.md), one test per
+# fact. Run it after every llama.cpp or model bump; a fact that moved fails
+# by name.
+rust_test(
+    name = "embedding_facts",
+    size = "medium",
+    srcs = ["tests/embedding_facts.rs"],
+    data = ["//third-party/qmd_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
+# The embedder against qmd's own answers on the same texts, captured once
+# (tests/qmd_cpu_golden.json), on the pinned model.
 rust_test(
     name = "parity_test",
     size = "medium",
     srcs = ["tests/parity.rs"],
     data = [
-        "tests/qmd_embed.mjs",
-        "@nodejs_host//:node_bin",
-        "//third-party/qmd/runtime:qmd_package_dir",
-        "//third-party/qmd/runtime:qmd_tree",
+        "tests/qmd_cpu_golden.json",
         "//third-party/qmd_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
         "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
-        "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-        "QMD_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
-        "QMD_SCRIPT_RLOC": "$(rlocationpath tests/qmd_embed.mjs)",
+        "QMD_GOLDEN_RLOC": "$(rlocationpath tests/qmd_cpu_golden.json)",
     },
     tags = ["cpu:2"],
     deps = [
@@ -77,6 +104,5 @@ rust_test(
         "//datalib/backend/search_index:datalib_search_index",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
     ],
 )

@@ -9,10 +9,10 @@
 # links each binary into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
 #
 # Whole, because the tarball is more than binaries: `runtime.manifest`
-# beside them names the release's Node runtime (Node plus the `qmd` and
-# `latchkey` package trees), which the binaries fetch, sha256-checked,
-# into ~/.cache/datalib/runtime on their first use — so a sync runs
-# both tools with no Node, npm or npx on the host, and this script
+# beside them names the release's Node runtime (Node plus the `latchkey`
+# package tree), which the binaries fetch, sha256-checked, into
+# ~/.cache/datalib/runtime on their first use — so a sync runs latchkey
+# with no Node, npm or npx on the host, and this script
 # installs nothing but the tarball. The symlinks are what puts the
 # binaries on PATH; they canonicalize their own path before looking
 # beside it, so the link is transparent to them.
@@ -227,10 +227,10 @@ say "unpacked into ${LIB_DIR}"
 say "setting it up? start with \`datalib-step help\` (the agent guide: ${LIB_DIR}/docs/agent_user.md)"
 say "linked:${installed} -> ${INSTALL_DIR}"
 if [ -f "${LIB_DIR}/runtime.manifest" ]; then
-    say "the Node runtime for qmd and latchkey is fetched on first use (once per release,"
+    say "the Node runtime for latchkey is fetched on first use (once per release,"
     say "sha256-checked, into ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime); \`datalib-step pull-runtime\` does it now."
 else
-    say "note: this tarball names no Node runtime; semantic search and latchkey need"
+    say "note: this tarball names no Node runtime; latchkey needs"
     say "      DATALIB_RUNTIME_DIR pointed at one, or DATALIB_ALLOW_NPX=1 with Node on the host."
 fi
 
