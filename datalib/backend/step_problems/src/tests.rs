@@ -192,10 +192,12 @@ fn the_lines_read_as_the_protocol_spells_them() {
 
 async fn insert(pool: &sqlx::SqlitePool, row: &ProblemRow) {
     // Audited: `insert_sql` is built from `ProblemRow`'s consts.
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert_sql())))
-        .execute(pool)
-        .await
-        .unwrap();
+    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
+        datalib_table::insert_sql::<ProblemRow>(),
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 /// A step's problems are read from every store in its folder: a raw
@@ -232,4 +234,37 @@ async fn a_steps_problems_are_its_stores_rows_as_last_sealed() {
         seen,
         [("listing:channels", "enterprise"), ("messages:1", "riker")]
     );
+}
+
+/// `replace`, for a step that finds every problem again on each run: the
+/// run's rows are the store's whole; one found again unchanged keeps its
+/// stamps, one fixed since is gone, and two reasons for one record are
+/// one row saying both.
+#[tokio::test]
+async fn replace_keeps_the_stamps_of_the_unchanged_and_joins_two_reasons() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = StepFile::open(dir.path(), STEP, at(1)).await.unwrap();
+    let pool = file.pool.clone();
+    replace(&pool, vec![row("a:1"), row("b:1")], &at(1))
+        .await
+        .unwrap();
+    let mut twice = found("c:1", "x").into_row("enterprise");
+    let again = ProblemRow {
+        sample: "y".into(),
+        ..twice.clone()
+    };
+    twice.sample = "x".into();
+    replace(&pool, vec![row("a:1"), twice, again], &at(2))
+        .await
+        .unwrap();
+    let rows = read(&file_of(dir.path(), STEP)).await.unwrap();
+    assert_eq!(keys(&rows), ["a:1", "c:1"]);
+    assert_eq!(
+        rows[0].changed_at_utc,
+        at(1).utc,
+        "unchanged keeps its stamp"
+    );
+    assert_eq!(rows[1].changed_at_utc, at(2).utc);
+    assert_eq!(rows[1].sample, "x; y");
+    file.finish(&[], Ended::Succeeded).await.unwrap();
 }

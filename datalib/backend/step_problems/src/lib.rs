@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage};
-use datalib_table::BulkUpsertable;
+use datalib_table::BulkUpsertable as _;
 use datalib_time::StoredStamp;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
@@ -158,21 +158,121 @@ fn is_under(path: &str, under: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-fn insert_sql() -> String {
-    let cols: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
-        .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
-        .collect();
-    format!(
-        "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
-        ProblemRow::TABLE,
-        cols.join(", "),
-        vec!["?"; cols.len()].join(", ")
-    )
+/// Write `rows` into the `problems` table `pool` holds, in one
+/// transaction, each stamped against the row it holds under the same id
+/// (`ProblemRow::stamped`), so a problem found again unchanged changes
+/// nothing. Rows sharing an id are one row, their samples joined. Adds
+/// every id written to `found`.
+pub async fn record(
+    pool: &SqlitePool,
+    rows: Vec<ProblemRow>,
+    now: &StoredStamp,
+    found: &mut HashSet<String>,
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let insert = datalib_table::insert_sql::<ProblemRow>();
+    let mut tx = pool.begin().await.context("begin the problems write")?;
+    let mut news = Vec::new();
+    for row in one_per_id(rows) {
+        let held = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
+            .bind(&row.problem_uuid)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("read the problem held")?
+            .map(|r| ProblemRow::from_row(&r))
+            .transpose()?;
+        let row = row.stamped(held.as_ref(), &now.utc, now.tz_offset.as_deref());
+        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+            .bind(&row.problem_uuid)
+            .execute(&mut *tx)
+            .await
+            .context("replace the problem held")?;
+        // Audited: `insert` is built from `ProblemRow`'s associated
+        // consts, never from row data; every value is bound.
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("record problem {}", row.problem_uuid))?;
+        if row.is_news(held.as_ref()) {
+            news.push(row.clone());
+        }
+        found.insert(row.problem_uuid);
+    }
+    tx.commit().await.context("commit the problems write")?;
+    datalib_problems::note_recorded(&news);
+    Ok(())
 }
 
-/// One run's writer of one step's file: [`record`](Self::record) as
-/// problems are found, then [`finish`](Self::finish) once. The file's one
-/// writer while it is open.
+/// Remove from `pool`'s `problems` what the run covered and did not
+/// find again (`found`). Returns how many rows went.
+pub async fn clear(
+    pool: &SqlitePool,
+    found: &HashSet<String>,
+    covered: &[Covered],
+    ended: Ended,
+) -> Result<usize> {
+    let mut tx = pool.begin().await.context("begin the problems clear")?;
+    let held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
+        .fetch_all(&mut *tx)
+        .await
+        .context("read the problems held")?
+        .iter()
+        .map(ProblemRow::from_row)
+        .collect::<Result<_>>()?;
+    let mut gone = 0;
+    for row in held
+        .iter()
+        .filter(|r| !found.contains(&r.problem_uuid) && clears(r, covered, ended))
+    {
+        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+            .bind(&row.problem_uuid)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("clear problem {}", row.problem_uuid))?;
+        gone += 1;
+    }
+    tx.commit().await.context("commit the problems clear")?;
+    Ok(gone)
+}
+
+/// Make `pool`'s `problems` hold `rows` and nothing else, for a step
+/// that finds every one of its problems again on each run
+/// (`render_time_series`, `render_occurrences`). Uncommitted to a
+/// doltlite store: the caller seals.
+pub async fn replace(pool: &SqlitePool, rows: Vec<ProblemRow>, now: &StoredStamp) -> Result<()> {
+    let mut found = HashSet::new();
+    record(pool, rows, now, &mut found).await?;
+    clear(pool, &found, &[Covered::All], Ended::Succeeded).await?;
+    Ok(())
+}
+
+/// One row per id, in first-seen order, a later row's sample appended
+/// to the first's: two reasons for one record are one problem.
+fn one_per_id(rows: Vec<ProblemRow>) -> Vec<ProblemRow> {
+    let mut out: Vec<ProblemRow> = Vec::with_capacity(rows.len());
+    let mut at: std::collections::HashMap<String, usize> = Default::default();
+    for row in rows {
+        match at.get(&row.problem_uuid) {
+            Some(&i) => {
+                let first = &mut out[i];
+                if !first.sample.split("; ").any(|s| s == row.sample) {
+                    first.sample = format!("{}; {}", first.sample, row.sample);
+                }
+            }
+            None => {
+                at.insert(row.problem_uuid.clone(), out.len());
+                out.push(row);
+            }
+        }
+    }
+    out
+}
+
+/// One run's writer of one step's own `problems.sqlite`:
+/// [`record`](Self::record) as problems are found, then
+/// [`finish`](Self::finish) once. The file's one writer while it is open.
 pub struct StepFile {
     pool: SqlitePool,
     now: StoredStamp,
@@ -211,79 +311,16 @@ impl StepFile {
         })
     }
 
-    /// Write what this run found, in one transaction, each row stamped
-    /// against the one the file holds under the same id.
     pub async fn record(&mut self, rows: Vec<ProblemRow>) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let insert = insert_sql();
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin the problems write")?;
-        let mut news = Vec::new();
-        for row in rows {
-            let held = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
-                .bind(&row.problem_uuid)
-                .fetch_optional(&mut *tx)
-                .await
-                .context("read the problem held")?
-                .map(|r| ProblemRow::from_row(&r))
-                .transpose()?;
-            let row = row.stamped(held.as_ref(), &self.now.utc, self.now.tz_offset.as_deref());
-            // Audited: `insert` is built from `ProblemRow`'s associated
-            // consts, never from row data; every value is bound.
-            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("record problem {}", row.problem_uuid))?;
-            if row.is_news(held.as_ref()) {
-                news.push(row.clone());
-            }
-            self.found.insert(row.problem_uuid);
-        }
-        tx.commit().await.context("commit the problems write")?;
-        datalib_problems::note_recorded(&news);
-        Ok(())
+        record(&self.pool, rows, &self.now, &mut self.found).await
     }
 
-    /// End the run: remove what it covered and did not find again, and
+    /// End the run: clear what it covered and did not find again, and
     /// close the file. Returns how many rows went.
     pub async fn finish(self, covered: &[Covered], ended: Ended) -> Result<usize> {
-        let result = self.clear(covered, ended).await;
+        let result = clear(&self.pool, &self.found, covered, ended).await;
         self.pool.close().await;
         result
-    }
-
-    async fn clear(&self, covered: &[Covered], ended: Ended) -> Result<usize> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin the problems clear")?;
-        let held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
-            .fetch_all(&mut *tx)
-            .await
-            .context("read the problems held")?
-            .iter()
-            .map(ProblemRow::from_row)
-            .collect::<Result<_>>()?;
-        let mut gone = 0;
-        for row in held
-            .iter()
-            .filter(|r| !self.found.contains(&r.problem_uuid) && clears(r, covered, ended))
-        {
-            sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
-                .bind(&row.problem_uuid)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("clear problem {}", row.problem_uuid))?;
-            gone += 1;
-        }
-        tx.commit().await.context("commit the problems clear")?;
-        Ok(gone)
     }
 }
 

@@ -443,16 +443,6 @@ pub fn problem_id(
         .to_string()
 }
 
-/// Id for one row of a step's own `problems.sqlite`: the step and its
-/// own name for the problem, which a step keeps the same on every run
-/// that finds it.
-pub fn step_problem_id(step_id: &str, key: &str) -> String {
-    let recipe = format!("problem\u{1f}step\u{1f}{step_id}\u{1f}{key}");
-    Uuid::new_v5(&DATALIB_ID_NS, recipe.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

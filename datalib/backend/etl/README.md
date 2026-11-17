@@ -94,7 +94,7 @@ own store under a stage no other step writes
 whose time series could not be read (`time_series`), and
 `render_occurrences`, an event whose occurrences could not be listed
 (`occurrences`). Each finds every one of them again on each run, so
-its rows replace the store's whole (`step_problems::replace`), keeping
+its rows replace the store's whole (`datalib_step_problems::replace`), keeping
 the stamps of the unchanged. `grid_index` takes both steps as inputs,
 for these rows alone, and copies each step's rows apart from the
 render store's (`copy_own_store_problems`): a source's render-store

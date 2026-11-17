@@ -4365,7 +4365,7 @@ mod source_cursor_tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let store = datalib_etl::doltlite_raw::open_derived(
             &path,
-            &[datalib_etl::step_problems::ddl()],
+            &[datalib_schema::problems::DDL[0].1],
             StoreKind::Occurrences,
         )
         .await
@@ -4379,7 +4379,7 @@ mod source_cursor_tests {
             Problem::record(Reason::RenderFailed, "no start"),
             None,
         );
-        datalib_etl::step_problems::replace(
+        datalib_step_problems::replace(
             &store,
             vec![unlisted.clone()],
             &datalib_time::split_stamp("2370-01-01T00:00:00+00:00"),

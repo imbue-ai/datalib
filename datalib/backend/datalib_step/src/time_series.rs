@@ -78,8 +78,7 @@ pub async fn run_render(
     let pool = store::open(&db, StoreKind::TimeSeries).await?;
     let written = async {
         let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await?;
-        datalib_etl::step_problems::replace(&pool, problems, &datalib_time::split_stamp(now))
-            .await?;
+        datalib_step_problems::replace(&pool, problems, &datalib_time::split_stamp(now)).await?;
         Ok(written)
     }
     .await;

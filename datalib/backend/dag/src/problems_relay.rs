@@ -31,6 +31,9 @@ pub(crate) struct Relay {
     /// Whether the step sent any problem event this run: a step that sent
     /// none writes its own file, or keeps none, and is left alone.
     spoke: bool,
+    /// A batch this run could not write: its problems are not in the
+    /// file, so nothing may be cleared as not found again.
+    lost: bool,
     sink: Arc<dyn EventSink>,
 }
 
@@ -80,6 +83,7 @@ impl Relay {
             pending: Vec::new(),
             covered: Vec::new(),
             spoke: false,
+            lost: false,
             sink,
         }
     }
@@ -114,6 +118,7 @@ impl Relay {
             .collect();
         let n = batch.len();
         if let Err(e) = self.write(batch).await {
+            self.lost = true;
             self.say(format!(
                 "could not record {n} problem(s) in {}: {e:#}",
                 datalib_step_problems::file_of(&self.data_root, &self.step_id).display()
@@ -149,8 +154,8 @@ impl Relay {
         }
         let file = self.file.take().expect("opened above");
         let covered = match ended {
-            Some(_) => std::mem::take(&mut self.covered),
-            None => Vec::new(),
+            Some(_) if !self.lost => std::mem::take(&mut self.covered),
+            _ => Vec::new(),
         };
         if let Err(e) = file.finish(&covered, ended.unwrap_or(Ended::Short)).await {
             self.say(format!("could not clear the problems file: {e:#}"));

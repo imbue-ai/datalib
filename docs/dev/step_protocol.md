@@ -367,40 +367,43 @@ Manage screen reads. The store, its retention and how to read it:
 ### Problems: what you could not do
 
 A problem is one thing your step could not fully do: a record it could
-not fetch, a file it could not read. A step keeps its problems in
-`problems.sqlite` in its own folder (`<data root>/<group>/<function>/`),
-plain SQLite that a reader opens while you write it. Either write it
-yourself through `datalib_step_problems::StepFile`, as `datalib-step`
-will, or send two lines and let the runner write it for you:
+not fetch, a file it could not read. It is a row of the `problems`
+table (`datalib_problems::ProblemRow`), the same table in every store,
+and a reader finds a step's problems in the stores directly in its
+folder (`<data root>/<group>/<function>/`): each `.doltlite_db` as its
+`main` commit has it, and each plain `.sqlite` file
+(`datalib_step_problems::of_step`). `datalib-step`'s steps keep theirs
+in their own stores. A step with no store of its own keeps them in
+`problems.sqlite` there: it writes the file itself through
+`datalib_step_problems::StepFile`, or sends two lines and lets the
+runner write it:
 
 ```json
-{"event":"problem","key":"record:messages:C01/1712345678.000100","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"HTTP 404","about":{"kind":"message","id":"C01/1712345678.000100"},"record":{"table":"messages","id":"C01/1712345678.000100"}}
+{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1712345678.000100","outcome":"dropped","reason":"fetch_failed","severity":"warning","sample":"HTTP 404","upstream_entity_kind":"message","upstream_id":"C01/1712345678.000100"}
 {"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
 ```
 
-- **`key`** is your name for the problem, the same on every run that
-  finds it; the problem's id is minted from your step id and the key.
-  A key starting `listing:` or `phase:` is a listing or phase your run
-  could not do.
-- **`record`** names the record of your own output the problem is
-  about, by `table` and `id`; it is what a `records` coverage matches.
-  A record may have several problems, each with its own key.
-- **`severity`** is `error`, `warning` or `info`. **`outcome`** and
-  **`reason`** are words of your own (datalib's steps use
-  `datalib_problems::Outcome` and `Reason`); **`sample`** says what
-  happened.
-- **`about`** names what you were holding when it arose, never an id
-  some other step mints: `kind`, `id` and `account` for the upstream
-  record, `node` for a node's uuid you already have, `path` for a file.
-  All optional; none means your run as a whole.
+- **A `problem` line** is a `ProblemRow` without the columns its writer
+  fills: its id (minted from what the line says), its source (the
+  step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
+  `reason` and `severity` are datalib's own closed sets
+  (`datalib_problems`); `sample` says what happened; `item_uuid`,
+  `field`, `path` and `rule` are optional.
+- **`scope_key`** is what the problem is about within your step:
+  `<table>:<id>` for a record, `file:<path>` for a file, or
+  `listing:<name>` or `phase:<name>` for a part of your run. It is
+  what `covered` matches.
+- **What it is about upstream** goes in `upstream_entity_kind`,
+  `upstream_id` and `upstream_account`, the names a grid row carries;
+  never an id some other step mints.
 - **`covered`** says what this run checked again, so what it covered
   and did not find again can go: `all`, `listings` (every `listing:`
-  and `phase:` key), `records` of one `table`, or `files` `under` a
+  and `phase:` scope), `records` of one `table`, or `files` `under` a
   folder. A `records` line with `only` vouches for exactly those
-  records, as a render that drew some documents again does; one with
-  `all_but`, and a `files` line with it, for every one but those. Both
-  count even when your run fails. Without either, and for `all` and
-  `listings`, only a run that succeeds clears anything.
+  records; one with `all_but`, and a `files` line with it, for every
+  one but those. Both count even when your run fails. Without either,
+  and for `all` and `listings`, only a run that succeeds clears
+  anything.
 
 The runner writes the problems as they arrive, at most a second after
 a line, so they show while you run, and clears when you end. A step

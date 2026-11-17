@@ -77,7 +77,7 @@ pub async fn run(
     let pool = store::open(&db).await?;
     let sealed = async {
         store::replace(&pool, &listed, &window).await?;
-        datalib_etl::step_problems::replace(&pool, problems, &stamp).await?;
+        datalib_step_problems::replace(&pool, problems, &stamp).await?;
         doltlite_raw::commit_run(
             &pool,
             &format!(
