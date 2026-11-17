@@ -10,6 +10,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_obs::status_line;
+use datalib_search_index::chunk::TokenEnds;
 
 /// Documents drawn together, as the keyword pass batches them.
 const BATCH: usize = 200;
@@ -23,7 +24,15 @@ pub(crate) struct Ask<'a> {
 
 pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
     let stdout = std::io::stdout();
-    match write(root, ask, &mut stdout.lock()) {
+    let written = if ask.chunks {
+        tokenizer(root).and_then(|t| {
+            let ends = |text: &str| t.ends(text);
+            write(root, ask, Some(&ends), &mut stdout.lock())
+        })
+    } else {
+        write(root, ask, None, &mut stdout.lock())
+    };
+    match written {
         Ok(()) => 0,
         Err(e) => {
             status_line!("error: index-text: {e:#}");
@@ -32,7 +41,26 @@ pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
     }
 }
 
-pub(crate) fn write(root: &Path, ask: &Ask<'_>, out: &mut impl Write) -> Result<()> {
+/// The model's tokenizer, which cuts the chunks, from where the steps keep
+/// the model for this root. Read-only: it fetches nothing.
+fn tokenizer(root: &Path) -> Result<datalib_embedder::Tokenizer> {
+    let model = crate::search_index::model_file(&datalib_qmd_models::models_dir_for(root));
+    anyhow::ensure!(
+        model.is_file(),
+        "{} is missing; `datalib-step pull-models` puts it in place",
+        model.display()
+    );
+    datalib_embedder::Tokenizer::open(&model)
+}
+
+/// What the index draws of each document; with `--chunks`, its chunks as
+/// `ends` (the model's tokenizer) cuts them.
+pub(crate) fn write(
+    root: &Path,
+    ask: &Ask<'_>,
+    ends: Option<TokenEnds<'_>>,
+    out: &mut impl Write,
+) -> Result<()> {
     let sources = match ask.source {
         Some(s) => vec![s.to_string()],
         None => sources(root)?,
@@ -44,7 +72,7 @@ pub(crate) fn write(root: &Path, ask: &Ask<'_>, out: &mut impl Write) -> Result<
         else {
             continue;
         };
-        let written = write_source(&store, source, ask, out);
+        let written = write_source(&store, source, ask, ends, out);
         store.close();
         written?;
     }
@@ -55,6 +83,7 @@ fn write_source(
     store: &IndexedMarkdownStore,
     source: &str,
     ask: &Ask<'_>,
+    ends: Option<TokenEnds<'_>>,
     out: &mut impl Write,
 ) -> Result<()> {
     let uuids: Vec<String> = match ask.document {
@@ -69,8 +98,8 @@ fn write_source(
     for batch in uuids.chunks(BATCH) {
         for doc in store.index_docs(source, batch)? {
             writeln!(out, "=== {source} {} {}", doc.markdown_uuid, doc.title)?;
-            if ask.chunks {
-                for (n, p) in doc.prompted().iter().enumerate() {
+            if let Some(ends) = ends.filter(|_| ask.chunks) {
+                for (n, p) in doc.prompted(ends)?.iter().enumerate() {
                     writeln!(out, "--- chunk {n} {}\n{}", p.hash, p.prompt)?;
                 }
             } else {

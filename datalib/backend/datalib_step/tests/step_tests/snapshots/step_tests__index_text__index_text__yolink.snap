@@ -47,6 +47,10 @@ Per-sample consumption, and the meter's lifetime total on a chart of its own.
 
 2 series · 576 points · Mon Apr 14th, 2369 at 00:00 — Mon Apr 14th, 2369 at 23:55
 
+
+--- chunk 1
+title: YoLink sensors — yolink | text: Source: yolink
+
 ## Devices
 
 Per-device read credentials (`family_device_id`, `device_udid`) are deliberately omitted: the pair grants access to that device's entire history.
@@ -71,6 +75,10 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
 | `humidity_pct` | %RH | 288 | 58.324 | 76.318 | 67.694 | 58.680 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `temperature_c` | °C | 288 | -20.757 | -16.357 | -18.557 | -18.844 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
+
+--- chunk 2
+title: YoLink sensors — yolink | text: Source: yolink
+
 ### ten_forward_cooler
 
 *temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
@@ -79,7 +87,7 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | `humidity_pct` | %RH | 288 | 34.261 | 46.256 | 40.415 | 46.139 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `temperature_c` | °C | 288 | 1.381 | 4.966 | 3.240 | 3.824 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 
---- chunk 1
+--- chunk 3
 title: YoLink sensors — yolink | text: Source: yolink
 
 ## Store

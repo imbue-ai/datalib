@@ -423,6 +423,7 @@ genrule(
         "ingested/backend_index.sqlite",
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/search_index:search_prompts",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     outs = [
         "ingested/search_index.sqlite",
@@ -437,6 +438,7 @@ genrule(
         "python3 $(execpath build_search_index.py)",
         "$(execpath //datalib/backend/datalib_step:datalib_step)",
         "$(execpath //datalib/backend/search_index:search_prompts)",
+        "$(execpath //third-party/qmd_models:embeddinggemma)",
         "$(execpath ingested/qmd.tar)",
         "$(execpath ingested/backend_index.sqlite)",
         "$(execpath ingested/search_index.sqlite)",

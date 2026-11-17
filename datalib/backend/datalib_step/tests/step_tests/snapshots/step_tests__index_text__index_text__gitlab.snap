@@ -75,6 +75,16 @@ Concur. Make it so.
 Beverly Crusher · Tue Apr 15th, 2369 at 14:30
 
 Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
+
+--- chunk 1
+title: Holodeck safety interlock regression test | text: Source: gitlab
+Project: enterprise-d/holodeck
+Merge request: 18
+State: opened
+Author: Jean-Luc Picard
+Branch: picard/safety-regression
+Into: main
+
 ## Inline comments
 
 ### `tests/safety.rs:42`

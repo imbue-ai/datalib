@@ -51,6 +51,20 @@ int32_t dl_embedder_keeps_cache(const dl_embedder *e);
 int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t text_len,
                              int32_t *out, int32_t cap);
 
+// The model's tokenizer alone: its vocabulary read from the file, without
+// its weights or a context. NULL on failure, with the reason in err.
+typedef struct dl_tokenizer dl_tokenizer;
+dl_tokenizer *dl_tokenizer_open(const char *model_path, char *err, size_t err_len);
+void dl_tokenizer_close(dl_tokenizer *t);
+
+// Where each of text's tokens ends, as a byte offset into text, with no
+// BOS or EOS and special-token text read as plain text. Returns the count;
+// when it exceeds cap, nothing past cap is written and the caller asks
+// again with room for the count. -2 when a token's piece cannot be lined
+// up with the text; -1 on any other failure.
+int32_t dl_tokenizer_ends(const dl_tokenizer *t, const char *text, int32_t text_len,
+                          int32_t *out, int32_t cap);
+
 // The pooled embedding of n tokens, n_embd floats into out, evaluated
 // `batch` tokens at a time; 0 or n or more is all at once. 0 on success.
 int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int32_t batch,

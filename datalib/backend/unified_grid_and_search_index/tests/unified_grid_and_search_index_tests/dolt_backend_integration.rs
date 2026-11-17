@@ -8,6 +8,9 @@ use datalib_schema::problems::{
 };
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
+use datalib_unified_grid_and_search_index::db::{
+    matching_sql, DOCUMENTS_INDEX, KEPT_DOCUMENTS, KEPT_ROWS,
+};
 use datalib_unified_grid_and_search_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::problems::{Ids, ProblemsQuery};
@@ -901,6 +904,54 @@ fn searched_index(plan: &[String]) -> Option<&str> {
         .filter(|d| d.starts_with("SEARCH grid_rows USING"))
         .find_map(|d| d.split("INDEX ").nth(1)?.split_whitespace().next())
         .filter(|name| name.starts_with("grid_rows_by_"))
+}
+
+/// A search narrowed to documents, alone or within sources, reads the
+/// documents' index and no row of the table: fetching each document's
+/// row took seconds a search on a cold disk, in a library of 60k
+/// documents. Beside any other key the plan is the planner's.
+#[tokio::test]
+async fn a_narrowing_to_documents_reads_their_index_alone() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    crate::children::create_tree(&writer).await;
+    for (_t, ddl) in GRID_INDEXES.iter() {
+        sqlx::query(*ddl).execute(&writer).await.expect("create");
+    }
+    let covered = format!("SEARCH grid_rows USING COVERING INDEX {DOCUMENTS_INDEX} ");
+    for q in [
+        "is:document",
+        "source:x is:document",
+        "-source:x source:y is:document",
+    ] {
+        for columns in [KEPT_ROWS, KEPT_DOCUMENTS] {
+            let (sql, params) = matching_sql("grid_rows", columns, &parse_query(q));
+            let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+            for p in &params {
+                explain = explain.bind(p.clone());
+            }
+            let plan: Vec<String> = explain
+                .fetch_all(&writer)
+                .await
+                .expect("explain")
+                .iter()
+                .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+                .collect();
+            assert!(
+                plan.iter().any(|d| d.starts_with(&covered)),
+                "{q:?} reading {columns:?}: {plan:?}"
+            );
+        }
+    }
+    for q in [
+        "-is:document",
+        "kind:x is:document",
+        "after:2025-01-01 is:document",
+    ] {
+        let (sql, _) = matching_sql("grid_rows", KEPT_ROWS, &parse_query(q));
+        assert!(!sql.contains("INDEXED BY"), "{q:?}: {sql}");
+    }
 }
 
 /// The problems banner and table read the index's `problems` through the
