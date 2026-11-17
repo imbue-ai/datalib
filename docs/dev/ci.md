@@ -211,10 +211,16 @@ BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
-nothing. An action's key covers its toolchain, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one never share an entry — locally the
-remote cache buys sharing with your own other worktrees and machines,
-not a replay of CI's work.
+nothing. An action's key covers its toolchain and every input it
+reads. On Linux the C/C++ toolchain is the hermetic LLVM one
+`MODULE.bazel` registers, not the machine's gcc, so the proc-macros and
+build scripts every Rust compile reads come out byte for byte the same
+on CI's runner, in a cloud VM and on a Linux laptop, and those share
+CI's entries when they build with CI's flags (`-c opt --config=release
+--nostamp --config=pr-tests` for a PR's). A mac builds with Apple's
+toolchain, so a darwin-arm64 rustc action and CI's linux-x86_64 one
+never share an entry: there the remote cache buys sharing with your own
+other worktrees and machines, not a replay of CI's work.
 
 **`--remote_download_minimal`** (`build:ci`, #497). A warm run has
 ~4400 cache hits; without this each hit's outputs were downloaded to
@@ -494,6 +500,6 @@ done
 Not in `$HOME/.bazelrc`: the `buildbuddy` config exists only in this
 repo's `.bazelrc`, and every other workspace on the machine would fail
 with "Config value 'buildbuddy' is not defined". `--config=remote` is
-CI-only for the same reason the cache shares nothing with a mac: the
-autodetected cc toolchain is generated from the client host, so
-driving Linux executors from a mac hands them a darwin toolchain.
+CI-only for the same reason the cache shares nothing with a mac:
+toolchains are resolved on the client, so driving Linux executors from
+a mac hands them a darwin toolchain.
