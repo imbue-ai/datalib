@@ -183,15 +183,15 @@ async fn update_keywords_in(
     Ok(done)
 }
 
-/// What the embed pass asks of a model: a prompt's vector, cut to fit its
-/// context, and whether it had to be.
+/// What the embed pass asks of a model: each prompt's vector, cut to fit
+/// its context, and whether it had to be.
 trait EmbedPrompt: Send + 'static {
-    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)>;
+    fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>>;
 }
 
 impl EmbedPrompt for Embedder {
-    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)> {
-        Embedder::embed_fitted(self, prompt)
+    fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>> {
+        Embedder::embed_fitted_many(self, prompts)
     }
 }
 
@@ -207,9 +207,12 @@ pub(crate) async fn embed(
     let model_path = model_path.to_path_buf();
     let open = move || {
         let embedder = Embedder::open(&model_path, Device::Best, 0)?;
+        let batching = embedder.batching();
         tracing::info!(
             device = %embedder.device(),
             cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
+            prompts_per_call = batching.prompts,
+            tokens_per_call = batching.tokens,
             "loaded the search model"
         );
         Ok(embedder)
@@ -348,16 +351,13 @@ async fn embed_batch<E: EmbedPrompt>(
     let prompt_bytes = batch.iter().map(|(_, prompt)| prompt.len()).sum();
     let started = Instant::now();
     let (e, out) = tokio::task::spawn_blocking(move || {
-        let mut cut = 0;
-        let out: Result<Vec<_>> = batch
-            .into_iter()
-            .map(|(hash, prompt)| {
-                let (vector, truncated) = e.embed_fitted(&prompt)?;
-                cut += usize::from(truncated);
-                Ok((hash, vector))
-            })
-            .collect();
-        (e, out.map(|v| (v, cut)))
+        let (hashes, prompts): (Vec<String>, Vec<String>) = batch.into_iter().unzip();
+        let out = e.embed_fitted_many(&prompts).map(|embedded| {
+            let cut = embedded.iter().filter(|(_, truncated)| *truncated).count();
+            let vectors = hashes.into_iter().zip(embedded.into_iter().map(|(v, _)| v));
+            (vectors.collect(), cut)
+        });
+        (e, out)
     })
     .await
     .context("embedding panicked")?;
@@ -588,9 +588,10 @@ mod tests {
     struct Fixed(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
     impl EmbedPrompt for Fixed {
-        fn embed_fitted(&mut self, _prompt: &str) -> Result<(Vec<f32>, bool)> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok((vec![0.6, 0.8], false))
+        fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>> {
+            self.0
+                .fetch_add(prompts.len(), std::sync::atomic::Ordering::SeqCst);
+            Ok(prompts.iter().map(|_| (vec![0.6, 0.8], false)).collect())
         }
     }
 

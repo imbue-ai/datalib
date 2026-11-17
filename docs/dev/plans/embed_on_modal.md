@@ -1,8 +1,10 @@
 # Embedding a source on Modal's GPUs
 
-**Status: proposal (2026-11-12). Built so far: the CUDA module under
-Bazel (#1750) and the embedder loading it (#1752); the rest is not. Facts
-marked _to check_ have not been measured or read from source yet.**
+**Status: proposal (2026-11-12). Step 1 is done: the CUDA module under
+Bazel (#1750), the embedder loading it (#1752), and the module run on
+Modal's T4, A100 and H100 in the published image (2026-11-17, § "Measured
+on Modal"). The rest is not. Facts marked _to check_ have not been
+measured or read from source yet.**
 
 A library's first embed is slow on the machine it lives on: about 16
 hours on an M-series Mac for one large library (710k chunks at ~12 a
@@ -90,8 +92,11 @@ x86_64, as a module the one gnu build loads when it can:
   besides those it needs only the driver's `libcuda.so.1`, and the
   small CUDA runtime is linked in. Linked in statically, cuBLAS made the
   module 939 MB, and `nvprune` only took it to 737 MB (#1750). On Modal,
-  the image our Modal side runs adds cuBLAS to our image as a layer
-  (which way, _to check_).
+  the image our Modal side runs adds cuBLAS to our image as a layer:
+  `Image.from_registry(<our image>, add_python=...)` and
+  `pip_install("nvidia-cublas-cu12")` (12.9, a 581 MB wheel that brings
+  nvrtc's 90 MB), with its `nvidia/cublas/lib` on `LD_LIBRARY_PATH`.
+  Modal's GPU hosts give the driver's `libcuda.so.1`.
 - **The module is fetched, like the runtime's CUDA overlay.** Without
   cuBLAS it is about llama.cpp's GPU code alone (node-llama-cpp's is
   156 MB for more GPU models; ours is 122 MB for five), still more than
@@ -112,14 +117,85 @@ x86_64, as a module the one gnu build loads when it can:
 - The kernels compiled for the GPU generations Modal rents: 7.5 (T4),
   8.0 (A100), 8.6 (A10G), 8.9 (L4, L40S) and 9.0 (H100, H200), with
   9.0's PTX for newer ones, which the driver compiles on first load.
-- The parity test gains a CUDA case, its vectors against the CPU's by
-  cosine as Metal's are today, run on a Modal GPU, since CI has none.
+- `gpu_check` (`datalib/backend/embedder/tools/gpu_check.rs`), which
+  `cuda.yml` builds and uploads beside the module, holds a GPU's vectors
+  to the CPU's by cosine, run by hand on a Modal GPU, since CI has none.
 
 NVIDIA's libraries are not open source. With cuBLAS on the host, the
 module carries only the CUDA runtime, which NVIDIA's license lists as
 redistributable; what the release's notices must say for it is _to
 check_ before the module is published (`AGENTS.md` § "License: MIT, and
 what may come in").
+
+## Measured on Modal
+
+`gpu_check` from `cuda.yml`, with the module in `lib/` beside it, in
+`ghcr.io/imbue-ai/datalib:0.54.1` plus the cuBLAS layer above, over the
+TNG fixture's 484 prompts (117,839 tokens) and the CPU over the first
+352. The module loaded on every GPU (`CUDA0`; drivers 610.57 and
+620.70), with cuBLAS from the wheel and nothing else from the host.
+
+| device | prompts/s | tokens/s | $ per M tokens |
+|---|---|---|---|
+| Modal T4 | 41–43 | 10,000–10,500 | 0.016 |
+| Modal A100 40 GB | 56.8 | 13,800 | 0.042 |
+| Modal H100 | 87.8 | 21,400 | 0.051 |
+| M-series Mac, Metal | 20.6–27.6 | 5,000–6,700 | — |
+| Modal's x86 CPU, in the GPU container | 2.0–3.1 | 470–700 | — |
+
+One prompt per call, the first call's start included. The price is
+Modal's list price per GPU-second over tokens per second, CPU and memory
+left out. An L4 was asked for and not given within 40
+minutes, so it is not here.
+
+**Agreement.** CUDA against Metal: worst cosine 0.99913, mean 0.99973,
+as close as any two devices here are to each other (Metal against the
+Mac's CPU: 0.99936). CUDA against either CPU: 0.9983 on one 26-token
+prompt, 0.9993 or better on every other, the same on all three GPUs.
+`gpu_check` holds CUDA to the CPU at 0.998.
+
+**Several prompts per call.** embeddinggemma keeps no cache in
+llama.cpp, so one call attends over every token in it, each prompt
+masked from the others: a call's time and scratch memory grow with the
+square of its tokens. The embedder packs prompts in order into calls of
+at most a count and a token budget (`Batching` in
+`datalib/backend/embedder/src/lib.rs`), and a prompt's vector does not
+depend on its neighbours (`tests/parity.rs`). Over the same 484 prompts,
+the first call left out of the rate:
+
+| device | 1 per call | 8 per call, 2,048 tokens | 16 per call, 4,096 | 128 per call, 32,768 |
+|---|---|---|---|---|
+| T4 | 44.3/s | 51.0/s | 29.5/s | 6.9/s |
+| A100 40 GB | 81.3/s | 146.5/s | 82.0/s | 26.4/s |
+| H100 | 97.1/s | 145.7/s | 82.2/s | 25.1/s |
+| Metal (M-series) | 25.6/s | 27.1/s | 23.2/s (8 per call) | 26.2/s (32 per call, 8,192) |
+
+So the default is 8 prompts in one context's tokens (2,048) on CUDA,
+and one per call on the CPU and Metal. On Metal a call of 2,048 tokens
+peaks at 2.3 GB however many prompts share it, 4,096 at 4.5 GB and 8,192
+at 8 to 9 GB, none faster: what made qmd's batching cost memory for
+nothing. The A100 and H100 tie, so at this size something other than the
+GPU's arithmetic bounds them (_to check_: the host side of each call).
+CUDA against the CPU did not move with the batching (worst cosine
+0.9992 to 0.9995 over 64 prompts).
+
+**Cheapest per token is still the T4, but barely.** At 8 per call: T4
+$0.013 per million tokens, A100 $0.016, H100 $0.031. A library of 710k
+chunks at ~560 tokens each (12 chunks a second at Metal's rate above;
+_to check_ on the library itself) is about 400M tokens: some $5 on T4s
+(9 GPU-hours) or $7 on A100s (3 GPU-hours). These prompts average 243
+tokens, so 8 share a call; a library's longer chunks share less, and
+gain less.
+
+**Spread across containers.** Each prompt is embedded alone and stored
+under its own hash, so one source's missing prompts split into slices,
+one container per slice, with no step between them but the writes the
+local step makes as slices come back. The GPU-seconds, and so the cost,
+are the same as one container's; the wait divides by the number of
+containers, plus each one's start (the image and the model loaded on
+the GPU, _to check_ at scale). Twenty T4s would take the library above
+in about half an hour. What caps it is the account's concurrency limit
+and what Modal has free of a GPU type (_to check_).
 
 ## How the step drives Modal
 
@@ -152,9 +228,9 @@ and the next run sends only what is still missing.
 
 ## Order of work
 
-1. The CUDA build: `libggml-cuda.so` under Bazel
+1. ~~The CUDA build: `libggml-cuda.so` under Bazel
    with the pinned toolkit, the embedder loading it when it can; built
-   in CI, run by hand on a Modal GPU through the parity test.
+   in CI, run by hand on a Modal GPU.~~ Done; § "Measured on Modal".
 2. `datalib-step embed-prompts`: stdin to stdout over `datalib_embedder`,
    tested here on the CPU against the step's own vectors.
 3. The module as a release asset, its license notices, and the fetch.

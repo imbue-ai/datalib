@@ -77,9 +77,18 @@ int32_t dl_embedder_gpu_available(void) {
     return gpu() ? 1 : 0;
 }
 
-dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
-                              int32_t use_gpu, char *err, size_t err_len) {
+const char *dl_embedder_device_for(int32_t use_gpu) {
     init_once();
+    ggml_backend_dev_t dev = use_gpu ? gpu() : nullptr;
+    return dev ? ggml_backend_dev_name(dev) : "CPU";
+}
+
+dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_threads,
+                              int32_t use_gpu, int32_t n_seq_max, int32_t n_tokens, char *err,
+                              size_t err_len) {
+    init_once();
+    if (n_seq_max < 1) n_seq_max = 1;
+    if (n_tokens < n_ctx) n_tokens = n_ctx;
     llama_model_params mp = llama_model_default_params();
     ggml_backend_dev_t dev = use_gpu ? gpu() : nullptr;
     ggml_backend_dev_t devices[] = {dev, nullptr};
@@ -91,10 +100,13 @@ dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_t
         return nullptr;
     }
     llama_context_params cp = llama_context_default_params();
-    cp.n_ctx = n_ctx;
-    cp.n_batch = n_ctx;
-    cp.n_ubatch = n_ctx;
-    cp.n_seq_max = 1;
+    // Each input has n_ctx positions of its own. The model keeps no cache,
+    // so one call attends over every token in it, inputs masked from each
+    // other: its cost grows with the square of n_tokens, not of n_ctx.
+    cp.n_ctx = n_ctx * n_seq_max;
+    cp.n_batch = n_tokens;
+    cp.n_ubatch = n_tokens;
+    cp.n_seq_max = n_seq_max;
     cp.embeddings = true;
     cp.swa_full = false;
     cp.no_perf = true;
@@ -131,7 +143,13 @@ const char *dl_embedder_device(const dl_embedder *e) { return e->device; }
 
 int32_t dl_embedder_n_embd(const dl_embedder *e) { return llama_model_n_embd_out(e->model); }
 
-int32_t dl_embedder_n_ctx(const dl_embedder *e) { return (int32_t)llama_n_ctx(e->ctx); }
+int32_t dl_embedder_n_ctx(const dl_embedder *e) { return (int32_t)llama_n_ctx_seq(e->ctx); }
+
+int32_t dl_embedder_n_seq_max(const dl_embedder *e) { return (int32_t)llama_n_seq_max(e->ctx); }
+
+int32_t dl_embedder_keeps_cache(const dl_embedder *e) { return llama_get_memory(e->ctx) != nullptr; }
+
+int32_t dl_embedder_n_tokens(const dl_embedder *e) { return (int32_t)llama_n_ubatch(e->ctx); }
 
 int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t text_len,
                              int32_t *out, int32_t cap) {
@@ -143,7 +161,7 @@ int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t tex
 
 int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int32_t batch,
                           float *out, char *err, size_t err_len) {
-    if (n <= 0 || n > (int32_t)llama_n_ctx(e->ctx)) {
+    if (n <= 0 || n > (int32_t)llama_n_ctx_seq(e->ctx)) {
         set_err(err, err_len, "the input is empty or longer than the context");
         return -1;
     }
@@ -174,6 +192,56 @@ int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int3
         return -1;
     }
     std::memcpy(out, pooled, sizeof(float) * (size_t)dl_embedder_n_embd(e));
+    return 0;
+}
+
+int32_t dl_embedder_embed_seqs(dl_embedder *e, const int32_t *tokens, const int32_t *lens,
+                               int32_t n_seqs, float *out, char *err, size_t err_len) {
+    if (n_seqs <= 0 || n_seqs > (int32_t)llama_n_seq_max(e->ctx)) {
+        set_err(err, err_len, "no inputs, or more than the context takes at once");
+        return -1;
+    }
+    int32_t total = 0;
+    for (int32_t s = 0; s < n_seqs; s++) {
+        if (lens[s] <= 0 || lens[s] > (int32_t)llama_n_ctx_seq(e->ctx)) {
+            set_err(err, err_len, "an input is empty or longer than the context");
+            return -1;
+        }
+        total += lens[s];
+    }
+    if (total > (int32_t)llama_n_ubatch(e->ctx)) {
+        set_err(err, err_len, "the inputs are more tokens than one call takes");
+        return -1;
+    }
+    llama_memory_clear(llama_get_memory(e->ctx), true);
+    llama_batch b = llama_batch_init(total, 0, 1);
+    int32_t i = 0;
+    for (int32_t s = 0; s < n_seqs; s++) {
+        for (int32_t p = 0; p < lens[s]; p++, i++) {
+            b.token[i] = tokens[i];
+            b.pos[i] = p;
+            b.n_seq_id[i] = 1;
+            b.seq_id[i][0] = s;
+            b.logits[i] = 1;
+        }
+    }
+    b.n_tokens = total;
+    const bool encoder_only = llama_model_has_encoder(e->model) && !llama_model_has_decoder(e->model);
+    const int32_t rc = encoder_only ? llama_encode(e->ctx, b) : llama_decode(e->ctx, b);
+    llama_batch_free(b);
+    if (rc != 0) {
+        set_err(err, err_len, "llama.cpp failed to evaluate the inputs");
+        return -1;
+    }
+    const size_t n_embd = (size_t)dl_embedder_n_embd(e);
+    for (int32_t s = 0; s < n_seqs; s++) {
+        const float *pooled = llama_get_embeddings_seq(e->ctx, s);
+        if (!pooled) {
+            set_err(err, err_len, "llama.cpp returned no pooled embedding");
+            return -1;
+        }
+        std::memcpy(out + (size_t)s * n_embd, pooled, sizeof(float) * n_embd);
+    }
     return 0;
 }
 

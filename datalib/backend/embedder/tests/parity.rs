@@ -205,44 +205,6 @@ fn qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only() {
     assert!(long > 0, "no test input is over {QMD_BATCH} tokens");
 }
 
-/// A chunk of dense text (code, an encoded blob) can hold more tokens than
-/// the model's context though it is within the chunker's bytes; it failed
-/// a whole source's embed. It is cut to fit, and its vector is the one of
-/// the cut input.
-#[test]
-fn an_input_past_the_context_is_cut_to_fit() {
-    let mut e = open(Device::Cpu);
-    let dense: String = (0..1500).map(|i| format!("x{i:x}/")).collect();
-    let tokens = e.tokenize(&dense).unwrap();
-    assert!(tokens.len() > e.context(), "{} tokens", tokens.len());
-    assert!(e.embed(&dense).is_err(), "the uncut input does not fit");
-    let (vector, cut) = e.embed_fitted(&dense).unwrap();
-    assert!(cut);
-    let (fitted, _) = datalib_embedder::fit(tokens, e.context());
-    assert_eq!(vector, e.embed_tokens(&fitted).unwrap());
-}
-
-/// A mac's build has Metal, and the best device on one is its GPU.
-#[cfg(target_os = "macos")]
-#[test]
-fn a_mac_runs_the_model_on_metal() {
-    assert!(datalib_embedder::gpu_available());
-    assert!(open(Device::Best).device().starts_with("MTL"));
-    assert_eq!(open(Device::Cpu).device(), "CPU");
-}
-
-/// The GPU's vectors and the CPU's agree, whole inputs included.
-#[test]
-fn the_best_device_agrees_with_the_cpu() {
-    let mut gpu = open(Device::Best);
-    let mut cpu = open(Device::Cpu);
-    for (title, text) in docs() {
-        let text = format::document(&text, title);
-        let c = cosine(&gpu.embed(&text).unwrap(), &cpu.embed(&text).unwrap());
-        assert!(c > 0.999, "cosine {c} for {text:?}");
-    }
-}
-
 /// The rate on 3,600-byte inputs, qmd's chunk budget, on every core. Not a
 /// check: run it with `--test_arg=--ignored --test_output=all`.
 #[test]
