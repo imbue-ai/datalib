@@ -56,9 +56,9 @@ pub fn wall_clock(entry: &Value) -> Option<NaiveDateTime> {
 /// an hour later, which is what the clock on the wall showed.
 pub fn in_zone(wall: &NaiveDateTime, zone: &NamedZone) -> Option<IsoOffsetTimestamp> {
     match zone.from_local(wall) {
-        LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => Some(t.into()),
+        LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => t.try_into().ok(),
         LocalResult::None => match zone.from_local(&(*wall + Duration::hours(1))) {
-            LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => Some(t.into()),
+            LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => t.try_into().ok(),
             LocalResult::None => None,
         },
     }
