@@ -101,8 +101,7 @@ Two things follow from sharing a process:
 * **Anything process-global is now shared.** An environment variable
   one test sets is every test's. A binary whose tests need one runs
   them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
-  beside it: `DATALIB_RUNTIME_DIR` in `unified_grid_and_search_index_tests` and
-  `applet_unittests`). Playback is not one: a test points the future it
+  beside it); none does today. Playback is not one: a test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:

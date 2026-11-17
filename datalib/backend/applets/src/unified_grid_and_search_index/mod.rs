@@ -3115,14 +3115,50 @@ mod tests {
         assert_eq!(offered[0].label.as_deref(), Some("Captain"));
     }
 
-    /// The index `datalib-applet search` answers from, opened by the
-    /// applet's own [`open_with_models_verified`] rather than by
-    /// repeating it here. A test is a caller with no server warming its
-    /// models, which is exactly what that function is for.
+    /// The index the applet serves over `root`, opened by its own
+    /// [`Index::open`], with the embedding model every test in this binary
+    /// shares ([`shared_embedder`]).
     pub(super) async fn index_over(root: &std::path::Path) -> Index {
-        open_with_models_verified(root.to_path_buf())
-            .await
-            .expect("open an index with the embedding model verified")
+        let mut s = Index::open(
+            root.to_path_buf(),
+            models::ModelGate::new(root),
+            ONE_SEARCH_DEADLINE,
+        )
+        .await
+        .expect("open an index");
+        s.local_embedder = shared_embedder();
+        s
+    }
+
+    /// The embedding model, verified by the applet's own
+    /// [`open_with_models_verified`] and loaded once for the whole test
+    /// binary: each test's own would hash the model's 300 MB again (its
+    /// verified stamp lives beside the model, in that test's root) and
+    /// load it again. Verified on a thread of its own, since a test's
+    /// runtime cannot block on another.
+    fn shared_embedder() -> Arc<local_embedder::LocalEmbedder> {
+        static SHARED: std::sync::OnceLock<(
+            tempfile::TempDir,
+            Arc<local_embedder::LocalEmbedder>,
+        )> = std::sync::OnceLock::new();
+        SHARED
+            .get_or_init(|| {
+                let root = super::search_tests::fixture_root();
+                let opened = std::thread::scope(|scope| {
+                    scope
+                        .spawn(|| {
+                            tokio::runtime::Runtime::new()
+                                .expect("a runtime to verify the model on")
+                                .block_on(open_with_models_verified(root.path().to_path_buf()))
+                        })
+                        .join()
+                        .expect("verifying the model panicked")
+                })
+                .expect("open an index with the embedding model verified");
+                (root, opened.local_embedder)
+            })
+            .1
+            .clone()
     }
 
     pub(super) async fn search(
