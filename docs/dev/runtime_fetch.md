@@ -82,7 +82,8 @@ manifest: a miss names the candidates and the fixes.
 
 ## The fetch
 
-`datalib-step`, `datalib-applet` and `datalib-http` call
+The two binaries that run latchkey, `datalib-step` (a sync's downloads)
+and `datalib-http` (browser sign-in), call
 `datalib_fetch::enable_runtime_fetch()` at start, which hands
 `datalib_runtime` a `RuntimeFetcher`. On the first `tool_command` that
 finds nothing staged, the resolver reads the manifest and calls it —

@@ -50,8 +50,9 @@ impl RuntimeFetcher for ReleaseRuntimeFetcher {
 }
 
 /// Let this process fetch the runtime its manifest names when nothing
-/// bundled is found. Called once, early, by `datalib-step`,
-/// `datalib-applet` and `datalib-http`.
+/// bundled is found. Called once, early, by the two binaries that run
+/// latchkey: `datalib-step` (a sync's downloads) and `datalib-http`
+/// (browser sign-in).
 pub fn enable_runtime_fetch() {
     enable_fetch(Box::new(ReleaseRuntimeFetcher));
 }

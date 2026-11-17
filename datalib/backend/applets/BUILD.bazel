@@ -23,7 +23,6 @@ rust_binary(
         "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
