@@ -83,6 +83,11 @@ const DRAWN: &[(u32, &str)] = &[
         2,
         "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
     ),
+    // The same text, chunked at each item.
+    (
+        3,
+        "7c415e9eda1ec5a5ff596af6f57a312172c6d5fd5b3c2f6c780ac885d9faeb3c",
+    ),
 ];
 
 /// The guard on [`INDEX_TEXT_VERSION`]: a drawing that changes while the

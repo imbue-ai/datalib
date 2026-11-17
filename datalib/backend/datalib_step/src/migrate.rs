@@ -59,11 +59,28 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
-        // The qmd index is qmd's, and the map is redrawn from it.
-        Function::QmdAggregator
-        | Function::KeywordIndex
-        | Function::Embed
-        | Function::EmbeddingMap => {
+        // A source's part of the search index holds the version each
+        // document was drawn with; a build that draws or chunks otherwise
+        // asks for the keyword pass, whose render did not move.
+        Function::KeywordIndex => {
+            let index = datalib_core::layout::grid_index_db(data_root);
+            let cache = datalib_core::layout::inference_cache_db(data_root);
+            if let Some(reader) = datalib_search_index::Reader::open(&index, &cache).await? {
+                let stale = reader.drawn_by_another_version(&env.group).await;
+                reader.close().await;
+                if stale? {
+                    tracing::info!(
+                        step = %env.step,
+                        "migrate: the search index was drawn by another version; it needs a rerun"
+                    );
+                    emitter.needs_rerun();
+                    return Ok(Vec::new());
+                }
+            }
+            tracing::info!(step = %env.step, "migrate: the search index is in this build's version");
+            Ok(Vec::new())
+        }
+        Function::QmdAggregator | Function::Embed | Function::EmbeddingMap => {
             tracing::info!(step = %env.step, "migrate: nothing of ours to bring up to date");
             Ok(Vec::new())
         }
@@ -599,6 +616,42 @@ mod tests {
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");
+    }
+
+    /// A new version of the index's drawing or chunking moves nothing the
+    /// keyword pass reads, so the migrate pass asks for it: when the
+    /// source's part of the index was drawn by another version, and not
+    /// before there is an index or once it is this build's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of("mail/keyword_index", Function::KeywordIndex);
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            emitter.asked_for_a_rerun()
+        };
+        assert!(!ask().await, "no index yet");
+        let put = |key: String| async {
+            let path = datalib_core::layout::grid_index_db(root.path());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let index = datalib_search_index::Index::open(&path).await.unwrap();
+            index
+                .put(&[datalib_search_index::IndexDoc {
+                    source_id: "mail".into(),
+                    markdown_uuid: "d".into(),
+                    content_hash: key,
+                    title: "Ten Forward".into(),
+                    sections: Vec::new(),
+                }])
+                .await
+                .unwrap();
+            index.close().await;
+        };
+        put("h.t0".to_string()).await;
+        assert!(ask().await, "drawn by an older version");
+        put(format!("h{}", datalib_search_index::text::key_suffix())).await;
+        assert!(!ask().await, "this build's version");
     }
 
     /// A source that has never downloaded gets no store from a migrate:

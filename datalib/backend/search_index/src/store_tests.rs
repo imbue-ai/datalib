@@ -310,3 +310,25 @@ async fn a_source_no_longer_configured_leaves_and_takes_its_hashes() {
     assert!(!hashes.contains(&crate::chunk::chunk_hash("Chat", "hello there")));
     assert_eq!(hashes.len(), index.chunks("mail").await.unwrap().len());
 }
+
+/// A large put commits in parts, each about `PUT_BYTES` of text, so the
+/// file's other writers wait between them rather than for the whole batch;
+/// a document larger than that is still one part, never split.
+#[tokio::test]
+async fn a_large_put_commits_in_parts() {
+    let (_dir, index) = open().await;
+    let generation = || async {
+        sqlx::query_scalar::<_, i64>("SELECT generation FROM search_state WHERE id = 1")
+            .fetch_one(&index.pool)
+            .await
+            .unwrap()
+    };
+    let before = generation().await;
+    let big = "warp ".repeat(PUT_BYTES / 5 * 3 / 5);
+    let docs: Vec<IndexDoc> = (0..3)
+        .map(|i| doc(&format!("d{i}"), "h", "T", &[(Some("m"), big.as_str())]))
+        .collect();
+    index.put(&docs).await.unwrap();
+    assert_eq!(generation().await - before, 3, "one commit per part");
+    assert_eq!(count(&index, "search_documents").await, 3);
+}
