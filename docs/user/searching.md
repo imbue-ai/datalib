@@ -98,16 +98,18 @@ for every document of a source; `--document <id>` for one, `--at
 The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
-`account:`, `project:`, `id:`, `contact:` and `email:` (an address
-book's columns), and the id of any other column the grid shows
-(`org_name:`, `created_at:`, …). These match the whole value as stored,
-case and all: `kind:Email`, not `kind:email`.
+`account:`, `project:`, `id:` (a row by the id its source gave it),
+`convo:` (a document by datalib's id for it, and every row in it),
+`contact:` and `email:` (an address book's columns), and the id of any
+other column the grid shows (`org_name:`, `created_at:`, …). These match
+the whole value as stored, case and all: `kind:Email`, not `kind:email`.
 
-`id:` takes a document's id (a thread, a conversation, a page) and
-finds that document and every row in it; Keep only on a Subject cell
-writes it. A message's own id finds nothing, since a message is a row
-inside a document, not a document. `convo:` is its old name and still
-works.
+`id:` takes the id as the source spells it: an email's id in Gmail or
+on a JMAP server (not its `Message-ID` header), a Notion page's id, a
+Claude or ChatGPT conversation's. Where one id is not enough to name a
+record, the value joins several with `#`: a Slack message is
+`<channel>#<ts>`, a GitHub comment `<owner>/<repo>#<id>`. Two sources
+can use the same id, so add `source:` when that matters.
 
 ### Writing a time
 
