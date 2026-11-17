@@ -46,6 +46,14 @@ Step A → step B iff B names A's id in its `inputs`. A step's id is also the
 one tree it writes, so an input is simultaneously a step reference and an
 artifact path, and nothing has to be matched against anything.
 
+One input may name many steps: `*/render_markdown` is every step whose id is
+`<group>/render_markdown`. The loader expands it to those ids before anything
+else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
+the step's `--inputs` hold ids only, and a source added to the file is read
+without its readers being edited. A pattern is still written in the config:
+the edges stay where a person can read them, and `--check` prints what each
+pattern stood for.
+
 Validation is correspondingly small: group ids are one segment and
 unique, a grouped step's group exists and its function is one segment,
 composed and verbatim ids are unique and un-nested, every input names a
@@ -64,6 +72,13 @@ assembly is told what the config pass already threw out so its message
 can tell "you named a step that does not exist" from "the step you named
 is broken"; the commonest case of all is a render step whose fetch step
 was rejected for a bad key.
+
+A pattern does not cascade. It stands for the steps that can run, so a step
+dropped for its own reasons, or for an input it names by id, falls out of
+every pattern that would have named it (`without_broken_matches` in
+`src/config.rs`). One broken source then costs its own steps and not the grid
+that reads every render by pattern; named by id, it still blocks the step
+that names it.
 
 Cycle reporting separates the ring from what merely hangs below it. Kahn's
 algorithm cannot: it leaves behind everything it could not order, ring and
