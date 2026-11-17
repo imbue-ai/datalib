@@ -106,9 +106,6 @@ fn hit(score: f64, place: Place) -> QmdHit {
         path: String::new(),
         score,
         snippet: String::new(),
-        lines: None,
-        docid: String::new(),
-        title: String::new(),
         place: Some(place),
     }
 }

@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::models::VerifiedModels;
 use anyhow::{Context, Result};
 use datalib_embedder::{Device, Embedder};
-use datalib_qmd_indexer::VerifiedModels;
 
 pub(super) struct LocalEmbedder {
     models: Arc<dyn VerifiedModels>,
@@ -43,5 +43,31 @@ impl LocalEmbedder {
             }
         };
         embedder.embed(&datalib_search_index::prompt::query(text))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::super::models::ModelsNotReady;
+    use super::*;
+
+    struct NotYet;
+
+    impl VerifiedModels for NotYet {
+        fn dir(&self, _deadline: Instant) -> Result<PathBuf> {
+            Err(ModelsNotReady("still being fetched".into()).into())
+        }
+    }
+
+    /// A search by meaning before the model is verified fails with the
+    /// gate's answer, and loads nothing.
+    #[test]
+    fn a_query_before_the_model_is_verified_loads_nothing() {
+        let embedder = LocalEmbedder::new(Arc::new(NotYet), Duration::from_millis(10));
+        let err = embedder.embed("warp").unwrap_err();
+        assert!(err.downcast_ref::<ModelsNotReady>().is_some(), "{err:#}");
+        assert!(embedder.live.lock().unwrap().is_none());
     }
 }

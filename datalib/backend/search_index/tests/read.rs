@@ -1,6 +1,6 @@
 //! The reader against an index and cache the writers filled.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use datalib_search_index::{
     chunk::chunk_hash, Index, IndexDoc, IndexSection, InferenceCache, Reader,
@@ -212,6 +212,72 @@ async fn a_document_is_embedded_when_every_chunk_has_a_vector() {
     assert!(!states["draft"]);
     assert_eq!(f.reader.coverage(&model).await.unwrap(), (2, 1));
     assert_eq!(f.reader.coverage("another-model").await.unwrap(), (2, 0));
+    f.reader.close().await;
+}
+
+/// A message of `text`, drawn with an envelope: it starts a chunk of its
+/// own.
+fn message(uuid: &str, text: &str) -> IndexSection {
+    IndexSection {
+        uuid: Some(uuid.into()),
+        text: format!("{text}\n"),
+        lead: Some(format!("**{uuid}** wrote")),
+    }
+}
+
+/// A document is embedded only once every chunk of it has a vector, not
+/// when some do; and every source's documents are answered and counted.
+#[tokio::test]
+async fn a_document_is_embedded_only_once_every_chunk_is() {
+    let mut two = doc("mail", "two", &[]);
+    two.sections = vec![message("m1", "warp core"), message("m2", "coolant leak")];
+    let halves = two.prompted();
+    assert_eq!(halves.len(), 2, "a message starts a chunk of its own");
+    let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
+    let chat_chunk = chat.prompted()[0].hash.clone();
+    let model = datalib_search_index::model_key();
+    let asked = ["two", "chat"].map(String::from);
+
+    let first = (halves[0].hash.clone(), vec![1.0, 0.0]);
+    let tea = (chat_chunk, vec![0.0, 1.0]);
+    let f = fixture(&[two.clone(), chat.clone()], &[first.clone(), tea.clone()]).await;
+    let states = f.reader.states(&model, &asked).await.unwrap();
+    assert_eq!(
+        states,
+        HashMap::from([("two".to_string(), false), ("chat".to_string(), true)])
+    );
+    assert_eq!(f.reader.coverage(&model).await.unwrap(), (2, 1));
+    f.reader.close().await;
+
+    let second = (halves[1].hash.clone(), vec![0.6, 0.8]);
+    let f = fixture(&[two, chat], &[first, second, tea]).await;
+    let states = f.reader.states(&model, &asked).await.unwrap();
+    assert!(states.values().all(|embedded| *embedded), "{states:?}");
+    assert_eq!(f.reader.coverage(&model).await.unwrap(), (2, 2));
+    f.reader.close().await;
+}
+
+/// A page's rows can ask about more documents than one statement binds:
+/// those past the first batch are answered too.
+#[tokio::test]
+async fn states_are_answered_past_the_first_batch() {
+    let held = ["held-a", "held-b"];
+    let docs: Vec<IndexDoc> = held
+        .iter()
+        .map(|u| doc("mail", u, &[(Some("m"), "warp\n")]))
+        .collect();
+    let f = fixture(&docs, &[]).await;
+    let mut asked: Vec<String> = (0..10_005).map(|i| format!("absent-{i}")).collect();
+    asked.extend(held.map(String::from));
+    let states = f
+        .reader
+        .states(&datalib_search_index::model_key(), &asked)
+        .await
+        .unwrap();
+    assert_eq!(
+        states,
+        HashMap::from([("held-a".to_string(), false), ("held-b".to_string(), false)])
+    );
     f.reader.close().await;
 }
 

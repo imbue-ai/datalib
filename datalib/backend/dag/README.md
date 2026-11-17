@@ -336,11 +336,12 @@ follows from it:
   `index` for any other step with inputs; so a download waiting out a
   rate limit never keeps a render from starting. The other two,
   `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
-  they once guarded), are held by the built-in search steps that name no
-  locks: `keyword_index` and `qmd_aggregator` take `qmd_keyword`, because
-  they all write the search index's tables in one file the runner cannot
-  see as shared; `embed` takes `qmd_embed`, so one embedding model is
-  loaded at a time. A `[[locks]]`
+  they once guarded), are held by the built-in index steps that name no
+  locks: `grid_index`, `keyword_index` and `qmd_aggregator` take
+  `qmd_keyword`, because they all write the grid index's file, which the
+  runner cannot see as shared, and a writer left to wait inside SQLite
+  times out; `embed` takes `qmd_embed`, so one embedding model is loaded
+  at a time. A `[[locks]]`
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.
 

@@ -458,10 +458,10 @@ never writes the file: the `photos` applet draws the photo from the
 applet's card. qmd indexes nothing for it, which is why a photo's
 caption is a `caption:` term.
 
-**A document can be in the grid and not in qmd.** One filed with
+**A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and every source's qmd collection ignores
-that folder (`qmd_indexer::ignore_for_group`). Use it for a document that only
+its rows and opens like any other, and every source's `keyword_index` leaves
+that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found
 by its own columns.

@@ -269,12 +269,8 @@ datalib/
                    (`build_id`), the bundled-Node resolver (the `npx`
                    fallback is opt-in and loud) and the qmd model
                    pins. No dependencies, so anything can link it.
-    qmd_indexer/   `Index`: the qmd index's operations — register the
-                   collections, keyword-index or embed one source — over
-                   qmd's SDK. Tested against the real qmd.
-    qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
-                   so qmd never fetches one itself. Linked by the step
-                   and the applet.
+    qmd_models/    puts the pinned embedding model in place,
+                   sha256-verified. Linked by the step and the applet.
     search_index/  the search index that replaces qmd's storage: keyword
                    rows per message and chunks keyed by their prompt's
                    hash, in `search_*` tables of the grid index's file,
@@ -314,9 +310,9 @@ datalib/
     problem_mutes/ the problem rows a person muted, under
                    `datalib_curated/`; the `unified_document_index`
                    applet is its one writer, `datalib-http` reads it.
-    unified_document_index/ the grid index, the qmd index, the query language over
-                   them. Linked by datalib-step and datalib-applet —
-                   never by datalib-http or datalib-dag.
+    unified_document_index/ the grid index, the search index's query side,
+                   the query language over them. Linked by datalib-step
+                   and datalib-applet — never by datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host, and `datalib-applet
                    search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
@@ -478,7 +474,8 @@ The rules, none optional. How our code enforces them is in
   per-file lock refuses it. `datalib-http` owns feedback, usage and
   remote media; the applet only reads. (The grid index is not doltlite:
   it is plain SQLite in WAL mode, which keeps no history and needs none
-  of these rules, and the `grid_index` step is its one writer.) A download takes its store as an input
+  of these rules. `grid_index`, every `keyword_index` and `qmd_aggregator`
+  write it, one at a time under the runner's `qmd_keyword` lock.) A download takes its store as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
@@ -667,7 +664,7 @@ Three neighbours of the same mistake:
   add a process-local counter to the pid. An environment variable is
   the same trap — one test's `set_var` is every test's, and outlives
   it. Prefer passing the value in (`models_dir_under` in
-  `qmd_indexer`); where the variable itself is what's under test, take
+  `qmd_models`); where the variable itself is what's under test, take
   a lock and restore on drop (`EnvGuard` in `node_runtime.rs`).
 - **A test that takes more than a third of its timeout on CI is a
   flake waiting to happen** once the runner is busy. Tag it `cpu:N`

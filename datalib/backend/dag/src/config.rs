@@ -1964,9 +1964,11 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 ];
 
 /// The lock a built-in step holds when it names none, where its shape's
-/// budget would not keep it safe: the qmd steps all write one index file,
-/// which the runner cannot see as shared.
+/// budget would not keep it safe: the grid's load, each keyword update and
+/// the aggregator's sweep all write the grid index's file, which the runner
+/// cannot see as shared; every embed loads the model.
 const BUILTIN_LOCKS: &[(&str, &str)] = &[
+    ("grid_index", crate::supervisor::locks::QMD_KEYWORD),
     ("qmd_aggregator", crate::supervisor::locks::QMD_KEYWORD),
     ("keyword_index", crate::supervisor::locks::QMD_KEYWORD),
     ("embed", crate::supervisor::locks::QMD_EMBED),
@@ -4540,10 +4542,13 @@ inputs = ["a"]
         assert_eq!(slots(&check, "cpu"), Some(4));
     }
 
-    /// The qmd steps all write one index file the runner cannot see as
-    /// shared, so each holds a one-slot lock by its function: a keyword
-    /// update and an embed may overlap, two of either may not. A step
-    /// that names its own locks, or runs its own command, keeps those.
+    /// Every writer of the grid index's file (the grid's load, each
+    /// keyword update, the aggregator's sweep) holds the one-slot
+    /// `qmd_keyword` lock, so they queue in the runner rather than inside
+    /// SQLite, where a `grid_index` waiting on a long `keyword_index` timed
+    /// out. An embed only reads that file and holds `qmd_embed`, so it may
+    /// overlap them. A step that names its own locks, or runs its own
+    /// command, keeps those.
     #[test]
     fn the_qmd_steps_hold_the_qmd_locks() {
         let check = check_text(
@@ -4576,6 +4581,11 @@ function = "qmd_aggregator"
 inputs = ["mail/keyword_index", "mail/embed"]
 
 [[steps]]
+group = "unified_document_index"
+function = "grid_index"
+inputs = ["mail/render_markdown"]
+
+[[steps]]
 id = "custom/embed"
 command = "x"
 inputs = ["mail/keyword_index"]
@@ -4594,6 +4604,7 @@ inputs = ["mail/keyword_index"]
             ["qmd_keyword"]
         );
         assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
+        assert_eq!(held("unified_document_index/grid_index"), ["qmd_keyword"]);
         assert_eq!(held("mail/embed"), ["cpu"], "named locks win");
         assert_eq!(
             held("custom/embed"),

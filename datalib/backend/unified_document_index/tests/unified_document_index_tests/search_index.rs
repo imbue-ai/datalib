@@ -126,6 +126,99 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
     }
 }
 
+/// A document of two messages, each its own chunk: a search whose other
+/// terms keep only the second ranks the document by that chunk, and lands
+/// on it, rather than by its nearest chunk overall, which those terms drop.
+#[tokio::test]
+async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let thread = IndexDoc {
+        source_id: "mail".into(),
+        markdown_uuid: "thread".into(),
+        content_hash: "h-thread".into(),
+        title: "thread".into(),
+        sections: ["m1", "m2"]
+            .into_iter()
+            .map(|m| IndexSection {
+                uuid: Some(m.to_string()),
+                text: format!("words of {m}\n"),
+                lead: Some(format!("**{m}** wrote")),
+            })
+            .collect(),
+    };
+    let chunks = thread.prompted();
+    assert_eq!(chunks.len(), 2, "a message starts a chunk of its own");
+    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
+    index.put(std::slice::from_ref(&thread)).await.unwrap();
+    index.close().await;
+    let cache = InferenceCache::open(&layout::inference_cache_db(root))
+        .await
+        .unwrap();
+    let vectors = vec![
+        (chunks[0].hash.clone(), vec![1.0, 0.0, 0.0]),
+        (chunks[1].hash.clone(), vec![0.0, 1.0, 0.0]),
+    ];
+    cache.put(&model_key(), &vectors).await.unwrap();
+    cache.close().await;
+
+    let held = HeldVectors::default();
+    let query = [1.0, 0.0, 0.0];
+    let top = |kept: Option<HashMap<String, Kept>>| {
+        let held = &held;
+        async move {
+            let hits = held
+                .nearest(root, &query, None, kept.as_ref(), 10, Freshness::Current)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(documents(&hits), ["thread"]);
+            hits.into_iter().next().unwrap().1
+        }
+    };
+    let item = |m: &str| {
+        Some(Place::Item {
+            uuid: Some(m.to_string()),
+        })
+    };
+
+    let whole = top(Some(HashMap::from([("thread".to_string(), Kept::Whole)]))).await;
+    assert_eq!(whole.place, item("m1"));
+    assert!((whole.score - 1.0).abs() < 1e-3, "{}", whole.score);
+
+    let second = top(Some(HashMap::from([(
+        "thread".to_string(),
+        Kept::Sections(HashSet::from(["m2".to_string()])),
+    )])))
+    .await;
+    assert_eq!(second.place, item("m2"));
+    assert!(second.score.abs() < 1e-3, "{}", second.score);
+}
+
+/// A document the keyword step removes stops being found by meaning,
+/// though the cache still holds its chunk's vector.
+#[tokio::test]
+async fn a_removed_document_is_no_longer_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write(
+        root,
+        &[
+            (doc("mail", "near", &[("n1", "warp")]), [1.0, 0.0, 0.0]),
+            (doc("mail", "far", &[("f1", "tea")]), [0.0, 1.0, 0.0]),
+        ],
+    )
+    .await;
+    let held = HeldVectors::default();
+    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10, Freshness::Current);
+    assert_eq!(documents(&ask().await.unwrap().unwrap()), ["near", "far"]);
+
+    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
+    index.remove(&["near".to_string()]).await.unwrap();
+    index.close().await;
+    assert_eq!(documents(&ask().await.unwrap().unwrap()), ["far"]);
+}
+
 /// What is held is read again once the files move, unless the search asks
 /// for what is held, as one does while a sync writes them.
 #[tokio::test]

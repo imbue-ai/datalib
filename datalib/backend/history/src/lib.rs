@@ -374,14 +374,11 @@ mod tests {
         let h = read(&path, 100).await.unwrap();
         assert!(!h.truncated);
         let messages: Vec<&str> = h.commits.iter().map(|c| c.message.as_str()).collect();
-        assert_eq!(
-            messages,
-            [
-                "churn run=job-9",
-                "first load",
-                "schema",
-                "Initialize data repository"
-            ]
+        assert_eq!(messages[..3], ["churn run=job-9", "first load", "schema"]);
+        assert_eq!(messages.len(), 4, "{messages:?}");
+        assert!(
+            messages[3].starts_with("Initialize data repository"),
+            "{messages:?}"
         );
         assert_eq!(h.commits[0].run.as_deref(), Some("job-9"));
         assert_eq!(h.commits[1].run, None);

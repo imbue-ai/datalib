@@ -909,6 +909,10 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
         // upsert, a delete of several rows — so it can undo that one
         // statement; in a temp file that was most of a load's time.
         .pragma("temp_store", "memory")
+        .pragma(
+            "journal_size_limit",
+            datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
+        )
         // Each source's `keyword_index` writes the search index's tables in
         // this file too, a batch of documents at a time.
         .busy_timeout(Duration::from_secs(5 * 60));
@@ -2591,6 +2595,26 @@ mod open_index_tests {
         assert_searched_by_index(&pool, &statements).await;
         pool.close().await;
     }
+
+    /// One pass loads a whole source in one transaction, and a checkpoint
+    /// alone leaves the `-wal` that large; the limit cuts it back. A
+    /// re-index left a live grid index's `-wal` at 4 GB.
+    #[tokio::test]
+    async fn the_grid_index_cuts_its_wal_back() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.sqlite"))
+            .await
+            .expect("open_index");
+        let limit: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            limit.to_string(),
+            datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES
+        );
+        pool.close().await;
+    }
 }
 
 #[cfg(test)]
@@ -4183,7 +4207,7 @@ mod source_cursor_tests {
             .await
             .unwrap();
         let first: String = sqlx::query_scalar(
-            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'",
         )
         .fetch_one(&pool)
         .await
