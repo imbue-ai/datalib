@@ -985,7 +985,7 @@ mod tests {
 
         assert_eq!(store.rename_step(old, new).await.unwrap(), 3);
         let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
-        assert_eq!(off, [new, "u/grid_index_extra"]);
+        assert_eq!(off, ["u/grid_index_extra", new]);
         let steps: Vec<(String, String)> =
             sqlx::query_as("SELECT step, reads FROM steps ORDER BY step")
                 .fetch_all(store.pool())
