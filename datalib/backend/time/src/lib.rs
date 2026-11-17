@@ -185,7 +185,12 @@ impl IsoOffsetTimestamp {
 
     pub fn inner(&self) -> DateTime<FixedOffset> {
         let offset = FixedOffset::east_opt(self.offset_secs()).expect("an offset within a day");
-        DateTime::from_timestamp(self.at.as_second(), self.at.subsec_nanosecond() as u32)
+        let nanos = self.at.as_nanosecond();
+        let (secs, subsec) = (
+            nanos.div_euclid(1_000_000_000),
+            nanos.rem_euclid(1_000_000_000),
+        );
+        DateTime::from_timestamp(secs as i64, subsec as u32)
             .expect("chrono's range holds jiff's")
             .with_timezone(&offset)
     }
@@ -892,6 +897,21 @@ mod tests {
         );
         let local = IsoOffsetTimestamp::now_local();
         assert_eq!(local.known_offset_secs(), Some(local.offset_secs()));
+    }
+
+    /// jiff counts a pre-1970 instant's part-second back toward zero,
+    /// chrono forward from the second before; `inner` panicked on one.
+    #[test]
+    fn a_stamp_before_1970_reaches_chrono_as_the_same_instant() {
+        for s in [
+            "1969-12-31T23:59:59.250+00:00",
+            "1969-07-20T16:17:40.5-04:00",
+            "0001-01-01T00:00:00.000001Z",
+        ] {
+            let t = parse_strict(s).unwrap();
+            assert_eq!(t.inner(), DateTime::parse_from_rfc3339(s).unwrap(), "{s}");
+            assert_eq!(IsoOffsetTimestamp::try_from(t.inner()).unwrap(), t, "{s}");
+        }
     }
 
     /// chrono holds instants past year 9999; a timestamp refuses them
