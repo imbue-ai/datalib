@@ -24,8 +24,9 @@ use super::{calendly, google, ics, ids};
 /// "Last changed" became `<time>` stamps; 8 when an organizer or guest
 /// with an address became a chip; 9 when an event's row was placed at its
 /// start rather than its last edit; 10 when a Windows zone name or a
-/// `GMT-0700` `TZID` began to resolve.
-pub const RENDER_VERSION: u32 = 10;
+/// `GMT-0700` `TZID` began to resolve; 11 when an iCalendar description
+/// written as HTML began to read as text.
+pub const RENDER_VERSION: u32 = 11;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]

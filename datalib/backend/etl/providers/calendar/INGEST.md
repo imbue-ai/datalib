@@ -120,6 +120,11 @@ way to list one, apart from the window's `calendar-query` above.
   holding only overrides (invitations to one occurrence). No `STATUS`
   properties at all — cancelled occurrences are `EXDATE`s. Every
   `TZID` was an IANA name.
+- **An event made in Google keeps Google's HTML in `DESCRIPTION`**
+  (a `@google.com` `UID`, `<a href=…>` and `<br />` beside `\n`
+  line breaks): 24 of 42 events in one week of a calendar shared from
+  Google. Render reads a description holding an editor's tag as HTML,
+  as it does Google's own.
 
 ## Google Calendar — measured against a live account
 
