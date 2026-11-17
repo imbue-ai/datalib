@@ -2,9 +2,9 @@
 //! the render store keeps of it (docs/dev/plans/messages_not_documents.md,
 //! step 3b). An item is its envelope line (who, to whom, when), then its
 //! body. A page, a document whose first piece is kept whole, opens with a
-//! line of the facts its front matter holds, and each whole piece is drawn
-//! as the words a person reads on it: no front matter, tags, link targets
-//! or escapes. Plain on purpose: a change here re-embeds every chunk it
+//! line of the facts its front matter holds, then its pieces without their
+//! front matter. A body and a piece alike are drawn as the words a person
+//! reads: no tags, link targets or escapes. Plain on purpose: a change here re-embeds every chunk it
 //! touches, so nothing for show goes in, and [`INDEX_TEXT_VERSION`] moves
 //! with every change to what is drawn.
 
@@ -142,7 +142,7 @@ fn draw_one(piece: &Piece, first: bool) -> IndexSection {
         };
         return IndexSection {
             uuid: piece.uuid.clone(),
-            text: page_text(text),
+            text: words(text),
             lead: None,
         };
     }
@@ -154,7 +154,10 @@ fn draw_one(piece: &Piece, first: bool) -> IndexSection {
         .filter(|l| !l.is_empty())
         .collect();
     let labels = (!labels.is_empty()).then(|| format!("Labels: {}", labels.join(", ")));
-    let body = flatten_links(piece.text.trim());
+    // `flatten` alone, not `words`: a body keeps its whitespace as written,
+    // which says nothing to the model, so that tidying it re-embeds no
+    // message.
+    let body = flatten(piece.text.trim());
     let body = body.trim();
     let text: String = [lead.as_deref(), labels.as_deref(), Some(body)]
         .into_iter()
@@ -229,21 +232,11 @@ fn person(name: &str, handle: Option<&str>) -> Option<String> {
     }
 }
 
-/// A body's links as their text: `[@Jean-Luc Picard](slack://user?… "…")`
-/// says `@Jean-Luc Picard`, an image its alt text, and an email or phone
-/// link `Name <address>`, the address one would type. The rest of a link
-/// (an id, a URL, a hover) is for show. Code is left as written: a fenced
-/// block, and an inline span.
-fn flatten_links(body: &str) -> String {
-    flatten(body, Mode::Item)
-}
-
-/// A piece kept whole, as its words: [`flatten_links`], and also its tags
-/// gone (their text kept, a `<br>` a line break), its `&amp;`-style
-/// escapes and markdown's backslash escapes read, and a table's rule rows
-/// and empty header gone. Code is left as written.
-fn page_text(text: &str) -> String {
-    let flat = flatten(text, Mode::Page);
+/// A page's piece as the words a person reads on it: [`flatten`], then a
+/// table's rule rows and empty header gone, and runs of blank lines made
+/// one.
+fn words(text: &str) -> String {
+    let flat = flatten(text);
     let lines: Vec<&str> = flat
         .lines()
         .map(str::trim_end)
@@ -275,17 +268,18 @@ fn without_front_matter(text: &str) -> &str {
         .unwrap_or(text)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    /// An item's body: links as their text.
-    Item,
-    /// A piece kept whole: links, tags and escapes as their text.
-    Page,
-}
-
-fn flatten(body: &str, mode: Mode) -> String {
+/// Markdown as its text. A link says its text
+/// (`[@Jean-Luc Picard](slack://user?… "…")` says `@Jean-Luc Picard`), an
+/// image its alt text, and an email or phone link `Name <address>`, the
+/// address one would type; the rest of a link (an id, a URL, a hover) is
+/// for show. A tag goes and its text stays (`<summary>Tool use</summary>`
+/// says `Tool use`, `<br>` is a line break). `&amp;`-style references and
+/// markdown's backslash escapes are read. Code is left as written: a fenced
+/// block, and an inline span.
+fn flatten(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut fenced = false;
+    let mut after_dropped = false;
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
@@ -294,21 +288,31 @@ fn flatten(body: &str, mode: Mode) -> String {
         } else if fenced {
             out.push_str(line);
         } else {
-            flatten_line(line, &mut out, mode);
+            let mut flat = String::new();
+            flatten_line(line, &mut flat);
+            let blank = flat.trim().is_empty();
+            // A line that held only tags (`<audio …>`, `</details>`) goes
+            // whole, and so does the blank line after it where one is
+            // already before it: no blank lines appear where none were
+            // written.
+            if blank && !line.trim().is_empty() {
+                after_dropped = true;
+                continue;
+            }
+            if !(blank && after_dropped && (out.is_empty() || out.ends_with("\n\n"))) {
+                out.push_str(&flat);
+            }
+            after_dropped = false;
         }
     }
     out
 }
 
-fn flatten_line(line: &str, out: &mut String, mode: Mode) {
-    let triggers: &[char] = match mode {
-        Mode::Item => &['`', '['],
-        Mode::Page => &['`', '[', '<', '\\'],
-    };
+fn flatten_line(line: &str, out: &mut String) {
     let mut rest = line;
-    while let Some(at) = rest.find(triggers) {
+    while let Some(at) = rest.find(['`', '[', '<', '\\']) {
         let (before, from) = rest.split_at(at);
-        push_words(before, out, mode);
+        push_words(before, out);
         if let Some(after) = from.strip_prefix('<') {
             rest = match tag_at(from) {
                 Some(tag) => {
@@ -355,10 +359,7 @@ fn flatten_line(line: &str, out: &mut String, mode: Mode) {
                 if out.ends_with('!') {
                     out.pop();
                 }
-                match mode {
-                    Mode::Item => out.push_str(text),
-                    Mode::Page => flatten_line(text, out, mode),
-                }
+                flatten_line(text, out);
                 let typed = dest
                     .strip_prefix("mailto:")
                     .or_else(|| dest.strip_prefix("tel:"))
@@ -374,16 +375,12 @@ fn flatten_line(line: &str, out: &mut String, mode: Mode) {
             }
         }
     }
-    push_words(rest, out, mode);
+    push_words(rest, out);
 }
 
-/// Text outside code, links and tags; on a page with its `&amp;`-style
-/// references read, a no-break space as a space.
-fn push_words(text: &str, out: &mut String, mode: Mode) {
-    match mode {
-        Mode::Item => out.push_str(text),
-        Mode::Page => out.push_str(&datalib_html_entities::decode(text).replace('\u{a0}', " ")),
-    }
+/// Text outside code, links and tags, its `&amp;`-style references read.
+fn push_words(text: &str, out: &mut String) {
+    out.push_str(&datalib_html_entities::decode(text));
 }
 
 struct Tag {

@@ -62,6 +62,11 @@ fn golden() -> Vec<Piece> {
         item("Geordi La Forge", "2026-03-05T08:00:00-05:00", "   "),
         item("Wesley Crusher", "stardate 47457.1", "Sir?"),
         sender_named_with_address(),
+        item(
+            "Worf",
+            "2026-03-06T08:00:00-08:00",
+            "<details><summary>Tool use: phaser_check</summary>\n\n&lt;armed&gt; \\| ready\n\n</details>",
+        ),
     ]
 }
 
@@ -160,7 +165,7 @@ fn a_page_opens_with_its_facts_and_reads_as_its_words() {
          Senior staff\n\n\
          | When | Tue Mar 3rd, 2026 at 09:00 |\n\
          | Organizer | Will Riker <riker@enterprise.test> |\n\n\
-         Room: Observation lounge\n\n\
+         Room: Observation\u{a0}lounge\n\n\
          Saucer | drive section & the log\nQ&A &bogus;\n\n\
          `<b>kept</b> &amp;` and <https://enterprise.test> and <picard@enterprise.test>\n"
     );
@@ -197,21 +202,25 @@ fn the_facts_open_the_first_piece_with_words() {
     );
 }
 
-/// A conversation's front matter is not one of its pieces, and its
-/// messages are drawn as they were: drawing pages anew moves no vector of
-/// any chat.
+/// A message's body carried its renderer's markup to the index: every
+/// thinking block and tool call wrapped in `<details><summary>`, a voice
+/// note's `<audio>`, a `<time>`, an SMS's `&lt;#&gt;`. It is drawn as its
+/// words, as a page is; a conversation has no facts line.
 #[test]
-fn a_conversation_has_no_facts_line_and_its_bodies_keep_their_escapes() {
+fn a_message_is_drawn_as_its_words_and_has_no_facts_line() {
     let (_, facts) = golden_page();
     let body = item(
         "Data",
         "2026-03-03T22:05:00Z",
-        "&lt;#&gt; code \\| <b>x</b>",
+        "<details><summary>Tool use: tricorder_scan</summary>\n\n\
+         &lt;#&gt; code \\| <b>x</b> at <time datetime=\"2369-01-01\">1 Jan</time>\n\n\
+         <audio controls src=\"/data/x/blob/1\"></audio>\n\n`<b>kept</b>`\n\n</details>",
     );
     let drawn = draw(&[body], &facts);
     assert_eq!(
         drawn[0].text,
-        "Data — Tue 3 Mar 2026 22:05\n\n&lt;#&gt; code \\| <b>x</b>\n\n"
+        "Data — Tue 3 Mar 2026 22:05\n\nTool use: tricorder_scan\n\n\
+         <#> code | x at 1 Jan\n\n`<b>kept</b>`\n\n"
     );
 }
 
@@ -290,10 +299,11 @@ const DRAWN: &[(u32, &str)] = &[
         4,
         "4f89acbbbfb514fefb9b523fbe5eb6e55db339e747b6560d6ee0151aa62f1d31",
     ),
-    // A page opens with its facts and is drawn as its words.
+    // A page opens with its facts; a page and a message are drawn as their
+    // words.
     (
         5,
-        "a3beb0258ed933166d0e0d1618b85f7cf8b0e7cc185a8eea4817f2a7ad0d2bf3",
+        "71ddcdd5d3bfc7fc0315a4aec050de3f61f9975240c2d18b20b808c64402e804",
     ),
 ];
 
@@ -398,6 +408,6 @@ fn a_bodys_links_are_drawn_as_their_text() {
             "nested [brackets]",
         ),
     ] {
-        assert_eq!(flatten_links(body), drawn, "{body}");
+        assert_eq!(flatten(body), drawn, "{body}");
     }
 }

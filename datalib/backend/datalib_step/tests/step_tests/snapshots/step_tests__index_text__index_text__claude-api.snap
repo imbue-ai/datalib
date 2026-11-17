@@ -12,24 +12,21 @@ Look up the Klingon greeting "nuqneH" and propose a respectful opening line for 
 --- chunk 1
 title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:00
 
-<details><summary>Thinking</summary>
+Thinking
 
 > "nuqneH" literally means "what do you want" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.
-
-</details>
 
 
 --- chunk 2
 title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:00
 
-<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
+Tool use: web_fetch — Fetching: Klingon language reference
 
 ```json
 {
   "url": "https://memory-alpha.test/wiki/Klingon_language"
 }
 ```
-</details>
 
 
 --- chunk 3
@@ -41,7 +38,7 @@ For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH
 --- chunk 4
 title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:01
 
-<details><summary>Tool result: web_fetch</summary>
+Tool result: web_fetch
 
 ```json
 {
@@ -55,8 +52,6 @@ title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 A
   "url": "https://memory-alpha.test/wiki/Klingon_language"
 }
 ```
-
-</details>
 
 
 --- chunk 5
@@ -75,25 +70,22 @@ Geordi, how far can we push the warp field before the nacelles complain?
 --- chunk 1
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:00
 
-<details><summary>Tool use: web_search — Searching the web</summary>
+Tool use: web_search — Searching the web
 
 ```json
 {
   "query": "Galaxy class maximum sustainable warp"
 }
 ```
-</details>
 
 
 --- chunk 2
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:00
 
-<details><summary>Tool result: web_search</summary>
+Tool result: web_search
 
 - Warp factor — Memory Alpha
 - Galaxy class propulsion — Starfleet Technical Manual
-
-</details>
 
 
 --- chunk 3
@@ -133,7 +125,7 @@ Write me a script that checks these coil readings.
 --- chunk 7
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool use: artifacts — Creating the coil check</summary>
+Tool use: artifacts — Creating the coil check
 
 Create artifact: **Coil check** (`application/vnd.ant.code`)
 
@@ -148,25 +140,22 @@ warp 9.6 for 12h
 def ok(efficiency):
     return efficiency >= 97.5
 ````
-</details>
 
 
 --- chunk 8
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool result: artifacts</summary>
+Tool result: artifacts
 
 ```
 OK
 ```
 
-</details>
-
 
 --- chunk 9
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool use: artifacts — Raising the threshold</summary>
+Tool use: artifacts — Raising the threshold
 
 Update artifact: **coil_check**
 
@@ -181,13 +170,12 @@ with:
 ```
 98.0
 ```
-</details>
 
 
 --- chunk 10
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool use: create_file — Writing the report</summary>
+Tool use: create_file — Writing the report
 
 Create `/mnt/user-data/outputs/coil_report.md` — Coil report for the chief engineer
 
@@ -196,32 +184,28 @@ Create `/mnt/user-data/outputs/coil_report.md` — Coil report for the chief eng
 
 Coil 2 is below threshold.
 ```
-</details>
 
 
 --- chunk 11
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool use: bash_tool — Running the check</summary>
+Tool use: bash_tool — Running the check
 
 Check coil 2 against the threshold
 
 ```bash
 python3 coil_check.py --coil 2
 ```
-</details>
 
 
 --- chunk 12
 title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
 
-<details><summary>Tool result: bash_tool</summary>
+Tool result: bash_tool
 
 ```
 coil 2: 97.1% (below 98.0%)
 ```
-
-</details>
 
 
 --- chunk 13
@@ -240,7 +224,7 @@ Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a
 --- chunk 1
 title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:00
 
-<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
+Tool use: starfleet_db_query — Querying Starfleet tactical DB
 
 ```json
 {
@@ -248,13 +232,12 @@ title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2
   "table": "borg_shield_signatures"
 }
 ```
-</details>
 
 
 --- chunk 2
 title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:00
 
-<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
+Tool use: starfleet_db_query — Retrying via backup relay
 
 ```json
 {
@@ -263,7 +246,6 @@ title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2
   "table": "borg_shield_signatures"
 }
 ```
-</details>
 
 
 --- chunk 3
@@ -275,24 +257,21 @@ Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.
 --- chunk 4
 title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:01
 
-<details><summary>Tool result: starfleet_db_query (error)</summary>
+Tool result: starfleet_db_query (error)
 
 ```
 ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 ```
-</details>
 
 
 --- chunk 5
 title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:01
 
-<details><summary>Tool result: starfleet_db_query</summary>
+Tool result: starfleet_db_query
 
 ```
 Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
 ```
-
-</details>
 
 
 === claude-api 00000000-0000-89b3-8bed-0eecc97d45ce Tricorder Image Diagnostic
@@ -352,28 +331,25 @@ I'll read the crew list first.
 --- chunk 2
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
 
-<details><summary>Tool use: Read</summary>
+Tool use: Read
 
 Read `/sessions/ready-room/crew.txt`
-</details>
 
 
 --- chunk 3
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
 
-<details><summary>Tool result: Read</summary>
+Tool result: Read
 
 ```
 Picard, Riker, Data, La Forge
 ```
 
-</details>
-
 
 --- chunk 4
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
 
-<details><summary>Tool use: Write</summary>
+Tool use: Write
 
 Create `/sessions/ready-room/roster.md`
 
@@ -385,19 +361,16 @@ Create `/sessions/ready-room/roster.md`
 - Lieutenant Commander Data: second officer and operations
 - Lieutenant Commander Geordi La Forge: chief engineer
 ```
-</details>
 
 
 --- chunk 5
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
 
-<details><summary>Tool result: Write</summary>
+Tool result: Write
 
 ```
 File written: roster.md
 ```
-
-</details>
 
 
 --- chunk 6
@@ -415,7 +388,7 @@ Add Worf, chief of security.
 --- chunk 8
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:03
 
-<details><summary>Tool use: Edit</summary>
+Tool use: Edit
 
 Edit `/sessions/ready-room/roster.md`
 
@@ -433,19 +406,16 @@ with:
 - Lieutenant Worf: chief of security
 
 ```
-</details>
 
 
 --- chunk 9
 title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:03
 
-<details><summary>Tool result: Edit</summary>
+Tool result: Edit
 
 ```
 Edited roster.md
 ```
-
-</details>
 
 
 --- chunk 10
@@ -487,35 +457,30 @@ Look up the three most recent holodeck malfunctions aboard the Enterprise and ci
 --- chunk 1
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
 
-<details><summary>Thinking</summary>
+Thinking
 
 > Search the incident logs.
-
-</details>
 
 
 --- chunk 2
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
 
-<details><summary>Tool use: web_search — Searching the web</summary>
+Tool use: web_search — Searching the web
 
 ```json
 {
   "query": "Enterprise holodeck malfunctions"
 }
 ```
-</details>
 
 
 --- chunk 3
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
 
-<details><summary>Tool result: web_search</summary>
+Tool result: web_search
 
 - Holodeck — Memory Alpha
 - Holodeck malfunctions — Starfleet
-
-</details>
 
 
 --- chunk 4
@@ -537,35 +502,30 @@ Look up the four most recent holodeck malfunctions aboard the Enterprise and cit
 --- chunk 6
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
 
-<details><summary>Thinking</summary>
+Thinking
 
 > Search again for four.
-
-</details>
 
 
 --- chunk 7
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
 
-<details><summary>Tool use: web_search — Searching the web</summary>
+Tool use: web_search — Searching the web
 
 ```json
 {
   "query": "Enterprise holodeck malfunctions four"
 }
 ```
-</details>
 
 
 --- chunk 8
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
 
-<details><summary>Tool result: web_search</summary>
+Tool result: web_search
 
 - Holodeck — Memory Alpha
 - Holodeck malfunctions — Starfleet
-
-</details>
 
 
 --- chunk 9
@@ -588,17 +548,15 @@ Plot how long each malfunction lasted and send me the chart.
 --- chunk 11
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Thinking</summary>
+Thinking
 
 > Write a script, run it, send the chart.
-
-</details>
 
 
 --- chunk 12
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool use: Write — Created a file</summary>
+Tool use: Write — Created a file
 
 Create `holodeck_chart.py`
 
@@ -607,50 +565,44 @@ import matplotlib.pyplot as plt
 plt.bar(['Moriarty', 'Datas', 'Robin Hood', 'Fair Haven'], [3, 1, 1, 2])
 plt.savefig('holodeck_chart.png')
 ```
-</details>
 
 
 --- chunk 13
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool result: Write</summary>
+Tool result: Write
 
 ```
 File created successfully at: holodeck_chart.py
 ```
 
-</details>
-
 
 --- chunk 14
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool use: Bash — Ran a command</summary>
+Tool use: Bash — Ran a command
 
 Render the chart
 
 ```bash
 python3 holodeck_chart.py
 ```
-</details>
 
 
 --- chunk 15
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool result: Bash</summary>
+Tool result: Bash
 
 ```
 (no output)
 ```
 
-</details>
-
 
 --- chunk 16
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool use: SendUserFile — Shared files</summary>
+Tool use: SendUserFile — Shared files
 
 ```json
 {
@@ -661,19 +613,16 @@ title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10
   "status": "normal"
 }
 ```
-</details>
 
 
 --- chunk 17
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
 
-<details><summary>Tool result: SendUserFile</summary>
+Tool result: SendUserFile
 
 ```
 Sent 1 file.
 ```
-
-</details>
 
 
 --- chunk 18
@@ -699,32 +648,27 @@ sherwood.png
 --- chunk 20
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
 
-<details><summary>Thinking</summary>
+Thinking
 
 > Read the report first.
-
-</details>
 
 
 --- chunk 21
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
 
-<details><summary>Tool use: Read — Read a file</summary>
+Tool use: Read — Read a file
 
 Read `/mnt/user-data/uploads/Away Team Report.pdf`
-</details>
 
 
 --- chunk 22
 title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
 
-<details><summary>Tool result: Read</summary>
+Tool result: Read
 
 ```
 All crew accounted for.
 ```
-
-</details>
 
 
 --- chunk 23

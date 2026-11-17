@@ -12,25 +12,21 @@ Scan the aft sensor logs for drift and report the worst hour.
 --- chunk 1
 title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:03
 
-<details><summary>Tool call: shell</summary>
+Tool call: shell
 
 ```
 bash -lc grep drift /var/log/aft-sensors.log | sort -k3 -n | sed -n '$p'
 ```
 
-</details>
-
 
 --- chunk 2
 title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:03
 
-<details><summary>Tool result: shell</summary>
+Tool result: shell
 
 ```
 2364-04-11T03:00 drift 0.44 deg
 ```
-
-</details>
 
 
 --- chunk 3
@@ -43,7 +39,6 @@ Worst hour: 03:00, at 0.44 degrees of drift.
 --- chunk 0
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:00
 
-<permissions instructions>
 Filesystem sandboxing: `workspace-write`. Network access is off.
 
 
@@ -52,15 +47,13 @@ title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it
 
 # AGENTS.md instructions for /Users/picard/src/enterprise
 
-<INSTRUCTIONS>
 # Agent Instructions
 
 Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
-</INSTRUCTIONS>
 
 <environment_context>
-  <cwd>/Users/picard/src/enterprise</cwd>
-  <shell>zsh</shell>
+  /Users/picard/src/enterprise
+  zsh
 </environment_context>
 
 
@@ -81,19 +74,17 @@ The deflector dish drifts 0.3 degrees every hour. Find out why and fix it.
 --- chunk 4
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
 
-<details><summary>Thinking</summary>
+Thinking
 
 > **Checking the emitter alignment first**
 > 
 > The drift is periodic, so the phase variance log is the place to start.
 
-</details>
-
 
 --- chunk 5
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
 
-<details><summary>Tool call: shell</summary>
+Tool call: shell
 
 ```json
 {
@@ -106,21 +97,17 @@ title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it
 }
 ```
 
-</details>
-
 
 --- chunk 6
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:01
 
-<details><summary>Tool result: shell</summary>
+Tool result: shell
 
 ```
 phase variance: 0.31 deg
 emitter temp: 41C
 realign threshold: 0.5 deg
 ```
-
-</details>
 
 
 --- chunk 7
@@ -132,7 +119,7 @@ The emitter reports 0.31 degrees of variance, under the 0.5 realignment threshol
 --- chunk 8
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
 
-<details><summary>Tool call: apply_patch</summary>
+Tool call: apply_patch
 
 ```
 *** Begin Patch
@@ -143,26 +130,22 @@ title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it
 *** End Patch
 ```
 
-</details>
-
 
 --- chunk 9
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:02
 
-<details><summary>Tool result: apply_patch</summary>
+Tool result: apply_patch
 
 ```
 Success. Updated the following files:
 M deflector/dish.conf
 ```
 
-</details>
-
 
 --- chunk 10
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:02
 
-<details><summary>Tool call: shell</summary>
+Tool call: shell
 
 ```json
 {
@@ -175,21 +158,17 @@ title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it
 }
 ```
 
-</details>
-
 
 --- chunk 11
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:02
 
-<details><summary>Tool result: shell</summary>
+Tool result: shell
 
 ```
 phase variance: 0.02 deg
 emitter temp: 41C
 realign threshold: 0.3 deg
 ```
-
-</details>
 
 
 --- chunk 12
@@ -207,11 +186,9 @@ Now do the same for the aft sensor array
 --- chunk 14
 title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:03
 
-<details><summary>Thinking</summary>
+Thinking
 
 > **Spawning a sub-agent to scan the aft logs**
-
-</details>
 
 
 --- chunk 15
@@ -234,7 +211,7 @@ Why does the replicator return cold Earl Grey? Screenshot attached.
 --- chunk 1
 title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: gpt-5.2-codex — Sun 12 Apr 2364 14:30
 
-<details><summary>Tool call: shell</summary>
+Tool call: shell
 
 ```json
 {
@@ -247,19 +224,15 @@ title: Why does the replicator return cold Earl Grey? Screenshot attached. | tex
 }
 ```
 
-</details>
-
 
 --- chunk 2
 title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: Codex — Sun 12 Apr 2364 14:30
 
-<details><summary>Tool result: shell (error)</summary>
+Tool result: shell (error)
 
 ```
 error: pattern buffer 7 offline
 ```
-
-</details>
 
 
 --- chunk 3
@@ -278,7 +251,6 @@ Pattern buffer 7 is offline, so the replicator falls back to the cold profile. B
 --- chunk 0
 title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:15
 
-<permissions instructions>
 Filesystem sandboxing: `workspace-write`.
 
 
@@ -293,29 +265,25 @@ title: Audit the warp core containment logs and tell me what you find. | text: C
 
 # AGENTS.md instructions for /Users/picard/src/enterprise
 
-<INSTRUCTIONS>
 # Agent Instructions
 
 Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
-</INSTRUCTIONS>
 
 
 --- chunk 3
 title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
 
-<details><summary>Tool call: exec</summary>
+Tool call: exec
 
 ```
 const r = await tools.exec_command({"cmd":"grep containment /var/log/warp-core.log | wc -l"});
 ```
 
-</details>
-
 
 --- chunk 4
 title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:16
 
-<details><summary>Tool result: exec</summary>
+Tool result: exec
 
 ```
 Script completed
@@ -324,8 +292,6 @@ Output:
 
 142
 ```
-
-</details>
 
 
 --- chunk 5
@@ -337,19 +303,17 @@ title: Audit the warp core containment logs and tell me what you find. | text: g
 --- chunk 6
 title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
 
-<details><summary>Tool call: exec</summary>
+Tool call: exec
 
 ```
 const r = await tools.exec_command({"cmd":"awk '$3 > 0.9' /var/log/warp-core.log"});
 ```
 
-</details>
-
 
 --- chunk 7
 title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:16
 
-<details><summary>Tool result: exec</summary>
+Tool result: exec
 
 ```
 Script completed
@@ -359,8 +323,6 @@ Output:
 2364-04-13T02:14 containment 0.94
 2364-04-13T02:15 containment 0.97
 ```
-
-</details>
 
 
 --- chunk 8
@@ -372,7 +334,7 @@ Two events crossed 0.9, both at 02:14-02:15. That is the window to look at; ever
 --- chunk 9
 title: Audit the warp core containment logs and tell me what you find. | text: Me — Mon 13 Apr 2364 09:17
 
-<containment> readings look wrong to me. Check the sensor calibration?
+readings look wrong to me. Check the sensor calibration?
 
 
 --- chunk 10
