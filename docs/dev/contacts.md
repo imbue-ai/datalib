@@ -759,13 +759,14 @@ Links sit over the view, so the search terms know handles and never
 contacts. A `contact:<id>` value on a person key is read from the
 contacts store when the search runs (`datalib_contacts::read`, a
 detached read, so the applet stays the one writer) and matches each
-handle the contact reaches: its own, stopped ones included; those of
-the contact it was merged into, or merged into it; and, for a group,
-every member's. The search bar offers your contacts first and draws the
-value as a contact chip. Making a link changes nothing in the index: no
-document renders again, the search index re-indexes nothing, and search follows the
-link at once, as chips do. A root without the contacts app refuses
-`contact:` by name ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+handle the contact reaches: its own, stopped ones included; those of the
+contact it was merged into, or merged into it; and, for a group, every
+member's. The search bar offers your contacts first and draws the value
+as a contact chip. Making a link changes nothing in the index: no
+document renders again, the search index re-indexes nothing, and search
+follows the link at once, as chips do. A root without the contacts app
+refuses `contact:` by name
+([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 §"Contacts: expanded when the search runs").
 
 **`me` is the person whose library this is.** On a person key, an

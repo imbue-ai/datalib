@@ -215,8 +215,9 @@ USER datalib
 RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
 
 # Nothing is fetched at run time: what the image ships is all it runs.
-# Every first-use fetch datalib makes (the embedding model, the Node runtime, a
-# package) is refused under this switch, naming what was missing.
+# Every first-use fetch datalib makes (the embedding model, the Node
+# runtime, a package) is refused under this switch, naming what was
+# missing.
 # `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
 ENV DATALIB_NO_FETCH=1
 

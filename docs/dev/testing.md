@@ -723,8 +723,8 @@ is one). Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
 Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
-grid index (with the search index's `search_*` tables) included. Run ids are in `runs`. What to look
-at, and where:
+grid index (with the search index's `search_*` tables) included. Run
+ids are in `runs`. What to look at, and where:
 
 | question | where it shows |
 |---|---|

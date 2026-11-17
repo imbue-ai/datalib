@@ -446,27 +446,27 @@ rendered tree is still on disk, and `qmd_aggregator` drops from the
 search index every source no group claims.
 
 A source's `keyword_index` (input: its render) fills its part of the
-search index with its documents' words and chunks, cutting the chunks with
-the embedding model's tokenizer, so it needs the model file too; its
-`embed` (input: the `keyword_index`) loads the model and fills the
-vectors. Both fetch the model when it is missing.
-`qmd_aggregator` reads every source's pair, so it runs after all of
-them: it drops the sources it does not name, keeps only the vectors a
-chunk still names, and reports each source's counts. Nothing of a source's reads the
+search index with its documents' words and chunks, cutting the chunks
+with the embedding model's tokenizer, so it needs the model file too;
+its `embed` (input: the `keyword_index`) loads the model and fills the
+vectors. Both fetch the model when it is missing. `qmd_aggregator` reads
+every source's pair, so it runs after all of them: it drops the sources
+it does not name, keeps only the vectors a chunk still names, and
+reports each source's counts. Nothing of a source's reads the
 aggregator, and that is what lets each source's steps finish on their
-own: the runner holds a step's finish back while anything upstream of
-it is still running, so a step downstream of a fan-in would finish
-only when the slowest source did. Each per-source step reports what it
-read as its version and skips what the index already has, so one source
+own: the runner holds a step's finish back while anything upstream of it
+is still running, so a step downstream of a fan-in would finish only
+when the slowest source did. Each per-source step reports what it read
+as its version and skips what the index already has, so one source
 re-rendering reruns that source's two steps and nobody else's. A
 `keyword_index` the aggregator does not name is warned about: each
 aggregation drops what it indexed. Removing the aggregator turns
-free-text search off; the Manage screen takes every source's search steps
-with it. A `qmd_index` step is the shape from before the aggregator,
-when that fan-in fed the per-source steps or did their work itself; the
-loader refuses it, and `datalib-http` rewrites it as soon as it reads such
-a file, at boot or on any change to it, keeping the old text as
-`config.toml.bak` (`http/src/config_upgrade.rs`).
+free-text search off; the Manage screen takes every source's search
+steps with it. A `qmd_index` step is the shape from before the
+aggregator, when that fan-in fed the per-source steps or did their work
+itself; the loader refuses it, and `datalib-http` rewrites it as soon as
+it reads such a file, at boot or on any change to it, keeping the old
+text as `config.toml.bak` (`http/src/config_upgrade.rs`).
 `datalib-migrate-config` makes the same rewrite from a terminal.
 
 So the inputs are what decide which indexes a source reaches. With the
@@ -527,10 +527,10 @@ nothing to render or search.
 The screen lists groups, and the steps under each, in file order, and a
 header click's sort is undone by a third click. So the writers keep the
 file in the order data flows (`insertEntries`): a new source goes after
-the last one and above the `unified_grid_and_search_index` group, its search steps right
-after its render, and each step below the steps it reads. A file already
-out of that order where no place fits gets the new entries at the end.
-The runner itself reads only `inputs`.
+the last one and above the `unified_grid_and_search_index` group, its
+search steps right after its render, and each step below the steps it
+reads. A file already out of that order where no place fits gets the new
+entries at the end. The runner itself reads only `inputs`.
 
 Dragging a group by the grip at the left of its row is how a person
 changes that order (`moveGroup`). The group's `[[groups]]` entry and

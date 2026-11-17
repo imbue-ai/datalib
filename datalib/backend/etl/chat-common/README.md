@@ -131,11 +131,11 @@ someone may want to read.
 
 A provider that knows the account has not read a message upstream sets
 `unread` on its item. The wrapper then carries an `unread` class, and
-the first unread item in the document also carries `first-unread`,
-which the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing
-reaches the text: the rule is CSS, so the file and the search's chunks
-are the same either way. `false` means read *or* unknown; a provider that cannot tell leaves
-it there.
+the first unread item in the document also carries `first-unread`, which
+the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing reaches the
+text: the rule is CSS, so the file and the search's chunks are the same
+either way. `false` means read *or* unknown; a provider that cannot tell
+leaves it there.
 
 Read state has one shape, `ReadMark` (`datalib_etl::read_marks`):
 `Through(item)` on a conversation or thread, everything up to that item

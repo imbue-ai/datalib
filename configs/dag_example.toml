@@ -276,11 +276,11 @@ function = "qmd_aggregator"
 command = "datalib-step"
 inputs = ["*/keyword_index", "*/embed"]
 
-# The search index's document embeddings laid out on a plane by UMAP, for the map
-# card (`umapView()`). It reads the vectors every source's `embed` wrote,
-# so it runs after the aggregator, which runs after them. Each run starts from the last map, so
-# documents stay put as more arrive; resetting the step lays the map out
-# afresh.
+# The search index's document embeddings laid out on a plane by UMAP,
+# for the map card (`umapView()`). It reads the vectors every source's
+# `embed` wrote, so it runs after the aggregator, which runs after them.
+# Each run starts from the last map, so documents stay put as more
+# arrive; resetting the step lays the map out afresh.
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "embedding_map"

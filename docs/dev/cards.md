@@ -578,16 +578,17 @@ besides components:
   on the biggest source the index holds (`cards/searchDefaults.ts`).
 
 - `gridView(opts: { url, q?, columns?, name?, placeholder? })` — the
-  general-purpose grid: a search bar + a SlickGrid over `url`, a
-  table that pages, sorts and groups the way the search does (the
-  Manage screen's problems cell opens `/applet/unified_grid_and_search_index/problems`
-  this way). `url` is required; without one the card says so and names
-  `searchView()` for the search. Since a link can write card source,
-  `url` must be one of the tables `cards/tableUrls.ts` names in full
-  (`GRID_TABLES`); any other is refused with a card error, before
-  anything is fetched. Each answer says which field names a
-  row, which document a row opens and whether the search index ranks its free text
-  (`RowsSpec`). Persists `q`/`sel`/`cols` state.
+  general-purpose grid: a search bar + a SlickGrid over `url`, a table
+  that pages, sorts and groups the way the search does (the Manage
+  screen's problems cell opens
+  `/applet/unified_grid_and_search_index/problems` this way). `url` is
+  required; without one the card says so and names `searchView()` for
+  the search. Since a link can write card source, `url` must be one of
+  the tables `cards/tableUrls.ts` names in full (`GRID_TABLES`); any
+  other is refused with a card error, before anything is fetched. Each
+  answer says which field names a row, which document a row opens and
+  whether the search index ranks its free text (`RowsSpec`). Persists
+  `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_grid_and_search_index/chat/{markdownUuid}`), highlighting and scrolling to
   `sectionUuid`. A different selection is a different card: the grid
@@ -617,12 +618,12 @@ besides components:
 - `sourceDagView()` — the sources' step graph, live while a sync runs.
 - `umapView(opts?: { q?: string; by?: string })` — the embedding map
   (`cards/UmapCard.ce.vue`, over the applet's `/embedding_map`): every
-  document the `embed` steps embedded, placed by the `embedding_map` step. The search
-  bar takes the grid's grammar and greys out what it does not match
-  (`/embedding_map/matches`); a legend colours by one field and
-  isolates on hover; hovering a point previews it, clicking opens
-  `documentView` beside the card. Persists `q`/`by`/`sel`. The pure
-  half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
+  document the `embed` steps embedded, placed by the `embedding_map`
+  step. The search bar takes the grid's grammar and greys out what it
+  does not match (`/embedding_map/matches`); a legend colours by one
+  field and isolates on hover; hovering a point previews it, clicking
+  opens `documentView` beside the card. Persists `q`/`by`/`sel`. The
+  pure half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
 - `galleryView()` — the new-card gallery (see "Titles, icons and edit mode"
   above): the views of the data, then the developer tools; replaces
   itself with whatever the user picks.
