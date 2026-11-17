@@ -30,8 +30,8 @@ inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
+function = "embedding_map"
+inputs = ["*/embed"]
 `;
 
 const embeds = (text: string) =>

@@ -457,10 +457,10 @@ inputs = ["slack/render_markdown"]
         assert_eq!(sort_config(&spaced).unwrap(), None);
     }
 
-    /// The shape the wizard wrote before it kept the order, and the TNG
-    /// fixture still writes: every source's search steps after the
-    /// aggregator that reads them. Each goes back beside its source, the
-    /// aggregator after them, and the comments stay with their entries.
+    /// The shape the wizard wrote before it kept the order: every source's
+    /// steps after the index step that reads them. Each goes back beside
+    /// its source, the index after them, and the comments stay with their
+    /// entries.
     #[test]
     fn gathers_a_sources_steps_and_puts_the_index_after_them() {
         let text = r#"data_root = "~/datalib"
@@ -496,7 +496,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 inputs = ["slack/embed", "notes/embed"]
 
 # slack's search
@@ -524,7 +524,7 @@ command = "datalib-applet unified_grid_and_search_index"
                 "slack/embed",
                 "notes/render_markdown",
                 "notes/embed",
-                "unified_grid_and_search_index/qmd_aggregator",
+                "unified_grid_and_search_index/embedding_map",
             ]
         );
         assert_eq!(
@@ -542,7 +542,7 @@ command = "datalib-applet unified_grid_and_search_index"
         );
         assert!(at("channels = [\"general\"]") < at("function = \"render_markdown\""));
         assert!(
-            at("# ── the unified grid and search index ──") < at("function = \"qmd_aggregator\"")
+            at("# ── the unified grid and search index ──") < at("function = \"embedding_map\"")
         );
         assert!(at("# ── notes ──") < at("# ── the unified grid and search index ──"));
         // Sorting again changes nothing.

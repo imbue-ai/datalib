@@ -29,9 +29,9 @@
                                                   each chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
-<data_root>/unified_grid_and_search_index/qmd_aggregator/           nothing now: the aggregator's directory,
-                                                  where qmd's index was; the aggregator
-                                                  deletes what qmd left there
+<data_root>/unified_grid_and_search_index/qmd_aggregator/           nothing now: the retired aggregator's
+                                                  directory, where qmd's index was;
+                                                  grid_index deletes it
 <data_root>/unified_grid_and_search_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
@@ -134,8 +134,8 @@ ours.
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `grid_index` owns
-the grid index's tables and, with `qmd_aggregator`, the search index's
-`search_*` tables in the same file; `datalib-http` owns feedback, usage and remote media;
+the grid index's tables and the search index's `search_*` tables in the
+same file; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
@@ -145,13 +145,11 @@ flight is never served; a request also reopens the file when a reset
 has replaced it. Doltlite never copies a plain file's WAL back by
 itself ([`doltlite.md`](doltlite.md) § "Plain SQLite files and SQLite
 compatibility"), so the step
-does it at the end of every pass (`grid_index::close_index`). The two
-owners of the grid index's file share it by SQLite's own lock: each
-write transaction starts with `BEGIN IMMEDIATE`, so it waits for the
-other's rather than failing, and the search index writes in batches of
-a few hundred documents. The aggregator's sweep can wait as long as
-`grid_index` takes to load one source: seconds in an ordinary sync, many
-minutes for a large source loaded whole. When either owner's shape
+does it at the end of every pass (`grid_index::close_index`). The grid's
+load and the search index's writes are two parts of the one step, each
+with its own connection; each write transaction starts with `BEGIN
+IMMEDIATE`, and the search index writes in batches of a few hundred
+documents, so a reader is never held long. When either part's shape
 changes it drops only its own tables. Deleting the file by hand deletes
 the search index's rows with it; `grid_index` puts them back on its
 next run. `runs.sqlite` is the other exception to doltlite: plain

@@ -426,9 +426,9 @@ these steps for whichever source failed.
 
 The config lives at `config.toml` in your data root. Each source is a
 **group** with an `ingest` step (bring the data in) and a
-`render_markdown` step (turn it into readable markdown), plus two shared
-index steps that fan in over everything rendered. None of them names a
-command: a step without one is datalib's own, and the group's `type`
+`render_markdown` step (turn it into readable markdown), plus a shared
+index step that fans in over everything rendered. The steps name their
+program, `datalib-step`, and the group's `type`
 says which source it is. A one-source config looks like this:
 
 ```toml
@@ -466,12 +466,6 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -615,9 +609,6 @@ faster.
   drains take seconds. A Garmin, YoLink or AirVisual source has no
   `embed` step: its markdown is daily summaries of numbers, which the
   keyword index already finds. The app takes out one a config already has.
-- The `qmd_aggregator` step, once every source's `embed` is done: it
-  keeps only the embeddings the search index still names and reports
-  what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 

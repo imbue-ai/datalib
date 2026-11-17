@@ -46,8 +46,7 @@ data_root = "~/datalib"
 # The SQL index behind the grid and search reads every source's documents
 # into the grid and the keyword search, and the problem rows of its
 # time-series and occurrences steps; `params.not_searched` would keep a
-# source out of search. The aggregator runs after every embed and keeps
-# only the vectors the index still names.
+# source out of search.
 [[groups]]
 id = "unified_grid_and_search_index"
 name = "Grid and Search Index"
@@ -57,12 +56,6 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 
 # The app's search, grid and document view.
 [[applets]]

@@ -111,11 +111,9 @@ fn generate() -> String {
         "\n# The SQL index behind the grid and search reads every source's documents\n\
          # into the grid and the keyword search, and the problem rows of its\n\
          # time-series and occurrences steps; `params.not_searched` would keep a\n\
-         # source out of search. The aggregator runs after every embed and keeps\n\
-         # only the vectors the index still names.\n\
+         # source out of search.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
          [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\ncommand = \"datalib-step\"\n{}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
@@ -130,7 +128,6 @@ fn generate() -> String {
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
         inputs(&["render_markdown", "render_time_series", "render_occurrences"]),
-        "inputs = [\"unified_grid_and_search_index/grid_index\", \"*/embed\"]\n",
         inputs(&["render_time_series"]),
     ));
     for s in &sources {

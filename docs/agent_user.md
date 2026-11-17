@@ -39,8 +39,8 @@ database), `grid_index` under the `unified_grid_and_search_index` group (the SQL
 index, which also puts every source it reads in the keyword search but
 those its `params.not_searched` lists), and, for a source searched by
 meaning, `<group>/embed`, which embeds that source's part of the search
-index. `unified_grid_and_search_index/qmd_aggregator` runs after every
-embed and keeps only the embeddings the index still names. A step's function
+index; `grid_index` keeps only the embeddings the index still names. A
+step's function
 is the directory it writes (the search steps are the exception: they
 write the search index's tables in the grid index's file, and the
 vectors in `unified_grid_and_search_index/search_index/`):

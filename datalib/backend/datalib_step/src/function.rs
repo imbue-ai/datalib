@@ -24,7 +24,6 @@ pub enum Function {
     Ingest,
     RenderMarkdown,
     GridIndex,
-    QmdAggregator,
     Embed,
     EmbeddingMap,
     RenderTimeSeries,
@@ -79,16 +78,10 @@ impl Function {
                  works. One per source searched by meaning; \
                  inputs = [\"unified_grid_and_search_index/grid_index\"]."
             }
-            Function::QmdAggregator => {
-                "Keep only the vectors a chunk of the search index still names, and report \
-                 on the whole. Goes under the `unified_grid_and_search_index` group; \
-                 inputs = [\"unified_grid_and_search_index/grid_index\", \"*/embed\"], so it \
-                 runs after every embed."
-            }
             Function::EmbeddingMap => {
                 "Lay the search index's embeddings out on a plane, for the map card. Goes \
-                 under the `unified_grid_and_search_index` group; \
-                 inputs = [\"unified_grid_and_search_index/qmd_aggregator\"]."
+                 under the `unified_grid_and_search_index` group; inputs = [\"*/embed\"], \
+                 so it runs after every embed."
             }
             Function::RenderTimeSeries => {
                 "Turn a raw store into its time series, under \
@@ -154,10 +147,6 @@ mod tests {
         assert_eq!(
             Function::TimeSeriesIndex.as_str(),
             datalib_core::layout::TIME_SERIES_INDEX_DIR
-        );
-        assert_eq!(
-            Function::QmdAggregator.as_str(),
-            datalib_core::layout::QMD_DIR
         );
         assert_eq!(
             Function::EmbeddingMap.as_str(),

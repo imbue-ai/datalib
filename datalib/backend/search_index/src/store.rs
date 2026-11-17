@@ -269,14 +269,6 @@ impl Index {
         Ok(())
     }
 
-    /// Every source that holds a document, sorted.
-    pub async fn sources(&self) -> Result<Vec<String>> {
-        sqlx::query_scalar("SELECT DISTINCT source_id FROM search_documents ORDER BY source_id")
-            .fetch_all(&self.pool)
-            .await
-            .context("read the indexed sources")
-    }
-
     /// Every chunk hash the index names, each once: what the inference
     /// cache keeps on a sweep.
     pub async fn all_hashes(&self) -> Result<std::collections::HashSet<String>> {

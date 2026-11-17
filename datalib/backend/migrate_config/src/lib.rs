@@ -28,6 +28,7 @@
 //! rewrites are also the ones `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
+pub mod aggregator_drop;
 pub mod conversation_settings;
 pub mod convert;
 pub mod index_name;
@@ -90,6 +91,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if keyword_fold::is_retired(text)? {
         return Ok(LegacyFormat::KeywordIndexSteps);
     }
+    if aggregator_drop::is_retired(text)? {
+        return Ok(LegacyFormat::AggregatorStep);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -104,7 +108,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::TodoistCompletedSince
         | LegacyFormat::UnreadProblems
         | LegacyFormat::ConversationSettingNames
-        | LegacyFormat::KeywordIndexSteps => text.to_string(),
+        | LegacyFormat::KeywordIndexSteps
+        | LegacyFormat::AggregatorStep => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -121,6 +126,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = problem_inputs::rewrite(&out)?;
     let out = conversation_settings::rewrite(&out)?;
     let out = keyword_fold::rewrite(&out)?;
+    let out = aggregator_drop::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
@@ -255,6 +261,18 @@ pub fn upgrade_keyword_fold(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Take each `qmd_aggregator` out (`aggregator_drop.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did. The loader refuses the step already.
+pub fn upgrade_aggregator_drop(text: &str) -> Result<Option<String>> {
+    if !aggregator_drop::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = aggregator_drop::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Write a pattern (`*/render_markdown`) in each index step's `inputs`
 /// where it names every step of that function (`input_patterns.rs`).
 /// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
@@ -292,7 +310,8 @@ fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Resu
 /// writes `keyword_index` steps, which the loader refuses; whether it
 /// loses an entry is judged in the shape the chain ends in.
 pub(crate) fn folded(text: &str) -> String {
-    keyword_fold::rewrite(text).unwrap_or_else(|_| text.to_string())
+    let folded = keyword_fold::rewrite(text).unwrap_or_else(|_| text.to_string());
+    aggregator_drop::rewrite(&folded).unwrap_or(folded)
 }
 
 /// One rewrite `datalib-http` makes without asking: what the old shape
@@ -306,7 +325,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 11] = [
+pub const UNATTENDED: [Rewrite; 12] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -369,6 +388,13 @@ pub const UNATTENDED: [Rewrite; 11] = [
                `not_searched` lists, which names each source that had no `keyword_index`; \
                each `embed` and the aggregator read `grid_index` instead",
         run: upgrade_keyword_fold,
+    },
+    Rewrite {
+        why: "has a `qmd_aggregator` step",
+        what: "`grid_index` keeps the vector cache to what a chunk names and reports what \
+               search holds; the aggregator is taken out, and the embedding map reads every \
+               `embed`",
+        run: upgrade_aggregator_drop,
     },
     Rewrite {
         why: "has an index step that names every source's step by id",
@@ -891,7 +917,7 @@ inputs = ["slack/render_markdown"]
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
         );
-        assert!(out.contains("function = \"qmd_aggregator\""), "{out}");
+        assert!(!out.contains("qmd_aggregator"), "{out}");
         assert!(out.contains("\"*/render_markdown\""), "{out}");
         assert!(!out.contains("keyword_index"), "{out}");
         let (cfg, diags) = datalib_dag::config::parse_graded(&out);
@@ -1060,6 +1086,7 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_step_commands(&out).unwrap().unwrap();
         assert_eq!(upgrade_step_commands(&out).unwrap(), None);
         let out = upgrade_keyword_fold(&out).unwrap().unwrap();
+        let out = upgrade_aggregator_drop(&out).unwrap().unwrap();
         let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
         let check = datalib_dag::config::check_text(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
@@ -1067,7 +1094,8 @@ inputs = ["mail/render_markdown"]
             .cfg
             .steps
             .iter()
-            .any(|s| s.id == "unified_grid_and_search_index/qmd_aggregator"));
+            .any(|s| s.id == "unified_grid_and_search_index/grid_index"));
+        assert!(!out.contains("qmd_aggregator"), "{out}");
         assert!(!out.contains("\"unified_index"), "{out}");
         assert_eq!(upgrade_index_name(&out).unwrap(), None);
         assert_eq!(upgrade_index_name("not [ toml").unwrap(), None);
@@ -1081,7 +1109,9 @@ inputs = ["mail/render_markdown"]
     fn the_index_name_upgrade_refuses_a_rename_that_drops_a_step() {
         let current = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         let clash = format!(
-            "{current}\n[[steps]]\nid = \"unified_grid_and_search_index/qmd_aggregator\"\n\
+            "{current}\n[[steps]]\ngroup = \"unified_index\"\nfunction = \"grid_index\"\n\
+             inputs = [\"mail/render_markdown\"]\n\n\
+             [[steps]]\nid = \"unified_grid_and_search_index/grid_index\"\n\
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
         let loads = |text: &str| {
@@ -1090,7 +1120,7 @@ inputs = ["mail/render_markdown"]
                 .cfg
                 .steps
                 .iter()
-                .any(|s| s.id == "unified_grid_and_search_index/qmd_aggregator")
+                .any(|s| s.id == "unified_grid_and_search_index/grid_index")
         };
         assert!(loads(&clash), "the custom step runs before the rename");
         let err = upgrade_index_name(&clash).unwrap_err().to_string();

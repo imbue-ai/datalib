@@ -43,10 +43,7 @@ pub fn store(env: &StepEnv, data_root: &Path) -> Option<PathBuf> {
         Function::RenderOccurrences => {
             datalib_etl::layout::render_occurrences_db(data_root, &env.group)
         }
-        Function::GridIndex
-        | Function::QmdAggregator
-        | Function::Embed
-        | Function::EmbeddingMap => return None,
+        Function::GridIndex | Function::Embed | Function::EmbeddingMap => return None,
     })
 }
 
@@ -123,12 +120,9 @@ mod tests {
         assert_eq!(claimed[0].path, "mail/ingest");
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
-        let qmd = env(
-            "unified_grid_and_search_index/qmd_aggregator",
-            Function::QmdAggregator,
-        );
+        let embed = env("mail/embed", Function::Embed);
         assert!(
-            claims(&qmd, root.path()).await.is_empty(),
+            claims(&embed, root.path()).await.is_empty(),
             "no store of its own"
         );
     }

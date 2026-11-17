@@ -322,9 +322,8 @@ chunk the inference cache,
 `unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
 vector for, in process (`datalib/backend/embedder`, llama.cpp), after
 putting the pinned, sha256-verified embedding model in place through
-`datalib_embedding_models`. `unified_grid_and_search_index/qmd_aggregator` reads
-`grid_index` and every `embed`, so it runs after them: it sweeps vectors
-no chunk names, and reports what each source holds. This is what a search matches words and meaning against (see
+`datalib_embedding_models`. `grid_index` also sweeps the vectors no chunk
+names, and reports what each source holds. This is what a search matches words and meaning against (see
 `datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:

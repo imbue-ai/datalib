@@ -572,7 +572,6 @@ params = {params}
         # each `render_time_series` and `render_occurrences`, for their
         # problem rows.
         groups = [r.strip('"').split("/")[0] for r in rendered]
-        qmd_list = '"unified_grid_and_search_index/grid_index", "*/embed"'
         series = [g for g in groups if g in time_series_groups]
         grid_list = (
             '"*/render_markdown", "*/render_time_series", "*/render_occurrences"'
@@ -605,10 +604,10 @@ inputs = ["*/render_time_series"]"""
             blocks.append(series_index)
         dag_text = "\n\n".join(blocks) + "\n"
         # Everything a materialized root's config needs but `data_root`
-        # and the applet, which only the materializer knows. Both
-        # fan-ins are declared and wired the way a real root's are; the
-        # index arrives pre-built, so neither has to run for the root to
-        # be browsable.
+        # and the applet, which only the materializer knows. The fan-in
+        # is declared and wired the way a real root's is; the index
+        # arrives pre-built, so it need not run for the root to be
+        # browsable.
         root_blocks.append(
             f"""[[groups]]
 id = "unified_grid_and_search_index"
@@ -617,12 +616,7 @@ name = "Grid and Search Index"
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "grid_index"
-inputs = [{grid_list}]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = [{qmd_list}]"""
+inputs = [{grid_list}]"""
         )
         # Each source embeds what the `grid_index` step's keyword pass cut of it.
         # The index arrives pre-built here too.

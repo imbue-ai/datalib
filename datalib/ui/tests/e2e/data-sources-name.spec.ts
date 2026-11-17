@@ -381,7 +381,6 @@ test("free-text search is a choice, and only the search feels it", async ({ page
   // Not the toast: the first save's may still be on screen.
   await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
-  expect(fanInReads(saved, "qmd_aggregator", "rows-only/embed")).toBe(true);
   expect(saved).toContain(
     'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/grid_index"]',
   );

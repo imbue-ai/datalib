@@ -118,7 +118,6 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   render_occurrences: "render",
   grid_index: "index",
   time_series_index: "index",
-  qmd_aggregator: "index",
   embed: "index",
   embedding_map: "index",
 };
@@ -134,7 +133,6 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
   "unified_grid_and_search_index/grid_index": "Grid and Search Index (table)",
-  "unified_grid_and_search_index/qmd_aggregator": "Grid and Search Index (search)",
   "unified_grid_and_search_index/embedding_map": "Grid and Search Index (map)",
   unified_grid_and_search_index: "Grid and Search Index (Applet)",
   "unified_time_series_index/time_series_index": "Time Series Index",
@@ -1076,11 +1074,10 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
 }
 
 /// The fan-in steps, by function: the SQL index the grid reads, which
-/// consumes rendered markdown; the search aggregator, which runs after each
-/// source's own search steps; the map, which reads the aggregator; and the
-/// time-series index, which reads each source's time series. A source
-/// can be in one and not another.
-export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | "time_series_index";
+/// consumes rendered markdown; the map, which reads every source's
+/// `embed`; and the time-series index, which reads each source's time
+/// series. A source can be in one and not another.
+export type FanInFunction = "grid_index" | "embedding_map" | "time_series_index";
 
 /// The groups the fan-ins are filed under: the document index and the
 /// time-series index.
@@ -1281,47 +1278,41 @@ function setNotSearched(text: string, group: string, out: boolean): string {
 /// Put a source in search as far as `asked` says: out of the `grid_index` step's
 /// `not_searched` for its words, and an `embed` step for its meaning, or
 /// back. Never an `embed` step for a type that may not have one
-/// (`embedAllowed`), nor where the config has no aggregator, which sweeps
-/// after the embeds; taking one away takes every step that reads it.
+/// (`embedAllowed`), nor where the config has no `grid_index` step for it to read;
+/// taking one away takes every step that reads it.
 export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
   const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
   let next = setNotSearched(text, group, indexing === "none");
   const steps = listSteps(next);
-  const aggregated = steps.some(
-    (s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
-  );
+  const hasGridIndex = steps.some((s) => s.kind === "step" && s.id === GRID_INDEX_STEP);
   const embed = buildEmbedStep(group);
   const has = steps.some((s) => s.id === embed.id);
-  if (aggregated && indexing === "keyword_and_embed") {
-    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "qmd_aggregator");
+  if (hasGridIndex && indexing === "keyword_and_embed") {
+    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "embedding_map");
   } else if (has) {
     const gone = [...steps.filter((s) => s.id === embed.id), ...readersOf([embed.id], steps)];
-    next = unwireFromFanIns(removeSteps(next, gone), embed.id, "qmd_aggregator");
+    next = unwireFromFanIns(removeSteps(next, gone), embed.id, "embedding_map");
   }
   return next;
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
-/// them ([`readersOf`]); a source's `embed` when its render goes, since it
-/// embeds that render's documents though it reads the `grid_index` step; and,
-/// when the search aggregator is among them, every source's `embed` — search
-/// by meaning is off without it, and nothing would sweep what they embed.
+/// them ([`readersOf`]), and a source's `embed` when its render goes: it
+/// embeds that render's documents, though it reads the `grid_index` step.
+/// Each `embed` reads the `grid_index` step, so that step takes them all
+/// with it.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
-  const aggregatorGoes = all.some(
-    (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
-  );
-  const isEmbed = (s: ConfiguredStep) =>
-    s.kind === "step" && s.function === "embed" && !ids.includes(s.id);
-  const searchSteps = aggregatorGoes ? all.filter(isEmbed) : [];
-  const readers = readersOf([...ids, ...searchSteps.map((s) => s.id)], all);
-  const going = new Set(
-    [...ids, ...searchSteps, ...readers].map((s) => (typeof s === "string" ? s : s.id)),
-  );
+  const readers = readersOf(ids, all);
+  const going = new Set([...ids, ...readers.map((s) => s.id)]);
   const unrendered = all.filter(
-    (s) => isEmbed(s) && !going.has(s.id) && going.has(`${s.group}/render_markdown`),
+    (s) =>
+      s.kind === "step" &&
+      s.function === "embed" &&
+      !going.has(s.id) &&
+      going.has(`${s.group}/render_markdown`),
   );
-  return [...searchSteps, ...readers, ...unrendered];
+  return [...readers, ...unrendered];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other
@@ -1379,13 +1370,13 @@ function placeFor(text: string, body: string): number | null {
   const readsAdded = (s: ConfiguredStep) =>
     s.inputs.some((id) => addedIds.has(id)) ||
     (s.patterns ?? []).some((p) => [...addedIds].some((id) => namesStep(p, id)));
-  // The aggregator reads every embed, though one written as a list only
-  // names a new one once it is wired in.
+  // The map reads every embed, though one written as a list only names a
+  // new one once it is wired in.
   const embeds = added.some((s) => s.function === "embed");
   const readers = [
     ...(readsIndex ? [] : steps.filter(isIndex)),
     ...steps.filter(readsAdded),
-    ...(embeds ? steps.filter((s) => fanInFunctionOf(s) === "qmd_aggregator") : []),
+    ...(embeds ? steps.filter((s) => fanInFunctionOf(s) === "embedding_map") : []),
     ...(readsIndex ? [] : groups.filter((g) => g.id === INDEX_GROUP)),
   ];
   const latest = Math.min(text.length, ...readers.map((r) => extendOverComments(text, r.start)));

@@ -309,7 +309,6 @@ command = "datalib-applet unified_index" # serves the grid
                 "picard/ingest",
                 "picard/render_markdown",
                 "unified_grid_and_search_index/grid_index",
-                "unified_grid_and_search_index/qmd_aggregator",
                 "unified_grid_and_search_index/embedding_map",
                 "exports/csv",
             ]

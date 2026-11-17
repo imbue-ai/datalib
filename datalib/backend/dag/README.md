@@ -37,7 +37,7 @@ step whose `command` is `datalib-step` runs the step program datalib
 ships, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_aggregator`, …), and why the loader requires such a step to
+`grid_index`, `embed`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
@@ -353,10 +353,9 @@ follows from it:
   rate limit never keeps a render from starting. The other two,
   `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
   they once guarded), are held by the built-in index steps that name no
-  locks: `grid_index` and `qmd_aggregator` take `qmd_keyword`, because
-  they both write the grid index's file, which the
-  runner cannot see as shared, and a writer left to wait inside SQLite
-  times out; `embed` takes `qmd_embed`, so one embedding model is loaded
+  locks: `grid_index` takes `qmd_keyword`, because it writes the grid
+  index's file, which the runner cannot see as shared, and a writer left
+  to wait inside SQLite times out; `embed` takes `qmd_embed`, so one embedding model is loaded
   at a time. A `[[locks]]`
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.

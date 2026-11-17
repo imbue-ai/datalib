@@ -1,6 +1,6 @@
 //! The search index (docs/dev/plans/search_index_from_ram.md): what the
-//! `grid_index` step's keyword pass, each source's `embed`, and the aggregator do
-//! with it.
+//! `grid_index` step's keyword pass and sweep, and each source's `embed`, do with
+//! it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,8 @@ const CHUNK_BATCH: usize = 32;
 pub(crate) struct Done {
     pub(crate) put: usize,
     pub(crate) removed: usize,
+    /// Chunks the cache had no vector for when the embed began.
+    pub(crate) owed: usize,
     pub(crate) embedded: usize,
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
@@ -313,6 +315,7 @@ async fn embed_into<E: EmbedPrompt>(
             by_doc.entry(doc).or_default().insert(hash);
         }
     }
+    done.owed = queued.len();
     progress.set_message("search index: embedding");
     progress.set_length(Some(queued.len() as u64));
 
@@ -417,33 +420,26 @@ async fn embed_batch<E: EmbedPrompt>(
     })
 }
 
-/// The aggregator's half: let the cache keep only the vectors a chunk of
-/// the index still names, and answer how many went and which sources the
-/// index holds. Touches nothing that does not exist yet.
-pub(crate) async fn sweep(root: &Path) -> Result<(u64, Vec<String>)> {
+/// The `grid_index` step's sweep: the cache keeps only the vectors a chunk of the
+/// index still names. Answers how many went. Touches nothing that does not
+/// exist yet.
+pub(crate) async fn sweep(root: &Path) -> Result<u64> {
     retire_separate_file(root)?;
     let index_path = layout::grid_index_db(root);
-    if !index_path.exists() {
-        return Ok((0, Vec::new()));
+    let cache_path = layout::inference_cache_db(root);
+    if !index_path.exists() || !cache_path.exists() {
+        return Ok(0);
     }
     let index = Index::open(&index_path).await?;
-    let held = sweep_index(&index).await;
+    let hashes = index.all_hashes().await;
     index.close().await;
-    let (hashes, sources) = held?;
-    let cache_path = layout::inference_cache_db(root);
-    if !cache_path.exists() {
-        return Ok((0, sources));
-    }
+    let hashes = hashes?;
     let cache = InferenceCache::open(&cache_path).await?;
     let gone = cache
         .keep_only(&datalib_search_index::model_key(), &hashes)
         .await;
     cache.close().await;
-    Ok((gone?, sources))
-}
-
-async fn sweep_index(index: &Index) -> Result<(HashSet<String>, Vec<String>)> {
-    Ok((index.all_hashes().await?, index.sources().await?))
+    gone
 }
 
 /// The `grid_index` step's half after its keyword passes: every document of a

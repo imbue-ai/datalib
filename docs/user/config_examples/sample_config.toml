@@ -13,9 +13,8 @@
 # belongs to that table.
 data_root = "~/datalib"
 
-# Shared fan-in steps: the SQL index behind the grid UI, fed by every
-# source's rendered markdown, and the qmd aggregator, which runs after
-# every source's own search steps.
+# The shared fan-in step: the SQL index behind the grid UI and the keyword
+# search, fed by every source's rendered markdown.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -24,12 +23,6 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["unified_grid_and_search_index/grid_index", "*/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its

@@ -67,7 +67,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
-        Function::QmdAggregator | Function::Embed | Function::EmbeddingMap => {
+        Function::Embed | Function::EmbeddingMap => {
             tracing::info!(step = %env.step, "migrate: nothing of ours to bring up to date");
             Ok(Vec::new())
         }

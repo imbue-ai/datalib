@@ -20,8 +20,8 @@ use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
 
-fn qmd_aggregator() -> String {
-    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/qmd_aggregator")
+fn grid_index() -> String {
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/grid_index")
 }
 
 const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
@@ -83,12 +83,12 @@ pub struct Appended {
     /// `(source step, index step)` for each input added.
     pub wired: Vec<(String, String)>,
     /// Source steps no index step in the config reads, with the one that
-    /// would have: a config with search turned off has no `qmd_aggregator`.
+    /// would have: a config with no map has no `embedding_map`.
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
-    /// The config searches by meaning, and the stanza has no `embed`, so
-    /// the source is found by its words alone until one is added.
+    /// The config has the `grid_index` step an `embed` reads, and the stanza has
+    /// none, so the source is found by its words alone until one is added.
     pub found_by_words_alone: bool,
 }
 
@@ -157,7 +157,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
     let config_has_search = have
         .steps
         .iter()
-        .any(|s| s.step_id().as_deref() == Some(qmd_aggregator().as_str()));
+        .any(|s| s.step_id().as_deref() == Some(grid_index().as_str()));
     let has = |function: &str| {
         adding
             .steps
@@ -540,10 +540,10 @@ inputs = [
             appended.text
         );
         assert_eq!(appended.group, "work-mail");
-        // No qmd_aggregator here, and the minimal stanza has no embed
-        // for one to read.
+        // No embedding_map here, and the minimal stanza has no embed for
+        // one to read; the `grid_index` step searches it by its words.
         assert!(appended.unread.is_empty());
-        assert!(!appended.found_by_words_alone, "a config without search");
+        assert!(appended.found_by_words_alone);
     }
 
     #[test]
