@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_embedder::{Device, Embedder};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
@@ -15,11 +15,16 @@ use datalib_schema::markdowns::MarkdownRow;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
 use datalib_search_index::{Index, IndexDoc, InferenceCache, Reader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+use crate::modal::{self, Reply, Route, SignIn};
 
 /// Documents read and indexed together, one transaction each.
 const DOCUMENT_BATCH: usize = 200;
 /// Chunks embedded between two writes to the cache, and two checks for a stop.
 const CHUNK_BATCH: usize = 32;
+/// Vectors from Modal written to the cache together.
+const MODAL_PUT_BATCH: usize = 256;
 
 /// What a keyword pass or an embed did, for its log line.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -195,12 +200,32 @@ impl EmbedPrompt for Embedder {
     }
 }
 
+/// Where a run that owes enough chunks sends them
+/// (`embed_on_modal_from_n_chunks`), and how it gets there.
+pub(crate) struct Modal {
+    pub(crate) threshold: u64,
+    pub(crate) sign_in: Box<dyn FnOnce() -> SignIn + Send>,
+    pub(crate) driver: Box<dyn FnOnce() -> Result<modal::Driver> + Send>,
+}
+
+impl Modal {
+    /// This process's sign-in and the driver in its runtime.
+    pub(crate) fn for_this_process(threshold: u64) -> Modal {
+        Modal {
+            threshold,
+            sign_in: Box::new(SignIn::of_this_process),
+            driver: Box::new(modal::Driver::from_runtime),
+        }
+    }
+}
+
 /// `<group>/embed`'s half: every chunk of this source the inference cache
-/// has no vector for, embedded and cached.
+/// has no vector for, embedded and cached, here or on Modal.
 pub(crate) async fn embed(
     root: &Path,
     group: &str,
     model_path: &Path,
+    on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -217,15 +242,16 @@ pub(crate) async fn embed(
         );
         Ok(embedder)
     };
-    embed_with(root, group, open, progress, stop).await
+    embed_with(root, group, open, on_modal, progress, stop).await
 }
 
 /// [`embed`] with the model `open` loads, which it calls only when a chunk
-/// is owed.
+/// is owed here.
 async fn embed_with<E: EmbedPrompt>(
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -243,16 +269,18 @@ async fn embed_with<E: EmbedPrompt>(
     reader.close().await;
     let spans = spans?;
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
-    let out = embed_into(&cache, root, group, open, spans, progress, stop).await;
+    let out = embed_into(&cache, root, group, open, on_modal, spans, progress, stop).await;
     cache.close().await;
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn embed_into<E: EmbedPrompt>(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    on_modal: Option<Modal>,
     spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
@@ -271,8 +299,24 @@ async fn embed_into<E: EmbedPrompt>(
             by_doc.entry(doc).or_default().insert(hash);
         }
     }
-    progress.set_message("search index: embedding");
     progress.set_length(Some(queued.len() as u64));
+    if let Some(on_modal) = on_modal {
+        if modal::route(Some(on_modal.threshold), queued.len()) == Route::Modal {
+            progress.set_message("search index: embedding on Modal");
+            return embed_on_modal(
+                cache,
+                root,
+                group,
+                &by_doc,
+                queued.len(),
+                on_modal,
+                progress,
+                stop,
+            )
+            .await;
+        }
+    }
+    progress.set_message("search index: embedding");
 
     let mut embedder = Some(
         tokio::task::spawn_blocking(open)
@@ -327,6 +371,182 @@ async fn embed_into<E: EmbedPrompt>(
     // On Metal, ggml aborts at exit while a model is still loaded.
     drop(embedder.take());
     result.map(|()| done)
+}
+
+/// What the Modal driver said, besides vectors.
+#[derive(Default)]
+struct FromModal {
+    embedded: usize,
+    truncated: usize,
+    failed: usize,
+    first_error: Option<String>,
+    fatal: Option<(String, bool)>,
+}
+
+/// Every owed chunk sent to Modal through the driver (`crate::modal`):
+/// prompts in on its stdin as the documents are read, vectors out of its
+/// stdout into the cache as each slice returns. A stop interrupts the
+/// driver, which ends its Sandboxes; what was cached stays, and the next
+/// run owes the rest. Nothing about the remote work is kept.
+#[allow(clippy::too_many_arguments)]
+async fn embed_on_modal(
+    cache: &InferenceCache,
+    root: &Path,
+    group: &str,
+    by_doc: &BTreeMap<&str, HashSet<&str>>,
+    owed: usize,
+    on_modal: Modal,
+    progress: &Progress,
+    stop: &StopFlag,
+) -> Result<Done> {
+    let threshold = on_modal.threshold;
+    if !(on_modal.sign_in)().signed_in() {
+        bail!(modal::not_signed_in(
+            group,
+            owed,
+            threshold,
+            "this machine is not signed in to Modal"
+        ));
+    }
+    let driver = (on_modal.driver)()?;
+    tracing::info!(
+        owed,
+        threshold,
+        image = %driver.options.image,
+        gpu = %driver.options.gpu,
+        sandboxes = driver.options.sandboxes,
+        "embedding on Modal: {owed} chunks owed, at least `{}` of {threshold}",
+        modal::PARAM
+    );
+    let mut child = driver
+        .command()?
+        .spawn()
+        .with_context(|| format!("start the Modal driver with {}", driver.node.display()))?;
+    let stdin = child.stdin.take().context("the driver's stdin")?;
+    let stdout = child.stdout.take().context("the driver's stdout")?;
+    let stderr = child.stderr.take().context("the driver's stderr")?;
+    let started = Instant::now();
+    let model = datalib_search_index::model_key();
+
+    let feed = async move {
+        let mut stdin = stdin;
+        let mut unsettled = 0;
+        let mut prompt_bytes = 0;
+        let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
+        'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
+            for doc in draw_batch(root, group, uuids.to_vec()).await? {
+                if stop.requested() {
+                    break 'docs;
+                }
+                let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()]) else {
+                    unsettled += 1;
+                    continue;
+                };
+                for (hash, prompt) in prompts {
+                    prompt_bytes += prompt.len();
+                    stdin
+                        .write_all(modal::request_line(&hash, &prompt).as_bytes())
+                        .await
+                        .context("write to the Modal driver")?;
+                }
+            }
+        }
+        stdin.shutdown().await.ok();
+        Ok::<_, anyhow::Error>((unsettled, prompt_bytes))
+    };
+    let collect = async {
+        let mut from = FromModal::default();
+        let mut lines = BufReader::new(stdout).lines();
+        let mut batch: Vec<(String, Vec<f32>)> = Vec::new();
+        while let Some(line) = lines.next_line().await.context("read the Modal driver")? {
+            match serde_json::from_str::<Reply>(&line)
+                .with_context(|| format!("the Modal driver said {:.200}", line))?
+            {
+                Reply::Vector { hash, vector, cut } => {
+                    from.truncated += usize::from(cut);
+                    batch.push((hash, vector));
+                }
+                Reply::Failed { failed, error } => {
+                    from.failed += failed.len();
+                    from.first_error.get_or_insert(error);
+                }
+                Reply::Fatal { fatal, sign_in } => from.fatal = Some((fatal, sign_in)),
+            }
+            if batch.len() >= MODAL_PUT_BATCH {
+                cache.put(&model, &batch).await?;
+                from.embedded += batch.len();
+                progress.inc(batch.len() as u64);
+                batch.clear();
+            }
+        }
+        cache.put(&model, &batch).await?;
+        from.embedded += batch.len();
+        progress.inc(batch.len() as u64);
+        Ok::<_, anyhow::Error>(from)
+    };
+    let said = async {
+        let mut last = Vec::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::info!(group, "{line}");
+            last.push(line);
+            if last.len() > 5 {
+                last.remove(0);
+            }
+        }
+        last
+    };
+    let watch = async {
+        while !stop.requested() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        modal::interrupt(&child);
+        std::future::pending::<()>().await
+    };
+    let (fed, collected, last) = tokio::select! {
+        out = async { tokio::join!(feed, collect, said) } => out,
+        () = watch => unreachable!("the watch never ends"),
+    };
+    let status = child.wait().await.context("wait for the Modal driver")?;
+    let from = collected?;
+    if let Some((fatal, sign_in)) = from.fatal {
+        if sign_in {
+            bail!(modal::not_signed_in(
+                group,
+                owed,
+                threshold,
+                &format!("Modal refused the sign-in ({fatal})")
+            ));
+        }
+        bail!("the Modal driver could not start: {fatal}");
+    }
+    let done = Done {
+        embedded: from.embedded,
+        truncated: from.truncated,
+        embed_time: started.elapsed(),
+        ..Done::default()
+    };
+    if stop.requested() {
+        return Ok(done);
+    }
+    let (unsettled, prompt_bytes) = fed?;
+    if !status.success() {
+        bail!("the Modal driver exited {status}: {}", last.join(" | "));
+    }
+    if from.failed > 0 {
+        bail!(
+            "{} of {owed} chunks could not be embedded on Modal ({}); the {} that were are \
+             cached, and the next run sends the rest again",
+            from.failed,
+            from.first_error.unwrap_or_default(),
+            from.embedded
+        );
+    }
+    Ok(Done {
+        unsettled,
+        prompt_bytes,
+        ..done
+    })
 }
 
 /// `(hash, prompt)` for each chunk of `doc` the cache lacks, or `None`
@@ -715,7 +935,7 @@ mod tests {
                     flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(Fixed(calls))
                 };
-                let done = embed_with(root, group, open, &Progress::noop(), &StopFlag::new())
+                let done = embed_with(root, group, open, None, &Progress::noop(), &StopFlag::new())
                     .await
                     .unwrap();
                 (done, opened.load(std::sync::atomic::Ordering::SeqCst))
@@ -943,5 +1163,312 @@ mod tests {
         );
         let stale: HashSet<&str> = ["not-a-chunk-of-it"].into();
         assert_eq!(prompts_for(&doc, &stale), None);
+    }
+
+    /// The driver over a runtime tree of the test's making: the pinned
+    /// Node, and the stand-in for Modal's SDK where npm's `modal` would be,
+    /// whose Sandboxes run `fake_embed_prompts.mjs` here.
+    struct FakeModal {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        log: PathBuf,
+        node: PathBuf,
+        embed_prompts: PathBuf,
+    }
+
+    impl FakeModal {
+        fn new() -> FakeModal {
+            let r = runfiles::Runfiles::create().expect("runfiles");
+            let file = |rel: &str| {
+                let path = r.rlocation(rel).unwrap_or_else(|| panic!("{rel}"));
+                assert!(path.is_file(), "{}", path.display());
+                path
+            };
+            let node = file(&std::env::var("NODE_RLOC").expect("NODE_RLOC"));
+            let sdk = file("_main/datalib/backend/datalib_step/src/modal/testdata/fake_sdk.mjs");
+            let embed_prompts = file(
+                "_main/datalib/backend/datalib_step/src/modal/testdata/fake_embed_prompts.mjs",
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("runtime");
+            let node_at = root.join(datalib_runtime::node_runtime::NODE_REL);
+            std::fs::create_dir_all(node_at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&node, &node_at).unwrap();
+            let entry = root
+                .join("modal")
+                .join(datalib_runtime::node_runtime::MODAL_SDK_VERSION)
+                .join(datalib_runtime::node_runtime::MODAL_SDK_ENTRY_REL);
+            std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+            std::fs::copy(&sdk, &entry).unwrap();
+            let log = dir.path().join("sandboxes.jsonl");
+            FakeModal {
+                _dir: dir,
+                root,
+                log,
+                node,
+                embed_prompts,
+            }
+        }
+
+        /// The step's own options, but for the command each Sandbox runs
+        /// and slices small enough that a test makes several.
+        fn modal(&self, threshold: u64, signed_in: bool, env: &[(&str, &str)]) -> Modal {
+            self.modal_with(threshold, signed_in, env, 2)
+        }
+
+        fn modal_with(
+            &self,
+            threshold: u64,
+            signed_in: bool,
+            env: &[(&str, &str)],
+            sandboxes: usize,
+        ) -> Modal {
+            let mut options = modal::Options::for_this_build();
+            options.command = vec![
+                self.node.display().to_string(),
+                self.embed_prompts.display().to_string(),
+            ];
+            options.slice = 2;
+            options.sandboxes = sandboxes;
+            let root = self.root.clone();
+            let mut env: Vec<(String, String)> = env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            env.push(("FAKE_MODAL_LOG".into(), self.log.display().to_string()));
+            Modal {
+                threshold,
+                sign_in: Box::new(move || SignIn {
+                    token_in_env: signed_in,
+                    config_file: None,
+                }),
+                driver: Box::new(move || {
+                    let mut driver = modal::Driver::in_tree(&root, options)?;
+                    driver.env = env;
+                    Ok(driver)
+                }),
+            }
+        }
+
+        /// One line per Sandbox the run made.
+        fn sandboxes(&self) -> Vec<serde_json::Value> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        }
+    }
+
+    /// Five documents of one chunk each, keyword-indexed and owing their
+    /// vectors.
+    async fn five_docs(root: &Path) {
+        for i in 0..5 {
+            one_doc(
+                root,
+                GROUP,
+                &format!("d-{i}"),
+                &format!("Log entry number {i}"),
+            );
+        }
+        update(root).await;
+        assert_eq!(unembedded(root, GROUP).await, 5);
+    }
+
+    /// A model that must not be loaded: the run went to Modal.
+    fn never_opened() -> Result<Fixed> {
+        panic!("the local model was loaded for a run that should have gone to Modal")
+    }
+
+    /// Each cached vector, by hash.
+    async fn cached(root: &Path, group: &str) -> BTreeMap<String, Vec<f32>> {
+        let reader = Reader::open(
+            &layout::grid_index_db(root),
+            &layout::inference_cache_db(root),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let hashes: Vec<String> = reader
+            .chunk_hashes(group)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, h)| h)
+            .collect();
+        reader.close().await;
+        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+            .await
+            .unwrap();
+        let model = datalib_search_index::model_key();
+        let out = cache.get(&model, &hashes).await.unwrap();
+        cache.close().await;
+        out.into_iter().collect()
+    }
+
+    /// Over the threshold, every owed chunk goes to Modal: one Sandbox per
+    /// slice from this release's `-cuda` image on a T4, and each slice's
+    /// vectors land in the cache under its prompt's hash, as a local embed
+    /// would put them; the local model is never loaded. The next run owes
+    /// nothing and makes no Sandbox.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_over_the_threshold_embeds_on_modal() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+
+        let done = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            Some(fake.modal(5, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert!(done.prompt_bytes > 0);
+        assert_eq!(unembedded(root, GROUP).await, 0);
+        // fake_embed_prompts answers [prompt length, 1].
+        for (hash, vector) in cached(root, GROUP).await {
+            assert_eq!(vector.len(), 2, "{hash}");
+            assert_eq!(vector[1], 1.0, "{hash}");
+        }
+        let made = fake.sandboxes();
+        assert_eq!(made.len(), 3, "5 prompts, 2 a slice: {made:?}");
+        let sent: u64 = made.iter().map(|s| s["lines"].as_u64().unwrap()).sum();
+        assert_eq!(sent, 5);
+        for s in &made {
+            assert_eq!(
+                s["image"],
+                format!(
+                    "ghcr.io/imbue-ai/datalib:{}-cuda",
+                    datalib_runtime::build_id::DATALIB_VERSION
+                )
+            );
+            assert_eq!(s["gpu"], "T4");
+            assert_eq!(s["app"], "datalib-embed");
+        }
+
+        let again = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            Some(fake.modal(0, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(again, Done::default());
+        assert_eq!(fake.sandboxes().len(), 3, "nothing owed, nothing sent");
+    }
+
+    /// Under the threshold the run stays here and makes no Sandbox; with
+    /// no threshold at all nothing ever leaves.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_under_the_threshold_embeds_here() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let local = calls.clone();
+        let done = embed_with(
+            root,
+            GROUP,
+            move || Ok(Fixed(local)),
+            Some(fake.modal(6, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+        assert!(fake.sandboxes().is_empty());
+    }
+
+    /// Over the threshold and not signed in, the run fails before anything
+    /// leaves, saying how to sign in or raise the threshold; it does not
+    /// quietly embed here. A sign-in Modal itself refuses fails the same way.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_over_the_threshold_without_a_sign_in_fails_loudly() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        for (signed_in, env, says) in [
+            (false, &[][..], "not signed in to Modal"),
+            (
+                true,
+                &[("FAKE_MODAL_SIGNED_OUT", "1")][..],
+                "Modal refused the sign-in (Profile is missing credentials",
+            ),
+        ] {
+            let err = embed_with(
+                root,
+                GROUP,
+                never_opened,
+                Some(fake.modal(1, signed_in, env)),
+                &Progress::noop(),
+                &StopFlag::new(),
+            )
+            .await
+            .unwrap_err();
+            let err = format!("{err:#}");
+            for want in [says, "modal setup", modal::PARAM, "owes 5 chunks"] {
+                assert!(err.contains(want), "{want}: {err}");
+            }
+            assert_eq!(unembedded(root, GROUP).await, 5);
+        }
+        assert!(fake.sandboxes().is_empty());
+    }
+
+    /// A slice whose Sandbox fails is sent again; one that fails twice is
+    /// reported, the step fails, and the vectors the other slices brought
+    /// back are cached all the same, so the next run owes only the rest.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_slice_that_fails_twice_is_owed_by_the_next_run() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let done = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            Some(fake.modal(0, true, &[("FAKE_MODAL_FAIL", "1")])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5, "the first failure is sent again");
+        assert_eq!(fake.sandboxes().len(), 4);
+
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let err = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            // One at a time, so the first slice is the one that fails twice.
+            Some(fake.modal_with(0, true, &[("FAKE_MODAL_FAIL", "2")], 1)),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("2 of 5 chunks could not be embedded on Modal"),
+            "{err}"
+        );
+        assert_eq!(unembedded(root, GROUP).await, 2);
     }
 }

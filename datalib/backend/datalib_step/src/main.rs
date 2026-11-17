@@ -25,6 +25,7 @@ mod ingest;
 mod introspect;
 mod methods;
 mod migrate;
+mod modal;
 mod occurrences;
 mod probe;
 mod published;
@@ -858,7 +859,8 @@ async fn run_function(
             index_steps::run_keyword(data_root, &env, emitter, &control.stop).await
         }
         Function::Embed => {
-            index_steps::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
+            index_steps::run_embed(data_root, &env, params, models_dir, emitter, &control.stop)
+                .await
         }
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;

@@ -9,8 +9,10 @@ CUDA module is looked for, § "The CUDA module"), `datalib/backend/fetch/`
 (how it is published).
 
 `latchkey` (credentials) is a Node program. datalib runs it from a
-**runtime**: a pinned Node plus latchkey's full `node_modules` tree,
-built by Bazel from its lockfile so nothing is resolved from the npm
+**runtime**: a pinned Node plus latchkey's full `node_modules` tree, and
+Modal's JavaScript SDK beside it (`modal/<v>/`, which an `embed` step
+imports to embed a source on the person's Modal account:
+`docs/dev/plans/embed_on_modal.md`), each built by Bazel from its lockfile so nothing is resolved from the npm
 registry at install time and no package's install script ever runs on
 a user's machine. Every spawn of it goes through `datalib_runtime::node_runtime::tool_command`,
 which finds the runtime in one of three places, in this order:
@@ -46,7 +48,7 @@ The `runtime` job of `release.yml` runs `scripts/stage_runtime.sh` (through
 each host platform, and `publish-release` publishes what it stages:
 
 ```
-runtime-aarch64-apple-darwin.tar.gz        node/ + latchkey/<v>/
+runtime-aarch64-apple-darwin.tar.gz        node/ + latchkey/<v>/ + modal/<v>/
 runtime-x86_64-unknown-linux-gnu.tar.gz    likewise
 runtime-aarch64-unknown-linux-gnu.tar.gz   likewise
 ```

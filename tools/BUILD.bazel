@@ -39,6 +39,8 @@ STAGE_RUNTIME_DATA = [
     "//datalib/tauri:bundled_node",
     "//third-party:bundled_licenses",
     "//third-party/latchkey/runtime:latchkey_tree",
+    "//third-party/modal:LICENSE",
+    "//third-party/modal/runtime:modal_tree",
 ]
 
 STAGE_TARBALL_DATA = [
@@ -231,6 +233,7 @@ py_test(
         "//datalib/ui:pnpm-lock.yaml",
         "//third-party/doltlite:BUILD.bazel",
         "//third-party/latchkey/runtime:package.json",
+        "//third-party/modal/runtime:package.json",
     ],
     main = "check_version_pins.py",
 )

@@ -79,7 +79,10 @@ impl Function {
                 "Embed what a source's qmd collection lacks, for search by meaning. The \
                  slow one: turn it off for a source with `datalib-dag turn-off <config> \
                  <group>/embed`, and keyword search still works. One per searched \
-                 source; inputs = [\"<group>/keyword_index\"]."
+                 source; inputs = [\"<group>/keyword_index\"]. Param \
+                 `embed_on_modal_from_n_chunks`: a run that owes at least that many \
+                 chunks embeds them on the person's own Modal account; absent, \
+                 nothing leaves the machine."
             }
             Function::QmdAggregator => {
                 "Keep the qmd search index to the sources it reads, and report on the \

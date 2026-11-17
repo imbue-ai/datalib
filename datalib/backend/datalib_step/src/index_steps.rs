@@ -166,10 +166,15 @@ fn keyword_version(read: &str) -> String {
 pub async fn run_embed(
     data_root: &Path,
     env: &StepEnv,
+    params: serde_json::Value,
     models_dir: Option<PathBuf>,
     emitter: &Emitter,
     stop: &StopFlag,
 ) -> Result<Vec<OutputClaim>> {
+    let params = crate::modal::params(params)?;
+    let on_modal = params
+        .embed_on_modal_from_n_chunks
+        .map(crate::search_index::Modal::for_this_process);
     let progress = emitter.progress();
     progress.set_message("embedding");
     let root = data_root.to_path_buf();
@@ -179,7 +184,8 @@ pub async fn run_embed(
             .await
             .context("model provisioning panicked")??;
     let model = crate::search_index::model_file(&models);
-    let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
+    let done = crate::search_index::embed(data_root, &env.group, &model, on_modal, &progress, stop)
+        .await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric("embedded_prompt_bytes", &[], done.prompt_bytes as i64);
     progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);
