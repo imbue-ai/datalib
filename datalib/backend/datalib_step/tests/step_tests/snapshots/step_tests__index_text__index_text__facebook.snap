@@ -61,7 +61,7 @@ Of course. Boothby's garden, wasn't it?
 
 === facebook 00000000-0000-86e3-ad4e-e82f016fe3d4 facebook storage
 --- chunk 0
-title: facebook storage | text: Source: datalib
+title: facebook storage | text: Source: facebook
 
 # facebook — storage
 
@@ -86,6 +86,13 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
+
+--- chunk 1
+title: facebook storage | text: Source: facebook
+
+group_posts_and_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | `00000000` |
 | Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | `00000000` |
@@ -103,7 +110,7 @@ Away team to Risa. Bring the horga'hn, Number One.
 
 === facebook 00000000-0000-8768-85df-b763ceaebe85 Beverly Crusher
 --- chunk 0
-title: Beverly Crusher | text: Source: facebook
+title: Beverly Crusher | text: Source: Facebook
 Group: Friends
 
 # Beverly Crusher
@@ -119,7 +126,7 @@ Class of 2327: reunion at Boothby's garden. Bring your own trowel.
 
 === facebook 00000000-0000-8a3c-a66b-d2616975dbfc William Riker
 --- chunk 0
-title: William Riker | text: Source: facebook
+title: William Riker | text: Source: Facebook
 Group: Friends
 
 # William Riker
@@ -128,7 +135,7 @@ Friends since: 2364-01-06T10:00:00+00:00
 
 === facebook 00000000-0000-8a95-8e69-5d9ef0dcdf0c Data
 --- chunk 0
-title: Data | text: Source: facebook
+title: Data | text: Source: Facebook
 Group: Friends
 
 # Data

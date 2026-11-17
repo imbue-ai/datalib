@@ -457,10 +457,10 @@ inputs = ["slack/render_markdown"]
         assert_eq!(sort_config(&spaced).unwrap(), None);
     }
 
-    /// The shape the wizard wrote before it kept the order, and the TNG
-    /// fixture still writes: every source's qmd steps after the
-    /// aggregator that reads them. Each goes back beside its source, the
-    /// aggregator after them, and the comments stay with their entries.
+    /// The shape the wizard wrote before it kept the order: every source's
+    /// steps after the index step that reads them. Each goes back beside
+    /// its source, the index after them, and the comments stay with their
+    /// entries.
     #[test]
     fn gathers_a_sources_steps_and_puts_the_index_after_them() {
         let text = r#"data_root = "~/datalib"
@@ -496,18 +496,18 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["slack/keyword_index", "notes/keyword_index"]
+function = "embedding_map"
+inputs = ["slack/embed", "notes/embed"]
 
 # slack's search
 [[steps]]
 group = "slack"
-function = "keyword_index"
+function = "embed"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "notes"
-function = "keyword_index"
+function = "embed"
 inputs = ["notes/render_markdown"]
 
 [[applets]]
@@ -521,10 +521,10 @@ command = "datalib-applet unified_grid_and_search_index"
             [
                 "slack/ingest",
                 "slack/render_markdown",
-                "slack/keyword_index",
+                "slack/embed",
                 "notes/render_markdown",
-                "notes/keyword_index",
-                "unified_grid_and_search_index/qmd_aggregator",
+                "notes/embed",
+                "unified_grid_and_search_index/embedding_map",
             ]
         );
         assert_eq!(
@@ -535,14 +535,14 @@ command = "datalib-applet unified_grid_and_search_index"
         assert!(sorted.starts_with("data_root = \"~/datalib\"\n\n# ── slack ──\n"));
         // A comment travels with the entry under it, a sub-table with its step.
         let at = |s: &str| sorted.find(s).unwrap();
-        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"keyword_index\""));
+        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"embed\""));
         assert!(
             at("# slack's search")
                 > at("function = \"render_markdown\"\ninputs = [\"slack/ingest\"]")
         );
         assert!(at("channels = [\"general\"]") < at("function = \"render_markdown\""));
         assert!(
-            at("# ── the unified grid and search index ──") < at("function = \"qmd_aggregator\"")
+            at("# ── the unified grid and search index ──") < at("function = \"embedding_map\"")
         );
         assert!(at("# ── notes ──") < at("# ── the unified grid and search index ──"));
         // Sorting again changes nothing.

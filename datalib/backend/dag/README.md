@@ -37,7 +37,7 @@ step whose `command` is `datalib-step` runs the step program datalib
 ships, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
-`grid_index`, `qmd_aggregator`, …), and why the loader requires such a step to
+`grid_index`, `embed`, …), and why the loader requires such a step to
 be under a group. The runner never interprets the function itself.
 
 ## The graph is declared, not derived
@@ -45,6 +45,14 @@ be under a group. The runner never interprets the function itself.
 Step A → step B iff B names A's id in its `inputs`. A step's id is also the
 one tree it writes, so an input is simultaneously a step reference and an
 artifact path, and nothing has to be matched against anything.
+
+One input may name many steps: `*/render_markdown` is every step whose id is
+`<group>/render_markdown`. The loader expands it to those ids before anything
+else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
+the step's `--inputs` hold ids only, and a source added to the file is read
+without its readers being edited. A pattern is still written in the config:
+the edges stay where a person can read them, and `--check` prints what each
+pattern stood for.
 
 Validation is correspondingly small: group ids are one segment and
 unique, a grouped step's group exists and its function is one segment,
@@ -64,6 +72,13 @@ assembly is told what the config pass already threw out so its message
 can tell "you named a step that does not exist" from "the step you named
 is broken"; the commonest case of all is a render step whose fetch step
 was rejected for a bad key.
+
+A pattern does not cascade. It stands for the steps that can run, so a step
+dropped for its own reasons, or for an input it names by id, falls out of
+every pattern that would have named it (`without_broken_matches` in
+`src/config.rs`). One broken source then costs its own steps and not the grid
+that reads every render by pattern; named by id, it still blocks the step
+that names it.
 
 Cycle reporting separates the ring from what merely hangs below it. Kahn's
 algorithm cannot: it leaves behind everything it could not order, ring and
@@ -279,8 +294,8 @@ appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
 migrated in place, and the step reports its new head, which the record
 takes as its version while keeping the step's last success. A render
 store or the index in another shape is rebuilt by running the step, so
-that step answers `needs_rerun`, and so does a source's `keyword_index`
-whose part of the search index was drawn by another version of the index
+that step answers `needs_rerun`, and so does `grid_index` when a source
+it reads was drawn into the search index by another version of the index
 text or its chunking (`INDEX_TEXT_VERSION`), which no render moved: the record keeps the flag
 (`steps.needs_rerun`), the tick holds the step due until it next
 succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
@@ -338,10 +353,9 @@ follows from it:
   rate limit never keeps a render from starting. The other two,
   `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
   they once guarded), are held by the built-in index steps that name no
-  locks: `grid_index`, `keyword_index` and `qmd_aggregator` take
-  `qmd_keyword`, because they all write the grid index's file, which the
-  runner cannot see as shared, and a writer left to wait inside SQLite
-  times out; `embed` takes `qmd_embed`, so one embedding model is loaded
+  locks: `grid_index` takes `qmd_keyword`, because it writes the grid
+  index's file, which the runner cannot see as shared, and a writer left
+  to wait inside SQLite times out; `embed` takes `qmd_embed`, so one embedding model is loaded
   at a time. A `[[locks]]`
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.
@@ -350,9 +364,9 @@ None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only them
 is still taken on mid-sync, like any other. The built-in steps that read
 files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
-`keyword_index` and `embed`, which read their render store at its head
-rather than at the commit their input names;
-`embedding_map`, which reads the search index and its inference cache;
+`embed`, which reads the search index as it is rather than at the
+version its input names; `embedding_map`, which reads the search index
+and its inference cache;
 and perseus's render,
 which reads its TEI files); any step may say `reads` itself.
 
@@ -494,17 +508,17 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. The five warnings: a group nothing
+and the fix is on the group's line. The four warnings: a group nothing
 is filed under; a `name` written on a grouped step, whose label comes
-from the group; an applet filed under a group that does not exist; a
-`keyword_index` that `qmd_aggregator` does not read; and a built-in
+from the group; an applet filed under a group that does not exist; and a built-in
 step's `common.always_clear_before_ingest`, linkedin's
 `export.fetch_photos` or email's `gmail.request_concurrency`, which no
 longer do anything (`datalib-step`
 drops them before parsing, so the step still runs). The Manage screen's System row counts the warnings and shows
 their words on hover. The retired
 shapes — `datalib-step download|render|grid_index|qmd_index` on a
-command line, and a built-in `qmd_index` step — are `Rejected`, because
+command line, a built-in `qmd_index` step and a built-in
+`keyword_index` step — are `Rejected`, because
 they no longer run, and the diagnostic names `datalib-migrate-config`.
 The full list of what the loader drops is in
 [`config_model.md`](../../../docs/dev/config_model.md) § "What the loader checks". A warning passes the strict door too

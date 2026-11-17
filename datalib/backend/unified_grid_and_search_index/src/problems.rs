@@ -1,7 +1,7 @@
 //! The problems table's columns, by the ids its grid names them with, and
 //! the `problems` column behind each (`crate::view`). Its keys, order and
 //! free text are declared on `ProblemRow`: free text is a substring of
-//! the sample, the field and the rule, since there is no qmd index of
+//! the sample, the field and the rule, since there is no search index of
 //! problems.
 
 use datalib_schema::problems::ProblemRowColumn;
@@ -181,7 +181,7 @@ mod tests {
     }
 
     /// `before:`/`after:` bound when a problem last changed; there is no
-    /// `is:` and no qmd here.
+    /// `is:` and no ranked search here.
     #[test]
     fn a_range_is_the_changed_stamp() {
         let (sql, _) = build_where(&parse("after:2025-01-01T00:00:00Z"));

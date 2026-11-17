@@ -98,7 +98,7 @@ export function plainWords(query: string): string {
 }
 
 /// How long to wait after a keystroke before searching. A change to the
-/// free text is a qmd search when `ranked`: up to seconds long, and its
+/// free text is a ranked search when `ranked`: up to seconds long, and its
 /// embedding is finished even once the page has moved on. So it waits
 /// for a real pause; a filter is a quick read and keeps up.
 export function searchDelay(before: string, after: string, ranked: boolean): number {

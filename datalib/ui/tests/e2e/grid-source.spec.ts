@@ -63,7 +63,7 @@ test("the Source column shows the configured name, and source: filters by id", a
   request,
 }) => {
   // Two config writes plus five searches, any of which may land after
-  // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
+  // an applet restart and pay a model load — see `SEARCH_SETTLE`.
   test.setTimeout(210_000);
 
   // --- With no name in the config, the column falls back to the id --

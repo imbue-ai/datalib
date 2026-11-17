@@ -562,10 +562,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
         missing from them is one the config dropped, which leaves the
         index."""
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
-        (step,) = [
-            s for s in config.get("steps", []) if s.get("function") == "grid_index"
+        steps = config.get("steps", [])
+        (step,) = [s for s in steps if s.get("function") == "grid_index"]
+        ids = [
+            f"{s['group']}/{s['function']}" if "group" in s else s["id"] for s in steps
         ]
-        return tuple(step["inputs"])
+        # A pattern (`*/render_markdown`) stands for every step of its
+        # function, as the loader expands it before the step sees it.
+        out: list[str] = []
+        for written in step["inputs"]:
+            named = (
+                [i for i in ids if i.split("/", 1)[-1] == written[2:] and "/" in i]
+                if written.startswith("*/")
+                else [written]
+            )
+            out.extend(i for i in named if i not in out)
+        return tuple(out)
 
     @property
     def _index_db(self) -> Path:
@@ -769,7 +781,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_grid_and_search_index/src/qmd/mapping.rs) keys grid
+        way: `GridIndex` (unified_grid_and_search_index/src/hits/mapping.rs) keys grid
         rows by `norm_path(qmd_path)` and looks each qmd hit up by the
         hit's own data-root-relative path — the same spelling
         `apply_one` stores in `markdowns.md_path`. A provider that

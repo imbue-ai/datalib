@@ -8,8 +8,8 @@ use async_trait::async_trait;
 
 use crate::db::ChatMeta;
 use crate::group::{Grouping, Within};
+use crate::hits::GridRowRef;
 use crate::problems::{Ids, ProblemsQuery};
-use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 use crate::sort::Sort;
@@ -68,7 +68,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
-    /// or newest first with none. Its free text is qmd's; nothing here
+    /// or newest first with none. Its free text is the search index's; nothing here
     /// reads it.
     async fn ordered_uuids(
         &self,
@@ -88,7 +88,7 @@ pub trait IndexRepo: Send + Sync {
         utc: &str,
     ) -> Result<usize, RepoError>;
 
-    /// The rows behind `uuids`, qmd's ranking, that `query`'s structured
+    /// The rows behind `uuids`, the search's ranking, that `query`'s structured
     /// terms match: in `uuids`' order, or `sort`'s when given. A score
     /// sort is the ranking's own order, reversed for ascending.
     async fn filter_uuids(
@@ -101,7 +101,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// The groups the rows `query`'s structured terms match fall into, by
     /// the `grid_rows` columns `by`, and among `among` alone when given
-    /// (qmd's ranking, for free text).
+    /// (the search's ranking, for free text).
     async fn group_counts(
         &self,
         query: &ParsedQuery,
@@ -170,7 +170,7 @@ pub trait IndexRepo: Send + Sync {
     /// — the same UUID `/api/chat/{markdown_uuid}` takes.
     async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
 
-    /// The on-disk QMD for one rendered markdown, keyed by
+    /// The on-disk file of one rendered markdown, keyed by
     /// `markdowns.markdown_uuid`, and where its sections lie. The path
     /// is absolute (already joined with the data root): one UUID per
     /// rendered file, no enumeration, no fallbacks.
@@ -187,7 +187,7 @@ pub trait IndexRepo: Send + Sync {
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
 
-    /// The rows of the documents qmd's hits name, by `markdown_uuid`: a
+    /// The rows of the documents the search's hits name, by `markdown_uuid`: a
     /// hit's path is its document's id (`grid_rows::markdown_uuid_of_path`).
     async fn grid_row_refs_for_documents(
         &self,
@@ -200,7 +200,7 @@ pub trait IndexRepo: Send + Sync {
 
     /// The documents a query's structured terms match: the distinct
     /// `markdown_uuid` behind every matching row, a message's as much as
-    /// a document's. Free text is left out — qmd answers that.
+    /// a document's. Free text is left out — the search index answers that.
     async fn matching_documents(
         &self,
         q: &ParsedQuery,
@@ -214,7 +214,7 @@ pub trait IndexRepo: Send + Sync {
     ) -> Result<Vec<(String, String, bool)>, RepoError>;
 
     /// Which of `markdown_uuids` hold a row `q`'s structured terms match.
-    /// The documents holding a row `q` keeps that have a page qmd could
+    /// The documents holding a row `q` keeps that have a page the search could
     /// index, each with the source it is filed under. A row with no page,
     /// a photo's, has nothing to embed, and a page filed for the grid alone
     /// (`layout::UNINDEXED_DIR`) is left out on purpose.

@@ -4,7 +4,7 @@ expression: text
 ---
 === tng_calendar 00000000-0000-80a6-93ad-832002566f74 Warp core maintenance
 --- chunk 0
-title: Warp core maintenance | text: Source: calendar
+title: Warp core maintenance | text: Source: Calendar
 Kind: Recurring Event
 Calendar: Engineering
 
@@ -31,6 +31,12 @@ Take the core offline, recalibrate the dilithium matrix.
 
 Join from the pod: https://meet.enterprise.test/warp-core
 
+
+--- chunk 1
+title: Warp core maintenance | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Engineering
+
 ## Occurrences
 
 Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
@@ -41,7 +47,7 @@ Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
 
 === tng_calendar 00000000-0000-81a3-9b5c-946dc4b441a8 Starfleet Academy guest lecture: first contact protocols
 --- chunk 0
-title: Starfleet Academy guest lecture: first contact protocols | text: Source: calendar
+title: Starfleet Academy guest lecture: first contact protocols | text: Source: Calendar
 Kind: Changed Occurrence
 Calendar: Bridge
 
@@ -61,7 +67,7 @@ Starfleet Academy guest lecture: first contact protocols
 
 === tng_calendar 00000000-0000-8470-8240-1b4ee2c9889a Shore leave on Risa
 --- chunk 0
-title: Shore leave on Risa | text: Source: calendar
+title: Shore leave on Risa | text: Source: Calendar
 Kind: Event
 Calendar: Bridge
 
@@ -79,7 +85,7 @@ Horga'hn optional.
 
 === tng_calendar 00000000-0000-8488-9b56-8b957035e673 Senior staff briefing
 --- chunk 0
-title: Senior staff briefing | text: Source: calendar
+title: Senior staff briefing | text: Source: Calendar
 Kind: Recurring Event
 Calendar: Bridge
 
@@ -102,6 +108,12 @@ Senior staff briefing
 | Deanna Troi <troi@enterprise.test> | Maybe |
 | Geordi La Forge <laforge@enterprise.test> | No reply |
 
+
+--- chunk 1
+title: Senior staff briefing | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Bridge
+
 ## Description
 
 Ship's status, then department heads in turn.
@@ -123,7 +135,7 @@ Cancelled:
 
 === tng_calendar 00000000-0000-872d-a4f4-3355175938a9 Officers' poker night
 --- chunk 0
-title: Officers' poker night | text: Source: calendar
+title: Officers' poker night | text: Source: Calendar
 Kind: Recurring Event
 Calendar: Bridge
 
@@ -142,7 +154,7 @@ Rule: `RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TH`
 
 === tng_calendar 00000000-0000-87f7-ac79-138f8424fdb5 Senior staff briefing — Borg incursion
 --- chunk 0
-title: Senior staff briefing — Borg incursion | text: Source: calendar
+title: Senior staff briefing — Borg incursion | text: Source: Calendar
 Kind: Changed Occurrence
 Calendar: Bridge
 
@@ -164,13 +176,19 @@ Senior staff briefing — Borg incursion
 | Geordi La Forge <laforge@enterprise.test> | Accepted |
 | Worf <worf@enterprise.test> | Accepted |
 
+
+--- chunk 1
+title: Senior staff briefing — Borg incursion | text: Source: Calendar
+Kind: Changed Occurrence
+Calendar: Bridge
+
 ## Description
 
 Moved to Main Engineering so Commander La Forge can show the new shield modulations.
 
 === tng_calendar 00000000-0000-8899-a213-737545dc9ea2 Dilithium shipment arrives
 --- chunk 0
-title: Dilithium shipment arrives | text: Source: calendar
+title: Dilithium shipment arrives | text: Source: Calendar
 Kind: Event
 Calendar: Engineering
 
@@ -185,7 +203,7 @@ Dilithium shipment arrives
 
 === tng_calendar 00000000-0000-891b-9146-098a54f0815e Reception for the Klingon delegation
 --- chunk 0
-title: Reception for the Klingon delegation | text: Source: calendar
+title: Reception for the Klingon delegation | text: Source: Calendar
 Kind: Event
 Calendar: Bridge
 
@@ -214,7 +232,7 @@ Worf has asked that no one serve gagh.
 
 === tng_calendar 00000000-0000-891c-9fb1-f32c436d1ae4 tng_calendar storage
 --- chunk 0
-title: tng_calendar storage | text: Source: datalib
+title: tng_calendar storage | text: Source: tng_calendar
 
 # tng_calendar — storage
 
@@ -235,7 +253,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 
 === tng_calendar 00000000-0000-8eca-8033-c38531904ecf Data's activation day
 --- chunk 0
-title: Data's activation day | text: Source: calendar
+title: Data's activation day | text: Source: Calendar
 Kind: Recurring Event
 Calendar: Engineering
 

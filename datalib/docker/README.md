@@ -112,7 +112,7 @@ rm -rf "$tmp"
 ## Image size
 
 qmd's embedding model is about 330 MB of it, which `datalib-step
-pull-models` fetches from its pin (`datalib_runtime::qmd::EMBED_MODELS`;
+pull-models` fetches from its pin (`datalib_runtime::models::EMBED_MODELS`;
 the other two pinned models are loaded by nothing and left out). That
 step runs from the unpacked tarball, so it comes after the binaries'
 layer and a new tarball re-runs it.

@@ -4,7 +4,7 @@ expression: text
 ---
 === garmin 00000000-0000-80b6-a0f6-2a808ceb34db Daily log — Jean-Luc Picard
 --- chunk 0
-title: Daily log — Jean-Luc Picard | text: Source: garmin
+title: Daily log — Jean-Luc Picard | text: Source: Garmin
 
 Daily log — Jean-Luc Picard
 ### Mon Apr 14th, 2369
@@ -21,7 +21,7 @@ Daily log — Jean-Luc Picard
 
 === garmin 00000000-0000-81f8-a7be-7bc669836792 Records and badges — Jean-Luc Picard
 --- chunk 0
-title: Records and badges — Jean-Luc Picard | text: Source: garmin
+title: Records and badges — Jean-Luc Picard | text: Source: Garmin
 
 Records and badges — Jean-Luc Picard
 
@@ -36,7 +36,7 @@ Records and badges — Jean-Luc Picard
 
 === garmin 00000000-0000-8268-9462-873bc68da239 Steps and activity — Jean-Luc Picard
 --- chunk 0
-title: Steps and activity — Jean-Luc Picard | text: Source: garmin
+title: Steps and activity — Jean-Luc Picard | text: Source: Garmin
 
 Steps and activity — Jean-Luc Picard
 
@@ -50,7 +50,7 @@ Steps and activity — Jean-Luc Picard
 
 === garmin 00000000-0000-8622-be12-22e5f6631ff8 Heart rate and HRV — Jean-Luc Picard
 --- chunk 0
-title: Heart rate and HRV — Jean-Luc Picard | text: Source: garmin
+title: Heart rate and HRV — Jean-Luc Picard | text: Source: Garmin
 
 Heart rate and HRV — Jean-Luc Picard
 
@@ -64,7 +64,7 @@ Heart rate and HRV — Jean-Luc Picard
 
 === garmin 00000000-0000-8baa-bdd0-2e59fe76cde5 Stress and Body Battery — Jean-Luc Picard
 --- chunk 0
-title: Stress and Body Battery — Jean-Luc Picard | text: Source: garmin
+title: Stress and Body Battery — Jean-Luc Picard | text: Source: Garmin
 
 Stress and Body Battery — Jean-Luc Picard
 
@@ -78,7 +78,7 @@ Stress and Body Battery — Jean-Luc Picard
 
 === garmin 00000000-0000-8d0c-bb0a-d0b7f450753a Garmin — Jean-Luc Picard
 --- chunk 0
-title: Garmin — Jean-Luc Picard | text: Source: garmin
+title: Garmin — Jean-Luc Picard | text: Source: Garmin
 
 Garmin — Jean-Luc Picard
 
@@ -93,6 +93,10 @@ Garmin — Jean-Luc Picard
 | Wed Apr 9th, 2369 at 06:45 | 77.9 | 24.6 | 14.8 % | INDEX_SCALE |
 | Sat Apr 5th, 2369 at 06:45 | 78.1 | 24.6 | 15.0 % | INDEX_SCALE |
 | Wed Apr 2nd, 2369 at 06:45 | 78.4 | 24.7 | 15.2 % | INDEX_SCALE |
+
+
+--- chunk 1
+title: Garmin — Jean-Luc Picard | text: Source: Garmin
 
 ## Devices
 ### Forerunner 265
@@ -131,7 +135,7 @@ Garmin — Jean-Luc Picard
 
 === garmin 00000000-0000-8d3d-b49f-91db8d6251f4 garmin storage
 --- chunk 0
-title: garmin storage | text: Source: datalib
+title: garmin storage | text: Source: garmin
 
 # garmin — storage
 
@@ -155,7 +159,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 
 === garmin 00000000-0000-8f72-b9b8-d48cd967b0a8 Sleep — Jean-Luc Picard
 --- chunk 0
-title: Sleep — Jean-Luc Picard | text: Source: garmin
+title: Sleep — Jean-Luc Picard | text: Source: Garmin
 
 Sleep — Jean-Luc Picard
 
@@ -168,7 +172,7 @@ Sleep — Jean-Luc Picard
 
 === garmin 0b75af5a-2640-8ac4-895d-bc5b29c8a0e7 Holodeck run: Dixon Hill
 --- chunk 0
-title: Holodeck run: Dixon Hill | text: Source: garmin
+title: Holodeck run: Dixon Hill | text: Source: Garmin
 
 Holodeck run: Dixon Hill
 
@@ -187,7 +191,7 @@ Holodeck run: Dixon Hill
 
 === garmin 0b75b6c5-de60-825f-9377-d4c871ea50f0 Cycling: Deck 12 to Engineering
 --- chunk 0
-title: Cycling: Deck 12 to Engineering | text: Source: garmin
+title: Cycling: Deck 12 to Engineering | text: Source: Garmin
 
 Cycling: Deck 12 to Engineering
 

@@ -511,7 +511,7 @@ impl IndexedMarkdownStore {
     /// binding the whole set once.
     ///
     /// The file matters as much as the rows. `md_path` is what
-    /// `/applet/unified_grid_and_search_index/chat/{uuid}` serves and what qmd indexed, so a
+    /// `/applet/unified_grid_and_search_index/chat/{uuid}` serves and what search indexed, so a
     /// document deleted from the store but left on disk stays searchable and
     /// still resolves — a deletion the user can still read. The unlink
     /// follows the rows; inside a batch that later rolls back it leaves
@@ -1056,7 +1056,8 @@ fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_i
         .and_then(Front::from_json)
         .unwrap_or_default();
     datalib_search_index::text::Facts {
-        provider: row.provider.clone(),
+        source_name: datalib_schema::providers::Provider::parse(&row.provider)
+            .map_or_else(|| row.provider.clone(), |p| p.label().to_string()),
         front: front
             .facts()
             .iter()

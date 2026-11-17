@@ -391,7 +391,7 @@ One that is running but sends nothing for 30 seconds answers `504`,
 builds a search's whole answer before sending any of it, so a big
 search on a machine short of memory is the usual cause there. A hung
 qmd is not: a search waits at most 20 seconds on qmd to embed its text
-(`EMBED_DEADLINE`), then stops it and answers with a `qmd_error`. The
+(`EMBED_DEADLINE`), then stops it and answers with a `search_error`. The
 next search starts a fresh qmd.
 
 A read the caller gives up on is hung up on: when the browser cancels

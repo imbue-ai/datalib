@@ -168,25 +168,13 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
-inputs = ["gmail/render_markdown"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["gmail/keyword_index", "gmail/embed"]
-
-[[steps]]
-group = "gmail"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["gmail/render_markdown"]
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
 
 [[steps]]
 group = "gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 
 [[applets]]
 group = "unified_grid_and_search_index"

@@ -31,7 +31,7 @@ On a source's `embed` step, and nowhere else:
 group = "gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 [steps.params]
 embed_on_modal_from_n_chunks = 5000
 ```

@@ -141,8 +141,8 @@ of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
 The image carries the whole search index: every step in the demo
-config runs at image time, each source's `keyword_index` and `embed`
-and the `qmd_aggregator` included, so search by words and by meaning
+config runs at image time, `grid_index`'s keyword pass and each
+source's `embed` included, so search by words and by meaning
 both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a

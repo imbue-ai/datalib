@@ -498,7 +498,7 @@ pub struct StepEntry {
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
     /// The named locks it holds while it runs. `None` holds one default:
-    /// a built-in qmd step's own lock, else the one its shape gives it
+    /// a built-in search step's own lock, else the one its shape gives it
     /// (`supervisor::locks::default_for`).
     pub locks: Option<StepLocks>,
     /// How it reads its inputs. `None` is at a pinned commit, but for the
@@ -597,7 +597,7 @@ impl TryFrom<StepTable> for StepEntry {
 impl StepEntry {
     /// Whether it runs `datalib-step`. The runner still does more for that
     /// program than for any other: the launch's migrate and compact
-    /// passes, the qmd locks and unpinned reads its functions default to,
+    /// passes, the search locks and unpinned reads its functions default to,
     /// and the params check against its sources' schemas.
     pub fn runs_datalib_step(&self) -> bool {
         names_datalib_step(self.command.as_deref())
@@ -748,6 +748,39 @@ pub const TIME_SERIES_SOURCE_TYPES: &[&str] = &["garmin", "yolink", "airvisual"]
 
 /// The group the time-series index is filed under, and the tree it writes.
 pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
+
+/// Which index step reads every source's step of a function, as
+/// `(source function, index group, index function)`. The index step reads
+/// them by pattern (`*/render_markdown`), so a source added later is read
+/// without its entry being touched.
+pub const FAN_INS: &[(&str, &str, &str)] = &[
+    (
+        "render_markdown",
+        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        "grid_index",
+    ),
+    // For their problem rows alone.
+    (
+        "render_time_series",
+        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        "grid_index",
+    ),
+    (
+        "render_occurrences",
+        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        "grid_index",
+    ),
+    (
+        "embed",
+        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        "embedding_map",
+    ),
+    (
+        "render_time_series",
+        TIME_SERIES_INDEX_GROUP,
+        "time_series_index",
+    ),
+];
 
 fn reserved_dir(top: &str) -> Option<(&'static str, &'static str)> {
     RESERVED_DIRS.iter().copied().find(|(dir, _)| *dir == top)
@@ -1116,9 +1149,56 @@ struct Accepted {
     /// what the config declares.
     lock_specs: Vec<crate::supervisor::locks::LockSpec>,
     groups: Vec<GroupEntry>,
+    /// Each step with its patterns expanded over every step this pass
+    /// kept, and its spec.
     steps: Vec<(StepEntry, StepSpec)>,
+    /// The same steps with their `inputs` as written, for
+    /// [`check_text`] to expand again over what the graph keeps.
+    written: Vec<WrittenStep>,
+    expansions: Vec<crate::input_pattern::Expansion>,
     applets: Vec<AppletEntry>,
     diagnostics: Vec<Diagnostic>,
+}
+
+/// Steps with their inputs expanded and their specs, and what each pattern
+/// stood for.
+type Resolved = (
+    Vec<(StepEntry, StepSpec)>,
+    Vec<crate::input_pattern::Expansion>,
+);
+
+/// A step the entry rules kept, with its `inputs` as written and what its
+/// spec is built from.
+#[derive(Clone)]
+struct WrittenStep {
+    entry: StepEntry,
+    group_type: Option<String>,
+    source_group: Option<(String, String)>,
+}
+
+/// `steps` with every pattern in their `inputs` expanded to the ids in
+/// `universe` it names, and their specs built from that.
+fn resolve_inputs(steps: &[WrittenStep], universe: &[&str]) -> Resolved {
+    let mut out = Vec::with_capacity(steps.len());
+    let mut expansions = Vec::new();
+    for w in steps {
+        let (inputs, found) = crate::input_pattern::expand(&w.entry.id, &w.entry.inputs, universe);
+        expansions.extend(found);
+        let entry = StepEntry {
+            inputs,
+            ..w.entry.clone()
+        };
+        let source_group = w
+            .source_group
+            .as_ref()
+            .map(|(id, t)| (id.as_str(), t.as_str()));
+        // The entry rules built this spec once with the inputs as written;
+        // an expansion only puts ids of steps they kept in their place.
+        let spec = spec_of(&entry, w.group_type.as_deref(), source_group)
+            .expect("an accepted step's spec builds again with its patterns expanded");
+        out.push((entry, spec));
+    }
+    (out, expansions)
 }
 
 /// Every rule decidable without the graph, applied entry by entry, dropping
@@ -1144,7 +1224,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         .collect();
 
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let (steps, step_diags) = accept_steps(
+    let (written, step_diags) = accept_steps(
         c.steps,
         &by_id,
         &dropped_groups,
@@ -1153,6 +1233,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         text,
     );
     diags.extend(step_diags);
+    let universe: Vec<&str> = written.iter().map(|w| w.entry.id.as_str()).collect();
+    let (steps, expansions) = resolve_inputs(&written, &universe);
 
     let (applets, applet_diags) = accept_applets(c.applets, &package_dirs, text);
     diags.extend(applet_diags);
@@ -1179,6 +1261,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         lock_specs,
         groups,
         steps,
+        written,
+        expansions,
         applets,
         diagnostics: diags,
     }
@@ -1449,11 +1533,10 @@ fn accept_steps(
     locks: &[crate::supervisor::locks::LockSpec],
     packages: &BTreeMap<&str, String>,
     text: Option<&str>,
-) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
-    let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
+) -> (Vec<WrittenStep>, Vec<Diagnostic>) {
+    let mut accepted: Vec<WrittenStep> = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let aggregated = aggregated_ids(&candidates);
 
     for c in candidates {
         let id = c.entry.id.clone();
@@ -1478,7 +1561,7 @@ fn accept_steps(
                     Some(group) => {
                         group_type = group.r#type.as_deref();
                         if group_type == Some(DIFF_GROUP_TYPE)
-                            && !QMD_SOURCE_FUNCTIONS.contains(&f.as_str())
+                            && !SEARCH_SOURCE_FUNCTIONS.contains(&f.as_str())
                         {
                             if f != DIFF_GROUP_FUNCTION {
                                 diags.push(
@@ -1673,14 +1756,16 @@ fn accept_steps(
             );
             continue;
         }
-        if is_builtin(&c.entry, "qmd_index") {
+        if let Some((function, why)) = RETIRED_BUILTINS
+            .iter()
+            .find(|(function, _)| is_builtin(&c.entry, function))
+        {
             diags.push(
                 c.diag(
                     Severity::Rejected,
                     text,
                     Some("function"),
-                    "`qmd_index` is the shape from before `qmd_aggregator`, which reads each \
-                     source's `keyword_index` and `embed` rather than feeding them",
+                    format!("`{function}` is the shape from before {why}"),
                 )
                 .with_help(
                     "the app rewrites the file itself when it next reads it, keeping the old \
@@ -1689,23 +1774,6 @@ fn accept_steps(
                 ),
             );
             continue;
-        }
-        if is_builtin(&c.entry, "keyword_index")
-            && aggregated.as_ref().is_some_and(|a| !a.contains(&id))
-        {
-            diags.push(
-                c.diag(
-                    Severity::Warning,
-                    text,
-                    None,
-                    "`qmd_aggregator` does not read this step, so every aggregation retires \
-                     this source's qmd collection and this step registers it again",
-                )
-                .with_help(format!(
-                    "add {id:?} to `qmd_aggregator`'s `inputs`, or remove this step to leave \
-                     the source out of search"
-                )),
-            );
         }
         if c.entry.group.is_some() && c.entry.name.is_some() {
             diags.push(
@@ -1778,7 +1846,11 @@ fn accept_steps(
             continue;
         }
         seen.insert(id);
-        accepted.push((c.entry, spec));
+        accepted.push(WrittenStep {
+            entry: c.entry,
+            group_type: group_type.map(str::to_string),
+            source_group: source_group.map(|(id, t)| (id.to_string(), t.to_string())),
+        });
     }
     (accepted, diags)
 }
@@ -1914,24 +1986,27 @@ fn params_key_span(
     header
 }
 
+/// Built-in functions that no longer run, each with what took its place.
+/// The config upgrade rewrites each away (`datalib_migrate_config`).
+const RETIRED_BUILTINS: &[(&str, &str)] = &[
+    (
+        "qmd_index",
+        "each source's `embed` and `grid_index`'s keyword search did its work",
+    ),
+    (
+        "keyword_index",
+        "`grid_index` put each source in the keyword search itself: it searches every \
+         source it reads but those its `params.not_searched` names",
+    ),
+    (
+        "qmd_aggregator",
+        "`grid_index` kept the vector cache to what a chunk names and reported what search \
+         holds; `embedding_map` reads every `embed` itself",
+    ),
+];
+
 fn is_builtin(e: &StepEntry, function: &str) -> bool {
     e.runs_datalib_step() && e.function.as_deref() == Some(function)
-}
-
-/// Every step a built-in `qmd_aggregator` reads, or `None` in a config
-/// with none. The aggregator retires the collection of any source whose
-/// steps it does not read.
-fn aggregated_ids(candidates: &[Candidate<StepEntry>]) -> Option<BTreeSet<String>> {
-    let mut aggregators = candidates
-        .iter()
-        .filter(|c| is_builtin(&c.entry, "qmd_aggregator"))
-        .peekable();
-    aggregators.peek()?;
-    Some(
-        aggregators
-            .flat_map(|c| c.entry.inputs.iter().cloned())
-            .collect(),
-    )
 }
 
 fn nests_with(a: &str, b: &str) -> bool {
@@ -1953,25 +2028,21 @@ fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
 pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
 
 /// Built-in steps that read their inputs off disk rather than at a pinned
-/// commit: a keyword index globs its render tree's `.md` files, an embed
-/// and the embedding map read qmd's own SQLite file, and perseus renders
-/// straight from its ingest's TEI files. `(group type, function)`,
-/// `None` matching any type.
+/// commit: an embed and the embedding map read the search index's file as
+/// it is, and perseus renders straight from its ingest's TEI files.
+/// `(group type, function)`, `None` matching any type.
 const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
-    (None, "keyword_index"),
     (None, "embed"),
     (None, "embedding_map"),
     (Some("perseus"), "render_markdown"),
 ];
 
 /// The lock a built-in step holds when it names none, where its shape's
-/// budget would not keep it safe: the grid's load, each keyword update and
-/// the aggregator's sweep all write the grid index's file, which the runner
-/// cannot see as shared; every embed loads the model.
+/// budget would not keep it safe: the grid's load, its keyword pass and
+/// its sweep write the grid index's file and the inference cache, which
+/// the runner cannot see as shared; every embed loads the model.
 const BUILTIN_LOCKS: &[(&str, &str)] = &[
     ("grid_index", crate::supervisor::locks::QMD_KEYWORD),
-    ("qmd_aggregator", crate::supervisor::locks::QMD_KEYWORD),
-    ("keyword_index", crate::supervisor::locks::QMD_KEYWORD),
     ("embed", crate::supervisor::locks::QMD_EMBED),
 ];
 
@@ -1993,9 +2064,10 @@ fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
 /// wrote it.
 const DIFF_GROUP_FUNCTION: &str = "render_markdown";
 
-/// A source's own qmd steps, which read its `render_markdown` whoever
-/// wrote it — so a diff group may have them too.
-const QMD_SOURCE_FUNCTIONS: &[&str] = &["keyword_index", "embed"];
+/// A source's own search step, which embeds what the `grid_index` step's keyword
+/// pass cut of its `render_markdown` whoever wrote it — so a diff group
+/// may have it too.
+const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["embed"];
 
 fn spec_of(
     e: &StepEntry,
@@ -2177,6 +2249,9 @@ struct Entries {
     /// than that it never existed — different sentences, different entries
     /// to fix.
     dropped: BTreeSet<String>,
+    /// The kept steps with their `inputs` as written.
+    written: Vec<WrittenStep>,
+    expansions: Vec<crate::input_pattern::Expansion>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -2240,6 +2315,8 @@ fn entries_of(text: &str) -> Entries {
                 lock_specs: crate::supervisor::locks::defaults(),
                 spans: BTreeMap::new(),
                 dropped: BTreeSet::new(),
+                written: Vec::new(),
+                expansions: Vec::new(),
                 diagnostics: vec![d],
             };
         }
@@ -2366,6 +2443,8 @@ fn entries_of(text: &str) -> Entries {
         lock_specs: accepted.lock_specs,
         spans,
         dropped,
+        written: accepted.written,
+        expansions: accepted.expansions,
         diagnostics: diags,
     }
 }
@@ -2392,6 +2471,9 @@ pub struct ConfigCheck {
     pub cfg: DagConfig,
     /// The graph built from `cfg`. Empty when the file is not a config.
     pub graph: Graph,
+    /// Every pattern a step's `inputs` wrote (`*/render_markdown`), and
+    /// the ids it stood for; `cfg` and `graph` hold the ids only.
+    pub expansions: Vec<crate::input_pattern::Expansion>,
     /// One per problem, in file order — the order someone fixing them reads.
     /// Sort by [`Severity`] for worst-first; its `Ord` is blast radius.
     pub diagnostics: Vec<Diagnostic>,
@@ -2441,6 +2523,12 @@ impl ConfigCheck {
 /// silently breaks.
 pub fn check_text(text: &str) -> ConfigCheck {
     let mut entries = entries_of(text);
+    if let Some((steps, expansions)) = without_broken_matches(&entries.written, &entries.dropped) {
+        let (cfg_steps, specs): (Vec<_>, Vec<_>) = steps.into_iter().unzip();
+        entries.cfg.steps = cfg_steps;
+        entries.specs = specs;
+        entries.expansions = expansions;
+    }
     let (mut graph, mut graph_diags) =
         Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
     graph.locks = std::mem::take(&mut entries.lock_specs);
@@ -2468,8 +2556,59 @@ pub fn check_text(text: &str) -> ConfigCheck {
         text: text.to_string(),
         cfg: entries.cfg,
         graph,
+        expansions: entries.expansions,
         diagnostics: entries.diagnostics,
     }
+}
+
+/// What `datalib-dag --check` prints for the patterns: one line each,
+/// the step, the pattern and what it read.
+pub fn expansion_lines(expansions: &[crate::input_pattern::Expansion]) -> Vec<String> {
+    expansions
+        .iter()
+        .map(|e| {
+            let ids = if e.ids.is_empty() {
+                "(no step)".to_string()
+            } else {
+                e.ids.join(", ")
+            };
+            format!("  {} reads {} = {ids}", e.step, e.pattern)
+        })
+        .collect()
+}
+
+/// A pattern stands for the steps that can run, so one broken source does
+/// not block every step that reads its function by pattern, as it blocks a
+/// step that names it. The steps the graph drops with every pattern left
+/// out are the broken ones; the patterns are expanded again without them.
+/// `None` when no pattern matched a broken step.
+fn without_broken_matches(
+    written: &[WrittenStep],
+    dropped_earlier: &BTreeSet<String>,
+) -> Option<Resolved> {
+    let all: Vec<&str> = written.iter().map(|w| w.entry.id.as_str()).collect();
+    let (_, expansions) = resolve_inputs(written, &all);
+    if expansions.is_empty() {
+        return None;
+    }
+    let (named_only, _) = resolve_inputs(written, &[]);
+    let (probe, _) = Graph::build_graded(
+        named_only.into_iter().map(|(_, spec)| spec).collect(),
+        dropped_earlier,
+    );
+    let broken: BTreeSet<&str> = all
+        .iter()
+        .copied()
+        .filter(|id| !probe.by_id.contains_key(*id))
+        .collect();
+    let hit = expansions
+        .iter()
+        .any(|e| e.ids.iter().any(|id| broken.contains(id.as_str())));
+    if !hit {
+        return None;
+    }
+    let runnable: Vec<&str> = all.into_iter().filter(|id| !broken.contains(id)).collect();
+    Some(resolve_inputs(written, &runnable))
 }
 
 impl DagConfig {
@@ -2899,13 +3038,8 @@ mod tests {
 
             [[steps]]
             group = "mail"
-            function = "keyword_index"
-            inputs = ["mail/render_markdown"]
-
-            [[steps]]
-            group = "mail"
             function = "embed"
-            inputs = ["mail/keyword_index"]
+            inputs = ["unified_grid_and_search_index/grid_index"]
 
             [[steps]]
             group = "unified_grid_and_search_index"
@@ -2914,13 +3048,8 @@ mod tests {
 
             [[steps]]
             group = "unified_grid_and_search_index"
-            function = "qmd_aggregator"
-            inputs = ["mail/keyword_index", "mail/embed"]
-
-            [[steps]]
-            group = "unified_grid_and_search_index"
             function = "embedding_map"
-            inputs = ["unified_grid_and_search_index/qmd_aggregator"]
+            inputs = ["*/embed"]
 
             [[steps]]
             id = "custom/qmd"
@@ -2939,7 +3068,6 @@ mod tests {
             unpinned,
             [
                 "iliad/render_markdown",
-                "mail/keyword_index",
                 "mail/embed",
                 "unified_grid_and_search_index/embedding_map"
             ]
@@ -3667,10 +3795,6 @@ id = "unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 function = "grid_index"
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-
 [[applets]]
 group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
@@ -3678,7 +3802,7 @@ command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
-        assert_eq!(check.graph.steps.len(), 2);
+        assert_eq!(check.graph.steps.len(), 1);
     }
 
     /// Malformed TOML is the one shape with nothing to salvage.
@@ -4019,6 +4143,178 @@ command = "x"
 }
 
 // --- Groups ----------------------------------------------------------------
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    const CONFIG: &str = r#"
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+
+[[groups]]
+id = "mail"
+type = "email"
+
+[[steps]]
+group = "mail"
+function = "ingest"
+command = "datalib-step"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["mail/ingest"]
+
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
+"#;
+
+    fn inputs_of(check: &ConfigCheck, id: &str) -> Vec<String> {
+        check
+            .cfg
+            .steps
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{id} did not load: {}", check.render("c.toml".as_ref())))
+            .inputs
+            .clone()
+    }
+
+    /// `*/render_markdown` reads every source's render, in the file's
+    /// order, and everything past the loader sees the ids: the entry, the
+    /// graph's edges and the command line the step is handed.
+    #[test]
+    fn a_pattern_reads_every_step_of_its_function() {
+        let check = check_text(CONFIG);
+        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
+        let grid = "unified_grid_and_search_index/grid_index";
+        assert_eq!(
+            inputs_of(&check, grid),
+            ["slack/render_markdown", "mail/render_markdown"]
+        );
+        let spec = &check.graph.steps[check.graph.by_id[grid]];
+        let edges: Vec<&str> = spec.inputs.iter().map(|i| i.as_str()).collect();
+        assert_eq!(edges, ["slack/render_markdown", "mail/render_markdown"]);
+        let StepRun::Subprocess { argv, .. } = &spec.run else {
+            panic!("a subprocess step")
+        };
+        assert!(
+            argv.contains(&r#"["slack/render_markdown","mail/render_markdown"]"#.to_string()),
+            "{argv:?}"
+        );
+        assert_eq!(
+            expansion_lines(&check.expansions),
+            [format!(
+                "  {grid} reads */render_markdown = slack/render_markdown, mail/render_markdown"
+            )]
+        );
+    }
+
+    /// A source added to the file is read without touching the index's
+    /// entry, which is the point of writing a pattern.
+    #[test]
+    fn a_source_added_later_is_read_without_editing_the_index() {
+        let added = CONFIG.replace(
+            "[[groups]]\nid = \"unified_grid_and_search_index\"",
+            "[[groups]]\nid = \"notes\"\ntype = \"apple_notes\"\n\n[[steps]]\ngroup = \"notes\"\n\
+             function = \"render_markdown\"\ncommand = \"datalib-step\"\n\n\
+             [[groups]]\nid = \"unified_grid_and_search_index\"",
+        );
+        let check = check_text(&added);
+        assert_eq!(
+            inputs_of(&check, "unified_grid_and_search_index/grid_index"),
+            [
+                "slack/render_markdown",
+                "mail/render_markdown",
+                "notes/render_markdown"
+            ]
+        );
+    }
+
+    /// One source whose ingest was refused takes its own render with it,
+    /// and nothing else: the index that reads renders by pattern still
+    /// runs, over the source that works. Named by id, the same broken
+    /// render blocks the index, as it always has.
+    #[test]
+    fn a_broken_source_does_not_block_what_reads_it_by_pattern() {
+        let broken = CONFIG.replace(
+            "group = \"mail\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"",
+            "group = \"mail\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\nbogus = 1",
+        );
+        let check = check_text(&broken);
+        let grid = "unified_grid_and_search_index/grid_index";
+        assert_eq!(inputs_of(&check, grid), ["slack/render_markdown"]);
+        assert!(check.diagnostics.iter().all(|d| d.id() != Some(grid)));
+        assert_eq!(
+            check
+                .diagnostics
+                .iter()
+                .find(|d| d.id() == Some("mail/render_markdown"))
+                .map(|d| d.severity),
+            Some(Severity::Blocked)
+        );
+
+        let named = broken.replace(
+            r#"inputs = ["*/render_markdown"]"#,
+            r#"inputs = ["slack/render_markdown", "mail/render_markdown"]"#,
+        );
+        let check = check_text(&named);
+        assert_eq!(
+            check
+                .diagnostics
+                .iter()
+                .find(|d| d.id() == Some(grid))
+                .map(|d| d.severity),
+            Some(Severity::Blocked)
+        );
+    }
+
+    /// The map reads every embed by pattern.
+    #[test]
+    fn the_embedding_map_reads_every_embed() {
+        let text = format!(
+            "{CONFIG}
+[[steps]]
+group = \"slack\"
+function = \"embed\"
+command = \"datalib-step\"
+inputs = [\"unified_grid_and_search_index/grid_index\"]
+
+[[steps]]
+group = \"unified_grid_and_search_index\"
+function = \"embedding_map\"
+command = \"datalib-step\"
+inputs = [\"*/embed\"]
+"
+        );
+        let check = check_text(&text);
+        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
+        assert_eq!(
+            inputs_of(&check, "unified_grid_and_search_index/embedding_map"),
+            ["slack/embed"]
+        );
+    }
+}
 
 #[cfg(test)]
 mod group_tests {
@@ -4549,10 +4845,10 @@ inputs = ["a"]
         assert_eq!(slots(&check, "cpu"), Some(4));
     }
 
-    /// Every writer of the grid index's file (the grid's load, each
-    /// keyword update, the aggregator's sweep) holds the one-slot
+    /// Every writer of the grid index's file (the grid's load with its
+    /// keyword pass, the aggregator's sweep) holds the one-slot
     /// `qmd_keyword` lock, so they queue in the runner rather than inside
-    /// SQLite, where a `grid_index` waiting on a long `keyword_index` timed
+    /// SQLite, where a `grid_index` waiting on a long keyword write timed
     /// out. An embed only reads that file and holds `qmd_embed`, so it may
     /// overlap them. A step that names its own locks, or runs its own
     /// command, keeps those.
@@ -4573,19 +4869,9 @@ function = "render_markdown"
 
 [[steps]]
 group = "mail"
-function = "keyword_index"
-inputs = ["mail/render_markdown"]
-
-[[steps]]
-group = "mail"
 function = "embed"
-inputs = ["mail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 locks = ["cpu"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["mail/keyword_index", "mail/embed"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
@@ -4595,7 +4881,7 @@ inputs = ["mail/render_markdown"]
 [[steps]]
 id = "custom/embed"
 command = "x"
-inputs = ["mail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
@@ -4606,11 +4892,6 @@ inputs = ["mail/keyword_index"]
                 .map(|(name, _)| name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            held("unified_grid_and_search_index/qmd_aggregator"),
-            ["qmd_keyword"]
-        );
-        assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
         assert_eq!(
             held("unified_grid_and_search_index/grid_index"),
             ["qmd_keyword"]
@@ -4625,9 +4906,10 @@ inputs = ["mail/keyword_index"]
         assert_eq!(slots(&check, "qmd_embed"), Some(1));
     }
 
-    /// `qmd_index` fed the per-source steps; `qmd_aggregator` reads them.
-    /// A config still naming the old step is refused, naming the tool that
-    /// rewrites it, and loses that entry alone.
+    /// `qmd_index` did the search's work in one fan-in. A config still
+    /// naming the old step is refused, naming the tool that rewrites it,
+    /// and loses that entry alone. `keyword_index` and `qmd_aggregator`
+    /// are refused the same way (`RETIRED_BUILTINS`).
     #[test]
     fn a_qmd_index_step_is_refused_and_names_the_migrator() {
         let check = check_text(
@@ -4664,67 +4946,78 @@ inputs = ["mail/render_markdown"]
             .any(|s| s.id == "mail/render_markdown"));
     }
 
-    /// The aggregator keeps the collection set to the sources it reads,
-    /// so a keyword index it does not read is retired every run and
-    /// registered again. Loaded, and warned about.
+    /// `keyword_index` was each source's own keyword pass; `grid_index`
+    /// does it now. A config still naming the step is refused, naming the
+    /// tool that rewrites it, and loses that entry alone.
     #[test]
-    fn a_keyword_index_the_aggregator_does_not_read_warns() {
+    fn a_keyword_index_step_is_refused_and_names_the_migrator() {
         let check = check_text(
             r#"
 [[groups]]
 id = "mail"
 type = "email"
 
-[[groups]]
-id = "notes"
-type = "email"
-
-[[groups]]
-id = "unified_grid_and_search_index"
-
 [[steps]]
 group = "mail"
-function = "render_markdown"
-
-[[steps]]
-group = "notes"
 function = "render_markdown"
 
 [[steps]]
 group = "mail"
 function = "keyword_index"
 inputs = ["mail/render_markdown"]
+"#,
+        );
+        let refused: Vec<&Diagnostic> = check
+            .diagnostics
+            .iter()
+            .filter(|d| d.id() == Some("mail/keyword_index"))
+            .collect();
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("not_searched"));
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
+        assert!(check
+            .graph
+            .steps
+            .iter()
+            .any(|s| s.id == "mail/render_markdown"));
+    }
+
+    /// `qmd_aggregator` swept the vectors and reported; `grid_index` does
+    /// both now. A config still naming it is refused, naming the tool that
+    /// rewrites it, and loses that entry alone.
+    #[test]
+    fn a_qmd_aggregator_step_is_refused_and_names_the_migrator() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "notes"
-function = "keyword_index"
-inputs = ["notes/render_markdown"]
+group = "unified_grid_and_search_index"
+function = "grid_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
-inputs = ["mail/keyword_index"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 "#,
         );
-        let warned: Vec<&Diagnostic> = check
+        let refused: Vec<&Diagnostic> = check
             .diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Warning)
+            .filter(|d| d.id() == Some("unified_grid_and_search_index/qmd_aggregator"))
             .collect();
-        assert_eq!(warned.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(warned[0].id(), Some("notes/keyword_index"));
-        assert!(
-            warned[0].describe().contains("retires"),
-            "{}",
-            warned[0].describe()
-        );
-        assert_eq!(check.graph.steps.len(), 5, "a warning drops nothing");
+        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
+        assert_eq!(refused[0].severity, Severity::Rejected);
+        assert!(refused[0].describe().contains("datalib-migrate-config"));
+        assert_eq!(check.graph.steps.len(), 1);
     }
 
     /// A comparison is searched like any source, so its group may carry
-    /// the qmd steps beside its one render.
+    /// an embed beside its one render.
     #[test]
-    fn a_diff_group_may_carry_its_qmd_steps() {
+    fn a_diff_group_may_carry_its_embed() {
         let check = check_text(
             r#"
 [[groups]]
@@ -4744,19 +5037,14 @@ group = "slack-diff"
 function = "render_markdown"
 
 [[steps]]
-group = "slack-diff"
-function = "keyword_index"
-inputs = ["slack-diff/render_markdown"]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "slack-diff"
 function = "embed"
-inputs = ["slack-diff/keyword_index"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
+inputs = ["unified_grid_and_search_index/grid_index"]
 "#,
         );
         let dropped: Vec<_> = check
@@ -4765,7 +5053,7 @@ inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
             .filter(|d| d.severity.drops_the_entry())
             .collect();
         assert!(dropped.is_empty(), "{dropped:?}");
-        assert_eq!(check.graph.steps.len(), 4);
+        assert_eq!(check.graph.steps.len(), 3);
     }
 
     /// When a step may run is not what it makes: neither re-runs anything.

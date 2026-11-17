@@ -7,9 +7,10 @@
 use std::ops::Range;
 use std::path::Path;
 
-use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
+use datalib_dag::config::{DagConfig, FAN_INS, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
+use datalib_dag::input_pattern::names;
 use datalib_obs::status_line;
 use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
@@ -19,40 +20,8 @@ use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
 
-/// Which index step reads a source step of each function, as
-/// `(source function, index group, index function)`.
-const FAN_INS: &[(&str, &str, &str)] = &[
-    (
-        "render_markdown",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    // For their problem rows alone.
-    (
-        "render_time_series",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    (
-        "render_occurrences",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    (
-        "keyword_index",
-        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "qmd_aggregator",
-    ),
-    ("embed", UNIFIED_GRID_AND_SEARCH_INDEX_DIR, "qmd_aggregator"),
-    (
-        "render_time_series",
-        TIME_SERIES_INDEX_GROUP,
-        "time_series_index",
-    ),
-];
-
-fn qmd_aggregator() -> String {
-    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/qmd_aggregator")
+fn grid_index() -> String {
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/grid_index")
 }
 
 const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
@@ -114,13 +83,13 @@ pub struct Appended {
     /// `(source step, index step)` for each input added.
     pub wired: Vec<(String, String)>,
     /// Source steps no index step in the config reads, with the one that
-    /// would have: a config with search turned off has no `qmd_aggregator`.
+    /// would have: a config with no map has no `embedding_map`.
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
-    /// The config has search, and the stanza has no `keyword_index`, so
-    /// free text will not find this source until one is added.
-    pub left_out_of_search: bool,
+    /// The config has the `grid_index` step an `embed` reads, and the stanza has
+    /// none, so the source is found by its words alone until one is added.
+    pub found_by_words_alone: bool,
 }
 
 /// The minimal stanza for `t` by `method` (needed only when `t` has more
@@ -188,14 +157,14 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
     let config_has_search = have
         .steps
         .iter()
-        .any(|s| s.step_id().as_deref() == Some(qmd_aggregator().as_str()));
+        .any(|s| s.step_id().as_deref() == Some(grid_index().as_str()));
     let has = |function: &str| {
         adding
             .steps
             .iter()
             .any(|s| s.function.as_deref() == Some(function))
     };
-    let left_out_of_search = config_has_search && has("render_markdown") && !has("keyword_index");
+    let found_by_words_alone = config_has_search && has("render_markdown") && !has("embed");
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut wired = Vec::new();
@@ -222,12 +191,21 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             .find(|s| s.step_id().as_deref() == Some(index_id.as_str()));
         match index.and_then(|s| s.inputs.as_ref()) {
             Some(inputs) => {
-                let mut after = inputs.get_ref().clone();
-                after.extend(reads.iter().cloned());
-                edits.push((
-                    inputs.span(),
-                    edit_string_array(&config[inputs.span()], &after)?,
-                ));
+                // A pattern already there (`*/render_markdown`) reads the
+                // new step without an edit.
+                let unnamed: Vec<String> = reads
+                    .iter()
+                    .filter(|r| !inputs.get_ref().iter().any(|i| names(i, r)))
+                    .cloned()
+                    .collect();
+                if !unnamed.is_empty() {
+                    let mut after = inputs.get_ref().clone();
+                    after.extend(unnamed);
+                    edits.push((
+                        inputs.span(),
+                        edit_string_array(&config[inputs.span()], &after)?,
+                    ));
+                }
                 wired.extend(reads.into_iter().map(|r| (r, index_id.clone())));
             }
             None if index_group == TIME_SERIES_INDEX_GROUP
@@ -292,7 +270,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         wired,
         unread,
         added_time_series_index,
-        left_out_of_search,
+        found_by_words_alone,
     })
 }
 
@@ -416,13 +394,11 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
             "  nothing reads {step}: the config has no {index}, so it is not indexed there"
         );
     }
-    if appended.left_out_of_search {
+    if appended.found_by_words_alone {
         status_line!(
-            "  free-text search will not find it yet: the minimal stanza has no \
-             `{group}/keyword_index` step (words) or `{group}/embed` (meaning). Copy them \
-             from the complete stanza (`datalib-step examples {t} --method {method}`), and \
-             add them to the inputs of `{}`.",
-            qmd_aggregator()
+            "  search finds it by its words, not yet by its meaning: the minimal stanza has \
+             no `{group}/embed` step. Copy it from the complete stanza \
+             (`datalib-step examples {t} --method {method}`)."
         );
     }
     status_line!(
@@ -502,8 +478,8 @@ mod tests {
             ["slack/render_markdown"]
         );
         assert!(
-            appended.left_out_of_search,
-            "the starter has search and the minimal stanza no keyword_index"
+            appended.found_by_words_alone,
+            "the starter searches by meaning and the minimal stanza has no embed"
         );
         assert_eq!(
             appended.wired,
@@ -513,20 +489,14 @@ mod tests {
             )]
         );
         // Above the index block, whose comments stay with it, and the
-        // block itself untouched but for the one array.
+        // block itself untouched: its patterns read the new source.
         let source_at = appended.text.find("[[groups]]\nid = \"slack\"").unwrap();
         let index_at = appended
             .text
             .find("# ── the unified grid and search index")
             .unwrap();
         assert!(source_at < index_at, "{}", appended.text);
-        assert_eq!(
-            appended.text.replace(
-                "inputs = [\"slack/render_markdown\"]\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\"",
-                "inputs = []\n\n[[steps]]\ngroup = \"unified_grid_and_search_index\""
-            )[index_at..],
-            *starter
-        );
+        assert_eq!(appended.text[index_at..], *starter);
     }
 
     #[test]
@@ -570,10 +540,10 @@ inputs = [
             appended.text
         );
         assert_eq!(appended.group, "work-mail");
-        // No qmd_aggregator here, and the minimal stanza has no search
-        // steps for one to read.
+        // No embedding_map here, and the minimal stanza has no embed for
+        // one to read; the `grid_index` step searches it by its words.
         assert!(appended.unread.is_empty());
-        assert!(!appended.left_out_of_search, "a config without search");
+        assert!(appended.found_by_words_alone);
     }
 
     #[test]

@@ -216,8 +216,8 @@ pub struct DocumentLink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FreeTextMatch {
-    /// qmd ranks the rows: they come in its order, best first.
-    Qmd,
+    /// The search index ranks the rows: they come in its order, best first.
+    Ranked,
     /// A substring of some of the columns; the rows keep their order.
     Like,
 }

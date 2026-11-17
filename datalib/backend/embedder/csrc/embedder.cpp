@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 #include "llama.h"
 
@@ -18,6 +19,10 @@ struct dl_embedder {
     llama_model *model;
     llama_context *ctx;
     const char *device;
+};
+
+struct dl_tokenizer {
+    llama_model *model;
 };
 
 namespace {
@@ -157,6 +162,61 @@ int32_t dl_embedder_n_seq_max(const dl_embedder *e) { return (int32_t)llama_n_se
 int32_t dl_embedder_keeps_cache(const dl_embedder *e) { return llama_get_memory(e->ctx) != nullptr; }
 
 int32_t dl_embedder_n_tokens(const dl_embedder *e) { return (int32_t)llama_n_ubatch(e->ctx); }
+
+dl_tokenizer *dl_tokenizer_open(const char *model_path, char *err, size_t err_len) {
+    init_once();
+    llama_model_params mp = llama_model_default_params();
+    mp.vocab_only = true;
+    mp.n_gpu_layers = 0;
+    llama_model *model = llama_model_load_from_file(model_path, mp);
+    if (!model) {
+        set_err(err, err_len, "llama.cpp could not read the model's vocabulary");
+        return nullptr;
+    }
+    return new dl_tokenizer{model};
+}
+
+void dl_tokenizer_close(dl_tokenizer *t) {
+    if (!t) return;
+    llama_model_free(t->model);
+    delete t;
+}
+
+int32_t dl_tokenizer_ends(const dl_tokenizer *t, const char *text, int32_t text_len,
+                          int32_t *out, int32_t cap) {
+    const llama_vocab *vocab = llama_model_get_vocab(t->model);
+    int32_t n = llama_tokenize(vocab, text, text_len, nullptr, 0, false, false);
+    if (n == INT32_MIN) return -1;
+    n = n < 0 ? -n : n;
+    if (n > cap) return n;
+    std::vector<llama_token> tokens(n);
+    if (n > 0 && llama_tokenize(vocab, text, text_len, tokens.data(), n, false, false) != n) {
+        return -1;
+    }
+    // A piece spells its token as the model reads it, so it is lined up
+    // against the text rather than measured: the tokenizer reads a space
+    // as U+2581 (the "▁" SentencePiece marks one with), and a piece spells
+    // that back as a space, whether the text had a space or a literal ▁.
+    static const char kSpaceMark[] = "\xE2\x96\x81";
+    int32_t at = 0;
+    char piece[256];
+    for (int32_t i = 0; i < n; i++) {
+        int32_t len = llama_token_to_piece(vocab, tokens[i], piece, sizeof piece, 0, false);
+        if (len < 0) return -1;
+        for (int32_t k = 0; k < len; k++) {
+            if (at < text_len && text[at] == piece[k]) {
+                at += 1;
+            } else if (piece[k] == ' ' && at + 3 <= text_len &&
+                       std::memcmp(text + at, kSpaceMark, 3) == 0) {
+                at += 3;
+            } else {
+                return -2;
+            }
+        }
+        out[i] = at;
+    }
+    return n;
+}
 
 int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t text_len,
                              int32_t *out, int32_t cap) {

@@ -72,9 +72,12 @@ Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's
 own id for a record counts too, where it is a uuid, dashed or not, and so
 does a link that ends in one: paste a Notion page's link to find the page.
+A source id that is not a uuid, such as a Gmail id, is not looked up
+this way; search for it with `id:` (below).
 
-A source's words are searchable once its `keyword_index` step has run;
-until then free text finds nothing there and the answer says why.
+A source's words are searchable once `grid_index` has run after its
+render; until then free text finds nothing there and the answer says
+why. A source `grid_index` lists in `not_searched` is never searched.
 
 What the words and the meaning search over is each item drawn plainly:
 who wrote it (with their address, where it is an email or a phone
@@ -98,10 +101,30 @@ for every document of a source; `--document <id>` for one, `--at
 The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
-`account:`, `project:`, `convo:` (a document by its id, and every row in it), `contact:` and
-`email:` (an address book's columns), and the id of any other column the
-grid shows (`org_name:`, `created_at:`, …). These match the whole value
-as stored, case and all: `kind:Email`, not `kind:email`.
+`account:`, `project:`, `id:` (a row by the id its source gave it),
+`datalib_document_id:` (a document by datalib's id for it, and every
+row in it), `contact:` and `email:` (an address book's columns), and
+the id of any other column the grid shows (`org_name:`, `created_at:`,
+…). These match the whole value as stored, case and all: `kind:Email`,
+not `kind:email`.
+
+`id:` takes the id as the source spells it: an email's id in Gmail or
+on a JMAP server (not its `Message-ID` header), a Notion page's id, a
+Claude or ChatGPT conversation's. Where one id is not enough to name a
+record, the value joins several with `#`: a Slack message is
+`<channel>#<ts>`, a GitHub comment `<owner>/<repo>#<id>`. Two sources
+can use the same id, so add `source:` when that matters.
+
+Pasting an id as free text (above) finds every row that names it,
+ranked. `id:` is the exact match: the rows whose source id is that
+value, and nothing else, and it combines with other keys like any key
+does.
+
+`datalib_document_id:` takes the id datalib gave a document (a thread,
+a conversation, a page) and keeps that document and every row in it,
+over every month of a chat; Keep only on a Subject cell writes it. A
+message's own id finds nothing, since a message is a row inside a
+document.
 
 ### Writing a time
 

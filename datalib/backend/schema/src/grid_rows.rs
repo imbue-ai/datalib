@@ -37,7 +37,10 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid",
+    index = "grid_rows_by_upstream_id:upstream_id,touched_at_utc,is_document,uuid",
+    // Its last two columns are what a search narrowed to documents reads,
+    // so it reads no row (`DOCUMENTS_INDEX` in unified_grid_and_search_index).
+    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid,source_id,markdown_uuid",
     // `place:<cell>` and `near:<cell>` are ranges of this column
     // (datalib/backend/h3/README.md).
     index = "grid_rows_by_h3:h3",
@@ -45,7 +48,7 @@ use serde::{Deserialize, Serialize};
     search(
         order = "touched_at_utc desc, is_document desc, uuid desc",
         range = "touched_at_utc",
-        qmd
+        ranked
     )
 )]
 pub struct GridRow {
@@ -171,12 +174,12 @@ pub struct GridRow {
     /// The row's subject: the conversation, thread, page, event or card it
     /// belongs to, carried onto every child row so a grid row stands alone
     /// without a join. For a document's own row this is its own title.
-    /// Searched by name as `subject:`; `convo:` names it by id.
+    /// Searched by name as `subject:`; `datalib_document_id:` names it by id.
     #[col(sql = "TEXT", search = "subject", alias = "conversation")]
     pub conversation_name: Option<String>,
     /// The parent thread, so the preview pane knows what to open. Equals
     /// `uuid` for thread-level rows.
-    #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
+    #[col(sql = "VARCHAR(96)", search = "datalib_document_id", uuid)]
     pub conversation_uuid: String,
     /// The container this row lives in, a `data_nodes.uuid`: the chat, thread,
     /// page or session that holds it. Null where no container holds it.
@@ -201,7 +204,7 @@ pub struct GridRow {
     /// mailbox, a workspace): what a person browses or filters by.
     #[col(sql = "VARCHAR(96)")]
     pub place_uuid: Option<String>,
-    /// Zero-based position within the conversation, in the order the QMD
+    /// Zero-based position within the conversation, in the order the rendered markdown
     /// renders messages. Null for thread-level rows.
     #[col(sql = "INT")]
     pub message_index: Option<i64>,
@@ -212,7 +215,7 @@ pub struct GridRow {
     /// Contents column shows when there is no search term. Cut from the
     /// body the producer hands the builder (`GridRowBuilder::body`); the
     /// body itself is not stored here — the rendered markdown holds it,
-    /// and free-text search goes through qmd's index of that markdown.
+    /// and free-text search goes through the search index of that markdown.
     #[col(sql = "TEXT")]
     pub preview: String,
     /// blake3 of the whole body, hex. A change past the preview still
@@ -263,7 +266,9 @@ pub struct GridRow {
     /// holds by construction, with `stamp` the row's `created_at_utc` or
     /// nothing — which makes the backpointer verifiable rather than
     /// decorative.
-    #[col(sql = "VARCHAR(128)")]
+    ///
+    /// Searched as `id:`, whole and as written.
+    #[col(sql = "VARCHAR(128)", search = "id")]
     pub upstream_id: Option<String>,
     /// What sort of upstream thing this row is, in the provider's own
     /// vocabulary (`conversation`, `message`, `thinking_block`, `pr`,

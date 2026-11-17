@@ -20,6 +20,11 @@ mod ffi {
         _private: [u8; 0],
     }
 
+    #[repr(C)]
+    pub struct Tokenizer {
+        _private: [u8; 0],
+    }
+
     extern "C" {
         pub fn dl_embedder_open(
             model_path: *const c_char,
@@ -48,6 +53,19 @@ mod ffi {
         pub fn dl_embedder_keeps_cache(e: *const Embedder) -> i32;
         pub fn dl_embedder_tokenize(
             e: *const Embedder,
+            text: *const c_char,
+            text_len: i32,
+            out: *mut i32,
+            cap: i32,
+        ) -> i32;
+        pub fn dl_tokenizer_open(
+            model_path: *const c_char,
+            err: *mut c_char,
+            err_len: usize,
+        ) -> *mut Tokenizer;
+        pub fn dl_tokenizer_close(t: *mut Tokenizer);
+        pub fn dl_tokenizer_ends(
+            t: *const Tokenizer,
             text: *const c_char,
             text_len: i32,
             out: *mut i32,
@@ -417,6 +435,80 @@ impl Embedder {
             bail!("embed {} tokens: {}", tokens.len(), message(&err));
         }
         Ok(out)
+    }
+}
+
+/// The model's tokenizer alone, read from the model file without its
+/// weights: what the chunker counts its budget in, where nothing is
+/// embedded.
+pub struct Tokenizer {
+    raw: NonNull<ffi::Tokenizer>,
+}
+
+// llama.cpp's vocabulary is read-only once loaded, and each tokenize call
+// works on state of its own.
+unsafe impl Send for Tokenizer {}
+unsafe impl Sync for Tokenizer {}
+
+impl Tokenizer {
+    pub fn open(model: &Path) -> Result<Tokenizer> {
+        let path = CString::new(model.as_os_str().as_encoded_bytes())
+            .context("a model path with a NUL in it")?;
+        let mut err = [0 as c_char; 256];
+        let raw = unsafe { ffi::dl_tokenizer_open(path.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let Some(raw) = NonNull::new(raw) else {
+            bail!("open {}: {}", model.display(), message(&err));
+        };
+        Ok(Tokenizer { raw })
+    }
+
+    /// Where each of `text`'s tokens ends, as a byte offset into `text`,
+    /// without BOS and EOS: its length is the token count, and its last
+    /// offset is `text.len()`. A token can end inside a character, where
+    /// the model spells it in bytes.
+    pub fn ends(&self, text: &str) -> Result<Vec<usize>> {
+        let len = i32::try_from(text.len()).context("a text over 2 GB")?;
+        let mut out = vec![0i32; text.len() / 2 + 8];
+        loop {
+            let cap = i32::try_from(out.len())?;
+            let n = unsafe {
+                ffi::dl_tokenizer_ends(
+                    self.raw.as_ptr(),
+                    text.as_ptr().cast(),
+                    len,
+                    out.as_mut_ptr(),
+                    cap,
+                )
+            };
+            if n == -2 {
+                bail!("a token's piece does not line up with the text");
+            }
+            if n < 0 {
+                bail!("llama.cpp could not tokenize the text");
+            }
+            let n = n as usize;
+            if n > out.len() {
+                out.resize(n, 0);
+                continue;
+            }
+            out.truncate(n);
+            let ends: Vec<usize> = out.into_iter().map(|e| e as usize).collect();
+            let covered = ends.last().copied().unwrap_or(0);
+            if covered != text.len() {
+                bail!(
+                    "the tokens' pieces are {covered} bytes, the text {}: \
+                     the tokenizer changed the text",
+                    text.len()
+                );
+            }
+            return Ok(ends);
+        }
+    }
+}
+
+impl Drop for Tokenizer {
+    fn drop(&mut self) {
+        unsafe { ffi::dl_tokenizer_close(self.raw.as_ptr()) }
     }
 }
 

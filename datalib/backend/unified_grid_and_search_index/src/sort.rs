@@ -1,7 +1,7 @@
 //! The order a search's rows come in when the grid asks for one: its
 //! columns, most significant first, each ascending or descending. With
 //! none, rows come in the table's own order (`SearchTable::ORDER`), or in
-//! qmd's rank for free text.
+//! the search's rank for free text.
 
 use datalib_query::table::{Column, Direction, SearchTable};
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
@@ -9,7 +9,7 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 /// What one step of an order sorts by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SortBy<C> {
-    /// qmd's relevance, which no column holds. A search without free
+    /// the search's relevance, which no column holds. A search without free
     /// text has none, and comes in its default order instead.
     Rank,
     Column(C),
@@ -43,7 +43,7 @@ impl<C: Column> Sort<C> {
             })
             .collect::<Result<_, _>>()?;
         if order.len() > 1 && order.iter().any(|s| s.by == SortBy::Rank) {
-            return Err("score sorts alone: it is qmd's rank, not a column".to_string());
+            return Err("score sorts alone: it is the search's rank, not a column".to_string());
         }
         Ok(order)
     }
@@ -58,7 +58,7 @@ impl<C: Column> Sort<C> {
 }
 
 /// The `ORDER BY` an order means, with the primary key breaking the last
-/// ties so the order is total, or `None` for none, or for qmd's rank,
+/// ties so the order is total, or `None` for none, or for the search's rank,
 /// which no column holds. A row with no value comes last whichever way
 /// the column runs, so "oldest first" opens on the oldest and not on the
 /// undated. `NOCASE` only compares text: numbers and stamps sort as they
@@ -92,7 +92,7 @@ pub fn order_by<C: Column>(order: &[Sort<C>]) -> Option<String> {
 /// the order whose head is what is still to come, so the grid can open
 /// below it at now. `None` for any other order, oldest first included,
 /// whose now lies at the far end of the rows. No order is the grid's
-/// own, newest touched first; qmd's rank is no stamp.
+/// own, newest touched first; the search's rank is no stamp.
 pub fn newest_first_by_date(order: &[Sort]) -> Option<GridRowColumn> {
     let column = match order.first() {
         None => {
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(order_by(&grid_order("score").unwrap()), None);
     }
 
-    /// Score is qmd's rank: nothing to break its ties with in SQL, and
+    /// Score is the search's rank: nothing to break its ties with in SQL, and
     /// nothing it could break the ties of.
     #[test]
     fn an_order_that_does_not_read_says_why() {

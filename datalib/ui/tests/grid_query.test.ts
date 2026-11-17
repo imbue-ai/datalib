@@ -55,10 +55,10 @@ describe("plainWords", () => {
 });
 
 describe("searchDelay", () => {
-  /// Each change to the plain words is a qmd search, seconds long and one
+  /// Each change to the plain words is a ranked search, seconds long and one
   /// at a time; at 150 ms every pause between keystrokes started another
   /// that the server finished even after the page had moved on.
-  it("waits longer when the words qmd ranks changed", () => {
+  it("waits longer when the words the search ranks changed", () => {
     expect(searchDelay("warp co", "warp cor", true)).toBe(600);
     expect(searchDelay("warp", "warp kind:em", true)).toBe(150);
     expect(searchDelay("warp kind:em", "warp kind:email", true)).toBe(150);

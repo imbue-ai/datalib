@@ -127,7 +127,7 @@ export type SearchRow = {
   // The row's picture, as a `datalib:photo/<id>` name (`uri.ts`). Null on
   // a row with none of its own.
   image: string | null;
-  // QMD rank score. Present when the row came from a free-text (qmd)
+  // Rank score. Present when the row came from a ranked free-text
   // search; omitted for a query of structured terms alone.
   score?: number;
   // Where opening the row goes: `datalib:doc/<page>#<section>` (`uri.ts`).
@@ -139,12 +139,12 @@ export type SearchRow = {
 // keys (free_text, filters, resolved_type, …) that we ignore; typing
 // only what we consume keeps the contract narrow.
 export type QueryEcho = {
-  // Set when a free-text search failed in qmd; the response then has no
+  // Set when a free-text search failed to rank; the response then has no
   // rows, and the grid says why in a banner.
-  qmd_error?: string | null;
-  // True when free text was asked before any sync built a qmd index: no
+  search_error?: string | null;
+  // True when free text was asked before any sync built a search index: no
   // rows, and not a failure.
-  qmd_index_missing?: boolean;
+  search_index_missing?: boolean;
   // What part of the search could not answer, when the rest did.
   partial?: string | null;
   // How many documents the search could find have no vectors; on a search
@@ -162,9 +162,9 @@ export type RowsSpec = {
   // `link` field where it has one (`uri.ts`), else the first of `fields`
   // the row has a value in, at the section its `anchor` field names.
   document: { fields: string[]; anchor: string; link?: string };
-  // qmd ranks free text, best first; `like` matches a substring and keeps
+  // The search index ranks free text, best first; `like` matches a substring and keeps
   // the rows' order.
-  free_text: "qmd" | "like";
+  free_text: "ranked" | "like";
 };
 
 /// One page of a paged table's rows: the search's, or the problems'.
@@ -203,7 +203,7 @@ export type RowsResponse<Row> = RowsSpec & {
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
 
-// QMDs are write-only output. The backend ships the body verbatim
+// Rendered markdown is write-only output. The backend ships the body verbatim
 // (frontmatter stripped) and the UI runs markdown-it on it. Per-section
 // scrolling/highlighting uses the `<div data-section-uuid="…">`
 // wrappers the renderer emits (one per message, plus nested ones for
@@ -440,7 +440,7 @@ export type EmbeddingMapResponse = {
   present: boolean;
   made_at: string | null;
   seed: { kept: number; near_neighbours: number; fresh: number } | null;
-  /// Documents qmd has not embedded yet, so not on the map.
+  /// Documents not embedded yet, so not on the map.
   unembedded: number;
   /// Points whose document the grid no longer has.
   unplaced: number;
@@ -468,8 +468,8 @@ export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<
   return new Set(r.markdown_uuids);
 }
 
-// --- qmd index state -------------------------------------------------------
-export type QmdDocState = {
+// --- search index state ----------------------------------------------------
+export type DocIndexState = {
   indexed: boolean | null;
   embedded: boolean | null;
   // Present when either field is null, or when an otherwise-fine
@@ -477,33 +477,33 @@ export type QmdDocState = {
   note?: string;
 };
 
-export type QmdStateResponse = {
+export type IndexStateResponse = {
   // False for a data root that has never synced — there is no
   // index.sqlite, so every document is legitimately un-indexed.
   index_present: boolean;
   summary: { documents: number; embedded: number };
   // markdown_uuid → state. Every requested uuid appears.
-  docs: Record<string, QmdDocState>;
+  docs: Record<string, DocIndexState>;
   errors?: string[];
 };
 
-// Ask which of these rendered documents the qmd index holds. POST
+// Ask which of these rendered documents the search index holds. POST
 // because the uuid list is as long as the grid's result set; the
 // backend dedupes and caps it.
-export async function fetchQmdState(
+export async function fetchIndexState(
   markdownUuids: string[],
   signal?: AbortSignal,
-): Promise<QmdStateResponse> {
-  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/qmd_state`, {
+): Promise<IndexStateResponse> {
+  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/index_state`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ markdown_uuids: markdownUuids }),
     signal,
   });
   if (!r.ok) {
-    throw new Error(`POST ${UNIFIED_GRID_AND_SEARCH_INDEX}/qmd_state → ${r.status}`);
+    throw new Error(`POST ${UNIFIED_GRID_AND_SEARCH_INDEX}/index_state → ${r.status}`);
   }
-  const data = (await r.json()) as QmdStateResponse;
+  const data = (await r.json()) as IndexStateResponse;
   if (data.errors && data.errors.length > 0) {
     for (const e of data.errors) pushToast(e);
   }
@@ -682,7 +682,7 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 }
 
 /// Which page of a search, and in what order: `sort` is a column id and
-/// a direction (`created_at:desc`), or none for newest first (qmd's rank
+/// a direction (`created_at:desc`), or none for newest first (the search's rank
 /// for free text). `through` names a row the page must reach, however
 /// far past `offset` it is. `within` narrows it to one group,
 /// `[[column, value], …]` as JSON.
@@ -758,8 +758,8 @@ export type GroupsResponse<Row = SearchRow> = {
   truncated: boolean;
   at: string | null;
   // Only the search has these two.
-  qmd_error?: string | null;
-  qmd_index_missing?: boolean;
+  search_error?: string | null;
+  search_index_missing?: boolean;
   errors: string[];
   refused?: string[];
 };

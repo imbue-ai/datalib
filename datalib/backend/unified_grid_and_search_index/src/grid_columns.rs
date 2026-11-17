@@ -74,7 +74,7 @@ impl View for GridColumn {
             GridColumn::CreatedAt => same(G::CreatedAt),
             GridColumn::ModifiedAt => same(G::ModifiedAt),
             GridColumn::TouchedAt => same(G::TouchedAt),
-            // The cell shows qmd's matched words, or the preview: no value
+            // The cell shows the search's matched words, or the preview: no value
             // to match.
             GridColumn::Snippet => (SortBy::Column(G::Preview), None),
             GridColumn::Author => same(G::Author),
@@ -150,8 +150,9 @@ mod tests {
                 ("org_name", none, "org_name", false),
                 ("channel", none, "channel", false),
                 ("subject", &["conversation"], "conversation_name", false),
-                ("convo", none, "conversation_uuid", true),
+                ("datalib_document_id", none, "conversation_uuid", true),
                 ("source", &["source_id"], "source_id", false),
+                ("id", none, "upstream_id", false),
                 ("notion_page", none, "notion_page_uuid", true),
                 ("byte_size", none, "byte_size", false),
                 ("item_count", none, "item_count", false),
@@ -177,7 +178,7 @@ mod tests {
         );
         assert_eq!(
             for_column::<GridColumn>("conversation_name"),
-            Some(("convo", "conversation_uuid"))
+            Some(("datalib_document_id", "conversation_uuid"))
         );
         assert_eq!(for_column::<GridColumn>("score"), None);
         assert_eq!(for_column::<GridColumn>("snippet"), None);

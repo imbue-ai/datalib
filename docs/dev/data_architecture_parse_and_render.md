@@ -199,7 +199,7 @@ row, no `.md` file — and its problem rows are the whole record of it.
 ### What is still a file: the markdown
 
 The rendered `.md` lives on disk rather than in a table. Search does
-not read it: each source's `keyword_index` and `embed` steps
+not read it: `grid_index`'s keyword pass and each source's `embed`
 (`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
 text from the render store (`IndexedMarkdownStore::index_docs`), and
 `embed` runs the embedding model in process. What keeps the file is
@@ -212,7 +212,7 @@ text already stored five times on a real data root.
 Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
-"QMDs are write-only"), whatever database the markdown sits in.
+"Rendered markdown is write-only"), whatever database the markdown sits in.
 
 ### Upstream text is escaped where it becomes markup
 

@@ -446,7 +446,7 @@ struct Page {
 }
 
 /// One page of the problems `query` matches. Listed per request, not
-/// cached as a search is: there is no qmd ranking to save, and the list
+/// cached as a search is: there is no ranking to save, and the list
 /// is of problems, not of every row in the root.
 async fn page(s: &Index, query: &ProblemsQuery, spec: PageSpec<'_>) -> Result<Page, String> {
     let listing = s

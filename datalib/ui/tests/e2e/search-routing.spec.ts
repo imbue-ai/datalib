@@ -1,18 +1,18 @@
 import { test, expect } from "@playwright/test";
 import { GRID, searchAndSettle } from "./grid-helpers";
 
-// Free-text search routes through qmd (BM25 + vector + reranker by
+// Free-text search is ranked by the search index (words and meaning, by
 // default). The bug this guards: previously the Rust backend did
 // `LOWER(text) LIKE %query%`, so multi-word phrases only matched when
 // their tokens appeared in that exact order — `grey earl` would return
 // zero rows even though both tokens show up in many fixture rows (just
 // as the literal "earl grey").
 
-async function qmdSearch(page: import("@playwright/test").Page, q: string) {
+async function rankedSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
   // Settle first, then assert. The score column is only ever populated
-  // by qmd-routed rows, so once the grid is painting this query its
+  // by ranked rows, so once the grid is painting this query its
   // presence *is* the routing assertion — no timeout needed, and a
   // query that silently stopped routing now fails immediately instead
   // of after a 90s wait indistinguishable from a slow daemon.
@@ -21,26 +21,26 @@ async function qmdSearch(page: import("@playwright/test").Page, q: string) {
   await expect(page.locator(".grid-box .slick-row").first()).toBeVisible();
 }
 
-test.describe("free-text search routes through qmd", () => {
+test.describe("free-text search is ranked by the search index", () => {
   // The `warmup` project pays the cold start before any spec runs, but
   // the applet restarts on config changes and `data-sources-sync` (which
   // sorts earlier) rewrites config.toml wholesale — so the first query
-  // here may still pay a qmd model load. See `SEARCH_SETTLE`.
+  // here may still pay a model load. See `SEARCH_SETTLE`.
   test.setTimeout(180_000);
 
-  test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({ page }) => {
-    await qmdSearch(page, "grey earl");
+  test("bare 'grey earl' returns rows (ranked; was zero under LIKE)", async ({ page }) => {
+    await rankedSearch(page, "grey earl");
   });
 
   test('explicit qmd:"..." predicate also returns rows', async ({ page }) => {
-    await qmdSearch(page, 'qmd:"earl grey"');
+    await rankedSearch(page, 'qmd:"earl grey"');
   });
 
   test('the older qmd_vsearch:"..." spelling also returns rows', async ({ page }) => {
-    await qmdSearch(page, 'qmd_vsearch:"earl grey"');
+    await rankedSearch(page, 'qmd_vsearch:"earl grey"');
   });
 
   test("semantic:off answers from the words alone", async ({ page }) => {
-    await qmdSearch(page, "earl grey semantic:off");
+    await rankedSearch(page, "earl grey semantic:off");
   });
 });

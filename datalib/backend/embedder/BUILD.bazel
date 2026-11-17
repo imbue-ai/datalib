@@ -72,10 +72,10 @@ rust_test(
     name = "embedding_facts",
     size = "medium",
     srcs = ["tests/embedding_facts.rs"],
-    data = ["//third-party/qmd_models:embeddinggemma"],
+    data = ["//third-party/embedding_models:embeddinggemma"],
     edition = "2021",
     env = {
-        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
     },
     tags = ["cpu:2"],
     deps = [
@@ -92,11 +92,11 @@ rust_test(
     srcs = ["tests/parity.rs"],
     data = [
         "tests/qmd_cpu_golden.json",
-        "//third-party/qmd_models:embeddinggemma",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
-        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
         "QMD_GOLDEN_RLOC": "$(rlocationpath tests/qmd_cpu_golden.json)",
     },
     tags = ["cpu:2"],

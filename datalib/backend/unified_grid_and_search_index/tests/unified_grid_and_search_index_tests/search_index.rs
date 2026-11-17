@@ -7,8 +7,8 @@ use std::path::Path;
 use datalib_runtime::layout;
 use datalib_search_index::chunk::chunk_hash;
 use datalib_search_index::{model_key, Index, IndexDoc, IndexSection, InferenceCache};
-use datalib_unified_grid_and_search_index::qmd::mapping::Place;
-use datalib_unified_grid_and_search_index::qmd::vectors::{Freshness, Kept};
+use datalib_unified_grid_and_search_index::hits::mapping::Place;
+use datalib_unified_grid_and_search_index::hits::vectors::{Freshness, Kept};
 use datalib_unified_grid_and_search_index::search_index::HeldVectors;
 
 fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
@@ -33,7 +33,10 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
 async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     let only: Vec<IndexDoc> = docs.iter().map(|(d, _)| d.clone()).collect();
-    index.put(&only).await.unwrap();
+    index
+        .put(&only, &datalib_search_index::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     index.close().await;
     let cache = InferenceCache::open(&layout::inference_cache_db(root))
         .await
@@ -49,7 +52,12 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     cache.close().await;
 }
 
-fn documents(hits: &[(String, datalib_unified_grid_and_search_index::qmd::QmdHit)]) -> Vec<&str> {
+fn documents(
+    hits: &[(
+        String,
+        datalib_unified_grid_and_search_index::hits::SearchHit,
+    )],
+) -> Vec<&str> {
     hits.iter().map(|(d, _)| d.as_str()).collect()
 }
 
@@ -148,10 +156,18 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
             })
             .collect(),
     };
-    let chunks = thread.prompted();
+    let chunks = thread
+        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
+        .unwrap();
     assert_eq!(chunks.len(), 2, "a message starts a chunk of its own");
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
-    index.put(std::slice::from_ref(&thread)).await.unwrap();
+    index
+        .put(
+            std::slice::from_ref(&thread),
+            &datalib_search_index::chunk::four_bytes_a_token,
+        )
+        .await
+        .unwrap();
     index.close().await;
     let cache = InferenceCache::open(&layout::inference_cache_db(root))
         .await
