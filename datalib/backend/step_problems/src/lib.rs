@@ -367,6 +367,46 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Vec<Proble
     rows?.iter().map(ProblemRow::from_row).collect()
 }
 
+/// What a file looked like when its rows were read: its modification
+/// time and size, and its write-ahead log's, which a plain SQLite writer
+/// grows long before it touches the file itself.
+type Seen = Vec<(Option<std::time::SystemTime>, Option<u64>)>;
+
+fn seen(file: &Path) -> Seen {
+    let mut wal = file.as_os_str().to_owned();
+    wal.push("-wal");
+    [file.to_path_buf(), PathBuf::from(wal)]
+        .iter()
+        .map(|p| match std::fs::metadata(p) {
+            Ok(m) => (m.modified().ok(), Some(m.len())),
+            Err(_) => (None, None),
+        })
+        .collect()
+}
+
+/// The rows each file held when last read, so a reader asked again (the
+/// Manage screen asks on every refresh) opens only the files that moved.
+static READ: std::sync::Mutex<std::collections::BTreeMap<PathBuf, (Seen, Vec<ProblemRow>)>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+async fn read_cached(file: &Path, plain: bool) -> Result<Vec<ProblemRow>> {
+    let before = seen(file);
+    if let Some((was, rows)) = READ.lock().expect("unpoisoned").get(file) {
+        if *was == before {
+            return Ok(rows.clone());
+        }
+    }
+    let rows = if plain {
+        read(file).await?
+    } else {
+        read_store(file).await?
+    };
+    READ.lock()
+        .expect("unpoisoned")
+        .insert(file.to_path_buf(), (before, rows.clone()));
+    Ok(rows)
+}
+
 /// One step's problems, or why they could not be read.
 #[derive(Debug)]
 pub struct OfStep {
@@ -377,8 +417,7 @@ pub struct OfStep {
 
 /// What a step's problems are: the `problems` table of every store
 /// directly in its folder (a `.doltlite_db` read at `main`, or a plain
-/// `.sqlite` file, its own `problems.sqlite` among them). A row that
-/// names no source gets the step's group, which is the source.
+/// `.sqlite` file, its own `problems.sqlite` among them).
 pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
     let mut out = OfStep {
         step_id: step_id.to_string(),
@@ -394,26 +433,56 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
         .filter(|p| p.is_file())
         .collect();
     files.sort();
-    let group = step_id.rsplit_once('/').map_or(step_id, |(g, _)| g);
     for file in files {
         let read = match file.extension().and_then(|e| e.to_str()) {
-            Some("doltlite_db") => read_store(&file).await,
-            Some("sqlite") => read(&file).await,
+            Some(ext @ ("doltlite_db" | "sqlite")) => read_cached(&file, ext == "sqlite").await,
             _ => continue,
         };
         match read {
-            Ok(rows) => out.rows.extend(rows.into_iter().map(|r| ProblemRow {
-                source_id: if r.source_id.is_empty() {
-                    group.to_string()
-                } else {
-                    r.source_id.clone()
-                },
-                ..r
-            })),
+            Ok(rows) => out.rows.extend(rows),
             Err(e) => out.unread.push(format!("{e:#}")),
         }
     }
     out
+}
+
+/// Every step's problems under `data_root`: [`of_step`] for each
+/// `<group>/<function>` folder, in order. A folder with no store holding a
+/// `problems` table gives none.
+pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
+    let mut steps = Vec::new();
+    for group in sorted_dirs(data_root) {
+        for function in sorted_dirs(&group) {
+            let (Some(g), Some(f)) = (
+                group.file_name().and_then(|n| n.to_str()),
+                function.file_name().and_then(|n| n.to_str()),
+            ) else {
+                continue;
+            };
+            steps.push(format!("{g}/{f}"));
+        }
+    }
+    let mut out = Vec::with_capacity(steps.len());
+    for step in steps {
+        let read = of_step(data_root, &step).await;
+        if !read.rows.is_empty() || !read.unread.is_empty() {
+            out.push(read);
+        }
+    }
+    out
+}
+
+fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    dirs.sort();
+    dirs
 }
 
 #[cfg(test)]

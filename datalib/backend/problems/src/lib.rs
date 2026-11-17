@@ -1,10 +1,9 @@
 //! The `problems` table: one row per thing a step could not fully do to
-//! one record, kept in the store the step owns and copied downstream
-//! with the data until it reaches the unified document index and the screen.
+//! one record, kept in the store the step owns, where a reader finds it.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
-//! literal. How the rows travel, and what reads them: `etl/README.md`
-//! §"Problems flow downstream with the data".
+//! literal. Where the rows are, and what reads them: `etl/README.md`
+//! §"Problems stay in the step that found them".
 
 mod recorded;
 pub use recorded::{log_recorded, note_recorded};

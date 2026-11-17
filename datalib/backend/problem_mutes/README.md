@@ -1,8 +1,8 @@
 # Muting a problem row
 
 A **problem** is one row saying what a step could not fully do to one
-record (`datalib/backend/problems/`, and `etl/README.md` §"Problems flow
-downstream with the data"). Many are true and cannot be fixed: a
+record (`datalib/backend/problems/`, and `etl/README.md` §"Problems stay
+in the step that found them"). Many are true and cannot be fixed: a
 corrupt PDF, a date written in a form nobody can parse, a file no source
 reads. Every error and warning used to count toward the Dashboard's
 "Needs you" and the Manage row's count forever, so "Needs you" was
@@ -65,9 +65,9 @@ place, `datalib_problem_mutes`:
 
 1. `datalib-http` reads the ids the mutes store has published, read-only
    at `main`'s head (`read_published`).
-2. It counts the grid index's error and warning rows in one read-only
-   query, each by whose it is and whether its id is muted
-   (`count_in_index`). Whose it is, is `datalib_problems::CountedBy`: a
+2. It counts every step's error and warning rows, each read where its
+   step keeps it (`datalib_step_problems::of_steps`), by whose it is and
+   whether its id is muted (`count_rows`, over `counts`). Whose it is, is `datalib_problems::CountedBy`: a
    fetch-stage row is the source's `ingest` step's, a `time_series` row
    its `render_time_series` step's, an `occurrences` row its
    `render_occurrences` step's, the index's own row about a render
@@ -82,9 +82,10 @@ place, `datalib_problem_mutes`:
    and a source group's is the source's rows less the stages of the
    steps it lacks.
 
-A muted problem that was fixed is no longer in the index, so it counts
-nothing; and since the count and the list are one read of one store,
-they cannot drift. `//datalib/backend/applets` checks it: for every
+A muted problem that was fixed is no longer in its step's store, so it
+counts nothing; and since the count and the list read the same rows
+(the grid gathers them into a table of its read's own), they cannot
+drift. `//datalib/backend/applets` checks it: for every
 counter over rows of every stage and severity, the number is the rows
 its query lists.
 
@@ -92,12 +93,12 @@ What is not a row is not in those numbers. A pass that failed and was
 run again, and the count of a step that writes no problem rows (a
 package's own program), are a grey number beside them, and a
 double-click on that opens the step's log. The time-series and
-calendar-occurrence renders write rows, which reach the index as above
-(`etl/README.md` §"Problems flow downstream with the data").
+calendar-occurrence renders write rows in their own stores, read like
+any other step's (`etl/README.md` §"Problems stay in the step that found
+them").
 
-So `datalib-http` reads two stores' rows here, the mutes store and the
-index's `problems`; it opens both read-only and holds neither. Before
-there is an index it draws no counts.
+So `datalib-http` reads the mutes store and every step's `problems`,
+each read-only, and holds none of them.
 
 A mute is a commit to a store under `datalib_curated/`, which the app's
 watch reports as `curated`; that, and the index moving, make the Manage

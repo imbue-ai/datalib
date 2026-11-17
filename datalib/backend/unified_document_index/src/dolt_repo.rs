@@ -462,6 +462,55 @@ impl DoltRepo {
     /// state of it for every statement, and the writer changes it one
     /// whole source per transaction, so a request never sees a
     /// half-written batch.
+    /// [`pinned`](Self::pinned), with `problems` every step's problems:
+    /// each read where its step keeps it (`datalib_step_problems::of_steps`),
+    /// gathered into a table of this read's own, since no store holds them
+    /// all. A store that could not be read is said in the log.
+    async fn pinned_problems(&self) -> Result<Option<At>, RepoError> {
+        let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(None);
+        };
+        let ddl = datalib_schema::problems::DDL[0].1.replacen(
+            "CREATE TABLE IF NOT EXISTS problems",
+            "CREATE TEMP TABLE IF NOT EXISTS step_problems",
+            1,
+        );
+        // Audited: the problems table's own DDL, its name swapped for a
+        // literal; nothing from data.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *at.tx)
+            .await
+            .map_err(|e| internal("make this read's problems table", e))?;
+        sqlx::query("DELETE FROM temp.step_problems")
+            .execute(&mut *at.tx)
+            .await
+            .map_err(|e| internal("empty this read's problems table", e))?;
+        let insert = datalib_table::insert_sql::<ProblemRow>().replacen(
+            "INSERT INTO problems ",
+            "INSERT INTO temp.step_problems ",
+            1,
+        );
+        for step in datalib_step_problems::of_steps(&self.root).await {
+            for why in &step.unread {
+                tracing::error!(step = %step.step_id, error = %why, "could not read a step's problems");
+            }
+            for row in &step.rows {
+                // Audited: `insert` is built from `ProblemRow`'s associated
+                // consts, never from row data; every value is bound.
+                datalib_table::BulkUpsertable::bind_into(
+                    row,
+                    sqlx::query(sqlx::AssertSqlSafe(insert.clone())),
+                )
+                .execute(&mut *at.tx)
+                .await
+                .map_err(|e| internal("gather a step's problems", e))?;
+            }
+        }
+        at.problems = "temp.step_problems";
+        Ok(Some(at))
+    }
+
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
         use std::os::unix::fs::MetadataExt;
@@ -1178,7 +1227,7 @@ impl IndexRepo for DoltRepo {
         column: ProblemRowColumn,
         typed: &str,
     ) -> Result<Vec<(String, u64)>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         let (where_sql, params) = where_within(q, &[]);
@@ -1276,7 +1325,7 @@ impl IndexRepo for DoltRepo {
         sort: &[Sort<ProblemRowColumn>],
         within: &[Within<ProblemRowColumn>],
     ) -> Result<Listing, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Listing::default());
         };
         let uuids = at
@@ -1289,7 +1338,7 @@ impl IndexRepo for DoltRepo {
     }
 
     async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         let rows = at.problems_in(keys).await?;
@@ -1302,7 +1351,7 @@ impl IndexRepo for DoltRepo {
         ids: &Ids,
         by: &[ProblemRowColumn],
     ) -> Result<Grouping<LocatedProblem>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Grouping::default());
         };
         let (where_sql, params) = ids.narrow(where_within(q, &[]));
@@ -1314,7 +1363,7 @@ impl IndexRepo for DoltRepo {
     }
 
     async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         // The document's own rows, and any entity-scoped row about one

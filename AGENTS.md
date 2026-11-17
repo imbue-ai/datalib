@@ -360,8 +360,7 @@ the program it runs in `command`; datalib's own steps run
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
 `grid_index` under `unified_document_index` reads every render tree its `inputs`
-name into the SQL index the grid reads, and the problem rows of the
-time-series and occurrences steps it names. A searched source fills its own
+name into the SQL index the grid reads. A searched source fills its own
 part of the search index (`search_*` tables in the grid index's file, and
 the vectors in `search_index/inference_cache.sqlite`) with two more steps
 of its own, `keyword_index` and then `embed`, so the slow embedding can be
@@ -379,9 +378,9 @@ such store without copying its points (`docs/dev/time_series.md`). The document 
 queried by the `unified_document_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`), and the index's problem rows,
-which it counts, less the muted ones, for the Manage counts
-(`datalib/backend/problem_mutes/README.md`). A render
+(`datalib/backend/blob_store/README.md`), and every step's `problems`,
+each read where its step keeps it, which it counts, less the muted
+ones, for the Manage counts (`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in

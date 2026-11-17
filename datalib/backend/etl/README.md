@@ -72,63 +72,55 @@ file-backed provider's tests do exactly that.
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
 
-## Problems flow downstream with the data
+## Problems stay in the step that found them
 
 Every store a step owns holds a `problems` table (`datalib_problems`,
 in every raw store's `SHARED_DDL`): one row per thing the step could
 not fully do to one record, with a severity, a deterministic id and a
 sweep key. The owner sweeps it — per document in a render store, per
-entity in a raw store — and each consumer that reads a store pinned
-copies that store's rows for the source **wholesale** into its own,
-then adds its own: render copies the raw store's fetch-stage rows
-(minting them again under the source's id, which a download does not
-know, and filling in `item_uuid` — see below), `grid_index` copies
-every render store's into the index. The
-pinned store is the complete truth about its source's problems at that
-commit, so the copy is the sweep and there is nothing to diff. Stamps
-travel with the row.
+entity in a raw store — and nothing copies it. A reader finds a step's
+problems in the stores directly in its folder, each read as its `main`
+commit has it, which is what the step last sealed
+(`datalib_step_problems::of_step`); a step with no store of its own
+keeps a `problems.sqlite` there instead (`docs/dev/step_protocol.md`
+§"Problems: what you could not do"). So a download's problem is seen at
+its next seal, whether or not the source's render runs. Stamps are the
+row's own.
 
-Two steps besides the render keep problems of their own, each in its
-own store under a stage no other step writes
-(`datalib_problems::Stage::OWN_STORE`): `render_time_series`, a file
-whose time series could not be read (`time_series`), and
-`render_occurrences`, an event whose occurrences could not be listed
-(`occurrences`). Each finds every one of them again on each run, so
-its rows replace the store's whole (`datalib_step_problems::replace`), keeping
-the stamps of the unchanged. `grid_index` takes both steps as inputs,
-for these rows alone, and copies each step's rows apart from the
-render store's (`copy_own_store_problems`): a source's render-store
-copy replaces every stage but those two, and each step's copy only its
-own, so neither erases the other's. A step no longer among the inputs
-has its rows taken out. Wiring an existing config's `grid_index` to
-read them is one of the config upgrades the app makes without asking
-(`datalib_migrate_config::problem_inputs`).
+A download mints its rows under its source's id, which `datalib-step`
+names once from its group (`datalib_problems::step_source`); a run first
+mints again, under it, the rows an older build wrote naming none
+(`doltlite_raw::adopt_sourceless_problems`). A download's problem names
+only its raw entity (`<table>:<id>`) and, where it knows them, the
+upstream record (`upstream_entity_kind`, `upstream_id`,
+`upstream_account`); the grid row it is about is not stored on it.
 
-The Manage screen's red and yellow counts are the index's rows, counted
-by whose they are: a fetch-stage row on the Download row, a
-time-series-stage row on `render_time_series`'s, an occurrences-stage
-row on `render_occurrences`'s, the index's own row about a render
-store it could not read on `grid_index`'s, every other row on the
-render's. A group's count is the sum of its steps'.
-An `info` row is counted nowhere: nothing failed, and the problems grid
-is where it is seen. Each count opens exactly the rows it counted
-([`problem_mutes/README.md`](../problem_mutes/README.md)). A step still
-reports whole-store counts of the rows it found itself as
-`problems{severity=…}` metrics (a download at every seal too, right
-after it has written the problems its run has found so far,
-`run_problems::collecting_sealed`), and those are what a step that
-writes no rows (a package's own program) is drawn from, in grey.
+Two steps besides the render keep problems of their own, each under a
+stage no other step writes (`datalib_problems::Stage::OWN_STORE`):
+`render_time_series`, a file whose time series could not be read
+(`time_series`), and `render_occurrences`, an event whose occurrences
+could not be listed (`occurrences`). Each finds every one of them again
+on each run, so its rows replace the store's whole
+(`datalib_step_problems::replace`), keeping the stamps of the
+unchanged. `grid_index` keeps only its own rows, about a render store
+it could not read, and drops a source's when it reads that store again.
 
-A download's problem names only its raw entity (`<table>:<id>`): the
-grid row it is about has an id minted under the source's id, which the
-download never sees. So render asks each processor
-(`RenderProcessor::item_of_entity`) which row that entity is or belongs
-to — a Slack attachment belongs to its message — and fills in
-`item_uuid` only when the render store holds that row. A filled
-`item_uuid` therefore always opens something: the problems table links
-the row's document, and the document's banner lists the problem. A
-provider without the hook leaves `item_uuid` empty, and `scope_key` is
-the only pointer.
+The Manage screen's red and yellow counts are every step's rows, read
+where each step keeps them, counted by whose they are: a fetch-stage
+row on the Download row, a time-series-stage row on
+`render_time_series`'s, an occurrences-stage row on
+`render_occurrences`'s, the index's own row about a render store it
+could not read on `grid_index`'s, every other row on the render's. A
+group's count is the sum of its steps'. An `info` row is counted
+nowhere: nothing failed, and the problems grid is where it is seen. The
+problems grid gathers the same rows into a table of its read's own and
+runs its search over it, so each count opens exactly the rows it
+counted ([`problem_mutes/README.md`](../problem_mutes/README.md)). A
+reader keeps each file's rows until the file changes, so a refresh
+reopens only what moved. A step still reports whole-store counts of the
+rows it found itself as `problems{severity=…}` metrics, and those are
+what a step that writes no rows (a package's own program) is drawn
+from, in grey.
 
 Every error and warning row counts toward the Dashboard's "Needs you",
 including ones nothing can be done about (a corrupt file, a file no

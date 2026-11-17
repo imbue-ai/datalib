@@ -38,10 +38,9 @@ Three sources do:
   differs. A file whose time series could not be read (a FIT file that
   will not parse, or one the blob store no longer holds) costs only its
   own time series: it is a warning row in the store's `problems`, stage
-  `time_series` (`datalib_etl_time_series::unreadable_problems`).
-  `grid_index` reads the step too, for those rows alone, and copies them
-  into the problems list, where the step's Manage row counts them
-  (`etl/README.md` §"Problems flow downstream with the data").
+  `time_series` (`datalib_etl_time_series::unreadable_problems`), read
+  there, where the step's Manage row counts it
+  (`etl/README.md` §"Problems stay in the step that found them").
 - **`time_series_index`** (same file) reads each source store named in
   its `inputs` at that store's newest commit. It copies the store's
   rows and records the store's path and that commit. It copies no

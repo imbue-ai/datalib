@@ -284,14 +284,12 @@ mod tests {
         index.close().await;
     }
 
-    /// A source file whose time series could not be read was only a log
-    /// line and a number, so it reached neither the problems list nor
-    /// "Needs you". Now the step keeps it as a warning row in its store,
-    /// `grid_index` copies it into the index under the step's own stage,
-    /// and takes it out again once the step is no longer an input. The
-    /// TNG account's ride holds no FIT file the reader can parse.
+    /// A source file whose time series could not be read is a warning row
+    /// in the step's own store, where a reader finds it as the step's
+    /// (`datalib_step_problems::of_step`); `grid_index` copies none of it.
+    /// The TNG account's ride holds no FIT file the reader can parse.
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_unreadable_file_is_a_warning_row_in_the_index() {
+    async fn an_unreadable_file_is_a_warning_row_of_the_steps_own() {
         use datalib_etl::progress::Progress;
         use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
         use datalib_etl_web::synthesize::Synthesizer;
@@ -344,68 +342,41 @@ mod tests {
         run_render(&render, root, NOW, &Emitter::new("test".into()))
             .await
             .unwrap();
-        let index_with = |inputs: Vec<String>| StepEnv {
-            step: crate::grid_index::out_rel(),
-            group: datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR.into(),
-            group_type: None,
-            source_group: None,
-            source_group_type: None,
-            function: crate::function::Function::GridIndex,
-            inputs,
-        };
-        let stop = datalib_etl::stop::StopFlag::new();
-        let index_rows = || async {
-            let index = datalib_core::layout::grid_index_db(root);
-            let pool = sqlx::sqlite::SqlitePoolOptions::new()
-                .max_connections(1)
-                .idle_timeout(None)
-                .max_lifetime(None)
-                .connect_with(datalib_sqlite_open::file(&index).read_only(true))
-                .await
-                .unwrap();
-            let rows: Vec<(String, String, String, String)> = sqlx::query_as(
-                "SELECT source_id, stage, severity, scope_key FROM problems ORDER BY scope_key",
-            )
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-            pool.close().await;
-            rows
-        };
+        let read = datalib_step_problems::of_step(root, "riker/render_time_series").await;
+        assert!(read.unread.is_empty(), "{:?}", read.unread);
+        let rows: Vec<(&str, &str, &str, &str)> = read
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.source_id.as_str(),
+                    r.stage.as_str(),
+                    r.severity.as_str(),
+                    r.scope_key.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, [("riker", "time_series", "warning", "17010414002")]);
 
         crate::grid_index::run(
             root,
-            &index_with(vec!["riker/render_time_series".into()]),
+            &StepEnv {
+                step: crate::grid_index::out_rel(),
+                group: datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR.into(),
+                group_type: None,
+                source_group: None,
+                source_group_type: None,
+                function: crate::function::Function::GridIndex,
+                inputs: vec!["riker/render_time_series".into()],
+            },
             Some(NOW),
             &Emitter::new("test".into()),
-            &stop,
+            &datalib_etl::stop::StopFlag::new(),
         )
         .await
         .unwrap();
-        assert_eq!(
-            index_rows().await,
-            [(
-                "riker".to_string(),
-                "time_series".to_string(),
-                "warning".to_string(),
-                "17010414002".to_string()
-            )]
-        );
-
-        crate::grid_index::run(
-            root,
-            &index_with(vec![]),
-            Some(NOW),
-            &Emitter::new("test".into()),
-            &stop,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            index_rows().await,
-            [],
-            "a step no longer read leaves no rows"
-        );
+        let index = datalib_step_problems::of_step(root, &crate::grid_index::out_rel()).await;
+        assert!(index.rows.is_empty(), "the index copied {:?}", index.rows);
     }
 
     /// The config side adds `render_time_series` steps for the types its

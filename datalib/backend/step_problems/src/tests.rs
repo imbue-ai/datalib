@@ -202,8 +202,7 @@ async fn insert(pool: &sqlx::SqlitePool, row: &ProblemRow) {
 
 /// A step's problems are read from every store in its folder: a raw
 /// store as its last seal left it, never the rows its writer holds
-/// uncommitted, with the step's group filled in where a download's row
-/// names no source; and the step's own `problems.sqlite` beside it.
+/// uncommitted; and the step's own `problems.sqlite` beside it.
 #[tokio::test]
 async fn a_steps_problems_are_its_stores_rows_as_last_sealed() {
     let dir = tempfile::tempdir().unwrap();
@@ -211,11 +210,11 @@ async fn a_steps_problems_are_its_stores_rows_as_last_sealed() {
     let store = dir.path().join(step).join("entities.doltlite_db");
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
     let pool = datalib_etl::doltlite_raw::open(&store, &[]).await.unwrap();
-    insert(&pool, &found("messages:1", "404").into_row("")).await;
+    insert(&pool, &found("messages:1", "404").into_row("riker")).await;
     datalib_etl::doltlite_raw::commit_run(&pool, "seal")
         .await
         .unwrap();
-    insert(&pool, &found("messages:2", "404").into_row("")).await;
+    insert(&pool, &found("messages:2", "404").into_row("riker")).await;
 
     let mut file = StepFile::open(dir.path(), step, at(1)).await.unwrap();
     file.record(vec![row("listing:channels")]).await.unwrap();

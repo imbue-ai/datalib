@@ -711,6 +711,53 @@ mod tests {
         ]
     }
 
+    /// A download's problem is read where the download keeps it, in its
+    /// raw store as last sealed, with nothing copying it on: the problems
+    /// grid lists it and the source's Download count holds it, before any
+    /// render or index pass has run over it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_downloads_problem_is_listed_and_counted_from_its_own_store() {
+        use datalib_problem_mutes::{counter_of, query};
+        use datalib_problems::CountedBy;
+        use datalib_table::BulkUpsertable;
+
+        let tmp = tempfile::tempdir().unwrap();
+        index_problems(tmp.path(), &[]).await;
+        let raw = tmp.path().join("riker/ingest/entities.doltlite_db");
+        std::fs::create_dir_all(raw.parent().unwrap()).unwrap();
+        let pool = datalib_etl::doltlite_raw::open(&raw, &[]).await.unwrap();
+        let row = ProblemRow::new(
+            "riker",
+            Stage::Fetch,
+            Scope::Entity("messages:1"),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::FetchFailed, "404").severity(Severity::Error),
+            None,
+        );
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
+            datalib_table::insert_sql::<ProblemRow>(),
+        )))
+        .execute(&pool)
+        .await
+        .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&pool, "seal")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let s = super::super::tests::index_over(tmp.path()).await;
+        let download = counter_of("riker", CountedBy::Download);
+        let counts = datalib_problem_mutes::counts(tmp.path())
+            .await
+            .unwrap()
+            .expect("counted");
+        assert_eq!(counts.get(&download).map(|c| c.shown.errors), Some(1));
+        let listed = ask(&s, q(&query(&download))).await;
+        assert!(listed.errors.is_empty(), "{:?}", listed.errors);
+        assert_eq!(ids(&listed), [row.problem_uuid.as_str()]);
+    }
+
     async fn ask(s: &Index, params: Params) -> Response {
         handler(State(s.clone()), Query(params)).await.0
     }
