@@ -4,7 +4,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import {
-  UNIFIED_DOCUMENT_INDEX,
+  UNIFIED_GRID_AND_SEARCH_INDEX,
   installPackage,
   type ManageResponse,
   type ManageRow,
@@ -64,7 +64,7 @@ import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
 <p>Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
-(Work Slack, Personal mail), or the unified document index that makes them searchable. Open
+(Work Slack, Personal mail), or the unified grid and search index that makes them searchable. Open
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
@@ -468,7 +468,7 @@ export function useSourcesCard(ctx: CardCtx) {
   function onCellDoubleClicked(data: Row, field: string) {
     if (field === "problems" && data.kind === "system") openConfig();
     else if (field === "problems" && data.problems_query)
-      actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
+      actions.openProblems(data, `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`);
     else if (field === "problems" || field === "status") void actions.openStepLog(data);
   }
 

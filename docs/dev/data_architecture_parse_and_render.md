@@ -118,7 +118,7 @@ database per source, at
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them
-    (`unified_document_index`'s `POST /people`).
+    (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).
@@ -663,7 +663,7 @@ in principle and not built. The sink is the `problems` table
 starts in the source's raw store, everything else in its render
 store, and the render store carries the raw store's rows forward so
 one store holds the source's whole list. From there it is copied into
-the unified document index, counted on the Manage row and shown on the
+the unified grid and search index, counted on the Manage row and shown on the
 document. How it is wired at each stage:
 
 | stage | how a problem gets in | swept by |
@@ -983,7 +983,7 @@ problem, so one bucket that will not build neither fails the step nor
 makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
-`/applet/unified_document_index/chat/{uuid}` serves and what qmd indexed, so a
+`/applet/unified_grid_and_search_index/chat/{uuid}` serves and what qmd indexed, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
 the file at its old one (`put_document`). `grid_index` needs no part in

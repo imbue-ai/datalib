@@ -74,7 +74,7 @@ function release() {
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
 const RENDERS = SOURCES.map((s) => `${s}/render_markdown`);
-const INDEX = "unified_document_index/grid_index";
+const INDEX = "unified_grid_and_search_index/grid_index";
 const STEPS = [...INGESTS, ...RENDERS, INDEX];
 
 type DagStep = { id: string; current_state: string | null };
@@ -217,11 +217,11 @@ inputs = ["${id}/ingest"]
 at_most_every_secs = 0
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "'${STEP_BIN}'"
 inputs = [${sources.map(([id]) => `"${id}/render_markdown"`).join(", ")}]
@@ -232,7 +232,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     context,
   }) => {
     await writeConfig(page, config());
-    for (const id of [...SOURCES, "unified_document_index"]) await expandGroup(page, id);
+    for (const id of [...SOURCES, "unified_grid_and_search_index"]) await expandGroup(page, id);
 
     // The Explore grid, in a second tab, filtered to the first source's
     // rows before it has any. Not touched again after this: the point
@@ -350,7 +350,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     await settleRunner(page, 120_000);
     const search = (await (
       await page.request.get(
-        `/applet/unified_document_index/search?q=${encodeURIComponent(`source:${SOURCES[0]}`)}&limit=1000`,
+        `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(`source:${SOURCES[0]}`)}&limit=1000`,
       )
     ).json()) as { rows: unknown[] };
     expect(search.rows.length, "the tapes hold more than one conversation").toBeGreaterThan(
@@ -384,7 +384,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     const ingest = `${id}/ingest`;
     const steps = [ingest, `${id}/render_markdown`, INDEX];
     await writeConfig(page, config([[id, "chatgpt"]]));
-    for (const group of [id, "unified_document_index"]) await expandGroup(page, group);
+    for (const group of [id, "unified_grid_and_search_index"]) await expandGroup(page, group);
     const was = await stampsBefore(page, steps);
     hold();
     await page.getByRole("button", { name: "Sync everything" }).click();
@@ -432,7 +432,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     const id = "chatgpt-keys";
     const steps = [`${id}/ingest`, `${id}/render_markdown`, INDEX];
     await writeConfig(page, config([[id, "chatgpt"]]));
-    for (const group of [id, "unified_document_index"]) await expandGroup(page, group);
+    for (const group of [id, "unified_grid_and_search_index"]) await expandGroup(page, group);
     const was = await stampsBefore(page, steps);
 
     const grid = await context.newPage();

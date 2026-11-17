@@ -9,6 +9,6 @@ describe("appletBrowseSource", () => {
   it("opens the contacts app's table, and nothing for another applet", () => {
     expect(appletBrowseSource("datalib_contacts")).toBe("contactsView()");
     expect(appletBrowseSource("unified_time_series_index")).toBe("timeSeriesView()");
-    expect(appletBrowseSource("unified_document_index")).toBeNull();
+    expect(appletBrowseSource("unified_grid_and_search_index")).toBeNull();
   });
 });

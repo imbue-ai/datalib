@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
         let qmd = env(
-            "unified_document_index/qmd_aggregator",
+            "unified_grid_and_search_index/qmd_aggregator",
             Function::QmdAggregator,
         );
         assert!(

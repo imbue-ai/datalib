@@ -24,7 +24,7 @@ const PROBLEM = {
 test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
 test("an index commit clears a problem the open document no longer has", async ({ page }) => {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=1000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { uuid: string; markdown_uuid: string | null; message_index: number | null }[];
@@ -35,7 +35,7 @@ test("an index commit clears a problem the open document no longer has", async (
   const commit = await stubStream(page);
   let stale = true;
   await page.route(
-    `**/applet/unified_document_index/chat/${pick!.markdown_uuid}`,
+    `**/applet/unified_grid_and_search_index/chat/${pick!.markdown_uuid}`,
     async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as { problems?: unknown[] };

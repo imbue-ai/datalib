@@ -39,7 +39,7 @@ pub struct DagConfig {
     #[serde(default)]
     pub binary_dir: Option<PathBuf>,
     /// The containers steps and applets are filed under. A source is a group
-    /// with a `type`; the unified document index is a group without one.
+    /// with a `type`; the unified grid and search index is a group without one.
     #[serde(default)]
     pub groups: Vec<GroupEntry>,
     /// A config with no steps yet is valid — it just runs nothing.
@@ -350,7 +350,7 @@ pub struct GroupEntry {
     /// The kind of data this group mirrors (`slack`, `email`, …), which
     /// is what makes it a *source*. Forwarded to every step under the group
     /// and folded into their fingerprints. Absent for a group that mirrors
-    /// nothing, such as the unified document index.
+    /// nothing, such as the unified grid and search index.
     #[serde(default)]
     pub r#type: Option<String>,
     /// What this source is to the person who owns it — "work Slack, mostly
@@ -736,6 +736,7 @@ const RESERVED_DIRS: &[(&str, &str)] = &[
 pub const RESERVED_STANZA_NAMES: &[&str] = &[
     "unified_index",
     "unified_document_index",
+    "unified_grid_and_search_index",
     "unified_time_series_index",
 ];
 
@@ -2727,7 +2728,7 @@ mod tests {
             type = "slack"
 
             [[groups]]
-            id = "unified_document_index"
+            id = "unified_grid_and_search_index"
 
             [[steps]]
             group = "slack"
@@ -2741,7 +2742,7 @@ mod tests {
             params.api = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
 
             [[steps]]
-            group = "unified_document_index"
+            group = "unified_grid_and_search_index"
             function = "grid_index"
             inputs = ["slack/render_markdown"]
             "#,
@@ -2786,7 +2787,7 @@ mod tests {
 
         // The composed ids are what everything downstream sees.
         assert_eq!(specs[0].id, "slack/ingest");
-        assert_eq!(specs[2].id, "unified_document_index/grid_index");
+        assert_eq!(specs[2].id, "unified_grid_and_search_index/grid_index");
         assert_eq!(specs[0].group.as_deref(), Some("slack"));
         assert_eq!(specs[0].group_type.as_deref(), Some("slack"));
         assert_eq!(specs[0].function.as_deref(), Some("ingest"));
@@ -2833,7 +2834,7 @@ mod tests {
                 {description_line}
 
                 [[groups]]
-                id = "unified_document_index"
+                id = "unified_grid_and_search_index"
 
                 [[steps]]
                 group = "mail"
@@ -2841,7 +2842,7 @@ mod tests {
                 command = "my-fetcher"
 
                 [[steps]]
-                group = "unified_document_index"
+                group = "unified_grid_and_search_index"
                 function = "qmd_index"
                 command = "my-indexer"
                 inputs = ["mail/ingest"]
@@ -2876,7 +2877,7 @@ mod tests {
             type = "email"
 
             [[groups]]
-            id = "unified_document_index"
+            id = "unified_grid_and_search_index"
 
             [[steps]]
             group = "iliad"
@@ -2907,19 +2908,19 @@ mod tests {
             inputs = ["mail/keyword_index"]
 
             [[steps]]
-            group = "unified_document_index"
+            group = "unified_grid_and_search_index"
             function = "grid_index"
             inputs = ["iliad/render_markdown", "mail/render_markdown"]
 
             [[steps]]
-            group = "unified_document_index"
+            group = "unified_grid_and_search_index"
             function = "qmd_aggregator"
             inputs = ["mail/keyword_index", "mail/embed"]
 
             [[steps]]
-            group = "unified_document_index"
+            group = "unified_grid_and_search_index"
             function = "embedding_map"
-            inputs = ["unified_document_index/qmd_aggregator"]
+            inputs = ["unified_grid_and_search_index/qmd_aggregator"]
 
             [[steps]]
             id = "custom/qmd"
@@ -2940,7 +2941,7 @@ mod tests {
                 "iliad/render_markdown",
                 "mail/keyword_index",
                 "mail/embed",
-                "unified_document_index/embedding_map"
+                "unified_grid_and_search_index/embedding_map"
             ]
         );
     }
@@ -3289,12 +3290,12 @@ mod tests {
     /// steps' ids *are* those trees, so anything else claiming one is an
     /// ordinary duplicate.
     #[test]
-    fn the_index_steps_own_unified_document_index_by_being_it() {
+    fn the_index_steps_own_unified_grid_and_search_index_by_being_it() {
         let cfg: DagConfig = toml::from_str(
             r#"steps = [
                  {id = "slack/rendered_md", command = "r"},
-                 {id = "unified_document_index/grid", command = "a", inputs = ["slack/rendered_md"]},
-                 {id = "unified_document_index/qmd", command = "b", inputs = ["slack/rendered_md"]},
+                 {id = "unified_grid_and_search_index/grid", command = "a", inputs = ["slack/rendered_md"]},
+                 {id = "unified_grid_and_search_index/qmd", command = "b", inputs = ["slack/rendered_md"]},
                ]"#,
         )
         .unwrap();
@@ -3305,8 +3306,8 @@ mod tests {
         // special-case list involved.
         let clash: DagConfig = toml::from_str(
             r#"steps = [
-                 {id = "unified_document_index/grid", command = "a"},
-                 {id = "unified_document_index/grid", command = "b"},
+                 {id = "unified_grid_and_search_index/grid", command = "a"},
+                 {id = "unified_grid_and_search_index/grid", command = "b"},
                ]"#,
         )
         .unwrap();
@@ -3568,19 +3569,19 @@ id = "pdfs/ingest"
 command = "fetch-pdfs"
 
 [[steps]]
-id = "unified_document_index/grid_index"
+id = "unified_grid_and_search_index/grid_index"
 command = "index-it"
 inputs = ["pdfs/ingest"]
 
 [[applets]]
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         // The broken step is gone and named; everything else loaded.
         assert_eq!(
             ids(&check),
-            vec!["pdfs/ingest", "unified_document_index/grid_index"]
+            vec!["pdfs/ingest", "unified_grid_and_search_index/grid_index"]
         );
         assert_eq!(check.cfg.applets.len(), 1, "the applet must survive");
         assert_eq!(
@@ -3611,8 +3612,14 @@ command = "datalib-applet unified_document_index"
     #[test]
     fn nested_ids_are_two_writers_on_one_tree() {
         for (first, second) in [
-            ("unified_document_index", "unified_document_index/grid"),
-            ("unified_document_index/grid", "unified_document_index"),
+            (
+                "unified_grid_and_search_index",
+                "unified_grid_and_search_index/grid",
+            ),
+            (
+                "unified_grid_and_search_index/grid",
+                "unified_grid_and_search_index",
+            ),
         ] {
             let check = check_text(&format!(
                 "[[steps]]\nid = \"{first}\"\ncommand = \"a\"\n\n\
@@ -3647,27 +3654,27 @@ command = "datalib-applet unified_document_index"
     }
 
     /// Applet ids and step ids are separate namespaces, and the scaffold
-    /// depends on it: `unified_document_index` the applet sits beside
-    /// `unified_document_index/grid_index` the step.
+    /// depends on it: `unified_grid_and_search_index` the applet sits beside
+    /// `unified_grid_and_search_index/grid_index` the step.
     #[test]
     fn the_scaffold_shape_loads_clean() {
         let check = check_text(
             r#"
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
@@ -3715,7 +3722,7 @@ command = "b"
 inputs = ["slack/raw"]
 
 [[steps]]
-id = "unified_document_index/grid"
+id = "unified_grid_and_search_index/grid"
 command = "c"
 inputs = ["slack/rendered_md", "pdfs/raw"]
 "#,
@@ -3726,7 +3733,7 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
             Some(Severity::Blocked)
         );
         assert_eq!(
-            sev_of(&check.diagnostics, "unified_document_index/grid"),
+            sev_of(&check.diagnostics, "unified_grid_and_search_index/grid"),
             Some(Severity::Blocked)
         );
 
@@ -3752,7 +3759,7 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
         let cascaded = check
             .diagnostics
             .iter()
-            .find(|d| d.id() == Some("unified_document_index/grid"))
+            .find(|d| d.id() == Some("unified_grid_and_search_index/grid"))
             .unwrap();
         assert!(
             cascaded.message.contains("was itself dropped"),
@@ -3923,8 +3930,8 @@ id = "system/sneaky"
 command = "b"
 
 [[applets]]
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 [[applets]]
 id = "2fa"
@@ -3933,7 +3940,7 @@ command = "x"
         );
         assert_eq!(ids(&check), vec!["good/raw"]);
         assert_eq!(check.cfg.applets.len(), 1);
-        assert_eq!(check.cfg.applets[0].id, "unified_document_index");
+        assert_eq!(check.cfg.applets[0].id, "unified_grid_and_search_index");
         assert_eq!(
             sev_of(&check.diagnostics, "system/sneaky"),
             Some(Severity::Rejected)
@@ -4040,17 +4047,17 @@ function = "render_markdown"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#;
 
     /// The plan's example shape loads clean, and the ids everything
@@ -4064,7 +4071,7 @@ command = "datalib-applet unified_document_index"
         assert_eq!(
             ids,
             vec![
-                "unified_document_index/grid_index",
+                "unified_grid_and_search_index/grid_index",
                 "work-slack/ingest",
                 "work-slack/render_markdown"
             ]
@@ -4073,7 +4080,7 @@ command = "datalib-applet unified_document_index"
         assert_eq!(check.cfg.groups[0].name.as_deref(), Some("Work Slack"));
         assert_eq!(
             check.cfg.applets[0].group.as_deref(),
-            Some("unified_document_index")
+            Some("unified_grid_and_search_index")
         );
         assert!(check.graph.by_id.contains_key("work-slack/render_markdown"));
     }
@@ -4129,7 +4136,7 @@ command = "datalib-applet unified_document_index"
             assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
             assert!(!usable_group_id(bad), "{bad:?}");
         }
-        for good in ["a", "work-slack", "a.b_c", "unified_document_index"] {
+        for good in ["a", "work-slack", "a.b_c", "unified_grid_and_search_index"] {
             let check = check_text(&format!(
                 "[[groups]]\nid = \"{good}\"\n[[steps]]\ngroup = \"{good}\"\n\
                  function = \"raw\"\ncommand = \"x\"\n"
@@ -4374,7 +4381,7 @@ command = "datalib-applet unified_document_index"
     #[test]
     fn an_applet_under_an_undeclared_group_only_warns() {
         let check = check_text(
-            "[[applets]]\ngroup = \"nope\"\nid = \"unified_document_index\"\ncommand = \"x\"\n",
+            "[[applets]]\ngroup = \"nope\"\nid = \"unified_grid_and_search_index\"\ncommand = \"x\"\n",
         );
         assert_eq!(check.cfg.applets.len(), 1);
         assert_eq!(check.diagnostics.len(), 1);
@@ -4405,8 +4412,8 @@ command = "datalib-applet unified_document_index"
             "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
             "[[groups]]\nid = \"slack\"\ntype = \"slack_api\"\n\n\
              [[steps]]\ngroup = \"slack\"\nfunction = \"raw\"\ncommand = \"datalib-step download slack_api\"\n",
-            "[[groups]]\nid = \"unified_document_index\"\n\n\
-             [[steps]]\ngroup = \"unified_document_index\"\nfunction = \"grid\"\ncommand = \"datalib-step grid_index\"\n",
+            "[[groups]]\nid = \"unified_grid_and_search_index\"\n\n\
+             [[steps]]\ngroup = \"unified_grid_and_search_index\"\nfunction = \"grid\"\ncommand = \"datalib-step grid_index\"\n",
         ] {
             let check = check_text(text);
             assert_eq!(check.dropped(), 1, "{text}\n{:?}", check.diagnostics);
@@ -4558,7 +4565,7 @@ id = "mail"
 type = "email"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "mail"
@@ -4576,7 +4583,7 @@ inputs = ["mail/keyword_index"]
 locks = ["cpu"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = ["mail/keyword_index", "mail/embed"]
 
@@ -4600,7 +4607,7 @@ inputs = ["mail/keyword_index"]
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            held("unified_document_index/qmd_aggregator"),
+            held("unified_grid_and_search_index/qmd_aggregator"),
             ["qmd_keyword"]
         );
         assert_eq!(held("mail/keyword_index"), ["qmd_keyword"]);
@@ -4627,14 +4634,14 @@ id = "mail"
 type = "email"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "mail"
 function = "render_markdown"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_index"
 inputs = ["mail/render_markdown"]
 "#,
@@ -4642,7 +4649,7 @@ inputs = ["mail/render_markdown"]
         let refused: Vec<&Diagnostic> = check
             .diagnostics
             .iter()
-            .filter(|d| d.id() == Some("unified_document_index/qmd_index"))
+            .filter(|d| d.id() == Some("unified_grid_and_search_index/qmd_index"))
             .collect();
         assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
         assert_eq!(refused[0].severity, Severity::Rejected);
@@ -4670,7 +4677,7 @@ id = "notes"
 type = "email"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "mail"
@@ -4691,7 +4698,7 @@ function = "keyword_index"
 inputs = ["notes/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = ["mail/keyword_index"]
 "#,
@@ -4727,7 +4734,7 @@ type = "diff"
 source = "slack"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "slack-diff"
@@ -4744,7 +4751,7 @@ function = "embed"
 inputs = ["slack-diff/keyword_index"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = ["slack-diff/keyword_index", "slack-diff/embed"]
 "#,

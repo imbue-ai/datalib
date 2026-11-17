@@ -306,11 +306,13 @@ datalib/
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
     problem_mutes/ the problem rows a person muted, under
-                   `datalib_curated/`; the `unified_document_index`
-                   applet is its one writer, `datalib-http` reads it.
-    unified_document_index/ the grid index, the search index's query side,
-                   the query language over them. Linked by datalib-step
-                   and datalib-applet — never by datalib-http or datalib-dag.
+                   `datalib_curated/`; the
+                   `unified_grid_and_search_index` applet is its one
+                   writer, `datalib-http` reads it.
+    unified_grid_and_search_index/ the grid index, the search index's
+                   query side, the query language over them. Linked by
+                   datalib-step and datalib-applet — never by
+                   datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host, and `datalib-applet
                    search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
@@ -347,7 +349,7 @@ separate crates").
 
 `datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
 entry is one thing on the Manage screen (a source is a group with a
-`type`; the unified document index is a group without one); a `[[steps]]` entry is
+`type`; the unified grid and search index is a group without one); a `[[steps]]` entry is
 `group` + `function`, its id composed as `<group>/<function>` — the one
 tree it writes; `inputs` name steps by that id and are the edges; an
 `[[applets]]` entry is a server the gateway spawns. Every step names
@@ -355,7 +357,7 @@ the program it runs in `command`; datalib's own steps run
 `datalib-step`.
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
-`grid_index` under `unified_document_index` reads every render tree its `inputs`
+`grid_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
 name into the SQL index the grid reads, and the problem rows of the
 time-series and occurrences steps it names. A searched source fills its own
 part of the search index (`search_*` tables in the grid index's file, and
@@ -372,7 +374,7 @@ A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `render_time_series` step beside its `render_markdown`, and
 `time_series_index` under `unified_time_series_index` indexes every
 such store without copying its points (`docs/dev/time_series.md`). The document index is
-queried by the `unified_document_index` applet; `datalib-http`
+queried by the `unified_grid_and_search_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
 (`datalib/backend/blob_store/README.md`), and the index's problem rows,
@@ -424,7 +426,7 @@ it should not have.
 
 The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
 `datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
-from every source's render store and the `unified_document_index` applet reads
+from every source's render store and the `unified_grid_and_search_index` applet reads
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 

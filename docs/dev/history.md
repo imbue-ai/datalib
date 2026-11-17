@@ -42,3 +42,16 @@ doltlite's copy. doltlite's amalgamation turned its own SIMD kernels
 off, so it hashed every chunk with the portable code; it now builds
 them too, and every kernel symbol is renamed the same way
 (`third-party/doltlite/README.md` §"BLAKE3's SIMD kernels").
+
+## The index group's three names
+
+The untyped group that holds the grid and the search index was
+`unified_index`, then `unified_document_index`, and is now
+`unified_grid_and_search_index` (Nov 2026). It was renamed the second
+time because the search index's tables had moved into the grid
+index's file, so the group was no longer only a document index. Older
+plans, audits and commit messages use the names of their day. The
+data, the config, the applet's command and its `/applet/…` URLs all
+still answer to both old names: `datalib_migrate_config::index_name`
+rewrites the config, and `datalib-http`'s `config_upgrade::move_index_dir`
+moves the folder at boot.

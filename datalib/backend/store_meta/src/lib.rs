@@ -51,13 +51,13 @@ pub enum StoreKind {
     /// Every source's time series rows, pointing at their stores
     /// (`unified_time_series_index/time_series_index`).
     TimeSeriesIndex,
-    /// The grid index (`unified_document_index/grid_index`).
+    /// The grid index (`unified_grid_and_search_index/grid_index`).
     GridIndex,
     /// Every source's keyword index and embeddings, keyed by document,
-    /// holding no text (`unified_document_index/search_index`). Plain SQLite.
+    /// holding no text (`unified_grid_and_search_index/search_index`). Plain SQLite.
     SearchIndex,
     /// Each chunk's vector under the model that made it and the hash of
-    /// its prompt (`unified_document_index/search_index`). Plain SQLite.
+    /// its prompt (`unified_grid_and_search_index/search_index`). Plain SQLite.
     InferenceCache,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and

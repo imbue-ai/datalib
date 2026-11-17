@@ -3,7 +3,7 @@
 //!
 //! Two entry points, which are the same write path from two sides.
 //! [`apply_one`] writes one rendered document; [`build_grid_index`] stacks
-//! every source's store into the unified document index, which is the `grid_index` DAG
+//! every source's store into the unified grid and search index, which is the `grid_index` DAG
 //! step's whole job.
 //!
 //! A re-render replaces a document's rows rather than accumulating them,

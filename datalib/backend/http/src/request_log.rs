@@ -42,9 +42,9 @@ const ROUTINE_POSTS: [&str; 9] = [
     "/api/pipeline/storage/refresh",
     "/api/remote_media/check",
     "/api/ui/events",
-    "/applet/unified_document_index/people",
-    "/applet/unified_document_index/qmd_state",
-    "/applet/unified_document_index/sql",
+    "/applet/unified_grid_and_search_index/people",
+    "/applet/unified_grid_and_search_index/qmd_state",
+    "/applet/unified_grid_and_search_index/sql",
 ];
 
 /// Where a page keeps its own layout: written on every drag.
@@ -222,7 +222,7 @@ mod tests {
         assert!(is_logged("/", StatusCode::OK));
         assert!(is_logged("/api/dag", StatusCode::OK));
         assert!(is_logged(
-            "/applet/unified_document_index/rows",
+            "/applet/unified_grid_and_search_index/rows",
             StatusCode::OK
         ));
     }

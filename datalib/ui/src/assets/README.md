@@ -55,7 +55,7 @@ the light and dark backgrounds.
   (Apache-2.0) in a mid grey that reads on both themes. Apple publishes
   no vector app icons, Baby Connect publishes no mark (`baby_connect` is
   MDI's `baby-bottle-outline`), and the rest are not products. `search` marks the
-  unified document index group, and `system` the System group.
+  unified grid and search index group, and `system` the System group.
 - **Our own:**
   - `claude_code.svg` and `codex.svg`: a terminal glyph in Claude's
     colour and in OpenAI's, so a list that shows Claude Code beside Claude,

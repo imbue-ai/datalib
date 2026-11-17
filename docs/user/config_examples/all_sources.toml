@@ -48,11 +48,11 @@ data_root = "~/datalib"
 # the search index's aggregator reads every source's keyword index and
 # embeddings, and keeps the search index to the sources it names.
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = [
@@ -111,7 +111,7 @@ inputs = [
 ]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = [
@@ -192,14 +192,14 @@ inputs = [
 
 # The app's search, grid and document view.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 
@@ -269,7 +269,7 @@ command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
 # Keyword (BM25) search over the page. Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# `unified_grid_and_search_index/qmd_aggregator`'s inputs. A time-series source
 # takes no `embed` step: its pages are summaries of numbers.
 [[steps]]
 group = "airvisual"
@@ -319,7 +319,7 @@ command = "datalib-step"
 inputs = ["apple_messages/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "apple_messages"
 function = "keyword_index"
@@ -428,7 +428,7 @@ inputs = ["baby_connect/ingest"]
 time_zone = "America/Los_Angeles"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "baby_connect"
 function = "keyword_index"
@@ -472,7 +472,7 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
                                      # (the ingest mirrors them all either way)
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "beeper"
 function = "keyword_index"
@@ -532,7 +532,7 @@ command = "datalib-step"
 inputs = ["calendar-google/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "calendar-google"
 function = "keyword_index"
@@ -608,7 +608,7 @@ command = "datalib-step"
 inputs = ["calendar-fastmail/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "calendar-fastmail"
 function = "keyword_index"
@@ -684,7 +684,7 @@ command = "datalib-step"
 inputs = ["calendar-caldav/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "calendar-caldav"
 function = "keyword_index"
@@ -756,7 +756,7 @@ command = "datalib-step"
 inputs = ["calendar-calendly/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "calendar-calendly"
 function = "keyword_index"
@@ -812,7 +812,7 @@ command = "datalib-step"
 inputs = ["calendar-ics/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "calendar-ics"
 function = "keyword_index"
@@ -902,7 +902,7 @@ command = "datalib-step"
 inputs = ["chatgpt-api/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "chatgpt-api"
 function = "keyword_index"
@@ -949,7 +949,7 @@ command = "datalib-step"
 inputs = ["chatgpt-export/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "chatgpt-export"
 function = "keyword_index"
@@ -1029,7 +1029,7 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
                                 # bytes on the project's page; default 131072 (128 KiB)
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "claude-api"
 function = "keyword_index"
@@ -1077,7 +1077,7 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
                                 # bytes on the project's page; default 131072 (128 KiB)
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "claude-export"
 function = "keyword_index"
@@ -1123,7 +1123,7 @@ inputs = ["claude_code/ingest"]
 max_tool_result_bytes = 16384  # the default
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "claude_code"
 function = "keyword_index"
@@ -1169,7 +1169,7 @@ inputs = ["codex/ingest"]
 max_tool_result_bytes = 16384  # the default
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "codex"
 function = "keyword_index"
@@ -1226,7 +1226,7 @@ command = "datalib-step"
 inputs = ["contacts-fastmail/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "contacts-fastmail"
 function = "keyword_index"
@@ -1283,7 +1283,7 @@ command = "datalib-step"
 inputs = ["contacts-carddav/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "contacts-carddav"
 function = "keyword_index"
@@ -1328,7 +1328,7 @@ command = "datalib-step"
 inputs = ["contacts-vcf/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "contacts-vcf"
 function = "keyword_index"
@@ -1394,7 +1394,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "email-jmap"
 function = "keyword_index"
@@ -1479,7 +1479,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "email-gmail"
 function = "keyword_index"
@@ -1535,7 +1535,7 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "email-mbox"
 function = "keyword_index"
@@ -1590,7 +1590,7 @@ inputs = ["email-apple_mail/ingest"]
 only_render_labels = ["Inbox"]  # render only threads with a message in these mailboxes; default [] is all
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "email-apple_mail"
 function = "keyword_index"
@@ -1628,7 +1628,7 @@ command = "datalib-step"
 inputs = ["facebook/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "facebook"
 function = "keyword_index"
@@ -1730,7 +1730,7 @@ command = "datalib-step"
 inputs = ["garmin/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs.
+# `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "garmin"
 function = "keyword_index"
@@ -1779,7 +1779,7 @@ command = "datalib-step"
 inputs = ["github/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "github"
 function = "keyword_index"
@@ -1835,7 +1835,7 @@ command = "datalib-step"
 inputs = ["gitlab/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "gitlab"
 function = "keyword_index"
@@ -1900,7 +1900,7 @@ command = "datalib-step"
 inputs = ["google_drive/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "google_drive"
 function = "keyword_index"
@@ -1953,7 +1953,7 @@ command = "datalib-step"
 inputs = ["google_takeout/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "google_takeout"
 function = "keyword_index"
@@ -2128,7 +2128,7 @@ command = "datalib-step"
 inputs = ["linkedin/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "linkedin"
 function = "keyword_index"
@@ -2226,7 +2226,7 @@ command = "datalib-step"
 inputs = ["notion/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "notion"
 function = "keyword_index"
@@ -2277,7 +2277,7 @@ command = "datalib-step"
 inputs = ["pdf/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "pdf"
 function = "keyword_index"
@@ -2336,7 +2336,7 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # input_path = "~/Downloads/perseus-tei"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "perseus"
 function = "keyword_index"
@@ -2382,7 +2382,7 @@ command = "datalib-step"
 inputs = ["signal/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "signal"
 function = "keyword_index"
@@ -2468,7 +2468,7 @@ command = "datalib-step"
 inputs = ["slack/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "slack"
 function = "keyword_index"
@@ -2512,7 +2512,7 @@ command = "datalib-step"
 inputs = ["sms_backup_restore/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "sms_backup_restore"
 function = "keyword_index"
@@ -2568,7 +2568,7 @@ command = "datalib-step"
 inputs = ["todoist/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "todoist"
 function = "keyword_index"
@@ -2618,7 +2618,7 @@ command = "datalib-step"
 inputs = ["whatsapp/ingest"]
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
 [[steps]]
 group = "whatsapp"
 function = "keyword_index"
@@ -2694,7 +2694,7 @@ command = "datalib-step"
 inputs = ["yolink/ingest"]
 
 # Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
+# `unified_grid_and_search_index/qmd_aggregator`'s inputs. A time-series source
 # takes no `embed` step: its pages are summaries of numbers.
 [[steps]]
 group = "yolink"

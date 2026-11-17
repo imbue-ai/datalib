@@ -109,7 +109,7 @@ the container or from any other one with the folder mounted:
 <!-- doc-test: run demo-sql -->
 ```sh
 docker exec datalib-demo datalib-doltlite -readonly \
-  /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+  /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -162,16 +162,16 @@ inputs = ["gmail/ingest"]
 outlink_format = "gmail"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["gmail/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = ["gmail/keyword_index", "gmail/embed"]
@@ -189,9 +189,9 @@ command = "datalib-step"
 inputs = ["gmail/keyword_index"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 EOF
 if [ "$(uname)" = Linux ] && [ "$(id -u)" != 1000 ]; then
   docker run --rm --user 0 --entrypoint chown -v "$DATA_ROOT:/data" "$IMG" -R 1000:1000 /data
@@ -239,7 +239,7 @@ describes. Query it without the server running at all:
 <!-- doc-test: run own-sql -->
 ```sh
 docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
-  /data/unified_document_index/grid_index/db.sqlite \
+  /data/unified_grid_and_search_index/grid_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 

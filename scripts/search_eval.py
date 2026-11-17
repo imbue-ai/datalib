@@ -22,7 +22,7 @@ zone) is the zone the applet runs in, so a bare date in a query
 built from a real library is that library's data: keep it beside the
 library, never here.
 
-By default `run` starts its own `datalib-applet unified_document_index` on the
+By default `run` starts its own `datalib-applet unified_grid_and_search_index` on the
 root, which is the applet the app runs, minus the gateway. `--http` asks a
 running `datalib-http` instead, through its gateway, the path the app's
 requests take. Use it for any time you mean to quote.
@@ -72,7 +72,7 @@ class Applet:
         env["DATALIB_APPLET_SECRET_FILE"] = self.secret_file
         env.setdefault("RUST_LOG", "warn")
         self.proc = subprocess.Popen(
-            [binary, "unified_document_index", "-p", "0"],
+            [binary, "unified_grid_and_search_index", "-p", "0"],
             env=env,
             stdout=subprocess.PIPE,
             text=True,
@@ -108,7 +108,7 @@ class Gateway:
 
     def get(self, path: str) -> Any:
         req = urllib.request.Request(
-            f"{self.base}/applet/unified_document_index{path}",
+            f"{self.base}/applet/unified_grid_and_search_index{path}",
             headers={"Authorization": f"Bearer {self.token}"},
         )
         with urllib.request.urlopen(req, timeout=300) as r:

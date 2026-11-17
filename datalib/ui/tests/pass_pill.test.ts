@@ -143,12 +143,12 @@ describe("the sources of a pass", () => {
       steps: [
         step("enterprise-mail/ingest", "done"),
         step("enterprise-mail/render_markdown", "failed", "no datalib-step"),
-        step("unified_document_index/grid_index", "done"),
+        step("unified_grid_and_search_index/grid_index", "done"),
       ],
       rerender: [
         "ten-forward/render_markdown",
         "ten-forward/keyword_index",
-        "unified_document_index/grid_index",
+        "unified_grid_and_search_index/grid_index",
       ],
     };
     expect(sourceRows(upgrade.steps)).toEqual([
@@ -160,7 +160,7 @@ describe("the sources of a pass", () => {
         freed: null,
       },
       {
-        group: "unified_document_index",
+        group: "unified_grid_and_search_index",
         source: "Search index",
         state: "done",
         error: null,
@@ -169,9 +169,9 @@ describe("the sources of a pass", () => {
     ]);
     expect(rerenderSources(upgrade)).toEqual([
       { group: "ten-forward", source: "ten-forward" },
-      { group: "unified_document_index", source: "Search index" },
+      { group: "unified_grid_and_search_index", source: "Search index" },
     ]);
-    expect(keepsItsName("unified_document_index")).toBe(true);
+    expect(keepsItsName("unified_grid_and_search_index")).toBe(true);
     expect(keepsItsName("enterprise-mail")).toBe(false);
   });
 });

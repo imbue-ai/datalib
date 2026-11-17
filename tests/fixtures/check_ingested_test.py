@@ -99,7 +99,7 @@ class CheckIngestedTest(unittest.TestCase):
         sources = declared_sources(self.config_body.read_text())
         self.assertIn("tng_calendar", sources)
         self.assertIn("slack-diff", sources)
-        self.assertNotIn("unified_document_index", sources)
+        self.assertNotIn("unified_grid_and_search_index", sources)
 
 
 if __name__ == "__main__":
