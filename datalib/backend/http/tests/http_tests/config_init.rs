@@ -48,7 +48,7 @@ async fn init_turns_an_empty_root_into_a_working_library() {
     let (status, err) = call(
         &app,
         "GET",
-        "/applet/unified_document_index/search?q=&limit=1",
+        "/applet/unified_grid_and_search_index/search?q=&limit=1",
     )
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
@@ -83,13 +83,13 @@ async fn init_turns_an_empty_root_into_a_working_library() {
     let (status, err) = call(
         &app,
         "GET",
-        "/applet/unified_document_index/search?q=&limit=1",
+        "/applet/unified_grid_and_search_index/search?q=&limit=1",
     )
     .await;
     if status == StatusCode::BAD_GATEWAY {
         let msg = err["error"].as_str().unwrap();
         assert!(!msg.contains("no applet"), "still unconfigured: {msg}");
-        assert!(msg.contains("unified_document_index"), "{msg}");
+        assert!(msg.contains("unified_grid_and_search_index"), "{msg}");
     }
 }
 

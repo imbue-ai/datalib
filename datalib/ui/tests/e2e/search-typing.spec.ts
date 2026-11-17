@@ -13,7 +13,7 @@ const shownQuery = (page: Page) => page.locator(".grid-wrap");
 /// The query each request to the search applet asked, as it went out.
 function asked(request: Request): string | null {
   const url = new URL(request.url());
-  if (!url.pathname.startsWith("/applet/unified_document_index/search")) return null;
+  if (!url.pathname.startsWith("/applet/unified_grid_and_search_index/search")) return null;
   return url.searchParams.get("q");
 }
 
@@ -85,7 +85,7 @@ test("a search replaced is given up, every request of it", async ({ page }) => {
   await opened(page);
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
-  await page.route("**/applet/unified_document_index/search**", async (route) => {
+  await page.route("**/applet/unified_grid_and_search_index/search**", async (route) => {
     if (asked(route.request()) === "warp") await held;
     await route.fallback().catch(() => {});
   });

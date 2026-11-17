@@ -5,7 +5,7 @@ point on a plane, placed so that documents with similar content sit near
 each other. This crate computes where the points go. It is pure
 computation: the `embedding_map` function in `datalib-step`
 (`datalib_step/src/embedding_map.rs`) reads the vectors and writes the
-result, and the `unified_document_index` applet serves it joined to the grid.
+result, and the `unified_grid_and_search_index` applet serves it joined to the grid.
 
 ```
 search_* tables + search_index/inference_cache.sqlite   each chunk's vector
@@ -14,8 +14,8 @@ search_* tables + search_index/inference_cache.sqlite   each chunk's vector
 datalib_embedding_map::layout                 this crate
         │
         ▼
-unified_document_index/embedding_map/embedding_map.json   document → (x, y), one file
-        │  applets/src/unified_document_index/map.rs — joined to grid_rows by document
+unified_grid_and_search_index/embedding_map/embedding_map.json   document → (x, y), one file
+        │  applets/src/unified_grid_and_search_index/map.rs — joined to grid_rows by document
         ▼
 the map card                                  datalib/ui/src/cards/UmapCard.ce.vue
 ```

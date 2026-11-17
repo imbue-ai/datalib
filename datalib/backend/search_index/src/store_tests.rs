@@ -332,3 +332,19 @@ async fn a_large_put_commits_in_parts() {
     assert_eq!(generation().await - before, 3, "one commit per part");
     assert_eq!(count(&index, "search_documents").await, 3);
 }
+
+/// The search index writes the grid index's file too, so its connection
+/// cuts the `-wal` back as the grid's does.
+#[tokio::test]
+async fn the_search_index_cuts_the_files_wal_back() {
+    let (_dir, index) = open().await;
+    let limit: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+        .fetch_one(index.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        limit.to_string(),
+        datalib_runtime::plain_sqlite::WAL_SIZE_LIMIT_BYTES
+    );
+    index.close().await;
+}

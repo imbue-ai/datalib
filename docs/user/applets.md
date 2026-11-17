@@ -19,7 +19,7 @@ below are relative to it:
 
 ```sh
 TOKEN=$(cat <data_root>/system/api-token)
-curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/unified_document_index/search?q=warp"
+curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/unified_grid_and_search_index/search?q=warp"
 ```
 
 A running server writes its address on start (`--url-file` writes it to
@@ -32,7 +32,7 @@ and the app starts it within a moment, with no restart.
 
 | applet (`datalib-applet <name>`) | serves | a card in the app |
 |---|---|---|
-| `unified_document_index` | search, the grid, the documents, what each source says about a handle | the grid and document view, built into the app |
+| `unified_grid_and_search_index` | search, the grid, the documents, what each source says about a handle | the grid and document view, built into the app |
 | `datalib_contacts` | your own contacts: which handles are one person, labels on people and senders | the person card and the contacts card, built into the app |
 | `unified_time_series_index` | the time series, and their points over a range | the chart, built into the app |
 | `photos` | photos and videos | a contact sheet |
@@ -51,7 +51,7 @@ stored stays on disk. From the command line, add the entry yourself:
 
 ```toml fragment
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 
@@ -71,7 +71,7 @@ workspace = "Slack"
 `group`, which is optional, is the source or index its row on the
 Manage screen is filed under.
 
-## `unified_document_index`
+## `unified_grid_and_search_index`
 
 The one applet the app cannot run without. What it answers is mostly in
 other pages: [the query language](searching.md) is what `q=` takes, and
@@ -137,7 +137,7 @@ Every example below sends the token and posts JSON, so set them up once:
 
 ```sh
 TOKEN=$(cat <data_root>/system/api-token)
-SQL="<origin>/applet/unified_document_index/sql"
+SQL="<origin>/applet/unified_grid_and_search_index/sql"
 ask() { curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$1" "$SQL"; }
 ```
 
@@ -191,7 +191,7 @@ The request:
   `system/disk_stats.sqlite` and `system/usage.doltlite_db`. Nothing
   else under `system/` is a store here. `GET /sql/stores` lists them,
   with each one's `kind` and `bytes`, the search index's vectors
-  (`unified_document_index/search_index/inference_cache.sqlite`) among them.
+  (`unified_grid_and_search_index/search_index/inference_cache.sqlite`) among them.
   Any other store deeper than `<group>/<step>/<file>` reads by name but
   is not listed.
 - **`sql`** is one statement that returns rows: a `SELECT`, a `WITH …

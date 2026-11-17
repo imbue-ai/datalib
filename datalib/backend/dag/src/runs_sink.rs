@@ -869,14 +869,14 @@ mod tests {
     #[tokio::test]
     async fn a_streaming_pass_closes_its_process_and_leaves_the_step_running() {
         let start = || Event::StepStart {
-            step: "unified_document_index/grid".into(),
+            step: "unified_grid_and_search_index/grid".into(),
             attempt: 1,
             builtin: true,
         };
         let (td, snap) = run(&[
             start(),
             Event::PassEnd {
-                step: "unified_document_index/grid".into(),
+                step: "unified_grid_and_search_index/grid".into(),
                 status: RunState::Succeeded,
                 error: None,
                 exit_code: Some(0),
@@ -888,7 +888,7 @@ mod tests {
         let mut passes: Vec<_> = processes(td.path(), None, Some("step"), 10)
             .await
             .into_iter()
-            .filter(|p| p.step.as_deref() == Some("unified_document_index/grid"))
+            .filter(|p| p.step.as_deref() == Some("unified_grid_and_search_index/grid"))
             .collect();
         passes.sort_by(|a, b| a.started_at_utc.cmp(&b.started_at_utc));
         assert_eq!(passes.len(), 2, "one process per pass");
@@ -898,7 +898,7 @@ mod tests {
         let step = snap
             .steps
             .iter()
-            .find(|s| s.step == "unified_document_index/grid")
+            .find(|s| s.step == "unified_grid_and_search_index/grid")
             .expect("the step row");
         assert_eq!(step.state, "running");
     }

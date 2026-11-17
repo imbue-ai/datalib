@@ -882,7 +882,7 @@ mod tests {
             .unwrap();
 
         let moved = store
-            .rename_group_steps("unified_index", "unified_document_index")
+            .rename_group_steps("unified_index", "unified_grid_and_search_index")
             .await
             .unwrap();
         assert_eq!(moved, 3);
@@ -890,7 +890,7 @@ mod tests {
         assert_eq!(
             off,
             [
-                "unified_document_index/embedding_map",
+                "unified_grid_and_search_index/embedding_map",
                 "unified_index_extra/x"
             ]
         );
@@ -898,16 +898,19 @@ mod tests {
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(step, "unified_document_index/embedding_map");
-        assert_eq!(reads, r#"{"unified_document_index/qmd_aggregator":"v1"}"#);
+        assert_eq!(step, "unified_grid_and_search_index/embedding_map");
+        assert_eq!(
+            reads,
+            r#"{"unified_grid_and_search_index/qmd_aggregator":"v1"}"#
+        );
         let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(sink, "unified_document_index/grid_index");
+        assert_eq!(sink, "unified_grid_and_search_index/grid_index");
         assert_eq!(
             store
-                .rename_group_steps("unified_index", "unified_document_index")
+                .rename_group_steps("unified_index", "unified_grid_and_search_index")
                 .await
                 .unwrap(),
             0

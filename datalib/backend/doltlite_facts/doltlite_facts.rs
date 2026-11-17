@@ -790,7 +790,7 @@ mod diffs {
     }
 
     #[tokio::test]
-    async fn a_diff_across_a_rename_shows_every_row_added() {
+    async fn a_diff_follows_a_rename() {
         let (s, before) = store_with_rows().await;
         let mut w = s.rw().await;
         ok(&mut w, "ALTER TABLE t RENAME TO u").await;
@@ -800,7 +800,7 @@ mod diffs {
             &format!("SELECT diff_type FROM dolt_diff_u('{before}', 'HEAD')"),
         )
         .await;
-        assert_eq!(rows, vec!["added", "added"]);
+        assert_eq!(rows, Vec::<String>::new(), "the rows did not change");
     }
 }
 
@@ -833,7 +833,7 @@ mod revert {
         assert_eq!(texts(&mut c, "SELECT id FROM t").await, ["a", "b", "d"]);
         assert_eq!(
             text(&mut c, "SELECT message FROM dolt_log() LIMIT 1").await,
-            Some("Revert \"add c\"".to_string())
+            Some(format!("Revert \"add c\"\n\nThis reverts commit {add_c}."))
         );
         assert_eq!(
             texts(&mut c, "SELECT table_name FROM dolt_status").await,
@@ -1159,9 +1159,12 @@ mod drafts {
             Some(main_before)
         );
         assert_eq!(
-            texts(&mut m, "SELECT message FROM dolt_log()").await,
+            texts(
+                &mut m,
+                "SELECT message FROM dolt_log() WHERE message NOT LIKE 'Initialize data repository%'"
+            )
+            .await,
             [
-                "Initialize data repository",
                 "Merge branch 'draft' into main",
                 "base",
                 "edit on main"
@@ -1222,20 +1225,17 @@ mod drafts {
     }
 
     #[tokio::test]
-    async fn dash_d_refuses_a_branch_whose_only_change_is_uncommitted() {
+    async fn dash_d_drops_a_branch_whose_only_change_is_uncommitted() {
         let (s, _) = store_with_draft().await;
         let mut d = on_draft(&s).await;
         ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
         d.close().await.unwrap();
 
         let mut m = s.rw().await;
-        err_contains(
-            exec(&mut m, "SELECT dolt_branch('-d', 'draft')").await,
-            "branch has uncommitted changes",
-        );
+        ok(&mut m, "SELECT dolt_branch('-d', 'draft')").await;
         assert_eq!(
             texts(&mut m, "SELECT name FROM dolt_branches ORDER BY name").await,
-            ["draft", "main"]
+            ["main"]
         );
     }
     /// The draft renames Riker and commits; `main` renames him too and
@@ -1685,7 +1685,7 @@ mod trees {
     async fn first_commit(c: &mut SqliteConnection) -> String {
         text(
             c,
-            "SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'",
+            "SELECT commit_hash FROM dolt_log WHERE message LIKE 'Initialize data repository%'",
         )
         .await
         .expect("the store's first commit")
@@ -1835,7 +1835,8 @@ mod trees {
 
     /// A detached reader holds its commit against nothing: a fold and gc
     /// in another process that drop the commit leave the reader on a store
-    /// that no longer has it, and its next read of history is "malformed".
+    /// that no longer has it, and its next read of history says the
+    /// revision "is no longer available".
     /// A tag on the commit keeps it whole. The fold runs in the `doltlite`
     /// shell, a second process, as a real one would.
     #[tokio::test]
@@ -1865,7 +1866,7 @@ mod trees {
             if tagged {
                 assert_eq!(read, Ok(()), "tagged");
             } else {
-                err_contains(read, "malformed");
+                err_contains(read, "is no longer available");
             }
         }
     }
@@ -2315,12 +2316,12 @@ mod compat {
         assert_eq!(header("delete").await, [1, 1]);
     }
 
-    /// Stock SQLite checkpoints a WAL once a commit leaves it past
-    /// `wal_autocheckpoint` pages (1000). Doltlite never does on a plain
-    /// file, so its `-wal` keeps every page ever written until a
-    /// connection asks; asked, it copies all of them.
+    /// A commit that leaves a plain file's WAL past `wal_autocheckpoint`
+    /// pages (1000) checkpoints it, as stock SQLite does, so an explicit
+    /// checkpoint afterwards finds less than that left. Doltlite 0.51.3
+    /// never did, and a live grid index's `-wal` reached 4 GB.
     #[tokio::test]
-    async fn a_plain_file_in_wal_mode_is_checkpointed_only_when_asked() {
+    async fn a_plain_file_in_wal_mode_checkpoints_by_itself() {
         let s = Store::new();
         let plain = s.path.with_file_name("plain-wal.sqlite");
         let mut c = connect(
@@ -2332,10 +2333,11 @@ mod compat {
         text(&mut c, "PRAGMA journal_mode = wal").await;
         assert_eq!(int(&mut c, "PRAGMA wal_autocheckpoint").await, 1000);
         ok(&mut c, "CREATE TABLE a (b BLOB)").await;
-        for _ in 0..3 {
+        // 300 commits of about 10 pages each: some 3000 pages in all.
+        for _ in 0..300 {
             ok(
                 &mut c,
-                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10) \
                  INSERT INTO a SELECT randomblob(4000) FROM n",
             )
             .await;
@@ -2346,8 +2348,146 @@ mod compat {
             .unwrap();
         let (busy, frames, copied) = row;
         assert_eq!(busy, 0);
-        assert!(frames > 2000, "a checkpoint ran by itself: {frames} frames");
+        // At most the threshold and one commit's pages are left uncopied.
+        assert!(
+            frames < 1100,
+            "no checkpoint ran by itself: the WAL holds {frames} frames"
+        );
         assert_eq!(copied, frames);
+    }
+
+    /// The checkpoint happens in the process that commits, so it holds
+    /// while another process has the file open, as the search applet
+    /// holds the grid index's file while a step writes it. The writer is
+    /// the pinned CLI.
+    #[tokio::test]
+    async fn a_plain_wal_file_is_checkpointed_while_another_process_holds_it_open() {
+        let s = Store::new();
+        let plain = s.path.with_file_name("shared.sqlite");
+        let uri = format!("file:{}?doltlite_engine=sqlite", plain.display());
+        let mut c = connect(&uri, false, Duration::from_secs(60)).await;
+        text(&mut c, "PRAGMA journal_mode = wal").await;
+        ok(&mut c, "CREATE TABLE a (b BLOB)").await;
+        assert_eq!(int(&mut c, "SELECT COUNT(*) FROM a").await, 0);
+
+        let script = s.path.with_file_name("writer.sql");
+        let commit =
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10) \
+             INSERT INTO a SELECT randomblob(4000) FROM n;\n";
+        std::fs::write(&script, format!(".timeout 60000\n{}", commit.repeat(300))).unwrap();
+        let out = Command::new(cli())
+            .arg(&uri)
+            .stdin(std::fs::File::open(&script).unwrap())
+            .output()
+            .expect("run the CLI");
+        assert!(out.status.success(), "{out:?}");
+
+        assert_eq!(int(&mut c, "SELECT COUNT(*) FROM a").await, 3000);
+        let (busy, frames, _) =
+            sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
+                .fetch_one(&mut c)
+                .await
+                .unwrap();
+        assert_eq!(busy, 0);
+        assert!(
+            frames < 1100,
+            "the other process's commits were never checkpointed: {frames} frames"
+        );
+    }
+
+    /// A checkpoint lets the WAL start over but leaves the `-wal` file at
+    /// its largest, which one large transaction sets; `journal_size_limit`
+    /// cuts the file back at the first write after the checkpoint. The
+    /// grid index loads a whole source in one transaction, so without the
+    /// limit its `-wal` keeps the largest load's size on disk.
+    #[tokio::test]
+    async fn journal_size_limit_cuts_a_plain_wal_file_back() {
+        const LIMIT: u64 = 1 << 20;
+        for limit in [None, Some(LIMIT)] {
+            let s = Store::new();
+            let plain = s.path.with_file_name("sized.sqlite");
+            let mut c = connect(
+                &format!("file:{}?doltlite_engine=sqlite", plain.display()),
+                false,
+                Duration::from_secs(5),
+            )
+            .await;
+            text(&mut c, "PRAGMA journal_mode = wal").await;
+            if let Some(limit) = limit {
+                int(&mut c, &format!("PRAGMA journal_size_limit = {limit}")).await;
+            }
+            ok(&mut c, "CREATE TABLE a (b BLOB)").await;
+            // About 20 MB in one transaction, then one small write.
+            ok(
+                &mut c,
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000) \
+                 INSERT INTO a SELECT randomblob(4000) FROM n",
+            )
+            .await;
+            ok(&mut c, "INSERT INTO a VALUES (x'00')").await;
+            let wal = std::fs::metadata(plain.with_file_name("sized.sqlite-wal"))
+                .unwrap()
+                .len();
+            match limit {
+                None => assert!(wal > 16 << 20, "the -wal shrank by itself: {wal} bytes"),
+                Some(limit) => assert!(wal <= limit, "the -wal was not cut back: {wal} bytes"),
+            }
+        }
+    }
+
+    /// A writer waiting on a plain WAL file gets in between another
+    /// process's transactions, as with stock SQLite. Doltlite 0.51.3 kept
+    /// it waiting until the other writer had run every transaction it
+    /// had, so the grid index's step could not open its file while a
+    /// `keyword_index` ran for minutes. The other process is the pinned
+    /// CLI; what is checked is how many of its transactions had committed
+    /// when this one got in, never how long it waited.
+    #[tokio::test]
+    async fn a_waiting_writer_gets_in_between_another_processs_transactions() {
+        const ROUNDS: i64 = 60;
+        let s = Store::new();
+        let plain = s.path.with_file_name("shared.sqlite");
+        let uri = format!("file:{}?doltlite_engine=sqlite", plain.display());
+        let mut c = connect(&uri, false, Duration::from_secs(60)).await;
+        text(&mut c, "PRAGMA journal_mode = wal").await;
+        ok(&mut c, "CREATE TABLE rounds (n INTEGER)").await;
+        ok(&mut c, "CREATE TABLE pad (b BLOB)").await;
+        ok(&mut c, "CREATE TABLE waiter (rounds_before INTEGER)").await;
+
+        let script = s.path.with_file_name("writer.sql");
+        let mut sql = String::from(".timeout 60000\n");
+        for n in 1..=ROUNDS {
+            sql.push_str(&format!(
+                "BEGIN IMMEDIATE; INSERT INTO rounds VALUES ({n}); \
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000) \
+                 INSERT INTO pad SELECT randomblob(100) FROM n; COMMIT;\n"
+            ));
+        }
+        std::fs::write(&script, sql).unwrap();
+        let mut writer = Command::new(cli())
+            .arg(&uri)
+            .stdin(std::fs::File::open(&script).unwrap())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("start the CLI");
+
+        // Wait until the other writer is mid-stream.
+        while int(&mut c, "SELECT COUNT(*) FROM rounds").await < 2 {
+            if let Some(status) = writer.try_wait().unwrap() {
+                panic!("the CLI writer stopped before its second round: {status}");
+            }
+            tokio::task::yield_now().await;
+        }
+        ok(&mut c, "BEGIN IMMEDIATE").await;
+        ok(&mut c, "INSERT INTO waiter SELECT COUNT(*) FROM rounds").await;
+        ok(&mut c, "COMMIT").await;
+        assert!(writer.wait().unwrap().success(), "the CLI writer failed");
+
+        let before = int(&mut c, "SELECT rounds_before FROM waiter").await;
+        assert!(
+            before < ROUNDS,
+            "the waiting writer got in only after all {ROUNDS} of the other's transactions"
+        );
     }
 
     #[tokio::test]
@@ -2384,9 +2524,11 @@ mod compat {
     async fn a_new_file_starts_with_one_commit() {
         let s = Store::new();
         let mut w = s.rw().await;
-        assert_eq!(
-            texts(&mut w, "SELECT message FROM dolt_log()").await,
-            vec!["Initialize data repository"]
+        let messages = texts(&mut w, "SELECT message FROM dolt_log()").await;
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            messages[0].starts_with("Initialize data repository ("),
+            "{messages:?}"
         );
     }
 

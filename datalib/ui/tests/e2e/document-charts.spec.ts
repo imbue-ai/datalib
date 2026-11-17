@@ -43,14 +43,14 @@ test.use({ viewport: { width: 1600, height: 900 } });
  *  and waits for its four charts. `spans` collects every range /points
  *  is asked for. */
 async function openYolinkCharts(page: Page, request: APIRequestContext) {
-  const resp = await request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const pageRow = rows.find((r) => r.kind === "Sensor Timeseries" && r.source_id === "yolink");
   expect(pageRow, "the TNG fixture must contain the yolink page row").toBeTruthy();
   const mdUuid = pageRow!.markdown_uuid ?? pageRow!.uuid;
 
-  const chat = await request.get(`/applet/unified_document_index/chat/${mdUuid}`);
+  const chat = await request.get(`/applet/unified_grid_and_search_index/chat/${mdUuid}`);
   const body = ((await chat.json()) as { body: string }).body;
   const charts = [...body.matchAll(/data-time-series="([^"]*)"/g)].map((m) => m[1]!.split(" "));
   // Temperature, humidity, and volume as two charts: consumption, and the

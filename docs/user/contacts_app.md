@@ -66,7 +66,7 @@ one; an older one may not. Add this and the app starts it:
 
 ```toml fragment
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 ```
@@ -96,7 +96,7 @@ The grid index holds every handle any source mentioned, and what that
 source called the person. This lists them with the most written first:
 
 ```sh
-datalib-doltlite -readonly <data_root>/unified_document_index/grid_index/db.sqlite "
+datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/grid_index/db.sqlite "
   SELECT h.handle,
          group_concat(DISTINCT c.name) AS names,
          group_concat(DISTINCT c.source_id) AS sources,
@@ -118,7 +118,7 @@ datalib-applet search <data_root> 'with:email:riker@enterprise.org' --limit 20
 ```
 
 The same answer for a few handles at once, through the app, is `POST
-/applet/unified_document_index/people` with `{"handles": […]}`.
+/applet/unified_grid_and_search_index/people` with `{"handles": […]}`.
 
 ## 2. See what is already decided
 

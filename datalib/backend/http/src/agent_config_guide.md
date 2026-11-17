@@ -41,10 +41,10 @@ applets see `datalib-step help applets`. Edges are the declared `inputs`,
 which name steps by composed id — file order does not matter to the
 runner. It does to a person: the Sources screen lists groups and steps
 in file order, and writes them in the order data flows, each source
-above the `unified_document_index` group and each step below the steps it
+above the `unified_grid_and_search_index` group and each step below the steps it
 reads. Write yours the same way. A step
 with no `inputs` is a **source step** (where a sync normally starts); every
-source feeds the two fan-in steps under the `unified_document_index` group:
+source feeds the two fan-in steps under the `unified_grid_and_search_index` group:
 
 ```toml
 # One source = a group with a `type`, plus an ingest step and a
@@ -93,16 +93,16 @@ inputs = ["slack/keyword_index"]
 # `qmd_aggregator`'s, which runs after them and drops from search any
 # source it does not name.
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = ["slack/keyword_index", "slack/embed"]
@@ -166,7 +166,7 @@ entries it names. (A `warning` drops nothing and does not block a PUT.)
 
 `app_ready` on `GET /api/config` is the separate question of whether the
 app can serve anything at all: false when the file is not a config,
-when it declares no `unified_document_index` applet, or when the data root was
+when it declares no `unified_grid_and_search_index` applet, or when the data root was
 written by a newer datalib. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
@@ -179,9 +179,9 @@ and you should not try to translate the file yourself. A `qmd_index`
 step is different: the server rewrites it into `qmd_aggregator` and each
 source's own `keyword_index` and `embed` steps as soon as it reads the
 file, keeping the old one as `config.toml.bak`, so re-read the config
-after writing one. The same goes for an index group still named
-`unified_index`: the server renames it, its steps and its applet to
-`unified_document_index`. And for an id with capitals in it: every
+after writing one. The same goes for an index group under an earlier
+name, `unified_index` or `unified_document_index`: the server renames
+it, its steps and its applet to `unified_grid_and_search_index`. And for an id with capitals in it: every
 group, step and applet id is lower case, since each names a folder,
 and the server lowercases one it finds and moves its folder.
 

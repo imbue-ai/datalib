@@ -148,10 +148,10 @@ command = "datalib-step"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = [
@@ -165,9 +165,9 @@ inputs = [
 ]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # Each source's keyword (BM25) part of the qmd index. Cheap enough to
 # build with the image, so free-text search works the moment the demo
@@ -216,7 +216,7 @@ command = "datalib-step"
 inputs = ["pdfs/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 command = "datalib-step"
 inputs = [

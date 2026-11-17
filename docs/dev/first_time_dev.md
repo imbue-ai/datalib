@@ -246,7 +246,7 @@ as a subprocess. Datalib's own steps write `command = "datalib-step"`
 reads its function and its group's type from the environment — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_document_index/grid_index/db.sqlite`. See
+`<root>/unified_grid_and_search_index/grid_index/db.sqlite`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -316,16 +316,16 @@ Three kinds of step build the search index
 Each source's `keyword_index` brings that source's documents in the index
 in line with its render store: it chunks each changed document and writes
 its words and chunks into `search_*` tables of the grid index's file,
-`unified_document_index/grid_index/db.sqlite`. Its `embed` embeds every
+`unified_grid_and_search_index/grid_index/db.sqlite`. Its `embed` embeds every
 chunk the inference cache,
-`unified_document_index/search_index/inference_cache.sqlite`, has no
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
 vector for, in process (`datalib/backend/embedder`, llama.cpp), after
 putting the pinned, sha256-verified embedding model in place through
-`datalib_qmd_models`. `unified_document_index/qmd_aggregator` reads
+`datalib_qmd_models`. `unified_grid_and_search_index/qmd_aggregator` reads
 every source's pair, so it runs after them: it drops any source it does
 not name, sweeps vectors no chunk names, and reports what each source
 holds. This is what a search matches words and meaning against (see
-`datalib/backend/unified_document_index/src/search_index.rs`).
+`datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:
 
@@ -339,7 +339,7 @@ Design notes:
   Once the backlog drains, re-runs are no-ops.
 - **Models cache**: the embedding model (~300 MB) is shared across data
   roots in `~/.cache/qmd/models` (`$XDG_CACHE_HOME/qmd/models` when that
-  is set), unless a root has its own `unified_document_index/models`.
+  is set), unless a root has its own `unified_grid_and_search_index/models`.
   Override with `datalib-step --models-dir`; `datalib-step pull-models`
   fetches it ahead of time.
 

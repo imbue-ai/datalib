@@ -3644,7 +3644,7 @@ mod tests {
     /// a compaction will, and collects what only the old commits reached.
     async fn fold(pool: &SqlitePool) -> String {
         let first: String = sqlx::query_scalar(
-            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'",
         )
         .fetch_one(pool)
         .await

@@ -579,10 +579,10 @@ params = {params}
         grid_list = ", ".join(rendered + [f'"{g}/render_time_series"' for g in series])
         blocks.append(
             f"""[[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = [{grid_list}]"""
         )
@@ -611,16 +611,16 @@ inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
         # be browsable.
         root_blocks.append(
             f"""[[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = [{grid_list}]
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = [{qmd_list}]"""
         )

@@ -4,8 +4,9 @@
 //! order: an id that names a folder and has capitals in it
 //! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
-//! the index group still named `unified_index`
-//! (`datalib_migrate_config::upgrade_document_index`), a config with
+//! the index group under an earlier name, `unified_index` or
+//! `unified_document_index` (`datalib_migrate_config::upgrade_index_name`),
+//! a config with
 //! time-series sources and no time-series index
 //! (`datalib_migrate_config::upgrade_time_series_steps`), a
 //! time-series source with an `embed` step
@@ -19,8 +20,8 @@
 //! `datalib_migrate_config::UNATTENDED`. The text they replaced is kept
 //! as `config.toml.bak`.
 //!
-//! At boot only, [`move_index_dir`] then brings the document index's tree
-//! and the loop's record of its steps over to the new name, and
+//! At boot only, [`move_index_dir`] then brings the index's tree and the
+//! loop's record of its steps over to the current name, and
 //! [`move_case_folders`] moves each folder the config now names in lower
 //! case to that spelling, before anything opens them.
 
@@ -109,15 +110,15 @@ pub fn index_dir_plan(old_exists: bool, new_exists: bool, config_uses_old: bool)
     }
 }
 
-/// Move `<root>/unified_index/` to `<root>/unified_document_index/` with
-/// one rename, so the grid store and the qmd embeddings are kept rather
-/// than rebuilt, and carry the loop's per-step rows (a step turned off,
-/// its last success, its tree's version) over to the new step ids. Before
-/// the loop starts: nothing may have either open.
+/// Move the index's tree from each name it had before
+/// (`layout::RETIRED_INDEX_DIRS`, newest first) to
+/// `<root>/unified_grid_and_search_index/` with one rename, so the grid
+/// store and the search index's vectors are kept rather than rebuilt, and
+/// carry the loop's per-step rows (a step turned off, its last success,
+/// its tree's version) over to the new step ids. Before the loop starts:
+/// nothing may have either open.
 pub async fn move_index_dir(root: &Path) {
-    use datalib_core::layout::{
-        RETIRED_UNIFIED_INDEX_DIR as OLD, UNIFIED_DOCUMENT_INDEX_DIR as NEW,
-    };
+    use datalib_core::layout::{RETIRED_INDEX_DIRS, UNIFIED_GRID_AND_SEARCH_INDEX_DIR as NEW};
     let config = datalib_dag::config::root_config_path(root);
     let text = std::fs::read_to_string(&config).unwrap_or_default();
     // As written, not as loaded: a source the loader refuses for taking
@@ -125,10 +126,21 @@ pub async fn move_index_dir(root: &Path) {
     let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
         return;
     };
-    let prefix = format!("{OLD}/");
-    let config_uses_old = written.groups.iter().any(|g| g.id == OLD)
+    for old in RETIRED_INDEX_DIRS {
+        move_one_index_dir(root, &written, old, NEW).await;
+    }
+}
+
+async fn move_one_index_dir(
+    root: &Path,
+    written: &datalib_dag::written::WrittenEntries,
+    old_id: &str,
+    new_id: &str,
+) {
+    let prefix = format!("{old_id}/");
+    let config_uses_old = written.groups.iter().any(|g| g.id == old_id)
         || written.steps.iter().any(|s| s.id.starts_with(&prefix));
-    let (old, new) = (root.join(OLD), root.join(NEW));
+    let (old, new) = (root.join(old_id), root.join(new_id));
     match index_dir_plan(old.exists(), new.exists(), config_uses_old) {
         IndexDir::Leave => {}
         IndexDir::Move => match std::fs::rename(&old, &new) {
@@ -151,7 +163,7 @@ pub async fn move_index_dir(root: &Path) {
     }
     let renamed = match datalib_dag::supervisor::store::Store::open(root).await {
         Ok(store) => {
-            let moved = store.rename_group_steps(OLD, NEW).await;
+            let moved = store.rename_group_steps(old_id, new_id).await;
             store.close().await;
             moved
         }
@@ -159,8 +171,8 @@ pub async fn move_index_dir(root: &Path) {
     };
     match renamed {
         Ok(0) => {}
-        Ok(n) => tracing::warn!("supervisor: moved {n} rows from {OLD}/ to {NEW}/"),
-        Err(e) => tracing::error!("supervisor: could not rename the {OLD}/ steps: {e:#}"),
+        Ok(n) => tracing::warn!("supervisor: moved {n} rows from {old_id}/ to {new_id}/"),
+        Err(e) => tracing::error!("supervisor: could not rename the {old_id}/ steps: {e:#}"),
     }
 }
 

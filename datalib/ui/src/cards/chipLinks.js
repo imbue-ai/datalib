@@ -46,7 +46,7 @@ export function handleFromUri(href) {
 
 /** The handle a display name spells out, if it is one: an address, a
  *  number in international form, or a handle's URI. Mirrors
- *  `handle_named_by` in `unified_document_index/src/people.rs`.
+ *  `handle_named_by` in `unified_grid_and_search_index/src/people.rs`.
  *  @param {string} name
  *  @returns {string | null} */
 export function handleNamedBy(name) {

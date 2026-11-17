@@ -9,19 +9,19 @@
 #   <stanza>/render_markdown/...       Conversation markdown trees (from qmd.tar).
 #   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
 #                                      (from qmd.tar; no raw store beside it).
-#   unified_document_index/grid_index/db.sqlite  the plain SQLite grid index the
+#   unified_grid_and_search_index/grid_index/db.sqlite  the plain SQLite grid index the
 #                                      backend reads, with the search index's
 #                                      tables (`:ingested_tng_search_index`).
-#   unified_document_index/search_index/inference_cache.sqlite  every chunk's
+#   unified_grid_and_search_index/search_index/inference_cache.sqlite  every chunk's
 #                                      vector (`:ingested_tng_inference_cache`).
-#   unified_document_index/models/     the embedding model, linked in from
+#   unified_grid_and_search_index/models/     the embedding model, linked in from
 #                                      bazel outputs.
 #   <stanza>/render_time_series/...    each time-series source's store, and
 #   unified_time_series_index/time_series_index/...  the index over them
 #                                      (from time_series.tar).
 #   config.toml                        { data_root }, every source as a
 #                                      render-only group, the fan-ins, and
-#                                      the two applets: `unified_document_index`,
+#                                      the two applets: `unified_grid_and_search_index`,
 #                                      which serves the grid, and
 #                                      `unified_time_series_index`, which
 #                                      serves the Time series card.
@@ -73,13 +73,13 @@ tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
 # Drop the grid index, with the search index's tables, into the
 # `grid_index` step's tree, and the vectors beside it, where the backend
 # opens them.
-mkdir -p "$OUT_ROOT/unified_document_index/grid_index" "$OUT_ROOT/unified_document_index/search_index"
-cp "$DB_FILE" "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
-chmod u+w "$OUT_ROOT/unified_document_index/grid_index/db.sqlite"
-cp "$VECTORS_FILE" "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
-chmod u+w "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
+mkdir -p "$OUT_ROOT/unified_grid_and_search_index/grid_index" "$OUT_ROOT/unified_grid_and_search_index/search_index"
+cp "$DB_FILE" "$OUT_ROOT/unified_grid_and_search_index/grid_index/db.sqlite"
+chmod u+w "$OUT_ROOT/unified_grid_and_search_index/grid_index/db.sqlite"
+cp "$VECTORS_FILE" "$OUT_ROOT/unified_grid_and_search_index/search_index/inference_cache.sqlite"
+chmod u+w "$OUT_ROOT/unified_grid_and_search_index/search_index/inference_cache.sqlite"
 
-# The grid is served by the `unified_document_index` applet, so the config has to
+# The grid is served by the `unified_grid_and_search_index` applet, so the config has to
 # declare it or the app comes up with no search. An absolute command
 # rather than a bare name: this root is materialized into a temp dir with
 # no `binary_dir` and nothing installed on PATH.
@@ -92,7 +92,7 @@ chmod u+w "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
 # //datalib:dev_tng` path, which resolves through the source tree.
 #
 # The groups come from the pipeline that rendered the trees
-# (`config_body.toml`): every source, and the `unified_document_index` group, for
+# (`config_body.toml`): every source, and the `unified_grid_and_search_index` group, for
 # the same reason a real root declares them — a group is one row on the
 # Manage screen, the storage endpoint measures one tree per *declared*
 # group and step, and Browse needs a row to start from. Each source is
@@ -106,9 +106,9 @@ chmod u+w "$OUT_ROOT/unified_document_index/search_index/inference_cache.sqlite"
   cat <<EOF
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "'$APPLET_BIN' unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "'$APPLET_BIN' unified_grid_and_search_index"
 
 [[applets]]
 group = "unified_time_series_index"
@@ -121,7 +121,7 @@ EOF
 # (`datalib_qmd_models::models_dir_for`): every search by meaning embeds
 # the query. A link INTO the runfiles tree rather than a copy in every
 # root, the same assumption the applet `command` above already makes.
-MODELS_DIR="$OUT_ROOT/unified_document_index/models"
+MODELS_DIR="$OUT_ROOT/unified_grid_and_search_index/models"
 mkdir -p "$MODELS_DIR"
 EMBED_MODEL="_main/third-party/qmd_models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 src="$(rlocation "$EMBED_MODEL")" || src=""

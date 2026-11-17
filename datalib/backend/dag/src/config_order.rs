@@ -438,12 +438,12 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
-# ── the unified document index ──
+# ── the unified grid and search index ──
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 "#;
@@ -490,12 +490,12 @@ type = "slack"
 group = "notes"
 function = "render_markdown"
 
-# ── the unified document index ──
+# ── the unified grid and search index ──
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = ["slack/keyword_index", "notes/keyword_index"]
 
@@ -511,9 +511,9 @@ function = "keyword_index"
 inputs = ["notes/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
         assert_eq!(
@@ -524,12 +524,12 @@ command = "datalib-applet unified_document_index"
                 "slack/keyword_index",
                 "notes/render_markdown",
                 "notes/keyword_index",
-                "unified_document_index/qmd_aggregator",
+                "unified_grid_and_search_index/qmd_aggregator",
             ]
         );
         assert_eq!(
             groups(&sorted),
-            ["slack", "notes", "unified_document_index"]
+            ["slack", "notes", "unified_grid_and_search_index"]
         );
         assert!(flows_down(&sorted));
         assert!(sorted.starts_with("data_root = \"~/datalib\"\n\n# ── slack ──\n"));
@@ -541,8 +541,10 @@ command = "datalib-applet unified_document_index"
                 > at("function = \"render_markdown\"\ninputs = [\"slack/ingest\"]")
         );
         assert!(at("channels = [\"general\"]") < at("function = \"render_markdown\""));
-        assert!(at("# ── the unified document index ──") < at("function = \"qmd_aggregator\""));
-        assert!(at("# ── notes ──") < at("# ── the unified document index ──"));
+        assert!(
+            at("# ── the unified grid and search index ──") < at("function = \"qmd_aggregator\"")
+        );
+        assert!(at("# ── notes ──") < at("# ── the unified grid and search index ──"));
         // Sorting again changes nothing.
         assert_eq!(sort_config(&sorted).unwrap(), None);
     }
@@ -551,21 +553,21 @@ command = "datalib-applet unified_document_index"
     /// below it; the index goes to the end, with its banner.
     #[test]
     fn moves_an_index_written_first_to_the_end() {
-        let text = r#"# ── the unified document index ──
+        let text = r#"# ── the unified grid and search index ──
 # The banner.
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # Sources go below.
 
@@ -579,14 +581,14 @@ group = "slack"
 function = "render_markdown"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
-        assert_eq!(groups(&sorted), ["slack", "unified_document_index"]);
+        assert_eq!(groups(&sorted), ["slack", "unified_grid_and_search_index"]);
         assert!(sorted.starts_with("# Sources go below.\n\n# ── slack ──\n"));
         assert!(sorted.contains(
-            "# ── the unified document index ──\n# The banner.\n\n[[groups]]\nid = \"unified_document_index\""
+            "# ── the unified grid and search index ──\n# The banner.\n\n[[groups]]\nid = \"unified_grid_and_search_index\""
         ));
         assert!(sorted
             .trim_end()
-            .ends_with("command = \"datalib-applet unified_document_index\""));
+            .ends_with("command = \"datalib-applet unified_grid_and_search_index\""));
     }
 
     /// A `[` at the start of a line inside a multi-line string or array

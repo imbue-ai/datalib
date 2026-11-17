@@ -75,8 +75,9 @@ That cost real time. On a 1.46 GB Lightroom catalog (28.6k images)
 the ingest's writer thread spent over 40% of its busy time in the
 portable code. So here:
 
-- `amalgamation_blake3_simd.patch` (applied by `MODULE.bazel`) deletes
-  the lines that turn the kernels off.
+- `-DDOLTLITE_BLAKE3_SIMD_OBJECTS` (in `DOLTLITE_DEFINES`) tells the
+  amalgamation the kernels are compiled as objects of their own, so it
+  skips the lines that turn them off.
 - `@blake3_c` is BLAKE3's source at the version the amalgamation
   embeds, and `:blake3_<kernel>` compiles each kernel with its own
   flags (`BLAKE3_KERNELS` in `BUILD.bazel`): SSE2, SSE4.1, AVX2 and
@@ -134,13 +135,15 @@ Steps:
    - `doltlite-autoconf-X.Y.Z.tar.gz` — for its pre-generated `shell.c`
      only. The amalgamation is library-only (no `main()`), so the CLI
      has to come from here.
-3. Check that `amalgamation_blake3_simd.patch` still applies (the
-   build fails if not), and the BLAKE3 the new amalgamation embeds:
+3. Check that `DOLTLITE_BLAKE3_SIMD_OBJECTS` still guards the lines
+   that turn BLAKE3's kernels off (grep it in the new `doltlite.c`;
+   `:blake3_kernels_test` fails if no kernel is dispatched), and the
+   BLAKE3 the new amalgamation embeds:
    grep `BLAKE3_VERSION_STRING` in it, and move `@blake3_c` in
    `MODULE.bazel` to that version (`:blake3_kernels_test` fails until
    they agree). If the release ships the kernels itself
    ([dolthub/doltlite#4956](https://github.com/dolthub/doltlite/issues/4956)),
-   drop the patch and `@blake3_c` instead.
+   drop the define and `@blake3_c` instead.
 4. Check the chunk-store format before anything else: grep
    `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. A different
    number means every existing `.doltlite_db` is refused at open — a
@@ -183,7 +186,6 @@ Steps:
 |-----------------------------|------------------------------------------------------------------------|
 | `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, the BLAKE3 kernels, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `library_copts` (the flags, for the reader wheels' compile), `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
-| `amalgamation_blake3_simd.patch` | Turns the amalgamation's BLAKE3 SIMD kernels back on (§"BLAKE3's SIMD kernels"). |
 | `blake3.BUILD`              | BUILD file injected into the `@blake3_c//` external repo: the kernels' sources and headers, and the test vectors. |
 | `blake3_kernels_test.c`     | doltlite's BLAKE3 against BLAKE3's test vectors, with a SIMD kernel to dispatch to. |
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |

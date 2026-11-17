@@ -6,7 +6,7 @@ or a new tab from anywhere else; ⌘Enter always opens a new tab; and its arrow
 opens Advanced search, whose every setting writes the same
 words into the box), `datalib-applet search <data_root> '<query>'`
 from a shell (no app or server needed; it prints JSON), and
-`GET /applet/unified_document_index/search?q=…` on a running
+`GET /applet/unified_grid_and_search_index/search?q=…` on a running
 `datalib-http`. This page is that language. `datalib-step help search`
 prints it, and a release ships it beside the binaries as
 `docs/user/searching.md`.

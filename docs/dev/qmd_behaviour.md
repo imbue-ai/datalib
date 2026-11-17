@@ -326,13 +326,13 @@ they have to be taken back out by hand).
 ```sh
 S=/tmp/qmd-exp; mkdir -p $S/root
 tar -xf bazel-bin/tests/fixtures/ingested/qmd_md.tar -C $S/root --strip-components=1
-export XDG_CACHE_HOME=$S/root/unified_document_index/qmd_index
+export XDG_CACHE_HOME=$S/root/unified_grid_and_search_index/qmd_index
 export XDG_CONFIG_HOME=$XDG_CACHE_HOME
 export QMD_CONFIG_DIR=$XDG_CACHE_HOME/qmd
 export NO_COLOR=1
 mkdir -p $XDG_CACHE_HOME/qmd && ln -sfn ~/.cache/qmd/models $XDG_CACHE_HOME/qmd/models
 qmd() { node bazel-bin/third-party/qmd/runtime/node_modules/@tobilu/qmd/dist/cli/qmd.js "$@"; }
-for g in $(ls $S/root | grep -v unified_document_index); do
+for g in $(ls $S/root | grep -v unified_grid_and_search_index); do
   qmd collection add $S/root --name $g --mask "$g/render_markdown/**/*.md"; done
 qmd update
 qmd embed -c slack                       # finding 3

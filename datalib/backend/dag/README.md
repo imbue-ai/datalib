@@ -301,10 +301,11 @@ update until it is dismissed. The pass is held in the server's memory
 (`/api/config`'s `upgrade`) and announced as `pass_changed` on
 `/api/sync/stream`; freeing disk space is drawn by the same pill
 (§"Resets and purges").
-Before any of that, the http server brings the document index from
-before its rename forward (`http/src/config_upgrade.rs`): it moves
-`<root>/unified_index/` to `<root>/unified_document_index/` and the
-record's rows for those steps to their new ids
+Before any of that, the http server brings the index from before its
+renames forward (`http/src/config_upgrade.rs`): it moves
+`<root>/unified_document_index/` or `<root>/unified_index/` to
+`<root>/unified_grid_and_search_index/` and the record's rows for those
+steps to their new ids
 (`Store::rename_group_steps`), and moves each folder an older config
 spelled with capitals to the lowercase spelling the config now uses
 (`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
@@ -336,11 +337,12 @@ follows from it:
   `index` for any other step with inputs; so a download waiting out a
   rate limit never keeps a render from starting. The other two,
   `qmd_keyword` and `qmd_embed` (1 slot each, named for the qmd index
-  they once guarded), are held by the built-in search steps that name no
-  locks: `keyword_index` and `qmd_aggregator` take `qmd_keyword`, because
-  they all write the search index's tables in one file the runner cannot
-  see as shared; `embed` takes `qmd_embed`, so one embedding model is
-  loaded at a time. A `[[locks]]`
+  they once guarded), are held by the built-in index steps that name no
+  locks: `grid_index`, `keyword_index` and `qmd_aggregator` take
+  `qmd_keyword`, because they all write the grid index's file, which the
+  runner cannot see as shared, and a writer left to wait inside SQLite
+  times out; `embed` takes `qmd_embed`, so one embedding model is loaded
+  at a time. A `[[locks]]`
   entry of the same name resizes one, and `--parallelism N` sets
   `network` and `cpu` to N, over the config.
 

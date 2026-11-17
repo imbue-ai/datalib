@@ -52,7 +52,7 @@ for (const [from, otherOrigin, site] of [
     for (const path of [
       "/api/packages",
       "/api/config",
-      "/applet/unified_document_index/search?q=",
+      "/applet/unified_grid_and_search_index/search?q=",
     ]) {
       test(`reaches no route: ${path.split("?")[0]}`, async ({ page, baseURL }) => {
         const server = new URL(baseURL!);

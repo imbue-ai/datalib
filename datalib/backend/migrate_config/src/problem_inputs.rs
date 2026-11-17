@@ -6,7 +6,7 @@
 //! read reaches neither. The rewrite adds each such step of datalib's
 //! own to `grid_index`'s `inputs`, and changes nothing else.
 
-use crate::document_index::NEW as UNIFIED_DOCUMENT_INDEX_DIR;
+use crate::index_name::NEW as UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use anyhow::{Context as _, Result};
 use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
@@ -45,7 +45,7 @@ fn missing(view: &View) -> Option<(Vec<String>, &toml::Spanned<Vec<String>>)> {
     let inputs = view
         .steps
         .iter()
-        .find(|s| s.is(UNIFIED_DOCUMENT_INDEX_DIR, GRID_INDEX))?
+        .find(|s| s.is(UNIFIED_GRID_AND_SEARCH_INDEX_DIR, GRID_INDEX))?
         .inputs
         .as_ref()?;
     let ids: Vec<String> = view
@@ -133,11 +133,11 @@ function = "render_occurrences"
 inputs = ["duty-roster/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 # every source's documents
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "grid_index"
 inputs = [
     "riker/render_markdown",
@@ -157,7 +157,7 @@ inputs = [
             .cfg
             .steps
             .iter()
-            .find(|s| s.id == "unified_document_index/grid_index")
+            .find(|s| s.id == "unified_grid_and_search_index/grid_index")
             .unwrap()
             .inputs
             .clone()
@@ -195,7 +195,7 @@ inputs = [
         let after = rewrite(&package).unwrap();
         assert!(!grid_inputs(&after).contains(&"riker/render_time_series".to_string()));
         let no_index = BEFORE
-            .split("[[groups]]\nid = \"unified_document_index\"")
+            .split("[[groups]]\nid = \"unified_grid_and_search_index\"")
             .next()
             .unwrap();
         assert!(!is_retired(no_index).unwrap());

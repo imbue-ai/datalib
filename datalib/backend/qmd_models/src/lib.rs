@@ -24,11 +24,11 @@ pub use datalib_runtime::qmd::PINNED_MODELS;
 const TAG: &str = "[qmd-models]";
 
 /// Where the models are for a search of, or an embed into, the data root
-/// at `root`: its own `unified_document_index/models` when it has one (the
+/// at `root`: its own `unified_grid_and_search_index/models` when it has one (the
 /// test fixtures stage the model there), else the cache every root on
 /// this machine shares ([`shared_models_dir`]).
 pub fn models_dir_for(root: &Path) -> PathBuf {
-    let own = datalib_runtime::layout::unified_document_index_dir(root).join("models");
+    let own = datalib_runtime::layout::unified_grid_and_search_index_dir(root).join("models");
     if own.is_dir() {
         own
     } else {
@@ -276,7 +276,7 @@ mod tests {
     fn a_root_with_its_own_models_uses_them() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(models_dir_for(root.path()), shared_models_dir());
-        let own = root.path().join("unified_document_index/models");
+        let own = root.path().join("unified_grid_and_search_index/models");
         std::fs::create_dir_all(&own).unwrap();
         assert_eq!(models_dir_for(root.path()), own);
     }
