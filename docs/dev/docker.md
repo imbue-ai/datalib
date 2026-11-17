@@ -99,7 +99,7 @@ with `ADD --link`. A `--link` layer is built apart from the layers under
 it, so the same staged archives (`scripts/release/stage_cuda.sh`, file
 times fixed) make byte-identical layers whatever Ubuntu's packages did
 that day. `.github/workflows/cuda.yml` builds the variant up to its demo
-(`--target app`) twice, the second time over a fresh OS stage, and fails if either CUDA layer
+(`--target app`) twice, the second time over another Ubuntu, and fails if either CUDA layer
 moved. A version upgrade then downloads the OS and release layers, not
 the 700 MB beneath them. A machine with no GPU runs the variant on the
 CPU, as the plain image does: `docker-publish-cuda` checks the
