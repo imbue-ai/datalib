@@ -590,14 +590,10 @@ params = {params}
             root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{group}/render_markdown"')
         # The fan-ins read every source by pattern, as the starter config
-        # and the app's config upgrade write them. `grid_index` also reads
-        # each `render_time_series` and `render_occurrences`, for their
-        # problem rows.
+        # and the app's config upgrade write them.
         groups = [r.strip('"').split("/")[0] for r in rendered]
         series = [g for g in groups if g in time_series_groups]
-        grid_list = (
-            '"*/render_markdown", "*/render_time_series", "*/render_occurrences"'
-        )
+        grid_list = '"*/render_markdown"'
         blocks.append(
             f"""[[groups]]
 id = "unified_grid_and_search_index"

@@ -759,17 +759,6 @@ pub const FAN_INS: &[(&str, &str, &str)] = &[
         datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
         "grid_index",
     ),
-    // For their problem rows alone.
-    (
-        "render_time_series",
-        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
-    (
-        "render_occurrences",
-        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "grid_index",
-    ),
     (
         "embed",
         datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
