@@ -814,7 +814,7 @@ export function useSourcesCard(ctx: CardCtx) {
     // The fan-ins name their inputs, so a render step added without this
     // renders happily and is never indexed. Idempotent, so re-saving an
     // edit doesn't duplicate the entry. Free-text search is the one index
-    // the wizard asks about: the source in or out of the grid step's
+    // the wizard asks about: the source in or out of the `grid_index` step's
     // `not_searched`, and its `embed`, added or taken out.
     if (payload.renderId) {
       next = wireIntoFanIns(next, payload.renderId);

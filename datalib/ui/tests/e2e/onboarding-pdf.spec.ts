@@ -34,7 +34,7 @@ declare const process: { env: Record<string, string | undefined> };
 
 const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
 /// Keeps the source the wizard is adding out of the keyword search. The
-/// grid step cuts a searched source's chunks with the embedding model's
+/// `grid_index` step cuts a searched source's chunks with the embedding model's
 /// tokenizer, and a library made from an empty folder has no model and
 /// may not fetch one here. What this spec checks reads the grid alone.
 async function leaveOutOfSearch(page: Page) {

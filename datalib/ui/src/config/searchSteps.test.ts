@@ -1,4 +1,4 @@
-// How far into search the wizard puts a source: out of the grid step's
+// How far into search the wizard puts a source: out of the `grid_index` step's
 // `not_searched` for its words, an `embed` step for its meaning. A
 // time-series source never gets an embed step, whichever caller asks for
 // one; any other source still can.
@@ -50,7 +50,7 @@ describe("setSearchSteps", () => {
     expect(searchIndexingOf(listSteps(out), "away-team")).toBe("keyword");
   });
 
-  it("still embeds a source of any other type, reading the grid step", () => {
+  it("still embeds a source of any other type, reading the `grid_index` step", () => {
     const out = setSearchSteps(config("email"), "away-team", "keyword_and_embed");
     expect(embeds(out)).toEqual(["away-team/embed"]);
     expect(listSteps(out).find((s) => s.id === "away-team/embed")?.inputs).toEqual([
@@ -59,7 +59,7 @@ describe("setSearchSteps", () => {
     expect(searchIndexingOf(listSteps(out), "away-team")).toBe("keyword_and_embed");
   });
 
-  /// Out of search is said on the grid step, and in again takes it back
+  /// Out of search is said on the `grid_index` step, and in again takes it back
   /// off the list, leaving no empty one behind.
   it("lists a source kept out of search in not_searched, and takes it off again", () => {
     const embedded = setSearchSteps(config("email"), "away-team", "keyword_and_embed");
