@@ -25,7 +25,7 @@
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
-// The qmd steps are deliberately not in this config: their sink is an FTS
+// The search steps are deliberately not in this config: their sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.

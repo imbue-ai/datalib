@@ -20,7 +20,7 @@ pub async fn version(env: &StepEnv, data_root: &Path) -> Result<Option<String>> 
         content_commit_at_path, content_version_at_path, head_commit_at_path,
     };
     if matches!(env.function, Function::GridIndex) {
-        return grid_index_generation(data_root).await;
+        return crate::grid_index::version(data_root).await;
     }
     let Some(store) = store(env, data_root) else {
         return Ok(None);
@@ -43,23 +43,8 @@ pub fn store(env: &StepEnv, data_root: &Path) -> Option<PathBuf> {
         Function::RenderOccurrences => {
             datalib_etl::layout::render_occurrences_db(data_root, &env.group)
         }
-        Function::GridIndex
-        | Function::QmdAggregator
-        | Function::KeywordIndex
-        | Function::Embed
-        | Function::EmbeddingMap => return None,
+        Function::GridIndex | Function::Embed | Function::EmbeddingMap => return None,
     })
-}
-
-async fn grid_index_generation(data_root: &Path) -> Result<Option<String>> {
-    let path = datalib_core::layout::grid_index_db(data_root);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let pool = datalib_pin::open_reader(&path).await?;
-    let generation = datalib_pin::generation(&pool).await;
-    pool.close().await;
-    Ok(generation?)
 }
 
 /// The time-series store a `render_time_series` or `time_series_index`
@@ -135,12 +120,9 @@ mod tests {
         assert_eq!(claimed[0].path, "mail/ingest");
         assert_eq!(Some(claimed[0].version.clone()), sealed);
 
-        let qmd = env(
-            "unified_grid_and_search_index/qmd_aggregator",
-            Function::QmdAggregator,
-        );
+        let embed = env("mail/embed", Function::Embed);
         assert!(
-            claims(&qmd, root.path()).await.is_empty(),
+            claims(&embed, root.path()).await.is_empty(),
             "no store of its own"
         );
     }

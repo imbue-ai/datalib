@@ -60,12 +60,12 @@ impl ColSearch {
 
 pub const COL_KEYS: &str = "`search`, `alias`, `uuid`, `sort_by`, `is`, `like`";
 
-/// `#[portable_table(search(order = "…", range = "…", qmd))]`.
+/// `#[portable_table(search(order = "…", range = "…", ranked))]`.
 pub struct TableSearch {
     span: Span,
     order: Option<LitStr>,
     range: Option<String>,
-    qmd: bool,
+    ranked: bool,
 }
 
 pub fn parse_table_search(meta: &ParseNestedMeta) -> syn::Result<TableSearch> {
@@ -73,17 +73,19 @@ pub fn parse_table_search(meta: &ParseNestedMeta) -> syn::Result<TableSearch> {
         span: meta.path.get_ident().map_or(Span::call_site(), Ident::span),
         order: None,
         range: None,
-        qmd: false,
+        ranked: false,
     };
     meta.parse_nested_meta(|m| {
         if m.path.is_ident("order") {
             search.order = Some(m.value()?.parse()?);
         } else if m.path.is_ident("range") {
             search.range = Some(m.value()?.parse::<LitStr>()?.value());
-        } else if m.path.is_ident("qmd") {
-            search.qmd = true;
+        } else if m.path.is_ident("ranked") {
+            search.ranked = true;
         } else {
-            return Err(m.error("unknown search(...) key; supported keys: `order`, `range`, `qmd`"));
+            return Err(
+                m.error("unknown search(...) key; supported keys: `order`, `range`, `ranked`")
+            );
         }
         Ok(())
     })?;
@@ -264,7 +266,7 @@ fn expand_search(
             for word in std::iter::once(&key).chain(&s.aliases) {
                 // `before:`, `after:` and `is:` are the search's own;
                 // `semantic:` and `qmd:` say how free text is searched on a
-                // qmd table.
+                // ranked table.
                 if ["before", "after", "is", "semantic", "qmd", "qmd_vsearch"]
                     .contains(&word.as_str())
                     || spelled.contains(word)
@@ -310,19 +312,19 @@ fn expand_search(
             sort_arms.push(quote! { #enum_name::#v => #enum_name::#t, });
         }
     }
-    let free_text = match (search.qmd, likes.is_empty()) {
-        (true, true) => quote! { ::datalib_query::table::FreeText::Qmd },
+    let free_text = match (search.ranked, likes.is_empty()) {
+        (true, true) => quote! { ::datalib_query::table::FreeText::Ranked },
         (false, false) => quote! { ::datalib_query::table::FreeText::Like(&[#(#likes),*]) },
         (true, false) => {
             return Err(syn::Error::new(
                 search.span,
-                "free text is qmd's or `like` columns', not both",
+                "free text is `ranked` or `like` columns', not both",
             ))
         }
         (false, true) => {
             return Err(syn::Error::new(
                 search.span,
-                "say what free text matches: `qmd` here, or `like` on the columns it reads",
+                "say what free text matches: `ranked` here, or `like` on the columns it reads",
             ))
         }
     };

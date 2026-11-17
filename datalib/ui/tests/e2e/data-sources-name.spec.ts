@@ -54,6 +54,16 @@ function fanInReads(config: string, fn: string, id: string): boolean {
   const own = id.split("/")[1];
   return fanInInputs(config, fn).some((i) => i === id || i === `*/${own}`);
 }
+/// The sources the `grid_index` step keeps out of search.
+function notSearched(config: string): string[] {
+  const listed = /not_searched = \[([^\]]*)\]/.exec(config);
+  return listed
+    ? listed[1]
+        .split(",")
+        .map((t) => t.trim().replace(/^"|"$/g, ""))
+        .filter(Boolean)
+    : [];
+}
 /// A step's own table in the config text. Its id is never written — it is
 /// composed from these two keys — so the id alone appears only where
 /// another step names it as an input.
@@ -312,7 +322,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   expect(after).toContain('group = "no-render"');
 });
 
-test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
+test("free-text search is a choice, and only the search feels it", async ({ page }) => {
   // Embedding is the slow part of a sync, so a source can be rendered
   // and gridded without being embedded. The grid index is not a
   // choice — a source missing from it is missing from the table.
@@ -323,23 +333,25 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await expect(embedToggle(page)).toBeChecked();
   await openAdvanced(page);
   await keywordToggle(page).uncheck();
-  // The embeddings read the keyword index, so they cannot be kept alone.
+  // The embeddings are of what the keyword pass cut, so they cannot be
+  // kept alone.
   await expect(embedToggle(page)).toBeDisabled();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Rows Only.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/group = "rows-only"\nfunction = "render_markdown"/);
+  await expect(editor).toHaveValue(/rows-only\/render_markdown|group = "rows-only"/);
+  await expect(editor).toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const added = await editor.inputValue();
   expect(fanInReads(added, "grid_index", "rows-only/render_markdown")).toBe(true);
-  expect(added).not.toMatch(stepBlock("rows-only", "keyword_index"));
+  expect(notSearched(added)).toContain("rows-only");
+  expect(added).not.toMatch(stepBlock("rows-only", "embed"));
 
   // Reopening reads the answer back off the config, not off a default.
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
   await expect(keywordToggle(page)).not.toBeChecked();
   // Rendering off leaves nothing to index, so the question cannot be
-  // answered — and answering it would write an input naming a step
-  // that no longer exists.
+  // answered.
   await openAdvanced(page);
   await renderToggle(page).uncheck();
   await expect(keywordToggle(page)).toBeDisabled();
@@ -347,17 +359,17 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await openAdvanced(page);
   await renderToggle(page).check();
 
-  // Keyword search alone: the keyword index, and no embed step.
+  // Keyword search alone: off the not-searched list, and no embed step.
   await openAdvanced(page);
   await keywordToggle(page).check();
   await openAdvanced(page);
   await embedToggle(page).uncheck();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
-  await expect(editor).toHaveValue(stepBlock("rows-only", "keyword_index"));
+  await expect(editor).not.toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const keywordOnly = await editor.inputValue();
+  expect(notSearched(keywordOnly)).not.toContain("rows-only");
   expect(keywordOnly).not.toMatch(stepBlock("rows-only", "embed"));
-  expect(fanInReads(keywordOnly, "qmd_aggregator", "rows-only/keyword_index")).toBe(true);
 
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
@@ -369,17 +381,11 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   // Not the toast: the first save's may still be on screen.
   await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
-  expect(fanInReads(saved, "qmd_aggregator", "rows-only/keyword_index")).toBe(true);
-  expect(fanInReads(saved, "qmd_aggregator", "rows-only/embed")).toBe(true);
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "keyword_index"\ncommand = "datalib-step"\ninputs = ["rows-only/render_markdown"]',
+    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/grid_index"]',
   );
-  expect(saved).toContain(
-    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["rows-only/keyword_index"]',
-  );
-  // Added once, however many times the source is saved: as the keyword
-  // index's input. The grid reads it by pattern.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(1);
+  // Added once, however many times the source is saved.
+  expect(saved.match(/group = "rows-only"\nfunction = "embed"\n/g)).toHaveLength(1);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
@@ -452,7 +458,7 @@ test("a download-only source gets its render step, and no Rendering section", as
   await expect(editor).toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
+  expect(text).not.toContain('group = "photos"\nfunction = "embed"');
   expect(text).toContain('[[applets]]\nid = "photos"\ncommand = "datalib-applet photos"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
@@ -567,11 +573,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the four steps under it —
-  // ingest, render, and the source's keyword index and embeddings.
+  // The confirm says what goes: the group and the three steps under it —
+  // ingest, render, and the source's embeddings.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("4 steps");
+    expect(d.message()).toContain("3 steps");
     void d.accept();
   });
   await pickRowMenu(

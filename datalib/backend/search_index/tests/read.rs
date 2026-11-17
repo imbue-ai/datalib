@@ -299,7 +299,7 @@ async fn no_index_reads_as_none() {
     assert!(reader.is_none());
 }
 
-/// The grid index's file is there before any `keyword_index` has run: the
+/// The grid index's file is there before any keyword pass has run: the
 /// reader takes it as no index yet, not as an error.
 #[tokio::test]
 async fn a_grid_index_without_the_search_tables_is_no_index_yet() {

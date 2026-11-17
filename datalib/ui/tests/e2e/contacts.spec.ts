@@ -49,7 +49,7 @@ async function openMessageBy(page: Page, request: APIRequestContext, handle: str
   const message = rows.find((r) => r.markdown_uuid && r.message_index != null);
   expect(message, `the fixture must have a message by ${handle}`).toBeTruthy();
   await page.goto(EVERY_ROW);
-  await searchAndSettle(page, `convo:${message!.conversation_uuid}`);
+  await searchAndSettle(page, `datalib_document_id:${message!.conversation_uuid}`);
   await gridSettled(page);
   await openRowByUuid(page, message!.uuid);
 }

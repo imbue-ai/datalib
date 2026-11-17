@@ -74,7 +74,10 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 /// v23: a thread sits in its account and is filed under its emails'
 ///     labels; an email's `In-Reply-To` is a reply edge.
 /// v24: a sender's hover title names their address once, not twice.
-pub const RENDER_VERSION: u32 = 24;
+/// v25: a body loses its preheader padding, runs of characters that show
+///     nothing; a link around blocks or around another link is written
+///     on one line.
+pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -1176,7 +1179,8 @@ fn email_body_markdown(
 }
 
 /// Each part as markdown by its own kind: HTML through htmd after its
-/// `cid:` srcs point at the parts' addresses, plain text escaped.
+/// `cid:` srcs point at the parts' addresses, plain text escaped; either
+/// without its preheader padding.
 fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>) -> String {
     parts
         .iter()
@@ -1184,23 +1188,83 @@ fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>)
             BodyPart::Html(html) => html_markdown(&rewrite_cid_srcs(html, cid_to_blob)),
             BodyPart::Plain(text) => plain_body_markdown(text),
         })
+        .map(|md| super::padding::without_padding(&md))
         .filter(|md| !md.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
 /// An HTML body as markdown, its text reading as the sender wrote it.
-/// Two of htmd's outputs need help: a `<pre>` with no `<code>` comes out
+/// Three of htmd's outputs need help: a link around blocks (see
+/// [`link_on_one_line`]); a `<pre>` with no `<code>` comes out
 /// as its decoded text, so a `&lt;div&gt;` in it became a tag, and text
 /// holding `&amp;lt;` comes out as `&lt;`, which markdown reads as `<`.
 pub fn html_markdown(html: &str) -> String {
     let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
         .add_handler(vec!["pre"], pre_as_code_block)
+        .add_handler(vec!["a"], link_on_one_line)
         .build()
         .convert(html)
         .unwrap_or_default();
     entity_ampersands_escaped(&md)
+}
+
+thread_local! {
+    /// Whether the `<a>` being walked has written a link inside it.
+    static LINK_INSIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A mail's button is often a table or paragraphs inside an `<a>`, some
+/// inside a tracking `<a>` too. htmd writes such a link across several
+/// lines, and markdown ends a link's text at a blank line, so the page
+/// showed the brackets and both addresses. A link around another link
+/// gives way to it; a link around blocks is written on one line.
+fn link_on_one_line(
+    handlers: &dyn htmd::element_handler::Handlers,
+    element: htmd::Element,
+) -> Option<htmd::element_handler::HandlerResult> {
+    let is_link = element.attrs.iter().any(|a| &*a.name.local == "href");
+    let outer = LINK_INSIDE.replace(false);
+    let children = handlers.walk_children(element.node);
+    let wraps_a_link = LINK_INSIDE.get();
+    LINK_INSIDE.set(outer || wraps_a_link || is_link);
+    if wraps_a_link {
+        return Some(children);
+    }
+    let mut link = handlers.fallback(element)?;
+    let body = link.content.trim();
+    if body.contains('\n') {
+        let start = link.content.len() - link.content.trim_start().len();
+        let on_one_line = newline_runs_as_spaces(body);
+        link.content = format!(
+            "{}{on_one_line}{}",
+            &link.content[..start],
+            &link.content[start + body.len()..]
+        );
+    }
+    Some(link)
+}
+
+/// Each run of whitespace holding a line break as one space.
+fn newline_runs_as_spaces(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for c in text.chars() {
+        if c.is_whitespace() {
+            run.push(c);
+            continue;
+        }
+        if run.contains('\n') {
+            out.push(' ');
+        } else {
+            out.push_str(&run);
+        }
+        run.clear();
+        out.push(c);
+    }
+    out.push_str(&run);
+    out
 }
 
 /// A `<pre>` as a code block. One holding a `<code>` already comes out
@@ -1487,6 +1551,25 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
     /// page shows as `<`.
     #[test]
     fn an_html_body_reads_as_the_sender_wrote_it() {
+        assert_eq!(
+            html_markdown(
+                "<p>Hi</p><a href=\"https://risa.tourism/t?u=1\"><table><tr><td><a href=\"https://risa.tourism/follow\"><p>Risa</p><p>Follow</p></a></td></tr></table></a><p>Bye</p>"
+            ),
+            "Hi\n\n[Risa Follow](https://risa.tourism/follow)\n\nBye",
+            "a button: a tracking link around a link around paragraphs"
+        );
+        assert_eq!(
+            html_markdown(
+                "<p>See <a href=\"https://e.invalid/a\" title=\"A\">the  <b>log</b></a>.</p>"
+            ),
+            "See [the **log**](https://e.invalid/a \"A\").",
+            "a link on one line is htmd's"
+        );
+        assert_eq!(
+            html_markdown("<a name=\"top\"><p>Top</p></a>"),
+            "Top",
+            "an anchor with no href is its text"
+        );
         assert_eq!(
             html_markdown(
                 "<p>The console printed:</p><pre>&lt;div style=&quot;display:none&quot;&gt;phaser&lt;/div&gt;</pre>"

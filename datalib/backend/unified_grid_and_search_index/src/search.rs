@@ -1,4 +1,4 @@
-//! Row shape returned by `db::grid_rows`. QMDs are write-only output;
+//! Row shape returned by `db::grid_rows`. Rendered markdown is write-only output;
 //! search runs against the `grid_rows` projection in Dolt.
 
 use serde::Serialize;
@@ -24,7 +24,7 @@ pub struct SearchRow {
     pub markdown_uuid: Option<String>,
     pub message_index: Option<usize>,
     /// The Contents cell: the row's `preview`, or for a free-text hit the
-    /// words qmd matched.
+    /// words the search matched.
     pub snippet: String,
     pub sender: String,
     /// Null when the row has no source-side timestamp (e.g. contacts
@@ -163,7 +163,7 @@ pub struct SearchRow {
     /// The row's picture, as a `datalib:photo/…` name; `None` on a row
     /// with none of its own.
     pub image: Option<String>,
-    /// QMD-routed rank score for this row, when the search went through qmd.
+    /// Rank score for this row, when the search ranked its free text.
     /// `None` for a query of structured terms alone. Surfaced to the UI as
     /// a sortable "Score" column.
     #[serde(skip_serializing_if = "Option::is_none")]

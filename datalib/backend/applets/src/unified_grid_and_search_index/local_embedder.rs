@@ -1,6 +1,6 @@
 //! A search's text embedded in this process, by the model and prompt the
 //! search index's vectors were made with (`datalib_embedder`), rather than
-//! by qmd. The model loads at the first search by meaning and stays loaded.
+//! before. The model loads at the first search by meaning and stays loaded.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -31,7 +31,7 @@ impl LocalEmbedder {
             Some(embedder) => embedder,
             None => {
                 let dir = self.models.dir(Instant::now() + self.deadline)?;
-                let file = dir.join(datalib_runtime::qmd::EMBED_MODELS[0].cache_name());
+                let file = dir.join(datalib_runtime::models::EMBED_MODELS[0].cache_name());
                 let opened = Embedder::open(&file, Device::Best, 0)
                     .with_context(|| format!("load the search model {}", file.display()))?;
                 tracing::info!(

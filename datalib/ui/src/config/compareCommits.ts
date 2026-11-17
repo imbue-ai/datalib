@@ -11,7 +11,7 @@ import {
   buildDiffSource,
   listGroups,
   listSteps,
-  setQmdSteps,
+  setSearchSteps,
   slugify,
   suggestId,
   wireIntoFanIns,
@@ -166,6 +166,6 @@ export function addComparison(
   const built = buildDiffSource(opts);
   let next = insertEntries(text, `${built.groupBody}\n\n${built.stepsBody}`);
   next = wireIntoFanIns(next, built.renderId);
-  next = setQmdSteps(next, opts.id, "keyword_and_embed");
+  next = setSearchSteps(next, opts.id, "keyword_and_embed");
   return { text: next, renderId: built.renderId };
 }

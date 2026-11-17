@@ -95,6 +95,43 @@ impl Provider {
     pub fn parse(s: &str) -> Option<Provider> {
         s.parse().ok()
     }
+
+    /// The product's name as a person writes it: what search's text
+    /// calls a page's source when its renderer names none.
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::Airvisual => "AirVisual",
+            Provider::AppleMessages => "Apple Messages",
+            Provider::BabyConnect => "Baby Connect",
+            Provider::Beeper => "Beeper",
+            Provider::Calendar => "Calendar",
+            Provider::Chatgpt => "ChatGPT",
+            Provider::Claude => "Claude",
+            Provider::ClaudeCode => "Claude Code",
+            Provider::Codex => "Codex",
+            Provider::Contacts => "Contacts",
+            Provider::Datalib => "datalib",
+            Provider::Email => "Email",
+            Provider::Facebook => "Facebook",
+            Provider::Garmin => "Garmin",
+            Provider::Github => "GitHub",
+            Provider::Gitlab => "GitLab",
+            Provider::GoogleDrive => "Google Drive",
+            Provider::GoogleTakeout => "Google Takeout",
+            Provider::Lightroom => "Lightroom",
+            Provider::Linkedin => "LinkedIn",
+            Provider::Notion => "Notion",
+            Provider::Pdf => "PDF",
+            Provider::Perseus => "Perseus",
+            Provider::Signal => "Signal",
+            Provider::Slack => "Slack",
+            Provider::SmsBackupRestore => "SMS Backup & Restore",
+            Provider::Todoist => "Todoist",
+            Provider::Whatsapp => "WhatsApp",
+            Provider::Yolink => "YoLink",
+            Provider::Test => "Test",
+        }
+    }
 }
 
 #[cfg(test)]

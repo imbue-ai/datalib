@@ -422,7 +422,7 @@ pub fn plan(
         .uuid(source_id);
 
     let md_path = doc_md_path(&data_root.join(rendered_rel), &markdown_uuid);
-    let qmd_rel = md_path
+    let md_rel = md_path
         .strip_prefix(data_root)
         .unwrap_or(&md_path)
         .to_string_lossy()
@@ -453,7 +453,7 @@ pub fn plan(
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
                 .body(s.summary())
-                .qmd_path(Some(qmd_rel.clone()))
+                .qmd_path(Some(md_rel.clone()))
                 .markdown_uuid(Some(markdown_uuid.clone()))
                 // The machine-parsable half: `upstream_id` is the
                 // measured path verbatim and `upstream_entity_kind` the

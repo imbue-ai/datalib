@@ -1,5 +1,5 @@
-//! The starter `config.toml` a new data root gets: the index group's two
-//! fan-in steps, with nothing to read yet, and the applets every app
+//! The starter `config.toml` a new data root gets: the index group's
+//! fan-in step, with nothing to read yet, and the applets every app
 //! needs. `datalib-dag init`, `datalib-http --init` and the app's
 //! first-run screen all write this one text.
 
@@ -8,15 +8,15 @@ use std::path::Path;
 
 use crate::config::{owner_only_options, root_config_path};
 
-/// Non-empty on purpose: the two index steps are source-independent and
-/// belong in every pipeline. They read every source by pattern, so adding
+/// Non-empty on purpose: the index step is source-independent and
+/// belongs in every pipeline. It reads every source by pattern, so adding
 /// a source only writes it above this block.
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.
 pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
 # A group is one thing on the Manage screen; its steps are what run.
-# Every source feeds these two — the grid reads its rendered markdown,
-# the qmd aggregator its search steps. A step's id is
+# Every source feeds this one — the grid reads its rendered markdown
+# and puts it in the keyword search. A step's id is
 # `<group>/<function>`, the tree it writes, and `inputs` names the
 # steps it reads by that id, or every step of one function at once:
 # `*/render_markdown` is each source's render, those added later too.
@@ -40,12 +40,6 @@ group = "unified_grid_and_search_index"
 function = "grid_index"
 command = "datalib-step"
 inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["*/keyword_index", "*/embed"]
 
 # The applet that serves the grid: the app has no search, no document
 # view and no document picker without it. It is an applet like any

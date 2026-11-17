@@ -1,6 +1,6 @@
 //! The fixture's chunk prompts, one per line as `<hash>\t<prompt as JSON>`,
 //! sorted: what `:ingested_tng_vectors` embeds. Read from a root whose
-//! `keyword_index` steps have run, drawn by the store as the `embed` step
+//! `grid_index` has run, drawn by the store as the `embed` step
 //! draws them, and each one the index names found among them, so a prompt
 //! drawn differently from the step's fails here rather than caching a
 //! vector under the wrong text.

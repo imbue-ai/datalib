@@ -398,7 +398,9 @@ _RELEASE_WRITE_GRANTS = {
     "publish-release": {"contents"},
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
+    "docker-image-cuda": {"packages"},
     "docker-publish": {"packages"},
+    "docker-publish-cuda": {"packages"},
     "attest": {"id-token", "attestations", "packages"},
 }
 # Publishes on a tag, so what holds for a release holds for it.

@@ -20,6 +20,14 @@
 #     dist/arm64/datalib-aarch64-unknown-linux-gnu.tar.gz
 #     dist/arm64/runtime-aarch64-unknown-linux-gnu.tar.gz        (+ .sha256)
 #
+# and, for the CUDA variant only (`--build-arg CUDA=12`, amd64):
+#
+#     cuda/rootfs-cuda-libs.tar   cuBLAS 12, at usr/local/lib/datalib-cuda/
+#     cuda/rootfs-ggml-cuda.tar   opt/datalib/lib/libggml-cuda.so
+#
+# (scripts/release/stage_cuda.sh stages them, and stage_docker_context.sh
+# roots them at /).
+#
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
 # docker-image job in `release.yml` stages its architecture's assets from
@@ -48,7 +56,12 @@
 # share their Node major and latchkey pin through
 # `//tools:version_pins_test`, and nothing else.
 
-FROM ubuntu:26.04
+# `none` is the image everyone pulls; `12` is the CUDA variant,
+# `<version>-cuda`, for a machine with an NVIDIA GPU and for Modal
+# (docs/dev/docker.md § "The CUDA variant").
+ARG CUDA=none
+
+FROM ubuntu:26.04 AS os
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -102,6 +115,28 @@ RUN set -eux; \
     chmod 0755 /root
 ENV HOME=/root
 
+FROM os AS cuda-none
+
+# cuBLAS and the CUDA module, below everything a release changes, with
+# `--link`, which builds each layer apart from the ones under it, so that a
+# pull of the next release can reuse the ~700 MB. Each archive is rooted at
+# /, so every directory in its layer comes from the archive with a fixed
+# time: one `ADD` makes for its destination would carry the build's clock
+# and a new digest every release. `.github/workflows/cuda.yml` holds the
+# pushed layers' digests across two builds over different Ubuntus
+# (docs/dev/docker.md § "The CUDA variant"). NVIDIA's container
+# runtime passes in the driver (libcuda.so.1) and nothing else, so cuBLAS
+# ships here; datalib-step finds the module in /opt/datalib/lib/.
+FROM os AS cuda-12
+ADD --link cuda/rootfs-cuda-libs.tar /
+ADD --link cuda/rootfs-ggml-cuda.tar /
+ENV LD_LIBRARY_PATH=/usr/local/lib/datalib-cuda/cublas
+
+# The app without the demo: what `.github/workflows/cuda.yml` builds
+# (`--target app`) over the latest release's binaries, which cannot run a
+# newer demo config.
+FROM cuda-${CUDA} AS app
+
 # Everything below is the release tarball and the entrypoint. A
 # contributor in the devcontainer builds the binaries from source with
 # Bazel, and `bazelisk build //third-party/doltlite:doltlite` is the
@@ -132,7 +167,11 @@ RUN set -eux; \
     tar --no-same-owner -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' -print -quit)"; \
     test -n "$staged"; \
-    mv "$staged" /opt/datalib; \
+    # Into /opt/datalib rather than onto it: the CUDA variant has put the
+    # module in its lib/ already.
+    mkdir -p /opt/datalib; \
+    cp -a "$staged/." /opt/datalib/; \
+    rm -rf "$staged"; \
     (cd /tmp/release && sha256sum -c runtime-*-linux-gnu.tar.gz.sha256); \
     mkdir /opt/datalib/runtime; \
     tar --no-same-owner -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
@@ -158,6 +197,16 @@ RUN set -eux; \
     datalib-dag --version; \
     doltlite --version; \
     /opt/datalib/runtime/node/bin/node --version; \
+    # The CUDA variant: with cuBLAS beside it, the module may want nothing
+    # but the driver, which a builder without a GPU lacks.
+    if [ -e /opt/datalib/lib/libggml-cuda.so ]; then \
+        missing="$(ldd /opt/datalib/lib/libggml-cuda.so | awk '/not found/ {print $1}' | sort -u)"; \
+        echo "libggml-cuda.so lacks: ${missing:-nothing}"; \
+        test -z "$missing" || test "$missing" = libcuda.so.1; \
+        test -s /opt/datalib/licenses/CUDA-NOTICE.md; \
+        test -s /opt/datalib/licenses/nvidia/cudart/LICENSE; \
+        test -s /usr/local/lib/datalib-cuda/licenses/nvidia/cublas/LICENSE; \
+    fi; \
     # The demo library is the one place under /opt the app writes.
     install -d -o datalib -g datalib /opt/datalib/demo
 
@@ -182,6 +231,8 @@ ENV DATALIB_NO_FETCH=1
 # per-bind-mount key file before exec'ing the user's command. See the
 # script header and docs/docker.md for the security model.
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
+
+FROM app
 
 # --- The demo data library ------------------------------------------
 #

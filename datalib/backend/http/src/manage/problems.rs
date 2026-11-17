@@ -497,7 +497,7 @@ mod tests {
         )]);
         let steps = [
             StepProblems::of("unified_grid_and_search_index/grid_index", None, &held),
-            StepProblems::of("unified_grid_and_search_index/qmd_aggregator", None, &held),
+            StepProblems::of("unified_grid_and_search_index/embedding_map", None, &held),
         ];
         assert_eq!(kinds(&group_chips(&steps)), [(ChipKind::Error, "1")]);
         assert_eq!(

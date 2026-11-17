@@ -68,15 +68,11 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_abs = datalib_etl_render::grid_index::doc_md_path(
+    let md_abs = datalib_etl_render::grid_index::doc_md_path(
         &datalib_etl::layout::render_markdown_root(&render_root, stanza),
         &mr.uuid,
     );
-    assert!(
-        qmd_abs.exists(),
-        "rendered md missing: {}",
-        qmd_abs.display()
-    );
+    assert!(md_abs.exists(), "rendered md missing: {}", md_abs.display());
     // The projection rides on the emitted document now, not in a file
     // beside the markdown.
     assert!(
@@ -105,7 +101,7 @@ async fn gitlab_live_single_mr_snapshot() {
         "state_known": mr.state.is_some(),
         "note_count": parsed.comments.len(),
         "sections_present": sections,
-        "render_markdown_exists": qmd_abs.exists(),
+        "render_markdown_exists": md_abs.exists(),
         "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 
