@@ -14,7 +14,7 @@ pub const TEAM: &str = "id createdAt updatedAt archivedAt retiredAt name key dis
     description icon color timezone visibility cyclesEnabled cycleDuration \
     cycleStartDay cycleCooldownTime triageEnabled issueEstimationType autoClosePeriod \
     autoArchivePeriod parent { id } defaultIssueState { id } triageIssueState { id } \
-    issueCount progressHistory currentProgress activeCycle { id }";
+    issueCount activeCycle { id }";
 
 pub const USER: &str = "id createdAt updatedAt archivedAt name displayName email avatarUrl \
     description title timezone active admin owner guest app url disableReason statusEmoji \
