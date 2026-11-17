@@ -282,6 +282,21 @@ impl<'a> Scope<'a> {
     }
 }
 
+static STEP_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Set once by `datalib-step`, from its group: the source every problem
+/// this process's step finds is about. A download's writers mint their
+/// rows under it, since none of them is handed the source.
+pub fn set_step_source(source_id: &str) {
+    let _ = STEP_SOURCE.set(source_id.to_string());
+}
+
+/// The source [`set_step_source`] named; empty where nothing set it, as
+/// in a library's own tests.
+pub fn step_source() -> &'static str {
+    STEP_SOURCE.get().map_or("", String::as_str)
+}
+
 pub fn sample_of(s: &str) -> String {
     const MAX: usize = 80;
     if s.len() <= MAX {

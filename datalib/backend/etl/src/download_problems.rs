@@ -620,7 +620,7 @@ pub(crate) async fn apply(
     let mut news = Vec::new();
     for (key, outcome, problem) in &rows {
         let row = ProblemRow::new(
-            "",
+            datalib_problems::step_source(),
             Stage::Fetch,
             Scope::Entity(key),
             None,

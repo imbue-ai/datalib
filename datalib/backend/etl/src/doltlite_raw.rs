@@ -1805,6 +1805,73 @@ fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
     }
 }
 
+/// Mint again, under `source`, the problems an older build wrote naming
+/// none, keeping their stamps: their ids become the ones the render's
+/// copies carried, so a mute made on a copy holds on the row. A no-op for
+/// an empty `source`. Uncommitted: the run's seal commits it.
+pub async fn adopt_sourceless_problems(pool: &SqlitePool, source: &str) -> Result<usize> {
+    use crate::bulk::BulkUpsertable as _;
+    use datalib_problems::{Problem, ProblemRow, Scope, ScopeKind};
+    if source.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = pool.begin().await.context("begin adopting problems")?;
+    let rows: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems WHERE source_id = ''")
+        .fetch_all(&mut *tx)
+        .await
+        .context("read the problems that name no source")?
+        .iter()
+        .map(ProblemRow::from_row)
+        .collect::<Result<_>>()?;
+    let insert = crate::bulk::insert_sql::<ProblemRow>();
+    for old in &rows {
+        let scope = match old.scope_kind {
+            ScopeKind::Markdown => Scope::Markdown(&old.scope_key),
+            ScopeKind::Entity => Scope::Entity(&old.scope_key),
+        };
+        let problem = Problem {
+            reason: old.reason,
+            field: old.field.clone(),
+            path: old.path.clone(),
+            rule: old.rule.clone(),
+            sample: old.sample.clone(),
+            severity: Some(old.severity),
+        };
+        let fresh = ProblemRow::new(
+            source,
+            old.stage,
+            scope,
+            old.item_uuid.as_deref(),
+            old.outcome,
+            problem,
+            old.render_version.and_then(|v| u32::try_from(v).ok()),
+        );
+        let adopted = ProblemRow {
+            first_seen_at_utc: old.first_seen_at_utc.clone(),
+            changed_at_utc: old.changed_at_utc.clone(),
+            tz_offset: old.tz_offset.clone(),
+            upstream_entity_kind: old.upstream_entity_kind.clone(),
+            upstream_id: old.upstream_id.clone(),
+            upstream_account: old.upstream_account.clone(),
+            ..fresh
+        };
+        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+            .bind(&old.problem_uuid)
+            .execute(&mut *tx)
+            .await
+            .context("drop a problem that names no source")?;
+        // Audited: `insert` is built from `ProblemRow`'s associated
+        // consts, never from row data; every value is bound.
+        adopted
+            .bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
+            .execute(&mut *tx)
+            .await
+            .context("record it under the source")?;
+    }
+    tx.commit().await.context("commit adopting problems")?;
+    Ok(rows.len())
+}
+
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
     commit_run_dated(pool, msg, None).await
 }
@@ -2502,7 +2569,7 @@ async fn record_fetch_problem(
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let row = ProblemRow::new(
-        "",
+        datalib_problems::step_source(),
         Stage::Fetch,
         Scope::Entity(&entity_id),
         None,
@@ -3356,6 +3423,54 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    /// A problem an older build wrote naming no source is minted again
+    /// under the step's source, stamps kept, so its id is the one a row
+    /// minted under the source today has, which is what a mute names; a
+    /// row naming a source is left alone, and an empty source adopts
+    /// nothing.
+    #[tokio::test]
+    async fn a_problem_naming_no_source_is_minted_again_under_the_steps() {
+        use crate::bulk::BulkUpsertable as _;
+        use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+        let dir = tempdir().unwrap();
+        let pool = open_test(&dir.path().join("s.doltlite_db")).await;
+        let mint = |source: &str, key: &str| {
+            ProblemRow::new(
+                source,
+                Stage::Fetch,
+                Scope::Entity(key),
+                None,
+                Outcome::Dropped,
+                Problem::record(Reason::FetchFailed, "404"),
+                None,
+            )
+            .stamped(None, "2370-01-01T00:00:00.000000+00:00", Some("+02:00"))
+        };
+        for row in [mint("", "messages:1"), mint("riker", "messages:2")] {
+            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(crate::bulk::insert_sql::<
+                ProblemRow,
+            >())))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        assert_eq!(adopt_sourceless_problems(&pool, "").await.unwrap(), 0);
+        assert_eq!(adopt_sourceless_problems(&pool, "riker").await.unwrap(), 1);
+        let mut held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| ProblemRow::from_row(r).unwrap())
+            .collect();
+        held.sort_by(|a, b| a.scope_key.cmp(&b.scope_key));
+        assert_eq!(
+            held,
+            [mint("riker", "messages:1"), mint("riker", "messages:2")]
+        );
+        pool.close().await;
     }
 
     /// A second writer on a live store is refused at open, naming the
