@@ -1,82 +1,24 @@
-"""Helper for wiring up `bazel run //pkg:foo.update` snapshot-update
-targets next to insta-using `rust_test`s.
-
-Usage from a provider's `BUILD.bazel`:
+"""`bazel run //pkg:foo.update`: re-runs an insta-using `rust_test` so its
+snapshots are written into the source tree (`tools/insta_update.sh`),
+with the test's own env and runfiles (`tools/test_env.bzl`).
 
     load("//tools:insta.bzl", "insta_update")
-
-    rust_test(
-        name = "chatgpt_tests",
-        srcs = glob(["tests/chatgpt_tests/*.rs"]),
-        crate_root = "tests/chatgpt_tests/main.rs",
-        ...
-    )
 
     insta_update(
         name = "chatgpt_tests.update",
         test = ":chatgpt_tests",
+        test_args = ["--skip", "live::"],
     )
-
-A package's integration tests share one binary, so there is one
-`.update` per package and it refreshes every module's goldens.
-
-Then `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_tests.update`
-re-runs the test with `INSTA_UPDATE=always` and `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
-which is the standard insta-with-bazel idiom: insta resolves snapshot
-paths against the user's actual workspace, not the bazel sandbox.
-
-When the underlying `rust_test` uses additional `data` deps + `env` vars
-(e.g. //datalib/backend/etl/providers/claude:claude_tests,
-which reaches its fixture tree through `CLAUDE_FIXTURE_DIR`), pass
-them via `extra_data` + `extra_env` so the `.update` target picks them
-up too — `rust_test`'s env doesn't propagate to a sibling sh_binary.
 """
 
-load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//tools:test_env.bzl", "run_with_test_env")
 
-def insta_update(
-        name,
-        test,
-        test_args = None,
-        extra_data = None,
-        extra_env = None,
-        visibility = None):
-    """Generates a `bazel run`-able sibling target that updates snapshots.
-
-    Args:
-      name: target name (convention: `<test>.update`).
-      test: the `rust_test` label whose snapshots to update.
-      test_args: optional extra args passed verbatim to the test
-        binary (e.g. `["--ignored"]` for `#[ignore]`d tests).
-      extra_data: optional extra `data` deps. Mirrors the underlying
-        `rust_test`'s `data =` when the test reaches dependencies via
-        `$(rootpath ...)`-style env vars.
-      extra_env: optional extra env vars (Make-variable interpolation
-        supported, e.g. `"$(rootpath :foo_bin)"`). Mirrors the
-        underlying `rust_test`'s `env =`.
-      visibility: optional visibility list.
-    """
-    args_str = " ".join(test_args) if test_args else ""
-
-    env = {
-        "INSTA_TEST_BIN": "$(rootpath {})".format(test),
-        "INSTA_TEST_ARGS": args_str,
-    }
-    if extra_env:
-        env.update(extra_env)
-
-    data = [test]
-    if extra_data:
-        data = data + list(extra_data)
-
-    sh_binary(
+def insta_update(name, test, test_args = [], visibility = None):
+    run_with_test_env(
         name = name,
-        srcs = ["//tools:insta_update.sh"],
-        data = data,
-        env = env,
-        # We depend on a `rust_test` target, which is `testonly`. Mark
-        # the wrapper testonly too so bazel's dependency-correctness
-        # check doesn't reject it.
-        testonly = True,
+        test = test,
+        script = "//tools:insta_update.sh",
+        test_bin_var = "INSTA_TEST_BIN",
+        env = {"INSTA_TEST_ARGS": " ".join(test_args)},
         visibility = visibility,
     )

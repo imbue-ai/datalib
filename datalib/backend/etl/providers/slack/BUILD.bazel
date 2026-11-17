@@ -96,8 +96,4 @@ rust_test(
 insta_update(
     name = "slack_tests.update",
     test = ":slack_tests",
-    extra_data = [":tng_fixture"],
-    extra_env = {
-        "SLACK_FIXTURE_DIR": "datalib/backend/etl/providers/slack/tests/fixtures/slack_api",
-    },
 )

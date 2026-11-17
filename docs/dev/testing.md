@@ -32,7 +32,9 @@ full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
 `bazel test` runs in a sandbox, so `INSTA_UPDATE=always` would write new
 `*.snap`s where you can't review them. Every insta-using `rust_test` has a
 sibling `.update` target (via the `insta_update` macro in
-[`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
+[`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`.
+It runs the test with the test's own `env` and `data`, so nothing is
+listed twice:
 
 ```bash
 bazel run //datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests.update
@@ -78,10 +80,6 @@ insta_update(
     name = "my_render_test.update",
     test = ":my_render_test",
     test_args = ["--ignored"],  # only if the test is #[ignore]'d
-    # `data` and `env` on rust_test do NOT propagate through the sibling
-    # sh_binary wrapper — mirror every fixture / env-var dep here.
-    extra_data = [":tng_fixture"],
-    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
 )
 ```
 
