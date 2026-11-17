@@ -33,7 +33,10 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
 async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     let only: Vec<IndexDoc> = docs.iter().map(|(d, _)| d.clone()).collect();
-    index.put(&only).await.unwrap();
+    index
+        .put(&only, &datalib_search_index::chunk::four_bytes_a_token)
+        .await
+        .unwrap();
     index.close().await;
     let cache = InferenceCache::open(&layout::inference_cache_db(root))
         .await
@@ -148,10 +151,18 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
             })
             .collect(),
     };
-    let chunks = thread.prompted();
+    let chunks = thread
+        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
+        .unwrap();
     assert_eq!(chunks.len(), 2, "a message starts a chunk of its own");
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
-    index.put(std::slice::from_ref(&thread)).await.unwrap();
+    index
+        .put(
+            std::slice::from_ref(&thread),
+            &datalib_search_index::chunk::four_bytes_a_token,
+        )
+        .await
+        .unwrap();
     index.close().await;
     let cache = InferenceCache::open(&layout::inference_cache_db(root))
         .await

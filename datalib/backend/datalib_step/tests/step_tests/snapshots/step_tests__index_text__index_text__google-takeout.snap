@@ -183,6 +183,13 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
+
+--- chunk 1
+title: google-takeout storage | text: Source: datalib
+
+ `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_bills` |  | 2 rows | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_greetings` |  | 1 row | `00000000` |
 | Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_messages` |  | 11 rows | `00000000` |
