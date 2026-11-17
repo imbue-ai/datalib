@@ -39,7 +39,7 @@ fn run(root: &Path, reset: bool) -> Value {
         .env("DATALIB_DAG_FUNCTION", "embedding_map")
         .env(
             "DATALIB_DAG_INPUTS",
-            r#"["unified_grid_and_search_index/qmd_aggregator"]"#,
+            r#"["slack/embed"]"#,
         )
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", "2026-09-25T00:00:00+00:00")
