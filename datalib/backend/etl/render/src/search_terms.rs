@@ -115,20 +115,24 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     Ok(terms.len())
 }
 
+/// Every `(handle, author)` pair the grid shows, read from
+/// `grid_index::AUTHORS_INDEX` alone. Pinned, so a dropped or renamed
+/// index fails the pass instead of scanning every row's text (#1803).
+const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
+     FROM grid_rows INDEXED BY grid_rows_by_author \
+     WHERE author_handle IS NOT NULL AND author_handle != '' \
+     AND author IS NOT NULL AND author != ''";
+
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
 /// (`source_contacts`) gives for each handle it ties to them; and the
 /// handles of each source's own account. Written whole: it is a few
 /// thousand rows.
 pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<()> {
-    let authors: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT author_handle, author FROM grid_rows \
-         WHERE author_handle IS NOT NULL AND author_handle != '' \
-         AND author IS NOT NULL AND author != ''",
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .context("read the grid's authors")?;
+    let authors: Vec<(String, String)> = sqlx::query_as(AUTHORS)
+        .fetch_all(&mut *conn)
+        .await
+        .context("read the grid's authors")?;
     let contacts: Vec<(String, String)> = sqlx::query_as(
         "SELECT h.handle, c.contact_json FROM source_contact_handles h \
          JOIN source_contacts c \
@@ -463,6 +467,29 @@ mod tests {
         (uuid.to_string(), kind.to_string())
     }
 
+    /// #1803: the authors were read by scanning `grid_rows`, every row's
+    /// text with them, on each pass. They must come from the index alone.
+    #[tokio::test]
+    async fn the_authors_are_read_from_their_index_alone() {
+        let g = Grid::new().await;
+        // Audited: a constant statement of ours.
+        let rows: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {AUTHORS}")))
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        assert!(
+            plan.iter()
+                .any(|p| p.starts_with("SEARCH grid_rows USING COVERING INDEX grid_rows_by_author")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|p| p.starts_with("SCAN grid_rows")),
+            "{plan:?}"
+        );
+    }
+
     /// A forged `From: "picard@enterprise.org" <q@continuum.test>` made
     /// the row's author Picard's address, and the index then knew Q by
     /// that name. The row still shows what the message said.
@@ -576,185 +603,5 @@ mod tests {
 
         g.seal(&[], &["c-a"]).await;
         assert_eq!(g.matching("email:bo@example.com").await, Vec::new());
-    }
-
-    /// Repro for #1803 (throwaway): time `write_people` over a grid of
-    /// REPRO_ROWS rows (default 325k) of made-up authors.
-    #[tokio::test(flavor = "multi_thread")]
-    #[ignore]
-    #[allow(clippy::disallowed_macros)]
-    async fn repro_1803_write_people_scans_the_grid() {
-        use std::time::Instant;
-        let target: i64 = std::env::var("REPRO_ROWS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(325_000);
-        let distinct_gens: i64 = std::env::var("REPRO_DISTINCT_GENS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0);
-        let g = Grid::new().await;
-        let filler = "Captain's log, stardate 47634.4. ".repeat(12);
-        let seed: Vec<RenderedMarkdown> = (0..2000)
-            .map(|i| {
-                let mut d = doc(
-                    &g.root,
-                    &format!("c-{i}"),
-                    &format!("email:crew{}@enterprise.test", i % 1500),
-                    "Log",
-                );
-                d.rows[0].author = Some(format!("Crew Member {}", i % 1500));
-                d.rows[0].preview = filler.chars().take(240).collect();
-                d
-            })
-            .collect();
-        let t = Instant::now();
-        g.seal(&seed, &[]).await;
-        eprintln!(
-            "seeded 2000 docs through apply_one + seal in {:?}",
-            t.elapsed()
-        );
-        let cols: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info('grid_rows')")
-                .fetch_all(&g.pool)
-                .await
-                .unwrap();
-        let mut gen = 0;
-        loop {
-            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
-                .fetch_one(&g.pool)
-                .await
-                .unwrap();
-            if n >= target {
-                eprintln!("grid_rows: {n}");
-                break;
-            }
-            gen += 1;
-            let sel: Vec<String> = cols
-                .iter()
-                .map(|c| match c.as_str() {
-                    "uuid" | "markdown_uuid" | "conversation_uuid" => format!("{c} || '-g{gen}'"),
-                    "author_handle" if gen <= distinct_gens => format!("{c} || '-g{gen}'"),
-                    _ => c.clone(),
-                })
-                .collect();
-            let sql = format!(
-                "INSERT INTO grid_rows ({}) SELECT {} FROM grid_rows LIMIT {}",
-                cols.join(","),
-                sel.join(","),
-                target - n
-            );
-            sqlx::query(sqlx::AssertSqlSafe(sql))
-                .execute(&g.pool)
-                .await
-                .unwrap();
-        }
-        let db = datalib_core::layout::grid_index_db(&g.root);
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&g.pool)
-            .await
-            .unwrap();
-        g.pool.close().await;
-        eprintln!(
-            "file size: {} MB",
-            std::fs::metadata(&db).unwrap().len() / 1_000_000
-        );
-
-        let pool = open_index(&db).await.unwrap();
-        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
-            "EXPLAIN QUERY PLAN SELECT DISTINCT author_handle, author FROM grid_rows \
-             WHERE author_handle IS NOT NULL AND author_handle != '' \
-             AND author IS NOT NULL AND author != ''",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        eprintln!(
-            "plan before: {:?}",
-            plan.iter().map(|p| &p.3).collect::<Vec<_>>()
-        );
-        let root = g.root.clone();
-        let time_people = |label: &'static str, pool: sqlx::SqlitePool| {
-            let root = root.clone();
-            async move {
-                for i in 0..3 {
-                    let lock = WriteLock::for_index(pool.clone());
-                    if std::env::var("REPRO_COLD").is_ok() {
-                        let db = datalib_core::layout::grid_index_db(&root);
-                        for f in [
-                            db.clone(),
-                            std::path::PathBuf::from(format!("{}-wal", db.display())),
-                        ] {
-                            let _ = std::process::Command::new("dd")
-                                .arg(format!("if={}", f.display()))
-                                .args(["iflag=nocache", "count=0", "status=none"])
-                                .status();
-                        }
-                    }
-                    let t = Instant::now();
-                    lock.begin_transaction().await.unwrap();
-                    {
-                        let mut guard = lock.acquire().await.unwrap();
-                        write_people(guard.conn()).await.unwrap();
-                    }
-                    lock.commit_transaction().await.unwrap();
-                    eprintln!("{label} write_people run {i}: {:?}", t.elapsed());
-                }
-                let t = Instant::now();
-                let c: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM (SELECT DISTINCT author_handle, author FROM grid_rows \
-                 WHERE author_handle IS NOT NULL AND author_handle != '' \
-                 AND author IS NOT NULL AND author != '')",
-                )
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-                eprintln!(
-                    "{label} DISTINCT counted in SQLite only: {c} pairs in {:?}",
-                    t.elapsed()
-                );
-                let t = Instant::now();
-                let n: Vec<(String, String)> = sqlx::query_as(
-                    "SELECT DISTINCT author_handle, author FROM grid_rows \
-                 WHERE author_handle IS NOT NULL AND author_handle != '' \
-                 AND author IS NOT NULL AND author != ''",
-                )
-                .fetch_all(&pool)
-                .await
-                .unwrap();
-                eprintln!(
-                    "{label} DISTINCT alone: {} pairs in {:?}",
-                    n.len(),
-                    t.elapsed()
-                );
-            }
-        };
-        time_people("no index", pool.clone()).await;
-        let t = Instant::now();
-        sqlx::query("SELECT COUNT(*), SUM(LENGTH(preview)) FROM grid_rows")
-            .execute(&pool)
-            .await
-            .unwrap();
-        eprintln!("plain full scan touching preview: {:?}", t.elapsed());
-        let t = Instant::now();
-        sqlx::query("CREATE INDEX grid_rows_by_author ON grid_rows (author_handle, author)")
-            .execute(&pool)
-            .await
-            .unwrap();
-        eprintln!("CREATE INDEX (author_handle, author): {:?}", t.elapsed());
-        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
-            "EXPLAIN QUERY PLAN SELECT DISTINCT author_handle, author FROM grid_rows \
-             WHERE author_handle IS NOT NULL AND author_handle != '' \
-             AND author IS NOT NULL AND author != ''",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        eprintln!(
-            "plan after: {:?}",
-            plan.iter().map(|p| &p.3).collect::<Vec<_>>()
-        );
-        time_people("with index", pool.clone()).await;
-        pool.close().await;
     }
 }
