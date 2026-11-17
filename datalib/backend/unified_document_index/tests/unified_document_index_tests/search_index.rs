@@ -17,6 +17,7 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
         markdown_uuid: uuid.into(),
         content_hash: format!("h-{uuid}"),
         title: uuid.into(),
+        head: None,
         sections: messages
             .iter()
             .map(|(m, text)| IndexSection {

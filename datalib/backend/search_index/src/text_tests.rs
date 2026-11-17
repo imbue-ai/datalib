@@ -215,6 +215,21 @@ fn a_conversation_has_no_facts_line_and_its_bodies_keep_their_escapes() {
     );
 }
 
+/// A page's head is its facts line, which every chunk repeats; a
+/// conversation has none, since its chunks repeat their item's envelope.
+#[test]
+fn a_page_has_a_head_and_a_conversation_does_not() {
+    let (page, facts) = golden_page();
+    assert_eq!(
+        head(&page, &facts).as_deref(),
+        Some("Source: calendar\nKind: Recurring Event\nCalendar: Bridge")
+    );
+    assert!(draw(&page, &facts)[0]
+        .text
+        .starts_with(&head(&page, &facts).unwrap()));
+    assert_eq!(head(&golden(), &facts), None);
+}
+
 /// The source is named as its renderer labels it, else by its provider
 /// tag; a fact with no value, and one not worth reading, says nothing.
 #[test]

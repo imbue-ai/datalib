@@ -1021,6 +1021,7 @@ impl IndexedMarkdownStore {
                     markdown_uuid: row.markdown_uuid,
                     content_hash,
                     title: row.title.unwrap_or_default(),
+                    head: datalib_search_index::text::head(&pieces, &facts),
                     sections: datalib_search_index::text::draw(&pieces, &facts),
                 })
             })

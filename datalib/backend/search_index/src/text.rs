@@ -84,23 +84,26 @@ const PAGE_FACTS: &[(&str, &str)] = &[
     ("page_count", "Pages"),
 ];
 
+/// What every chunk of a document repeats: a page's facts line. `None`
+/// for a conversation, whose chunks repeat their item's envelope instead.
+pub fn head(pieces: &[Piece], facts: &Facts) -> Option<String> {
+    let page = pieces.first().is_some_and(|p| p.framed);
+    Some(facts_line(facts)).filter(|line| page && !line.is_empty())
+}
+
 /// A document's pieces as the sections the index takes.
 pub fn draw(pieces: &[Piece], facts: &Facts) -> Vec<IndexSection> {
-    let page = pieces.first().is_some_and(|p| p.framed);
     let mut drawn: Vec<IndexSection> = pieces
         .iter()
         .enumerate()
         .map(|(i, p)| draw_one(p, i == 0))
         .collect();
-    if page {
-        let line = facts_line(facts);
+    if let Some(line) = head(pieces, facts) {
         // A page whose opening piece was its front matter alone opens its
         // first piece with words instead, so the facts share its chunk.
         let at = drawn.iter().position(|s| !s.text.is_empty()).unwrap_or(0);
-        if !line.is_empty() {
-            let opening = &mut drawn[at];
-            opening.text = format!("{line}\n\n{}", opening.text);
-        }
+        let opening = &mut drawn[at];
+        opening.text = format!("{line}\n\n{}", opening.text);
     }
     drawn
 }

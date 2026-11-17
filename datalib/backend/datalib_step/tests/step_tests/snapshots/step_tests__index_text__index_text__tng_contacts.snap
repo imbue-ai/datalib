@@ -3,9 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === tng_contacts 00000000-0000-8140-88d9-42badf1b195b drone.4.of.12@unimatrix01.borg
---- -
---- 00000000-0000-8140-88d9-42badf1b195b
-Source: contacts
+--- chunk 0
+title: drone.4.of.12@unimatrix01.borg | text: Source: contacts
 Group: Borg
 
 # drone.4.of.12@unimatrix01.borg
@@ -13,10 +12,10 @@ Group: Borg
 Email:
 
 drone.4.of.12@unimatrix01.borg
+
 === tng_contacts 00000000-0000-81e2-8596-1ee8f9640d13 Jean-Luc Picard
---- -
---- 00000000-0000-81e2-8596-1ee8f9640d13
-Source: contacts
+--- chunk 0
+title: Jean-Luc Picard | text: Source: contacts
 Group: Bridge
 
 Jean-Luc Picard
@@ -43,10 +42,10 @@ Phone cell:
 Phone home: +33-555-LABARRE
 Address work: Ready Room, Deck 1, Saucer Section
 Note: Make it so.
+
 === tng_contacts 00000000-0000-829a-bb9d-4c1b203d3251 Senior Staff
---- -
---- 00000000-0000-829a-bb9d-4c1b203d3251
-Source: contacts
+--- chunk 0
+title: Senior Staff | text: Source: contacts
 Group: Bridge
 
 # Senior Staff
@@ -55,10 +54,10 @@ Group: Bridge
 
 - Jean-Luc Picard <jlpicard@enterprise.starfleet>
 - William T. Riker <wriker@enterprise.starfleet>
+
 === tng_contacts 00000000-0000-85d8-ac4b-9c4472cee5ea Worf
---- -
---- 00000000-0000-85d8-ac4b-9c4472cee5ea
-Source: contacts
+--- chunk 0
+title: Worf | text: Source: contacts
 Group: Bridge
 
 Worf
@@ -76,9 +75,10 @@ Phone cell:
 +1-202-555-0102 <+12025550102>
 
 Note: Son of Mogh. Prefers prune juice.
+
 === tng_contacts 00000000-0000-861c-8d00-be0043b71820 tng_contacts storage
---- -
-Source: datalib
+--- chunk 0
+title: tng_contacts storage | text: Source: datalib
 
 # tng_contacts — storage
 
@@ -97,10 +97,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#ingested_files` |  | 3 rows | `00000000` |
+
 === tng_contacts 00000000-0000-8acb-9e72-ef58e1a96813 Seven of Nine
---- -
---- 00000000-0000-8acb-9e72-ef58e1a96813
-Source: contacts
+--- chunk 0
+title: Seven of Nine | text: Source: contacts
 Group: Borg
 
 # Seven of Nine <seven.of.nine@unimatrix01.borg>
@@ -114,10 +114,10 @@ Email:
 annika.hansen@raven.fed
 
 Phone home: +1-555-TERTIARY
+
 === tng_contacts 00000000-0000-8b00-b38c-a2a290dad572 William T. Riker
---- -
---- 00000000-0000-8b00-b38c-a2a290dad572
-Source: contacts
+--- chunk 0
+title: William T. Riker | text: Source: contacts
 Group: Bridge
 
 William T. Riker
@@ -142,10 +142,10 @@ riker@enterprise.starfleet
 
 Phone cell: +1-555-NUMBER-1
 Note: Plays the trombone. Owns a beard.
+
 === tng_contacts 00000000-0000-8c51-a4b4-dde335468f6c Hugh
---- -
---- 00000000-0000-8c51-a4b4-dde335468f6c
-Source: contacts
+--- chunk 0
+title: Hugh | text: Source: contacts
 Group: Borg
 
 # Hugh <third.of.five@unimatrix01.borg>
@@ -155,10 +155,10 @@ Email work:
 third.of.five@unimatrix01.borg
 
 Phone work: +1-555-THIRD-OF-5
+
 === tng_contacts 00000000-0000-8d78-9232-e6b0deeebfb7 Geordi La Forge
---- -
---- 00000000-0000-8d78-9232-e6b0deeebfb7
-Source: contacts
+--- chunk 0
+title: Geordi La Forge | text: Source: contacts
 Group: Engineering
 
 Geordi La Forge
@@ -177,10 +177,10 @@ laforge@enterprise.starfleet
 
 Phone work: +1-555-WARP-FAC
 Note: If we modulate the deflector array we should be able to render this contact correctly.
+
 === tng_contacts 00000000-0000-8f5b-ab9b-f6b9fbf217b5 Locutus of Borg
---- -
---- 00000000-0000-8f5b-ab9b-f6b9fbf217b5
-Source: contacts
+--- chunk 0
+title: Locutus of Borg | text: Source: contacts
 Group: Borg
 
 # Locutus of Borg <locutus@unicomplex.borg>

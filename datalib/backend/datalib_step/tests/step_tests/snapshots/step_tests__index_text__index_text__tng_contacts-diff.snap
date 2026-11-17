@@ -3,9 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === tng_contacts-diff 00000000-0000-8195-8ee2-d14cb601f004 Worf
---- -
---- 00000000-0000-8195-8ee2-d14cb601f004
-Source: contacts
+--- chunk 0
+title: Worf | text: Source: contacts
 Group: Bridge
 
 Worf
@@ -23,10 +22,10 @@ Phone cell:
 +1-202-555-0102 <+12025550102>
 
 Note: Son of Mogh. Prefers prune juice.
+
 === tng_contacts-diff 00000000-0000-819d-aad9-cb628fc3bec0 Kalita
---- -
---- 00000000-0000-819d-aad9-cb628fc3bec0
-Source: contacts
+--- chunk 0
+title: Kalita | text: Source: contacts
 Group: Maquis
 
 # Kalita
@@ -34,10 +33,10 @@ Group: Maquis
 Maquis pilot
 
 Phone work: +1-555-BADLANDS
+
 === tng_contacts-diff 00000000-0000-825c-a3c4-1fb84e9bfce6 Jean-Luc Picard
---- -
---- 00000000-0000-825c-a3c4-1fb84e9bfce6
-Source: contacts
+--- chunk 0
+title: Jean-Luc Picard | text: Source: contacts
 Group: Bridge
 
 Jean-Luc Picard
@@ -64,10 +63,10 @@ Phone cell:
 Phone home: +33-555-LABARRE
 Address work: Ready Room, Deck 1, Saucer Section
 Note: Make it so.
+
 === tng_contacts-diff 00000000-0000-8429-b938-7d1e51384182 Ro Laren
---- -
---- 00000000-0000-8429-b938-7d1e51384182
-Source: contacts
+--- chunk 0
+title: Ro Laren | text: Source: contacts
 Group: Maquis
 
 Ro Laren
@@ -81,10 +80,10 @@ Email work:
 ro.laren@maquis.badlands
 
 Note: Resigned her commission. Last seen in the Badlands.
+
 === tng_contacts-diff 00000000-0000-86be-a0a0-341fa48bbc80 Data
---- -
---- 00000000-0000-86be-a0a0-341fa48bbc80
-Source: contacts
+--- chunk 0
+title: Data | text: Source: contacts
 Group: Bridge
 
 Data

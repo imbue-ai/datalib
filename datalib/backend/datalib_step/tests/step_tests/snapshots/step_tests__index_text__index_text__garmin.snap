@@ -3,47 +3,40 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === garmin 00000000-0000-80b6-a0f6-2a808ceb34db Daily log — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Daily log — Jean-Luc Picard | text: Source: garmin
 
 Daily log — Jean-Luc Picard
---- 00000000-0000-89c1-a2d8-721a560e2b1e
 ### Mon Apr 14th, 2369
 
 - **Sleep:** Sleep score 84 · Asleep 7 h 20 min · Deep 1 h 30 min · Light 4 h 10 min · REM 1 h 30 min · Awake 10 min
 - **Heart rate and HRV:** Resting HR 48 bpm · Min HR 44 bpm · Max HR 171 bpm · HRV last night 61 ms · HRV 7-day avg 58 ms · HRV status balanced
 - **Stress and Body Battery:** Avg stress 29 · Body Battery high 94 · Body Battery low 18
 - **Steps and activity:** Steps 14,872 · Floors 22 · Total calories 2,980 kcal
---- 00000000-0000-8272-b240-6bc269fe64ce
 ### Sun Apr 13th, 2369
 
 - **Heart rate and HRV:** Resting HR 49 bpm · Min HR 45 bpm · Max HR 162 bpm
 - **Stress and Body Battery:** Avg stress 24 · Body Battery high 96 · Body Battery low 31
 - **Steps and activity:** Steps 9,120 · Floors 14 · Total calories 2,410 kcal
+
 === garmin 00000000-0000-81f8-a7be-7bc669836792 Records and badges — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Records and badges — Jean-Luc Picard | text: Source: garmin
 
 Records and badges — Jean-Luc Picard
 
 ## Personal records
---- 00000000-0000-8252-8e49-2a5eea9170ce
 **Fastest 5 km** · 21:30 · Running · in Holodeck run: Dixon Hill
---- -
 ## Badges
---- 00000000-0000-8787-a9bf-fa3ecd707a65
 **First Marathon** · earned 2368-11-02
---- -
 ## Gear
---- 00000000-0000-8b30-a5d1-49daa3109a69
 **Starfleet issue trainers** · Shoes · retire at 800 km
---- -
 ## Workouts
---- 00000000-0000-8459-bfbf-509cece0e740
 **Tempo intervals** · Running · about 45:00
+
 === garmin 00000000-0000-8268-9462-873bc68da239 Steps and activity — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Steps and activity — Jean-Luc Picard | text: Source: garmin
 
 Steps and activity — Jean-Luc Picard
 
@@ -54,9 +47,10 @@ Steps and activity — Jean-Luc Picard
 | Day | Steps | Floors | Total calories (kcal) |
 | Mon Apr 14th, 2369 | 14,872 | 22 | 2,980 |
 | Sun Apr 13th, 2369 | 9,120 | 14 | 2,410 |
+
 === garmin 00000000-0000-8622-be12-22e5f6631ff8 Heart rate and HRV — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Heart rate and HRV — Jean-Luc Picard | text: Source: garmin
 
 Heart rate and HRV — Jean-Luc Picard
 
@@ -67,9 +61,10 @@ Heart rate and HRV — Jean-Luc Picard
 | Day | Resting HR (bpm) | Min HR (bpm) | Max HR (bpm) | HRV last night (ms) | HRV 7-day avg (ms) | HRV status |
 | Mon Apr 14th, 2369 | 48 | 44 | 171 | 61 | 58 | balanced |
 | Sun Apr 13th, 2369 | 49 | 45 | 162 |  |  |  |
+
 === garmin 00000000-0000-8baa-bdd0-2e59fe76cde5 Stress and Body Battery — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Stress and Body Battery — Jean-Luc Picard | text: Source: garmin
 
 Stress and Body Battery — Jean-Luc Picard
 
@@ -80,9 +75,10 @@ Stress and Body Battery — Jean-Luc Picard
 | Day | Avg stress | Body Battery high | Body Battery low |
 | Mon Apr 14th, 2369 | 29 | 94 | 18 |
 | Sun Apr 13th, 2369 | 24 | 96 | 31 |
+
 === garmin 00000000-0000-8d0c-bb0a-d0b7f450753a Garmin — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Garmin — Jean-Luc Picard | text: Source: garmin
 
 Garmin — Jean-Luc Picard
 
@@ -99,11 +95,9 @@ Garmin — Jean-Luc Picard
 | Wed Apr 2nd, 2369 at 06:45 | 78.4 | 24.7 | 15.2 % | INDEX_SCALE |
 
 ## Devices
---- 00000000-0000-8909-ae68-923b6b55ace2
 ### Forerunner 265
 
 *device 3654926501 · last synced 2369-04-15T05:12:44.0*
---- -
 ## Store
 
 | Weigh-ins | 4 |
@@ -134,9 +128,10 @@ Garmin — Jean-Luc Picard
 | `stress` | 15 | 0 |
 | `training_readiness` | 15 | 0 |
 | `training_status` | 15 | 0 |
+
 === garmin 00000000-0000-8d3d-b49f-91db8d6251f4 garmin storage
---- -
-Source: datalib
+--- chunk 0
+title: garmin storage | text: Source: datalib
 
 # garmin — storage
 
@@ -157,9 +152,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `garmin/ingest/entities.doltlite_db#garmin_items` |  | 4 rows | `00000000` |
 | Table | ingest | `garmin/ingest/entities.doltlite_db#garmin_weigh_ins` |  | 4 rows | `00000000` |
 | Table | ingest | `garmin/ingest/entities.doltlite_db#garmin_wellness_files` |  | 0 rows | `00000000` |
+
 === garmin 00000000-0000-8f72-b9b8-d48cd967b0a8 Sleep — Jean-Luc Picard
---- -
-Source: garmin
+--- chunk 0
+title: Sleep — Jean-Luc Picard | text: Source: garmin
 
 Sleep — Jean-Luc Picard
 
@@ -169,9 +165,10 @@ Sleep — Jean-Luc Picard
 
 | Day | Sleep score | Asleep (h:mm) | Deep (h:mm) | Light (h:mm) | REM (h:mm) | Awake (h:mm) |
 | Mon Apr 14th, 2369 | 84 | 7:20 | 1:30 | 4:10 | 1:30 | 0:10 |
+
 === garmin 0b75af5a-2640-8ac4-895d-bc5b29c8a0e7 Holodeck run: Dixon Hill
---- -
-Source: garmin
+--- chunk 0
+title: Holodeck run: Dixon Hill | text: Source: garmin
 
 Holodeck run: Dixon Hill
 
@@ -187,9 +184,10 @@ Holodeck run: Dixon Hill
 | Device | Forerunner 265 |
 | Original FIT file | kept |
 | Garmin activity id | 17010413001 |
+
 === garmin 0b75b6c5-de60-825f-9377-d4c871ea50f0 Cycling: Deck 12 to Engineering
---- -
-Source: garmin
+--- chunk 0
+title: Cycling: Deck 12 to Engineering | text: Source: garmin
 
 Cycling: Deck 12 to Engineering
 

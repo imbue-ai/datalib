@@ -3,8 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === yolink 00000000-0000-882b-9a1a-116060d6a7ed yolink storage
---- -
-Source: datalib
+--- chunk 0
+title: yolink storage | text: Source: datalib
 
 # yolink — storage
 
@@ -16,9 +16,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `yolink/ingest/entities.doltlite_db#coverage` |  | 0 rows | `00000000` |
 | Table | ingest | `yolink/ingest/entities.doltlite_db#yolink_devices` |  | 4 rows | `00000000` |
 | Table | ingest | `yolink/ingest/entities.doltlite_db#yolink_readings` |  | 2304 rows | `00000000` |
+
 === yolink 00000000-0000-8bfa-9046-e6e84f594bf2 YoLink sensors — yolink
---- -
-Source: yolink
+--- chunk 0
+title: YoLink sensors — yolink | text: Source: yolink
 
 YoLink sensors — yolink
 
@@ -49,7 +50,6 @@ Per-sample consumption, and the meter's lifetime total on a chart of its own.
 ## Devices
 
 Per-device read credentials (`family_device_id`, `device_udid`) are deliberately omitted: the pair grants access to that device's entire history.
---- 00000000-0000-8b59-84d5-1f5a9303f5f8
 ### deck_12_water_main
 
 *watermeter · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
@@ -57,7 +57,6 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
 | `water_consumption_gal` | L | 288 | 0.000 | 12.613 | 5.917 | 5.205 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `water_meter_gal` | L | 288 | 30667.635 | 32365.967 | 31592.693 | 32365.967 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
---- 00000000-0000-81b2-aa2e-04f4bb40e79c
 ### sickbay_plasma_fridge
 
 *temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
@@ -65,7 +64,6 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
 | `humidity_pct` | %RH | 288 | 28.347 | 36.343 | 32.372 | 34.824 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `temperature_f` | °C | 288 | 5.362 | 8.360 | 6.861 | 6.861 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
---- 00000000-0000-8532-b55e-4c829ebad978
 ### stasis_unit_alpha
 
 *temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
@@ -73,7 +71,6 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
 | `humidity_pct` | %RH | 288 | 58.324 | 76.318 | 67.694 | 58.680 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `temperature_c` | °C | 288 | -20.757 | -16.357 | -18.557 | -18.844 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
---- 00000000-0000-872a-a430-a3e02e00742e
 ### ten_forward_cooler
 
 *temperature_humidity · configured from Mon Apr 14th, 2369 at 00:00 · last reading Mon Apr 14th, 2369 at 23:55*
@@ -81,7 +78,10 @@ Per-device read credentials (`family_device_id`, `device_udid`) are deliberately
 | Metric | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
 | `humidity_pct` | %RH | 288 | 34.261 | 46.256 | 40.415 | 46.139 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
 | `temperature_c` | °C | 288 | 1.381 | 4.966 | 3.240 | 3.824 | Mon Apr 14th, 2369 at 00:00 | Mon Apr 14th, 2369 at 23:55 | 5.0m |
---- -
+
+--- chunk 1
+title: YoLink sensors — yolink | text: Source: yolink
+
 ## Store
 
 | Readings | 2,304 |

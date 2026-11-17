@@ -3,29 +3,28 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === notion 00000000-0000-83c9-9b62-3a0c19713d6c Bridge Operations Handbook
---- -
-Source: Notion
+--- chunk 0
+title: Bridge Operations Handbook | text: Source: Notion
 
 > The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.
---- 0b75b878-be80-8789-947e-32dbd1d21be8
 Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:00
 
 Recommend we lower sensor gain to avoid tipping off the Romulans.
---- 0b75b87d-5260-8b4d-85ae-d86bbfcc6a45
 Data <data@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:05
 
 Concur, Commander. Reducing gain by 30%.
+
 === notion 00000000-0000-86d5-851e-a6d36ec0864a Bridge Operations Handbook
---- -
---- 0b75b881-e640-8c48-8004-7b48d5b94f90
-Source: Notion
+--- chunk 0
+title: Bridge Operations Handbook | text: Source: Notion
 
 Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:10
 
 Make it so.
+
 === notion 00000000-0000-8770-8cbd-edbb96f9dca9 notion storage
---- -
-Source: datalib
+--- chunk 0
+title: notion storage | text: Source: datalib
 
 # notion — storage
 
@@ -46,9 +45,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `notion/ingest/entities.doltlite_db#pages` |  | 3 rows | `00000000` |
 | Table | ingest | `notion/ingest/entities.doltlite_db#tree` |  | 3 rows | `00000000` |
 | Table | ingest | `notion/ingest/entities.doltlite_db#users` |  | 4 rows | `00000000` |
+
 === notion 0b75b842-ba60-80f0-ab79-7448df7f2124 Incident Log: Stardate 47988.1
---- -
-Source: Notion
+--- chunk 0
+title: Incident Log: Stardate 47988.1 | text: Source: Notion
 
 Incident Log: Stardate 47988.1
 
@@ -70,6 +70,10 @@ Reviewing tickets logged against the warp coil since Tue Apr 8th, 2369. Geordi L
    1. Bring the injector trace.
    2. Bring the holodeck override log.
 
+
+--- chunk 1
+title: Incident Log: Stardate 47988.1 | text: Source: Notion
+
 ## Reflection
 
 > There are four lights.
@@ -79,9 +83,10 @@ Reminder of yesterday's tactical drill — see Bridge Operations Handbook for st
 ---
 
 End of log. Signed: **William T. Riker, First Officer.**
+
 === notion 0b75b842-ba60-8131-881b-f4b981d5c44a Bridge Operations Handbook
---- -
-Source: Notion
+--- chunk 0
+title: Bridge Operations Handbook | text: Source: Notion
 
 Bridge Operations Handbook
 
@@ -110,6 +115,10 @@ The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Co
 | Ops | Lieutenant Commander Data |
 
 ---
+
+
+--- chunk 1
+title: Bridge Operations Handbook | text: Source: Notion
 
 ## Standing Orders
 
@@ -140,9 +149,10 @@ Treaty of Algeron
 📄 Shift Roster
 
 📄 Incident Log: Stardate 47988.1
+
 === notion 0b75b842-ba60-88dd-b090-baf44d88db59 Shift Roster
---- -
-Source: Notion
+--- chunk 0
+title: Shift Roster | text: Source: Notion
 
 Shift Roster
 

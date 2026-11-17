@@ -3,38 +3,43 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === sms-backup-restore 00000000-0000-85d9-b5a3-420c27c71680 Geordi La Forge
---- 0b75ba9e-0f80-8ad5-8bd8-d3e3fd659bed
-Me — Tue 15 Apr 2369 11:00
+--- chunk 0
+title: Geordi La Forge | text: Me — Tue 15 Apr 2369 11:00
 
 Geordi, I need warp speed in three minutes.
 
+
 === sms-backup-restore 00000000-0000-8709-8732-c5f02579e8d6 Deanna Troi
---- 0b75b781-8d40-89bb-8299-ebbc766db091
-Deanna Troi <+12025550103> — Mon 14 Apr 2369 20:30
+--- chunk 0
+title: Deanna Troi | text: Deanna Troi <+12025550103> — Mon 14 Apr 2369 20:30
 
 Outgoing call — Deanna Troi (4:00)
 
+
 === sms-backup-restore 00000000-0000-8a32-861f-a85bca667a83 Worf
---- 0b75b74a-9ec0-83ec-af8b-969533e62bc5
-Worf <+12025550102> — Mon 14 Apr 2369 19:30
+--- chunk 0
+title: Worf | text: Worf <+12025550102> — Mon 14 Apr 2369 19:30
 
 Missed call — Worf
 
---- 0b75ba67-2100-8288-a8b2-df54cf9b6b1c
-Worf <+12025550102> — Tue 15 Apr 2369 10:00
+
+--- chunk 1
+title: Worf | text: Worf <+12025550102> — Tue 15 Apr 2369 10:00
 
 Today is a good day to die.
 
---- 0b75ba68-0b60-887e-b930-8855bf9650de
-Worf <+12025550102> — Tue 15 Apr 2369 10:01
+
+--- chunk 2
+title: Worf | text: Worf <+12025550102> — Tue 15 Apr 2369 10:01
 
 Bat'leth practice at 0700.
 
 batleth.gif
 
+
 === sms-backup-restore 00000000-0000-8a35-a540-630d0aa1cfba sms-backup-restore storage
---- -
-Source: datalib
+--- chunk 0
+title: sms-backup-restore storage | text: Source: datalib
 
 # sms-backup-restore — storage
 
@@ -50,31 +55,36 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_attachments` |  | 3 rows | `00000000` |
 | Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_calls` |  | 3 rows | `00000000` |
 | Table | ingest | `sms-backup-restore/ingest/entities.doltlite_db#sms_messages` |  | 7 rows | `00000000` |
+
 === sms-backup-restore 00000000-0000-8c57-9571-2bd28212d376 Jean-Luc Picard
---- 0b75b713-b040-84e2-aa8e-c1c59f7a1ca4
-Jean-Luc Picard <+12025550101> — Mon 14 Apr 2369 18:30
+--- chunk 0
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Mon 14 Apr 2369 18:30
 
 Incoming call — Jean-Luc Picard (1:35)
 
---- 0b75ba30-3280-85bd-b058-e3f81fd3f403
-Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:00
+
+--- chunk 1
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:00
 
 Make it so. 🚀
 
---- 0b75ba31-1ce0-8607-a757-33aa9851eb7b
-Me — Tue 15 Apr 2369 09:01
+
+--- chunk 2
+title: Jean-Luc Picard | text: Me — Tue 15 Apr 2369 09:01
 
 Aye, Captain.
 
---- 0b75ba32-0740-8993-adf7-73c1d3d06442
-Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:02
+
+--- chunk 3
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Tue 15 Apr 2369 09:02
 
 The Enterprise approaches.
 
 viewscreen.png
 
---- 0b75ba32-f1a0-824c-915f-32273472fad4
-Me <+12025550100> — Tue 15 Apr 2369 09:03
+
+--- chunk 4
+title: Jean-Luc Picard | text: Me <+12025550100> — Tue 15 Apr 2369 09:03
 
 Captain's log, supplemental.
 

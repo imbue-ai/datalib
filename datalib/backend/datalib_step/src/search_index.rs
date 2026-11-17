@@ -680,6 +680,7 @@ mod tests {
             markdown_uuid: "d".into(),
             content_hash: "h".into(),
             title: "T".into(),
+            head: None,
             sections: text::draw(
                 &[Piece {
                     text: "hello".into(),

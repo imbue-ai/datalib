@@ -3,8 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === ship-air 00000000-0000-8376-8138-98b5e3d7ae50 ship-air storage
---- -
-Source: datalib
+--- chunk 0
+title: ship-air storage | text: Source: datalib
 
 # ship-air — storage
 
@@ -18,9 +18,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_samples` |  | 81 rows | `00000000` |
 | Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_unplaced_samples` |  | 2 rows | `00000000` |
 | Table | ingest | `ship-air/ingest/entities.doltlite_db#ingested_files` |  | 9 rows | `00000000` |
+
 === ship-air 00000000-0000-88da-b36e-289718ab00fd AirVisual monitors — ship-air
---- -
-Source: airvisual
+--- chunk 0
+title: AirVisual monitors — ship-air | text: Source: airvisual
 
 AirVisual monitors — ship-air
 
@@ -60,8 +61,11 @@ Relative humidity is already a dimensionless ratio — no conversion applies.
 
 2 series · 69 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
+
+--- chunk 1
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
 ## Devices
---- 00000000-0000-88c0-b6ee-3210db9c4ed5
 ### Sickbay
 
 *serial `SICKBAY01` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Denver · last sample Sun Sep 1st, 2024 at 11:25*
@@ -77,7 +81,6 @@ Relative humidity is already a dimensionless ratio — no conversion applies.
 | `pm1_ugm3` | µg/m³ | 34 | 1.0 | 145.4 | 14.2 | 1.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 | `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 | `temperature_c` | °C | 35 | 22.0 | 22.3 | 22.2 | 22.1 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
---- 00000000-0000-8e1d-8ce6-ca9fcdd15aaf
 ### Ten Forward
 
 *serial `TENFWD10X` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Los_Angeles · last sample Sun Nov 3rd, 2024 at 11:45*
@@ -93,7 +96,10 @@ Relative humidity is already a dimensionless ratio — no conversion applies.
 | `pm1_ugm3` | µg/m³ | 38 | 1.0 | 6.2 | 2.7 | 1.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 | `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 | `temperature_c` | °C | 38 | 21.0 | 23.5 | 22.0 | 21.5 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
---- -
+
+--- chunk 2
+title: AirVisual monitors — ship-air | text: Source: airvisual
+
 ## Store
 
 | Samples | 81 |

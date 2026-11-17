@@ -3,32 +3,25 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === google-drive 00000000-0000-8602-beba-b894e74a00cd Captain's log, stardate 41153.7
---- -
-Source: Google Drive
+--- chunk 0
+title: Captain's log, stardate 41153.7 | text: Source: Google Drive
 
 Captain's log, stardate 41153.7
---- -
 # Captain's log, stardate 41153.7
 
 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy. **Commander Riker** will join us at Farpoint Station.
---- -
 💬 3 comments · resolved on “beyond which lies the great unexplored mass”
 
 > beyond which lies the great unexplored mass
---- 0b75a070-6680-8cc2-9ce1-272f21bcee82
 ## Geordi La Forge Thu Apr 10th, 2369 at 09:00
 
 Deneb IV's orbit is stable; I've checked twice.
---- 0b75a079-8e40-8558-9fb7-57f19b63173a
 ## Jean-Luc Picard <picard@enterprise.starfleet> Thu Apr 10th, 2369 at 09:10
 
 Make it so.
---- 0b75a08b-ddc0-8fc5-bf17-66d295bf7908
 ## Jean-Luc Picard <picard@enterprise.starfleet> Thu Apr 10th, 2369 at 09:30
 
 *resolved the thread*
---- -
---- -
 ## Away team
 
 Led by William Riker <riker@enterprise.starfleet>, per the Away team protocols.
@@ -38,16 +31,16 @@ Led by William Riker <riker@enterprise.starfleet>, per the Away team protocols.
 - Data, operations
 1. Beam down
 1. Report to the bridge
---- -
 💬 1 comment on “Phaser on stun”
 
 > Phaser on stun
---- 0b75a5cd-b100-843c-a987-eaee55760165
+
+--- chunk 1
+title: Captain's log, stardate 41153.7 | text: Source: Google Drive
+
 ## Data Fri Apr 11th, 2369 at 10:00
 
 Stun only. Q is watching.
---- -
---- -
 | Station | Officer |
 | Conn | Wesley Crusher |
 
@@ -61,21 +54,17 @@ def engage(warp):
 The Q entity1 put us on trial for the crimes of humanity. We are not amused.
 
 1 Self-described.
---- -
 ## Comments not tied to the text
---- -
 💬 1 comment
---- 0b75ab2a-fb80-8310-993b-c47a37ec481d
 ## Deanna Troi Sat Apr 12th, 2369 at 11:00
 
 Send this to Starfleet Command when done.
---- -
+
 === google-drive 00000000-0000-868f-8a6f-73021b82d3b0 Engineering notes
---- -
-Source: Google Drive
+--- chunk 0
+title: Engineering notes | text: Source: Google Drive
 
 Engineering notes
---- -
 # Warp core
 
 Dilithium matrix realigned. *Do not* vent the plasma.
@@ -83,9 +72,10 @@ Dilithium matrix realigned. *Do not* vent the plasma.
 # Holodeck
 
 Program 3 needs a safety interlock.
+
 === google-drive 00000000-0000-8a71-9138-d94e886d12d7 google-drive storage
---- -
-Source: datalib
+--- chunk 0
+title: google-drive storage | text: Source: datalib
 
 # google-drive — storage
 

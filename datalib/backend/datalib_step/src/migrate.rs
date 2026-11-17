@@ -648,6 +648,7 @@ mod tests {
                     markdown_uuid: "d".into(),
                     content_hash: key,
                     title: "Ten Forward".into(),
+                    head: None,
                     sections: Vec::new(),
                 }])
                 .await

@@ -48,11 +48,19 @@ pub struct Prompted {
 }
 
 /// Each chunk of a document's sections with its prompt: the chunk's text,
-/// after the lead of the item it starts inside, so a piece cut from the
-/// middle of a long message still says who wrote it and when. The keyword
-/// pass files chunks by these hashes and the embed pass embeds these
-/// prompts, so the two never disagree.
-pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> {
+/// after the document's head (a page's facts line) and the lead of the
+/// item it starts inside, so a piece cut from the middle of a long page
+/// still says what the page is, and one from a long message who wrote it
+/// and when. The document's text opens with its head, so the first chunk
+/// is not given it twice, and a chunk holding the head alone is dropped:
+/// every other chunk says it. The keyword pass files chunks by these
+/// hashes and the embed pass embeds these prompts, so the two never
+/// disagree.
+pub fn prompted(
+    title: &str,
+    head: Option<&str>,
+    sections: &[crate::IndexSection],
+) -> Vec<Prompted> {
     let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
     let items: Vec<bool> = sections.iter().map(|s| s.lead.is_some()).collect();
     let whole = texts.concat();
@@ -62,16 +70,25 @@ pub fn prompted(title: &str, sections: &[crate::IndexSection]) -> Vec<Prompted> 
         starts.push(at);
         at += t.len();
     }
-    chunks_within(&texts, &items, MAX_BYTES, OVERLAP_BYTES)
+    let head = head.map(str::trim).filter(|h| !h.is_empty());
+    let mut chunks = chunks_within(&texts, &items, MAX_BYTES, OVERLAP_BYTES);
+    if chunks.len() > 1 {
+        chunks.retain(|c| Some(whole[c.start..c.end].trim()) != head);
+    }
+    chunks
         .into_iter()
         .map(|chunk| {
             let span = &whole[chunk.start..chunk.end];
-            let text = match &sections[chunk.first_section].lead {
-                Some(lead) if chunk.start > starts[chunk.first_section] => {
-                    format!("{lead}\n\n{span}")
-                }
-                _ => span.to_string(),
-            };
+            let lead = sections[chunk.first_section]
+                .lead
+                .as_deref()
+                .filter(|_| chunk.start > starts[chunk.first_section]);
+            let head = head.filter(|_| chunk.start > 0);
+            let text: String = [head, lead, Some(span)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n\n");
             Prompted {
                 chunk,
                 hash: chunk_hash(title, &text),
@@ -231,13 +248,73 @@ mod tests {
             text: format!("{lead}\n\n{body}\n\n"),
             lead: Some(lead.clone()),
         }];
-        let got = prompted("Ten Forward", &sections);
+        let got = prompted("Ten Forward", None, &sections);
         assert!(got.len() > 1, "{} chunks", got.len());
         for (i, p) in got.iter().enumerate() {
             let text = p.prompt.split(" | text: ").nth(1).unwrap();
             assert!(text.starts_with(&lead), "chunk {i}: {text:.80}");
             assert_eq!(text.matches(lead.as_str()).count(), 1, "chunk {i}");
             assert_eq!(p.hash, chunk_hash("Ten Forward", text));
+        }
+    }
+
+    fn page_text(prompt: &str) -> &str {
+        prompt.split(" | text: ").nth(1).unwrap()
+    }
+
+    /// A long page's facts line was only in its first chunk, so the rest
+    /// of the page was embedded without saying what it was (its source,
+    /// repository, calendar). Every chunk now opens with it, once.
+    #[test]
+    fn every_chunk_of_a_long_page_opens_with_its_facts() {
+        let head = "Source: github\nRepository: ncc-1701/engineering";
+        let body = "Recalibrate the warp coils before the next run.\n\n".repeat(200);
+        let sections = vec![crate::IndexSection {
+            uuid: None,
+            text: format!("{head}\n\n{body}"),
+            lead: None,
+        }];
+        let got = prompted("Warp core tuning", Some(head), &sections);
+        assert!(got.len() > 2, "{} chunks", got.len());
+        for (i, p) in got.iter().enumerate() {
+            let text = page_text(&p.prompt);
+            assert!(text.starts_with(head), "chunk {i}: {text:.80}");
+            assert_eq!(text.matches(head).count(), 1, "chunk {i}");
+            assert_eq!(p.hash, chunk_hash("Warp core tuning", text));
+        }
+    }
+
+    /// A page whose heading opens a piece longer than a chunk: the facts
+    /// line before the heading stood as a chunk of its own, saying nothing
+    /// but the facts. It goes, and the chunks after carry the facts.
+    #[test]
+    fn a_chunk_holding_only_the_facts_is_dropped() {
+        let head = "Source: datalib";
+        let table = "| Table | `ingest/entities.doltlite_db#crew` | 1701 rows |\n".repeat(120);
+        let sections = vec![
+            crate::IndexSection {
+                uuid: None,
+                text: String::new(),
+                lead: None,
+            },
+            crate::IndexSection {
+                uuid: None,
+                text: format!("{head}\n\n# enterprise — storage\n\n{table}"),
+                lead: None,
+            },
+        ];
+        let with_head = prompted("enterprise storage", Some(head), &sections);
+        let without = prompted("enterprise storage", None, &sections);
+        assert_eq!(
+            page_text(&without[0].prompt).trim(),
+            head,
+            "the case staged"
+        );
+        assert_eq!(with_head.len(), without.len() - 1);
+        for (i, p) in with_head.iter().enumerate() {
+            let text = page_text(&p.prompt);
+            assert!(text.starts_with(head), "chunk {i}: {text:.80}");
+            assert_ne!(text.trim(), head, "chunk {i}");
         }
     }
 

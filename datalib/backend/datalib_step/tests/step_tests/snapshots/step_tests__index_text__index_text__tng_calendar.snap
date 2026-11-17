@@ -3,9 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === tng_calendar 00000000-0000-80a6-93ad-832002566f74 Warp core maintenance
---- -
---- 00000000-0000-80a6-93ad-832002566f74
-Source: calendar
+--- chunk 0
+title: Warp core maintenance | text: Source: calendar
 Kind: Recurring Event
 Calendar: Engineering
 
@@ -39,10 +38,10 @@ Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
 ## Links
 
 - Core checklist.pdf
+
 === tng_calendar 00000000-0000-81a3-9b5c-946dc4b441a8 Starfleet Academy guest lecture: first contact protocols
---- -
---- 00000000-0000-81a3-9b5c-946dc4b441a8
-Source: calendar
+--- chunk 0
+title: Starfleet Academy guest lecture: first contact protocols | text: Source: calendar
 Kind: Changed Occurrence
 Calendar: Bridge
 
@@ -59,10 +58,10 @@ Starfleet Academy guest lecture: first contact protocols
 
 | Who | Response |
 | Jean-Luc Picard <picard@enterprise.test> | Accepted |
+
 === tng_calendar 00000000-0000-8470-8240-1b4ee2c9889a Shore leave on Risa
---- -
---- 00000000-0000-8470-8240-1b4ee2c9889a
-Source: calendar
+--- chunk 0
+title: Shore leave on Risa | text: Source: calendar
 Kind: Event
 Calendar: Bridge
 
@@ -77,10 +76,10 @@ Shore leave on Risa
 ## Description
 
 Horga'hn optional.
+
 === tng_calendar 00000000-0000-8488-9b56-8b957035e673 Senior staff briefing
---- -
---- 00000000-0000-8488-9b56-8b957035e673
-Source: calendar
+--- chunk 0
+title: Senior staff briefing | text: Source: calendar
 Kind: Recurring Event
 Calendar: Bridge
 
@@ -121,10 +120,10 @@ Cancelled:
 
 - Mon Feb 9th, 2026 at 09:00
 - Thu Apr 2nd, 2026 at 09:00
+
 === tng_calendar 00000000-0000-872d-a4f4-3355175938a9 Officers' poker night
---- -
---- 00000000-0000-872d-a4f4-3355175938a9
-Source: calendar
+--- chunk 0
+title: Officers' poker night | text: Source: calendar
 Kind: Recurring Event
 Calendar: Bridge
 
@@ -140,10 +139,10 @@ Officers' poker night
 ## Occurrences
 
 Rule: `RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TH`
+
 === tng_calendar 00000000-0000-87f7-ac79-138f8424fdb5 Senior staff briefing — Borg incursion
---- -
---- 00000000-0000-87f7-ac79-138f8424fdb5
-Source: calendar
+--- chunk 0
+title: Senior staff briefing — Borg incursion | text: Source: calendar
 Kind: Changed Occurrence
 Calendar: Bridge
 
@@ -168,10 +167,10 @@ Senior staff briefing — Borg incursion
 ## Description
 
 Moved to Main Engineering so Commander La Forge can show the new shield modulations.
+
 === tng_calendar 00000000-0000-8899-a213-737545dc9ea2 Dilithium shipment arrives
---- -
---- 00000000-0000-8899-a213-737545dc9ea2
-Source: calendar
+--- chunk 0
+title: Dilithium shipment arrives | text: Source: calendar
 Kind: Event
 Calendar: Engineering
 
@@ -183,10 +182,10 @@ Dilithium shipment arrives
 | Status | Tentative |
 | Added | Tue Sep 15th, 2026 at 08:00 |
 | Last changed | Wed Sep 16th, 2026 at 09:00 |
+
 === tng_calendar 00000000-0000-891b-9146-098a54f0815e Reception for the Klingon delegation
---- -
---- 00000000-0000-891b-9146-098a54f0815e
-Source: calendar
+--- chunk 0
+title: Reception for the Klingon delegation | text: Source: calendar
 Kind: Event
 Calendar: Bridge
 
@@ -212,9 +211,10 @@ Reception for the Klingon delegation
 Ambassador K'Ehleyr arrives at 1900. Formal uniforms.
 
 Worf has asked that no one serve gagh.
+
 === tng_calendar 00000000-0000-891c-9fb1-f32c436d1ae4 tng_calendar storage
---- -
-Source: datalib
+--- chunk 0
+title: tng_calendar storage | text: Source: datalib
 
 # tng_calendar — storage
 
@@ -232,10 +232,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `tng_calendar/ingest/entities.doltlite_db#google_events` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_calendar/ingest/entities.doltlite_db#ics_objects` |  | 8 rows | `00000000` |
 | Table | ingest | `tng_calendar/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | `00000000` |
+
 === tng_calendar 00000000-0000-8eca-8033-c38531904ecf Data's activation day
---- -
---- 00000000-0000-8eca-8033-c38531904ecf
-Source: calendar
+--- chunk 0
+title: Data's activation day | text: Source: calendar
 Kind: Recurring Event
 Calendar: Engineering
 

@@ -1,8 +1,9 @@
-//! What search sees of the fixture, one snapshot per source: a change to a
-//! renderer or to the drawing (`search_index/src/text.rs`) that moves the
-//! text the index holds and embeds shows up here in review, rather than as
-//! a search that quietly finds less. Drawn by `datalib-step index-text`,
-//! the command a person runs, over the fixture's rendered root.
+//! What search sees of the fixture, one snapshot per source: every chunk
+//! of every document, as the prompt the model embeds. A change to a
+//! renderer, to the drawing (`search_index/src/text.rs`) or to where
+//! chunks fall (`chunk.rs`) shows up here in review, rather than as a
+//! search that quietly finds less. Drawn by `datalib-step index-text
+//! --chunks`, the command a person runs, over the fixture's rendered root.
 
 use std::collections::BTreeMap;
 use std::process::Command;
@@ -17,6 +18,7 @@ fn every_sources_index_text_is_this() {
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .arg("index-text")
         .arg(td.path().join("qmd"))
+        .arg("--chunks")
         .output()
         .unwrap();
     assert!(
@@ -35,7 +37,7 @@ fn every_sources_index_text_is_this() {
         by_source
             .entry(source.clone())
             .or_default()
-            .push_str(&without_sizes(line));
+            .push_str(&without_sizes(&without_hash(line)));
     }
     assert!(
         by_source.len() >= 20,
@@ -44,6 +46,18 @@ fn every_sources_index_text_is_this() {
     );
     for (source, text) in by_source {
         insta::assert_snapshot!(format!("index_text__{source}"), text);
+    }
+}
+
+/// `--- chunk 3 <hash>` as `--- chunk 3`: the hash is of the prompt below
+/// it, sizes and all, so it moves with a size the snapshot hides.
+fn without_hash(line: &str) -> String {
+    match line.strip_prefix("--- chunk ") {
+        Some(rest) => format!(
+            "--- chunk {}\n",
+            rest.split(' ').next().unwrap_or_default().trim_end()
+        ),
+        None => line.to_string(),
     }
 }
 

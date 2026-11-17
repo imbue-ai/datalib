@@ -3,43 +3,49 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === slack 00000000-0000-8087-98c3-35796eae6f68 #ten-forward
---- 0b7698fa-7fc0-89d7-af94-d89a1724367f
-William T. Riker — Wed 28 May 2369 15:16
+--- chunk 0
+title: #ten-forward | text: William T. Riker — Wed 28 May 2369 15:16
 
 Anyone up for poker tonight?
 
---- 0b7698fc-0660-889a-8ed4-b5b9b5c39786
-Worf — Wed 28 May 2369 15:18
+
+--- chunk 1
+title: #ten-forward | text: Worf — Wed 28 May 2369 15:18
 
 I do not understand the appeal of this Earth game.
 
+
 === slack 00000000-0000-80d6-b5a5-2617d0679dab @William T. Riker, Worf
---- 0b7698ff-2340-8846-8c6a-4796fd32ae08
-Jean-Luc Picard — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker, Worf | text: Jean-Luc Picard — Wed 28 May 2369 15:21
 
 Noted, Mr. Worf. Phasers on stun.
 
+
 === slack 00000000-0000-8119-8c96-61dfdcca24d4 #bridge
---- 0b769903-a780-8b46-b987-b030e43d4ae0
-William T. Riker — Wed 28 May 2369 15:26
+--- chunk 0
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:26
 
 Shields up. Red alert.
 
+
 === slack 00000000-0000-811d-904c-516d04a43f68 #bridge
---- 0b7698fd-8d00-84ad-8dc9-0a79dbe69904
-Lt. Cmdr. Data — Wed 28 May 2369 15:20
+--- chunk 0
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:20
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
 
+
 === slack 00000000-0000-81d7-a9c9-0ee77752a4e6 #engineering
---- 0b7698f8-f920-898c-8557-00e23e5954e1
-Lt. Cmdr. Data — Wed 28 May 2369 15:15
+--- chunk 0
+title: #engineering | text: Lt. Cmdr. Data — Wed 28 May 2369 15:15
 
 Warp core efficiency at 99.7%.
 
+
 === slack 00000000-0000-828b-b39d-73c49d6cb65c slack storage
---- -
-Source: datalib
+--- chunk 0
+title: slack storage | text: Source: datalib
 
 # slack — storage
 
@@ -63,62 +69,72 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | `00000000` |
+
 === slack 00000000-0000-84d6-b1f0-0b22f0528e5c #bridge
---- 0b7698f2-dea0-84c2-a732-f51e3d0eed12
-Jean-Luc Picard — Wed 28 May 2369 15:08
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:08
 
 Mr. Data, status report.
 
---- 0b7698f4-6540-8740-8097-5bd209562812
-Lt. Cmdr. Data — Wed 28 May 2369 15:10
+
+--- chunk 1
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:10
 
 All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
 
---- 0b7698f5-ebe0-8636-907d-ec3c06dd8caf
-William T. Riker — Wed 28 May 2369 15:11
+
+--- chunk 2
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:11
 
 Set a course, Mr. Data. Warp factor five.
 
---- 0b769902-20e0-82a9-bcd1-b91ee7c07e1d
-Worf — Wed 28 May 2369 15:25
+
+--- chunk 3
+title: #bridge | text: Worf — Wed 28 May 2369 15:25
 
 Long-range sensors confirm it, Captain: a Warbird, decloaking.
 
+
 === slack 00000000-0000-8630-8d5e-f4aae259bc1c @William T. Riker
---- 0b7698ff-13a0-808c-b7ce-cea9b1aeadd7
-William T. Riker — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker | text: William T. Riker — Wed 28 May 2369 15:21
 
 Captain, the away team roster is ready for your review.
 
+
 === slack 00000000-0000-89a0-9bd6-7e928c9b2396 @Lt. Cmdr. Data
---- 0b7698ff-1b70-8b07-b467-aa4ec3751924
-Lt. Cmdr. Data — Wed 28 May 2369 15:21
+--- chunk 0
+title: @Lt. Cmdr. Data | text: Lt. Cmdr. Data — Wed 28 May 2369 15:21
 
 Sir, I have completed my analysis of the Romulan signature.
 
+
 === slack 00000000-0000-8ac1-a181-7b8e737cbd85 @William T. Riker
---- 0b7698ff-1788-803e-99f1-66c2a1e051e2
-Jean-Luc Picard — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker | text: Jean-Luc Picard — Wed 28 May 2369 15:21
 
 Thank you, Number One. Make it so.
 
+
 === slack 00000000-0000-8b0f-9140-61eaa37493ff #bridge
---- 0b7698fc-0660-82bf-8e80-6e3a63abace6
-Jean-Luc Picard — Wed 28 May 2369 15:18
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:18
 
 New combadge prototypes — thoughts?
 
 🖼 *[Delta shield prototype (not yet fetched)]*
 *(source: https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)*
 
+
 === slack 00000000-0000-8bff-b36c-0096661fd9fa #bridge
---- 0b7698f7-7280-8ed4-adc1-7d90bde8bac5
-Worf — Wed 28 May 2369 15:13
+--- chunk 0
+title: #bridge | text: Worf — Wed 28 May 2369 15:13
 
 I recommend raising shields **now**, Captain.
 
+
 === slack 00000000-0000-8d9c-9316-43944fcd9e60 @William T. Riker, Worf
---- 0b7698ff-1f58-8154-ac8f-29f1f51d27f8
-Worf — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker, Worf | text: Worf — Wed 28 May 2369 15:21
 
 @Jean-Luc Picard, I must object to beaming down unarmed.

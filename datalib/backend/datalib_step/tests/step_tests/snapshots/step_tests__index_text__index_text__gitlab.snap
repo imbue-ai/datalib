@@ -3,8 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === gitlab 00000000-0000-8b91-8399-3668763e7fba gitlab storage
---- -
-Source: datalib
+--- chunk 0
+title: gitlab storage | text: Source: datalib
 
 # gitlab — storage
 
@@ -18,9 +18,10 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `gitlab/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | `00000000` |
 | Table | ingest | `gitlab/ingest/entities.doltlite_db#merge_requests` |  | 2 rows | `00000000` |
 | Table | ingest | `gitlab/ingest/entities.doltlite_db#self_identity` |  | 1 row | `00000000` |
+
 === gitlab 0b75b9f9-4400-887d-bae6-937c2e6ee3a6 Add Earl Grey, hot to replicator menu
---- -
-Source: gitlab
+--- chunk 0
+title: Add Earl Grey, hot to replicator menu | text: Source: gitlab
 Project: enterprise-d/holodeck
 Merge request: 17
 State: merged
@@ -33,29 +34,24 @@ Add Earl Grey, hot to replicator menu (!17)
 *merged* — Jean-Luc Picard — `picard/earl-grey` → `main`
 
 ## Description
---- 0b75b9f9-4400-887d-bae6-937c2e6ee3a6
 Tea. Earl Grey. Hot.
---- -
 ## General discussion
---- 0b75ba6b-b4e0-8d87-b39b-6e62030598db
 Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 10:05
 
 Adopted. Make it so.
---- 0b75ba82-9840-81d6-88bc-01156ea95dd6
 Worf · Tue Apr 15th, 2369 at 10:30
 
 I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.
---- -
 ## Inline comments
 
 ### `src/replicator/menu.rs:88`
---- 0b75ba67-2100-8cc2-a0d4-510cce260212
 William T. Riker · Tue Apr 15th, 2369 at 10:00
 
 Use `enum Tea { EarlGrey, Chamomile, ... }` here rather than a string match — it'll catch typos at compile time.
+
 === gitlab 0b75bad4-fe00-8155-aa7c-9db9f663482a Holodeck safety interlock regression test
---- -
-Source: gitlab
+--- chunk 0
+title: Holodeck safety interlock regression test | text: Source: gitlab
 Project: enterprise-d/holodeck
 Merge request: 18
 State: opened
@@ -68,27 +64,20 @@ Holodeck safety interlock regression test (!18)
 *opened* — Jean-Luc Picard — `picard/safety-regression` → `main`
 
 ## Description
---- 0b75bad4-fe00-8155-aa7c-9db9f663482a
 Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.
---- -
 ## General discussion
---- 0b75bb4c-02c0-816b-93e3-fa09181a699d
 Geordi La Forge *(reply)* · Tue Apr 15th, 2369 at 14:10
 
 Agreed — I can wire that into the simulator harness if Data writes the assertion.
---- 0b75bb55-2a80-8a4c-abf0-af3670ee359e
 Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 14:20
 
 Concur. Make it so.
---- 0b75bb5e-5240-8a34-b5b2-12c9558a6379
 Beverly Crusher · Tue Apr 15th, 2369 at 14:30
 
 Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
---- -
 ## Inline comments
 
 ### `tests/safety.rs:42`
---- 0b75bb42-db00-8df2-988c-d4c436597bec
 Lt. Cmdr. Data · Tue Apr 15th, 2369 at 14:00
 
 The assertion only checks the safety flag *before* arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).

@@ -10,6 +10,7 @@ fn doc(uuid: &str, hash: &str, title: &str, sections: &[(Option<&str>, &str)]) -
         markdown_uuid: uuid.into(),
         content_hash: hash.into(),
         title: title.into(),
+        head: None,
         sections: sections
             .iter()
             .map(|(uuid, text)| IndexSection {
