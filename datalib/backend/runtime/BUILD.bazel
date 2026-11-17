@@ -2,10 +2,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
-    # Canonical version constants, read by //tools:version_pins_test
-    # (and by //tools:qmd_model_cache_path_test for the qmd one).
-    "src/node_runtime.rs",  # LATCHKEY_VERSION
-    "src/qmd.rs",  # DEFAULT_QMD_VERSION
+    "src/node_runtime.rs",  # LATCHKEY_VERSION, read by //tools:version_pins_test
+    "src/qmd.rs",  # the model pins, read by //tools:qmd_model_pins_test
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary

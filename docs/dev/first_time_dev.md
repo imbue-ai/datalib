@@ -15,9 +15,9 @@ brew install bazelisk
 # it on the Python the repo pins. The build and the tests do not use it.
 brew install uv
 
-# That is all: Node, qmd and latchkey are Bazel inputs, so the build
+# That is all: Node and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
-# latchkey and qmd through a staged `runtime/` tree (the dev launchers
+# latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
 # A sync's first `embed` step fetches the pinned embedding model,
 # sha256-verified, into qmd's cache (`~/.cache/qmd/models`).
@@ -86,7 +86,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
-  doltlite DB, renders one Markdown file per conversation, builds a qmd
+  doltlite DB, renders one Markdown file per conversation, builds a
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and a Docker image.
@@ -291,8 +291,8 @@ fetched: [`step_protocol.md`](step_protocol.md) §"Running
 `datalib-step` by hand". Use a root no app is serving; on one the app
 serves, `datalib-dag <config> --sync <step>` is the way.
 
-A sync also spawns `latchkey` and `qmd`, which the binaries run from a
-`runtime/` tree (Node plus both package trees, lockfile-pinned by
+A sync also spawns `latchkey`, which the binaries run from a
+`runtime/` tree (Node plus latchkey's package tree, lockfile-pinned by
 Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR` — a
 release install fetches it instead, see `runtime_fetch.md`. The
 `bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;

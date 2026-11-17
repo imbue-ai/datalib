@@ -174,37 +174,8 @@ _E2E_DATA = [
     # the host `pnpm install` for the `bazel test` path.
     ":node_modules",
     ":e2e_inputs",
-    # Node + the qmd package tree, which run_e2e.sh symlinks into a
-    # `DATALIB_RUNTIME_DIR` layout so the applet's qmd resolves through
-    # `bundled_command` instead of `npx -y @tobilu/qmd@<v>`.
-    #
-    # This is a correctness fix, not a speed one. npm keys the npx cache
-    # (`~/.npm/_npx/<hash>`) on the package spec ALONE — no Node version
-    # in it — so one directory is shared by every Node on the machine,
-    # while a native module inside it may be built for exactly one ABI.
-    # (When this was written the offender was named: better-sqlite3 12's
-    # `node-v127` prebuilt. qmd 2.8.3 moved to better-sqlite3 13, whose
-    # bindings are per-platform rather than per-ABI, so that particular
-    # trap is closed — the staging below is kept because it also removes
-    # the registry fetch, which was never only about the ABI.)
-    # This test is the one qmd
-    # consumer that reached npx, and it also `env_inherit`s PATH, so it
-    # ran under whatever `node` the developer had while every Bazel
-    # action uses the pinned PATH's Homebrew node. The two poisoned each
-    # other's cache in a loop: whoever installed first won, and everyone
-    # else died on NODE_MODULE_VERSION. Staging the same Bazel-managed
-    # Node the fixture genrule uses removes the second Node entirely.
-    "@nodejs_host//:node_bin",
-    "//third-party/qmd/runtime:qmd_tree",
-    "//third-party/qmd/runtime:package.json",
-    # The anchor `DATALIB_TEST_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above
-    # is what actually materializes the 277-package store.
-    "//third-party/qmd/runtime:qmd_package_dir",
 ]
 
-# Runfiles paths of the two staging inputs above, handed to run_e2e.sh
-# rather than hardcoded: bzlmod mangles `@nodejs_host`'s repo name, so
-# there is no stable string to write down.
 _E2E_ENV = {
     # Runfiles paths Bazel computes, rather than strings run_e2e.sh
     # spells out. A hand-written `_main/...` path is checked against
@@ -221,19 +192,6 @@ _E2E_ENV = {
     # run_e2e.sh spawns.
     "DATALIB_QMD_MODELS_NO_FETCH": "1",
     "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
-    "DATALIB_TEST_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-    "DATALIB_TEST_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
-    # The store's location has to be anchored on a GENERATED artifact,
-    # not derived from the source `package.json` above. In the runfiles
-    # tree that package.json is a symlink back into the source dir, so
-    # `dirname` of it lands in `third-party/qmd/runtime/` — where
-    # `node_modules/` does not exist, because pnpm materializes it under
-    # `bazel-bin/`. Under `bazel test` the resolution happened to stay
-    # inside the runfiles tree and the sibling was found; under
-    # `bazel run` it did not, and the documented
-    # `--update-snapshots` workflow failed with "qmd package store not
-    # in runfiles". `qmd_package_dir` exists precisely as this anchor.
-    "DATALIB_TEST_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
@@ -275,8 +233,8 @@ sh_test(
     # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
     # not fit in that. It runs every spec file across two browser
     # engines behind nine backend processes, and the `warmup`
-    # project alone — qmd's cold model load, paid once for the whole
-    # suite — grew to 1.2-1.5 min in qmd 2.8.3.
+    # project alone — the search model's cold load, paid once for the
+    # whole suite — took 1.2-1.5 min when qmd loaded it.
     #
     # Measured wall clock: ~40-70s warm, and 193-202s per run over
     # `--runs_per_test=5` (avg 198s) on a 10-core laptop. A single

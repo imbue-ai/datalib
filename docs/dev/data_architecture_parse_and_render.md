@@ -70,8 +70,8 @@ precisely because being wrong here is cheap to correct.
 ### The render-store contract
 
 After download, we run transformations for display and indexing —
-render to markdown with YAML frontmatter, index the markdown with qmd,
-derive `grid_rows` for the UI.
+render to markdown with YAML frontmatter, index the documents for
+search, derive `grid_rows` for the UI.
 
 The cross-provider contract is the **render store**: one doltlite
 database per source, at
@@ -192,15 +192,13 @@ row, no `.md` file — and its problem rows are the whole record of it.
 
 ### What is still a file: the markdown
 
-The rendered `.md` lives on disk rather than in a table, and moving it
-is gated on something specific: **qmd consumes a markdown tree.** The
-semantic index shells out to `@tobilu/qmd` over `render_markdown/`, so
-the tree cannot simply stop existing — it would have to be materialized
-for the indexer, or qmd's role taken over by something that reads from
-the database (a direction
-[`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
-proposes for other reasons). A smaller thing points the same way: the
-markdown is deliberately human-readable and greppable on disk.
+The rendered `.md` lives on disk rather than in a table. Search does
+not read it: each source's `keyword_index` and `embed` steps
+(`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
+text from the render store (`IndexedMarkdownStore::index_docs`), and
+`embed` runs the embedding model in process. What keeps the file is
+the document view, which serves it (below), and that the markdown is
+deliberately human-readable and greppable on disk.
 Moving the markdown into the store saves space only if the file tree
 then goes away; `plans/multimodal_retrieval.md` §4 measured the same
 text already stored five times on a real data root.
@@ -983,7 +981,7 @@ problem, so one bucket that will not build neither fails the step nor
 makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
-`/applet/unified_grid_and_search_index/chat/{uuid}` serves and what qmd indexed, so a
+`/applet/unified_grid_and_search_index/chat/{uuid}` serves, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
 the file at its old one (`put_document`). `grid_index` needs no part in

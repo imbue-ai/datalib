@@ -144,9 +144,6 @@ log "writing runtime.manifest for runtime-${runtime_triple}"
 {
     echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
     manifest_line cpu "runtime-${runtime_triple}.tar.gz"
-    if [[ "$runtime_triple" == "x86_64-unknown-linux-gnu" ]]; then
-        manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
-    fi
 } > "$stage/runtime.manifest"
 cat "$stage/runtime.manifest" >&2
 

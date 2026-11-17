@@ -141,8 +141,8 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
 }
 
 /// An [`Index`] for a caller with no server warming its models: the
-/// embedding model verified first, on a thread of its own, and qmd given
-/// a cold start's budget rather than a served request's.
+/// embedding model verified first, on a thread of its own, and the search
+/// given a cold start's budget rather than a served request's.
 ///
 /// Nothing warms the model for a one-off search, so one that embeds its
 /// text waits for it here, however long a first download takes, rather
@@ -159,17 +159,17 @@ async fn open_with_models_verified(root: PathBuf) -> Result<Index> {
     Index::open(root, models, ONE_SEARCH_DEADLINE).await
 }
 
-/// How long a served search waits on qmd to embed its text: under the
-/// gateway's 30 s (`APPLET_READ_TIMEOUT` in datalib-http), so a qmd that
-/// never answers costs this search an error naming it, and the next a
-/// fresh qmd, rather than a bare proxy timeout.
+/// How long a served search waits for the embedding model to be verified:
+/// under the gateway's 30 s (`APPLET_READ_TIMEOUT` in datalib-http), so a
+/// model still on its way costs this search an error naming it rather than
+/// a bare proxy timeout.
 const EMBED_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// How long `search_once` waits on qmd's embedder. No gateway's proxy
-/// timeout to stay under, and every one starts it cold, loading its model.
+/// How long `search_once` waits for the embedding model. No gateway's proxy
+/// timeout to stay under, and every one starts cold.
 const ONE_SEARCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Whether answering free text runs qmd's embedding model. Fields and
+/// Whether answering free text runs the embedding model. Fields and
 /// words read tables, so `semantic:off` needs none.
 fn embeds(parsed: &ParsedQuery) -> bool {
     !parsed.free_text.is_empty() && parsed.semantic != Semantic::Off
@@ -1059,9 +1059,9 @@ struct Ranked {
     partial: Option<String>,
 }
 
-/// qmd's ranking of a free-text search, narrowed to its structured terms:
-/// the list every sort and group of it is cut from, so qmd runs once per
-/// search and commit rather than once per group.
+/// The ranking of a free-text search, narrowed to its structured terms:
+/// the list every sort and group of it is cut from, so it is ranked once
+/// per search and commit rather than once per group.
 /// With the commit it was read at, and whether it may be kept: one read
 /// from terms written for another commit may be a pass out.
 async fn ranked(

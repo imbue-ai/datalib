@@ -77,9 +77,6 @@ def expected_artifacts() -> dict[str, set[str]]:
             for triple in RUNTIME_TRIPLES
         }
     )
-    expected["runtime-x86_64-unknown-linux-gnu"] |= with_sidecar(
-        "runtime-x86_64-unknown-linux-gnu-cuda.tar.gz"
-    )
     expected["macos-app-dmg"] = with_sidecar(DMG)
     expected["docker-image-digest"] = {IMAGE_DIGEST}
     return expected

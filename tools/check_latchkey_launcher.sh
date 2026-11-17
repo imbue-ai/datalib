@@ -52,7 +52,6 @@ write_manifest() {
     {
         echo "# The Node runtime these binaries fetch on first use"
         echo "cpu runtime-x.tar.gz $this_sha 100 https://example.com/runtime-x.tar.gz"
-        echo "cuda runtime-x-cuda.tar.gz $previous_sha 200 https://example.com/runtime-x-cuda.tar.gz"
     } > "$release/runtime.manifest"
 }
 

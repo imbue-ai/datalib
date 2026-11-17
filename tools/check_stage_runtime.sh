@@ -3,8 +3,8 @@
 # runs it: scripts/release/stage_runtime_asset.sh from a directory that
 # is not the repo, with a relative <dest> — v0.35.0's job was the first
 # to pass one, and the script's smoke test could not find the node it
-# had just staged. Then checks the asset it produced names the pinned
-# qmd. RELEASE_SHELL picks the bash the script runs under and RELEASE_RSYNC
+# had just staged. Then checks the asset it produced runs its node and
+# holds the pinned latchkey. RELEASE_SHELL picks the bash the script runs under and RELEASE_RSYNC
 # the rsync; the macOS variant sets what the mac runner has, /bin/bash (3.2)
 # and /usr/bin/rsync (openrsync), which a laptop's Homebrew rsync would hide.
 
@@ -24,8 +24,8 @@ script="$(rlocation _main/scripts/release/stage_runtime_asset.sh)"
 [[ -f "$script" ]] || { echo "ERROR: stage_runtime_asset.sh not in runfiles at $script" >&2; exit 1; }
 # The runfiles tree lays the Bazel outputs out exactly as bazel-bin does.
 tree="${script%/scripts/release/stage_runtime_asset.sh}"
-qmd_pin="$(grep -E -m1 '^pub const DEFAULT_QMD_VERSION:' "$tree/datalib/backend/runtime/src/qmd.rs" | sed -E 's/.*"([^"]+)".*/\1/')"
-[[ -n "$qmd_pin" ]] || { echo "ERROR: no DEFAULT_QMD_VERSION pin found" >&2; exit 1; }
+latchkey_pin="$(grep -E -m1 '^pub const LATCHKEY_VERSION:' "$tree/datalib/backend/runtime/src/node_runtime.rs" | sed -E 's/.*"([^"]+)".*/\1/')"
+[[ -n "$latchkey_pin" ]] || { echo "ERROR: no LATCHKEY_VERSION pin found" >&2; exit 1; }
 
 shell="${RELEASE_SHELL:-bash}"
 echo ">>> running under $("$shell" -c 'echo "$BASH_VERSION"')"
@@ -47,7 +47,7 @@ work="$TEST_TMPDIR/work"
 mkdir -p "$work"
 cd "$work"
 
-files="$(STAGE_RUNTIME_BAZEL_BIN="$tree" "$shell" "$script" "$triple" false)"
+files="$(STAGE_RUNTIME_BAZEL_BIN="$tree" "$shell" "$script" "$triple")"
 echo "$files"
 [[ "$files" == "runtime-$triple.tar.gz"$'\n'"runtime-$triple.tar.gz.sha256" ]] \
     || { echo "ERROR: unexpected asset list" >&2; exit 1; }
@@ -61,9 +61,9 @@ tar -xzf "runtime-$triple.tar.gz" -C unpacked
 # Bazel's outputs are read-only, and the app's build signs these files in place.
 read_only="$(find unpacked ! -type l ! -perm -u+w)"
 [[ -z "$read_only" ]] || { echo "ERROR: read-only in the asset:"$'\n'"$read_only" >&2; exit 1; }
-got="$(unpacked/node/bin/node unpacked/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js --version)"
-echo "$got"
-case "$got" in
-    "qmd $qmd_pin"*) ;;
-    *) echo "ERROR: expected 'qmd $qmd_pin …' from the unpacked asset, got '$got'" >&2; exit 1 ;;
-esac
+unpacked/node/bin/node --version || { echo "ERROR: the unpacked asset's node does not run" >&2; exit 1; }
+package="unpacked/latchkey/$latchkey_pin/node_modules/latchkey/package.json"
+[[ -f "$package" ]] || { echo "ERROR: no latchkey $latchkey_pin in the unpacked asset" >&2; ls unpacked/latchkey >&2; exit 1; }
+got="$(unpacked/node/bin/node -p "require('./$package').version")"
+[[ "$got" == "$latchkey_pin" ]] || { echo "ERROR: the asset's latchkey says '$got', not $latchkey_pin" >&2; exit 1; }
+[[ ! -e unpacked/qmd ]] || { echo "ERROR: the asset still carries qmd" >&2; exit 1; }

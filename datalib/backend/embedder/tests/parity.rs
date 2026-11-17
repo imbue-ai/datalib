@@ -1,16 +1,17 @@
-//! The embedder against qmd 2.8.3 itself, on made-up texts: the string each
-//! shows the model, the tokens, and the vector. qmd runs as it shipped,
-//! through `tests/qmd_embed.mjs` on the pinned node and package, loading
-//! the same pinned model file.
+//! The embedder against qmd 2.8.3, whose vectors search was built on, on
+//! made-up texts: the string each shows the model, the tokens, and the
+//! vector. qmd's answers are `tests/qmd_cpu_golden.json`, captured from
+//! qmd itself on its CPU path before it left the tree; its `made_by` names
+//! the commit whose `tests/qmd_embed.mjs` made it. Never remake it with
+//! this embedder: the test would then check the embedder against itself.
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use datalib_embedder::{Device, Embedder};
 use datalib_search_index::prompt as format;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 fn runfile(var: &str) -> PathBuf {
     let rel = std::env::var(var).unwrap_or_else(|_| panic!("{var} unset: is it on the test rule?"));
@@ -74,46 +75,21 @@ fn parse(v: &Value) -> Vec<Side> {
         .collect()
 }
 
-/// qmd's answers for every text, once per process: (docs, queries).
-fn qmd(cpu_only: bool) -> (Vec<Side>, Vec<Side>) {
-    let input = json!({
-        "docs": docs().iter().map(|(title, text)| json!({"text": text, "title": title})).collect::<Vec<_>>(),
-        "queries": queries(),
-    });
-    let home = tempfile::tempdir().unwrap();
-    let mut cmd = Command::new(runfile("NODE_RLOC"));
-    cmd.arg(runfile("QMD_SCRIPT_RLOC"))
-        .arg(runfile("QMD_PACKAGE_RLOC"))
-        .arg(runfile("EMBED_MODEL_RLOC"))
-        .env("HOME", home.path())
-        .env("XDG_CACHE_HOME", home.path())
-        .env("QMD_EMBED_PARALLELISM", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit());
-    if cpu_only {
-        cmd.env("QMD_FORCE_CPU", "1");
-    }
-    let mut child = cmd.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(input.to_string().as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "qmd_embed.mjs failed: {:?}",
-        out.status
-    );
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    (parse(&v["docs"]), parse(&v["queries"]))
-}
-
+/// qmd's answers for every text: (docs, queries), in the order of
+/// [`docs`] and [`queries`].
 fn qmd_cpu() -> &'static (Vec<Side>, Vec<Side>) {
     static ONCE: OnceLock<(Vec<Side>, Vec<Side>)> = OnceLock::new();
-    ONCE.get_or_init(|| qmd(true))
+    ONCE.get_or_init(|| {
+        let golden = std::fs::read(runfile("QMD_GOLDEN_RLOC")).unwrap();
+        let v: Value = serde_json::from_slice(&golden).unwrap();
+        let (docs, queries) = (parse(&v["docs"]), parse(&v["queries"]));
+        assert_eq!(
+            (docs.len(), queries.len()),
+            (self::docs().len(), self::queries().len()),
+            "the golden answers every text"
+        );
+        (docs, queries)
+    })
 }
 
 /// An embedder of the test's own, dropped when it ends: on Metal, ggml
@@ -172,11 +148,11 @@ fn the_tokens_are_qmds_with_bos_and_eos() {
 /// (`getDefaultContextBatchSize`: the context, at most 512 tokens).
 const QMD_BATCH: usize = 512;
 
-/// How closely ours and qmd's agree on the CPU. On arm64 both run ggml's
-/// NEON kernels and agree to rounding. On x86 node-llama-cpp's prebuilt
-/// picks AVX2 kernels at run time, while our build keeps to the portable
-/// ones so it runs on any x86, and the two round differently (0.99975 on
-/// CI's runner): far closer than anything that would move a ranking.
+/// How closely ours and qmd's agree on the CPU. The golden was made on
+/// arm64, and there both run ggml's NEON kernels and agree to rounding.
+/// On x86 our build keeps to ggml's portable kernels so it runs on any
+/// x86, and they round differently (qmd's own AVX2 run agreed to 0.99975
+/// on CI's runner): far closer than anything that would move a ranking.
 const CPU_AGREEMENT: f64 = if cfg!(target_arch = "aarch64") {
     0.9999
 } else {
@@ -227,21 +203,6 @@ fn qmd_embedded_an_input_over_512_tokens_from_its_last_batch_only() {
         }
     }
     assert!(long > 0, "no test input is over {QMD_BATCH} tokens");
-}
-
-/// What qmd wrote into a real index ran on the GPU where there was one
-/// (Metal on a mac). Ours on its best device, evaluated in qmd's batches,
-/// agrees with it closely.
-#[test]
-fn the_vectors_match_qmd_on_its_default_backend() {
-    let (docs, queries) = qmd(false);
-    let mut embedder = open(Device::Best);
-    for side in docs.iter().chain(&queries) {
-        let tokens = embedder.tokenize(&side.formatted).unwrap();
-        let got = embedder.embed_in_batches(&tokens, QMD_BATCH).unwrap();
-        let c = cosine(&got, &side.vector);
-        assert!(c > 0.999, "cosine {c} for {:?}", side.formatted);
-    }
 }
 
 /// A chunk of dense text (code, an encoded blob) can hold more tokens than

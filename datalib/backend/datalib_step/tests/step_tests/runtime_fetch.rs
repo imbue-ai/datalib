@@ -5,8 +5,8 @@
 //! `datalib-step` beside a `runtime.manifest`, no `runtime/`, a local
 //! HTTP server standing in for the GitHub release, and a stand-in
 //! runtime whose `node` is a shell script that echoes what it was asked
-//! to run. `datalib-step pull-runtime` resolves qmd through the same
-//! path a sync takes, so what it reports is what a sync would run.
+//! to run. `datalib-step pull-runtime` resolves the runtime through the
+//! same path a sync takes, so what it reports is what a sync would run.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 use datalib_runtime::node_runtime::{
     AssetKind, Manifest, RuntimeAsset, LATCHKEY_ENTRY_REL, LATCHKEY_VERSION, MANIFEST_FILE,
 };
-use datalib_runtime::qmd::DEFAULT_QMD_VERSION;
 use sha2::{Digest, Sha256};
 
 /// Held while a binary is being copied and while one is being spawned,
@@ -116,8 +115,8 @@ impl Install {
 }
 
 /// A `.tar.gz` of a runtime whose `node` echoes its arguments and whose
-/// qmd and latchkey entries exist, so `--version` through the resolver
-/// prints the path each resolved to. Its `node` refuses to run latchkey,
+/// latchkey entry exists, so `--version` through the resolver prints
+/// what it ran. Its `node` refuses to run latchkey,
 /// as latchkey does on a machine with no encryption key and no keychain:
 /// `pull-runtime` must not need to.
 fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
@@ -131,11 +130,6 @@ fn fake_runtime_tarball(base: &Path) -> Vec<u8> {
     )
     .unwrap();
     fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
-    let entry = src.join(format!(
-        "qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js"
-    ));
-    fs::create_dir_all(entry.parent().unwrap()).unwrap();
-    fs::write(&entry, "// qmd\n").unwrap();
     let entry = src.join(format!("latchkey/{LATCHKEY_VERSION}/{LATCHKEY_ENTRY_REL}"));
     fs::create_dir_all(entry.parent().unwrap()).unwrap();
     fs::write(&entry, "// latchkey\n").unwrap();
@@ -195,16 +189,13 @@ fn serve(body: Vec<u8>) -> (String, Arc<AtomicUsize>) {
 }
 
 fn manifest_for(url_base: &str, body_len: usize, sha256: &str) -> Manifest {
-    Manifest::new(
-        RuntimeAsset {
-            kind: AssetKind::Cpu,
-            name: "runtime-test.tar.gz".to_string(),
-            sha256: sha256.to_string(),
-            bytes: body_len as u64,
-            url: format!("{url_base}/runtime-test.tar.gz"),
-        },
-        None,
-    )
+    Manifest::new(RuntimeAsset {
+        kind: AssetKind::Cpu,
+        name: "runtime-test.tar.gz".to_string(),
+        sha256: sha256.to_string(),
+        bytes: body_len as u64,
+        url: format!("{url_base}/runtime-test.tar.gz"),
+    })
 }
 
 fn runtime_dirs(cache_home: &Path) -> Vec<String> {
@@ -220,8 +211,8 @@ fn runtime_dirs(cache_home: &Path) -> Vec<String> {
     names
 }
 
-/// The first use fetches, verifies and unpacks; qmd then resolves out
-/// of the cache; the second use finds it there and fetches nothing.
+/// The first use fetches, verifies and unpacks; the tools then resolve
+/// out of the cache; the second use finds it there and fetches nothing.
 #[test]
 fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
     let td = tempfile::tempdir().unwrap();
@@ -245,13 +236,10 @@ fn first_use_fetches_the_manifests_runtime_and_the_second_does_not() {
         stderr.contains(&format!("runtime: {}", expected_root.display())),
         "{stderr}"
     );
-    // The fake node echoed the entry it was given: qmd resolved from the
-    // fetched tree at its pin. latchkey is read, never run.
+    // The fetched tree's node ran, as every tool there runs; latchkey
+    // is read, never run.
     assert!(
-        stderr.contains(&format!(
-            "qmd --version: fake-node --disable-sigusr1 {}/qmd/{DEFAULT_QMD_VERSION}/node_modules/@tobilu/qmd/dist/cli/qmd.js --version",
-            expected_root.display()
-        )),
+        stderr.contains("node --version: fake-node --disable-sigusr1 --version"),
         "{stderr}"
     );
     assert!(

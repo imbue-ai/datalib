@@ -31,7 +31,7 @@ workflow's `run:` blocks are one line each:
 
 | step | script | what it makes |
 |---|---|---|
-| `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple> <cuda>` | `runtime-<triple>.tar.gz` (+ `-cuda`) and `.sha256` sidecars, from `scripts/stage_runtime.sh` |
+| `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple>` | `runtime-<triple>.tar.gz` and its `.sha256` sidecar, from `scripts/stage_runtime.sh` |
 | `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
 
 Each script writes into the current directory, prints what it wrote,
@@ -271,7 +271,7 @@ files.
 | `publish-release` | `gh`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
-| `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
+| `macos-app-verify` | the signed app: its Node, latchkey | `contents: read` |
 | `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
 | `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
 | `reader-wheels.yml`'s `wheels` | Bazel fetching and, on a Mac, compiling doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
@@ -329,11 +329,11 @@ cache to leave anything in.
 
 - **`//tools:stage_runtime_test`** runs `stage_runtime_asset.sh` from
   a directory that is not the repo, with the relative `runtime` the
-  workflow passes, then unpacks the asset and runs qmd out of it,
-  checking it reports the pinned `DEFAULT_QMD_VERSION`. On Linux CI
-  this is where node-llama-cpp's fork probe runs.
+  workflow passes, then unpacks the asset, runs its Node, and checks
+  its latchkey `package.json` names the pinned `LATCHKEY_VERSION` and
+  that it carries no `qmd/` tree.
 - **`//tools:stage_tarball_test`** runs `stage_tarball.sh` for four
-  triples (gnu with the CUDA overlay, the two musl ones naming their
+  triples (gnu, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
   and checks every binary is a regular executable, the library, the launcher, the
   commit, the manifest line for this triple's runtime asset, and the
@@ -400,8 +400,7 @@ What holds it:
   image's, and `check_reader_wheels.sh` loads them on glibc 2.17
   (§"The reader wheels").
 - **`check_glibc_floor.sh`** reads every ELF file in the tarball (the
-  `build` job) and in each runtime asset, the CUDA overlay included
-  (the `runtime` job), and fails on any glibc version above
+  `build` job) and in each runtime asset (the `runtime` job), and fails on any glibc version above
   `GLIBC_FLOOR`. Node and the npm prebuilds in the runtime were built by
   someone else, so the runner pin does nothing for them; this is what
   notices one that moved. The version names are whole strings in an ELF
@@ -428,8 +427,9 @@ mirror.gcr.io/library/ubuntu:<version>`.
 
 `bazel test //...` on a mac runs the two tests under macOS, and CI
 runs them under Linux x86_64 — but a mac is where releases are cut
-from, and the Linux-only behaviour (node-llama-cpp's binding probe)
-is what has bitten. So run them on Linux locally, in the devcontainer:
+from, and what the release steps do only on Linux (GNU tools, the
+gnu and musl tarballs, Linux's Node) does not show on a mac. So run
+them on Linux locally, in the devcontainer:
 
 ```sh
 bazelisk run //tools:release_steps_docker
@@ -437,7 +437,7 @@ bazelisk run //tools:release_steps_docker
 
 That builds the devcontainer image from `.devcontainer/Dockerfile` for
 this host's arch (the published one is amd64 only, and an emulated
-node-llama-cpp is not a faithful test), bind-mounts the working tree
+run is not a faithful test), bind-mounts the working tree
 where `devcontainer.json` does, reuses its named cache volumes, and
 runs the two tests with `bazelisk test` inside. The first run pays for
 the image and a cold Linux build of the shipped binaries — the better

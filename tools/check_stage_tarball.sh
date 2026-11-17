@@ -61,7 +61,7 @@ cd "$work"
 # The runtime assets the manifest describes, as the `runtime` job would
 # have published them: any bytes, with the sidecar sha256sum writes.
 mkdir assets
-for name in runtime-x86_64-unknown-linux-gnu.tar.gz runtime-x86_64-unknown-linux-gnu-cuda.tar.gz \
+for name in runtime-x86_64-unknown-linux-gnu.tar.gz \
             runtime-aarch64-unknown-linux-gnu.tar.gz runtime-aarch64-apple-darwin.tar.gz; do
     printf 'not a runtime: %s\n' "$name" > "assets/$name"
     ( cd assets && if command -v sha256sum >/dev/null; then sha256sum "$name" > "$name.sha256"; else shasum -a 256 "$name" > "$name.sha256"; fi )
@@ -69,10 +69,9 @@ done
 
 sha_of() { cut -d' ' -f1 "assets/$1.sha256"; }
 
-# One triple per manifest shape: gnu with the CUDA overlay, musl naming
-# its gnu sibling, mac.
-check() { # triple, expected runtime triple, expect cuda line (yes/no)
-    local triple="$1" runtime_triple="$2" cuda="$3"
+# One triple per manifest shape: gnu, musl naming its gnu sibling, mac.
+check() { # triple, expected runtime triple
+    local triple="$1" runtime_triple="$2"
     echo ">>> staging $triple"
     local tarball
     tarball="$(RELEASE_BAZEL_BIN="$tree" RELEASE_ASSETS_DIR="$PWD/assets" \
@@ -133,11 +132,9 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
     local cpu="runtime-$runtime_triple.tar.gz"
     local expected_cpu="cpu $cpu $(sha_of "$cpu") $(wc -c < "assets/$cpu" | tr -d ' ') https://github.com/imbue-ai/datalib/releases/download/v0.0.0-test/$cpu"
     grep -qxF "$expected_cpu" "$manifest" || { echo "ERROR: manifest lacks the line: $expected_cpu" >&2; cat "$manifest" >&2; exit 1; }
-    if [[ "$cuda" == yes ]]; then
-        grep -q "^cuda runtime-$runtime_triple-cuda.tar.gz " "$manifest" || { echo "ERROR: manifest lacks the cuda line" >&2; cat "$manifest" >&2; exit 1; }
-    else
-        ! grep -q '^cuda ' "$manifest" || { echo "ERROR: manifest has a cuda line for $triple" >&2; cat "$manifest" >&2; exit 1; }
-    fi
+    local assets
+    assets="$(grep -cv '^#' "$manifest")"
+    [[ "$assets" == 1 ]] || { echo "ERROR: manifest names $assets assets, not the one runtime" >&2; cat "$manifest" >&2; exit 1; }
 
     # The launcher finds the tree from the manifest the release wrote.
     local cache="$PWD/cache-$triple"
@@ -152,7 +149,7 @@ check() { # triple, expected runtime triple, expect cuda line (yes/no)
     echo ">>> $triple: ok"
 }
 
-check x86_64-unknown-linux-gnu x86_64-unknown-linux-gnu yes
-check x86_64-unknown-linux-musl x86_64-unknown-linux-gnu yes
-check aarch64-unknown-linux-musl aarch64-unknown-linux-gnu no
-check aarch64-apple-darwin aarch64-apple-darwin no
+check x86_64-unknown-linux-gnu x86_64-unknown-linux-gnu
+check x86_64-unknown-linux-musl x86_64-unknown-linux-gnu
+check aarch64-unknown-linux-musl aarch64-unknown-linux-gnu
+check aarch64-apple-darwin aarch64-apple-darwin

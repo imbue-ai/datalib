@@ -45,13 +45,12 @@ The sections on credentials (step 2) and on getting your data back out
 ## 0. Prerequisites
 
 None. The release tarball carries the binaries, and the first sync
-fetches the one other thing a sync runs: a Node runtime with the two
-Node programs the tools shell out to — `latchkey`, which holds your
-credentials, and `qmd`, which builds the semantic search index — at
-the exact versions datalib was built and tested with, published beside
-the tarball on the same release and checked against the sha256 the
-tarball carries for it. It lands in `~/.cache/datalib/runtime`, a
-download of about 100 MB, once per release. You do not need `node`,
+fetches the one other thing a sync runs: a Node runtime with the
+Node program the tools shell out to — `latchkey`, which holds your
+credentials — at the exact versions datalib was built and tested with,
+published beside the tarball on the same release and checked against
+the sha256 the tarball carries for it. It lands in
+`~/.cache/datalib/runtime`, one download per release. You do not need `node`,
 `npm` or `npx` installed. The `latchkey` command does not fetch it
 itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
 that is also how to fetch it ahead of time for an offline laptop.
