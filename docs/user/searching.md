@@ -72,6 +72,8 @@ Free text made only of ids and addresses (`picard@enterprise.org`,
 `tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's
 own id for a record counts too, where it is a uuid, dashed or not, and so
 does a link that ends in one: paste a Notion page's link to find the page.
+A source id that is not a uuid, such as a Gmail id, is not looked up
+this way; search for it with `id:` (below).
 
 A source's words are searchable once its `keyword_index` step has run;
 until then free text finds nothing there and the answer says why.
@@ -99,7 +101,6 @@ The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
-`convo:` (a document by datalib's id for it, and every row in it),
 `contact:` and `email:` (an address book's columns), and the id of any
 other column the grid shows (`org_name:`, `created_at:`, …). These match
 the whole value as stored, case and all: `kind:Email`, not `kind:email`.
@@ -110,6 +111,16 @@ Claude or ChatGPT conversation's. Where one id is not enough to name a
 record, the value joins several with `#`: a Slack message is
 `<channel>#<ts>`, a GitHub comment `<owner>/<repo>#<id>`. Two sources
 can use the same id, so add `source:` when that matters.
+
+Pasting an id as free text (above) finds every row that names it,
+ranked. `id:` is the exact match: the rows whose source id is that
+value, and nothing else, and it combines with other keys like any key
+does.
+
+`convo:` is deprecated. It keeps the rows of one document, by datalib's
+id for the document, and still works so saved searches keep working,
+but it will be removed. To find a document, paste its id as free text,
+or search for the source's own id with `id:`.
 
 ### Writing a time
 

@@ -277,7 +277,8 @@ the Subject column (`subject_ref`, which on a contact's row is the
 card's chip and in a conversation named by its people a chip for each,
 from its `subject` terms), and `subject:` finds it by its whole name, `conversation:`
 being the same key; `convo:` names the conversation by id, and is what
-the cell's Keep only writes.
+the cell's Keep only writes. The user docs mark `convo:` deprecated
+(`docs/user/searching.md`); `id:` is the row's `upstream_id`.
 
 `channel` is where a row is filed when that is *not* its subject: a
 card's address book, an event's calendar, a sensor's device, LinkedIn's
