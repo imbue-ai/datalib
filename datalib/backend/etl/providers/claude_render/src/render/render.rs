@@ -68,7 +68,9 @@ use datalib_schema::providers::Provider;
 /// v14: a message, a project's text or a document is markdown as
 ///     written again, HTML included.
 /// v15: a conversation in a project sits in the project.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: text written before a message's last tool call or thought is an
+///     item of its own, where it was written, not joined to the answer.
+pub const RENDER_VERSION: u32 = 16;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -284,16 +286,31 @@ fn build_chat(
             .unwrap_or_default();
         blocks.sort_by_key(|b| b.block_index);
 
-        // The message item: its `text` blocks, plus any extracted-text
-        // attachments folded inline and downloadable files as
-        // attachments. Always emitted so the per-message grid row stays.
+        // Text before the message's last tool call or thought was said
+        // before it ("I'll read the file first."), so it is an item of its
+        // own in its place; the text after is the answer.
+        let structural = |b: &ContentBlockRow| {
+            matches!(
+                b.r#type.as_deref(),
+                Some("tool_use" | "tool_result" | "thinking")
+            )
+        };
+        let answer_from = blocks
+            .iter()
+            .rposition(|b| structural(b))
+            .map_or(0, |i| i + 1);
+
+        // The message item: its answer's `text` blocks, plus any
+        // extracted-text attachments folded inline and downloadable files
+        // as attachments. Always emitted so the per-message grid row stays.
         let text_blocks: Vec<&ContentBlockRow> = blocks
             .iter()
             .copied()
             .filter(|b| b.r#type.as_deref() == Some("text"))
             .collect();
-        let mut body_parts: Vec<String> = text_blocks
+        let mut body_parts: Vec<String> = blocks[answer_from..]
             .iter()
+            .filter(|b| b.r#type.as_deref() == Some("text"))
             .filter_map(|b| b.text.as_deref())
             .filter(|s| !s.is_empty())
             .map(|s| s.trim_end().to_string())
@@ -330,13 +347,14 @@ fn build_chat(
         }
 
         // One item per structural block (thinking / tool_use /
-        // tool_result), keeping its stable section id + block kind.
-        // Emitted before the message's own text item so that on a
-        // timestamp tie the blocks (which precede the final answer) sort
-        // first under the stable sort below.
-        for b in &blocks {
+        // tool_result), keeping its stable section id + block kind, and
+        // one per text block said before the last of them. Emitted in
+        // block order, before the message's own text item, so that on a
+        // timestamp tie they keep that order under the stable sort below.
+        for (at, b) in blocks.iter().enumerate() {
             let btype = b.r#type.as_deref().unwrap_or("");
-            if !matches!(btype, "tool_use" | "tool_result" | "thinking") {
+            let said_before = btype == "text" && at < answer_from;
+            if !structural(b) && !said_before {
                 continue;
             }
             let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
@@ -359,15 +377,31 @@ fn build_chat(
                 &raw_obj,
                 block_ms,
             );
-            let block_model = filter_nonempty(model.clone());
-            let block_handle = block_model.as_deref().and_then(Handle::ai_model);
-            let block_author = block_model.unwrap_or_else(|| btype.to_string());
-            let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
+            let (block_author, block_handle, block_kind, body) = if said_before {
+                (
+                    author_display.clone(),
+                    author_handle.clone(),
+                    kind_label,
+                    b.text.as_deref().unwrap_or("").trim_end().to_string(),
+                )
+            } else {
+                let block_model = filter_nonempty(model.clone());
+                (
+                    block_model.clone().unwrap_or_else(|| btype.to_string()),
+                    block_model.as_deref().and_then(Handle::ai_model),
+                    kind_for_block(btype),
+                    block_body_md(btype, b.text.as_deref(), &raw_obj),
+                )
+            };
             items.push(NormalizedChatItem {
                 reply_to: None,
                 message_uuid: block_id.uuid.clone(),
                 author_handle: block_handle,
-                author_kind: AuthorKind::Named,
+                author_kind: if said_before {
+                    author_kind
+                } else {
+                    AuthorKind::Named
+                },
                 author_display: block_author,
                 date_ms: block_ms,
                 date_offset_secs: None,
@@ -378,7 +412,7 @@ fn build_chat(
                 labels: Vec::new(),
                 system_note: None,
                 source_url: None,
-                kind_label: Some(kind_for_block(btype).to_string()),
+                kind_label: Some(block_kind.to_string()),
                 source_ref: Some(UpstreamRef::new(
                     block_id.entity_kind,
                     block_id.natural_key.clone(),

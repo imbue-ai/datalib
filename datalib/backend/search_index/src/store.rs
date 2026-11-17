@@ -18,11 +18,16 @@ use sqlx::SqliteConnection;
 use crate::IndexDoc;
 
 const DDL: [&str; 7] = [
+    // `conversation`: its pieces are messages, each its own utterance, so a
+    // word search needs one to hold every word; otherwise it is a page,
+    // whose pieces are parts of one thing and may hold the words between
+    // them.
     "CREATE TABLE IF NOT EXISTS search_documents (
         doc_id INTEGER PRIMARY KEY,
         source_id TEXT NOT NULL,
         markdown_uuid TEXT NOT NULL UNIQUE,
-        content_hash TEXT NOT NULL
+        content_hash TEXT NOT NULL,
+        conversation INTEGER NOT NULL
     )",
     "CREATE INDEX IF NOT EXISTS search_documents_by_source ON search_documents (source_id)",
     "CREATE TABLE IF NOT EXISTS search_sections (
@@ -64,12 +69,18 @@ const DDL: [&str; 7] = [
 /// thousand documents, many minutes when it loads a large source whole.
 const WAIT_FOR_THE_GRID: Duration = Duration::from_secs(60 * 60);
 
+/// About how much drawn text one transaction of [`Index::put`] indexes.
+/// Its FTS rows and chunks take a few hundred milliseconds a megabyte; a
+/// whole batch of large documents in one held another writer of the file
+/// for over half a minute.
+pub const PUT_BYTES: usize = 1 << 20;
+
 /// Documents removed in one transaction, so a large removal never holds
 /// the file the grid index's step is waiting on.
 const REMOVE_BATCH: usize = 500;
 
-#[cfg(test)]
-fn schema_hash() -> String {
+/// The shape of the index's tables, as its `_datalib_meta` part records it.
+pub(crate) fn shape() -> String {
     datalib_store_meta::schema_hash(DDL)
 }
 
@@ -129,21 +140,37 @@ impl Index {
         Ok(rows.into_iter().collect())
     }
 
-    /// Indexes `docs` in one transaction. A document already held with the
-    /// same hash is left alone; a changed one has its sections and chunks
-    /// replaced.
+    /// Indexes `docs`, committing after about [`PUT_BYTES`] of their text
+    /// so the file's other writers wait seconds, not the whole batch. A
+    /// document already held with the same hash is left alone; a changed
+    /// one has its sections and chunks replaced, in one transaction.
     pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let mut changed = false;
-        for doc in docs {
-            changed |= put_one(&mut tx, doc)
-                .await
-                .with_context(|| format!("index document {}", doc.markdown_uuid))?;
+        let mut rest = docs;
+        while !rest.is_empty() {
+            let mut bytes = 0;
+            let take = rest
+                .iter()
+                .take_while(|d| {
+                    let first = bytes == 0;
+                    bytes += d.sections.iter().map(|s| s.text.len()).sum::<usize>();
+                    first || bytes <= PUT_BYTES
+                })
+                .count();
+            let (now, later) = rest.split_at(take);
+            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+            let mut changed = false;
+            for doc in now {
+                changed |= put_one(&mut tx, doc)
+                    .await
+                    .with_context(|| format!("index document {}", doc.markdown_uuid))?;
+            }
+            if changed {
+                moved(&mut tx).await?;
+            }
+            tx.commit().await.context("commit the indexed documents")?;
+            rest = later;
         }
-        if changed {
-            moved(&mut tx).await?;
-        }
-        tx.commit().await.context("commit the indexed documents")
+        Ok(())
     }
 
     pub async fn remove(&self, markdown_uuids: &[String]) -> Result<()> {
@@ -255,26 +282,27 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
         Some((doc_id, _, _)) => {
             clear(conn, &[doc_id]).await?;
             sqlx::query(
-                "UPDATE search_documents SET source_id = ?, content_hash = ? WHERE doc_id = ?",
+                "UPDATE search_documents SET source_id = ?, content_hash = ?, conversation = ? \
+                 WHERE doc_id = ?",
             )
             .bind(&doc.source_id)
             .bind(&doc.content_hash)
+            .bind(doc.is_conversation())
             .bind(doc_id)
             .execute(&mut *conn)
             .await?;
             doc_id
         }
-        None => {
-            sqlx::query_scalar(
-                "INSERT INTO search_documents (source_id, markdown_uuid, content_hash) \
-                 VALUES (?, ?, ?) RETURNING doc_id",
-            )
-            .bind(&doc.source_id)
-            .bind(&doc.markdown_uuid)
-            .bind(&doc.content_hash)
-            .fetch_one(&mut *conn)
-            .await?
-        }
+        None => sqlx::query_scalar(
+            "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation) \
+                 VALUES (?, ?, ?, ?) RETURNING doc_id",
+        )
+        .bind(&doc.source_id)
+        .bind(&doc.markdown_uuid)
+        .bind(&doc.content_hash)
+        .bind(doc.is_conversation())
+        .fetch_one(&mut *conn)
+        .await?,
     };
 
     let sections = doc.sections_or_one();

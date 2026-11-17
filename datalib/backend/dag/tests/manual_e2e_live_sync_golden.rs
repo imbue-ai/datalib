@@ -303,9 +303,9 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
 ///   what it made of them.
-/// - `render_inputs` and the agent transcripts' `records` repeat, row
-///   by row, what the `.md` files and `grid_rows` beside them already
-///   show.
+/// - `render_inputs`, `sections` and the agent transcripts' `records`
+///   repeat, row by row, what the `.md` files, the `index_text`
+///   snapshots and `grid_rows` beside them already show.
 ///
 /// Notion's `tree` and `listed_pages` are the first kind, and the one
 /// pair here that is also a tripwire. A roots source walks down from its
@@ -342,6 +342,7 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("claude_code", "records"),
     ("codex", "records"),
     ("*", "render_inputs"),
+    ("*", "sections"),
 ];
 
 /// The step a store sits in: the `<sub>` of
@@ -626,6 +627,7 @@ fn manual_e2e_live_sync_golden() {
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
     }
+    snapshot_index_text(&data_root, &cfg_out, &mut manifest);
     manifest.sort();
 
     // Prune snapshots orphaned when the set of produced files changes.
@@ -1275,22 +1277,8 @@ fn assert_step_statuses_ok(summary: &Value) {
 /// has nothing left to embed, and one without still has all of it left: the
 /// embed stayed in its own source.
 fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
-    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
-    let steps = cfg
-        .get("steps")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let groups_with = |function: &str| -> std::collections::BTreeSet<String> {
-        steps
-            .iter()
-            .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
-            .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .collect()
-    };
-    let embedded = groups_with("embed");
-    let keyword: Vec<String> = groups_with("keyword_index").into_iter().collect();
+    let embedded = groups_with(cfg_text, "embed");
+    let keyword: Vec<String> = groups_with(cfg_text, "keyword_index").into_iter().collect();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1339,6 +1327,19 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
         );
     }
     Value::Object(report)
+}
+
+/// The groups that have a step of `function` in the config.
+fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    cfg.get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
+        .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 /// The markdown files the search covers under `dir`: every one a renderer
@@ -1748,6 +1749,77 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 /// `$DATALIB_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
 /// `manifest` collects the snapshot key (top + rel path)
 /// for the overall manifest assertion.
+/// Every searchable document's text as the search index embeds it, chunk
+/// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
+/// for each source with a `keyword_index`, the ones search reads.
+/// Drawn by `datalib-step index-text --chunks`, the call the keyword and
+/// embed passes make, so a change to what search reads (the envelope line,
+/// a flattened link, where a chunk is cut, the prompt) is a diff here even
+/// when the page looks the same.
+fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<String>) {
+    let searched = groups_with(cfg_text, "keyword_index");
+    let out = Command::new(bin_dir().join("datalib-step"))
+        .arg("index-text")
+        .arg(data_root)
+        .arg("--chunks")
+        .output()
+        .expect("run datalib-step index-text");
+    assert!(
+        out.status.success(),
+        "datalib-step index-text failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).expect("index-text writes UTF-8");
+    let docs = index_text_documents(&text);
+    assert!(
+        !docs.is_empty(),
+        "index-text drew no document, though the bake renders searchable sources"
+    );
+    for (source, uuid, body) in docs {
+        if !searched.contains(&source) {
+            continue;
+        }
+        let shard = &uuid[uuid.len() - 2..];
+        let key = format!("{source}/index_text/{shard}/{uuid}.txt");
+        manifest.push(key.clone());
+        insta::with_settings!({
+            snapshot_path => snap_base().join(&source).join("index_text").join(shard).display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => key,
+        }, {
+            assert_snapshot!(format!("{uuid}.txt"), normalize_str(&body));
+        });
+    }
+}
+
+/// `index-text`'s output split at each `=== <source> <id> <title>` header,
+/// the header kept as the document's first line.
+fn index_text_documents(text: &str) -> Vec<(String, String, String)> {
+    let mut docs: Vec<(String, String, String)> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let header = line
+            .strip_prefix("=== ")
+            .and_then(|rest| {
+                let mut parts = rest.splitn(3, ' ');
+                Some((parts.next()?, parts.next()?))
+            })
+            .filter(|(_, uuid)| {
+                uuid.len() == 36 && uuid.chars().filter(|c| *c == '-').count() == 4
+            });
+        match header {
+            Some((source, uuid)) => {
+                docs.push((source.to_string(), uuid.to_string(), line.to_string()))
+            }
+            None => {
+                if let Some(doc) = docs.last_mut() {
+                    doc.2.push_str(line);
+                }
+            }
+        }
+    }
+    docs
+}
+
 fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
     if !root.is_dir() {
         return;
@@ -1828,12 +1900,16 @@ fn prune_orphan_snapshots(manifest: &[String]) {
         }
         // Snapshot path mirrors the data layout, so only the per-group
         // tree snaps are manifest-keyed — hence pruning only under an
-        // `ingest/`, `render_markdown/` or `render_occurrences/` segment.
+        // `ingest/`, `render_markdown/`, `render_occurrences/` or
+        // `index_text/` segment.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
-        let is_tree_snap = key
-            .split('/')
-            .any(|seg| matches!(seg, "ingest" | "render_markdown" | "render_occurrences"));
+        let is_tree_snap = key.split('/').any(|seg| {
+            matches!(
+                seg,
+                "ingest" | "render_markdown" | "render_occurrences" | "index_text"
+            )
+        });
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)
                 .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));

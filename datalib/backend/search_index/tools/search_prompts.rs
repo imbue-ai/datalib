@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_search_index::Index;
+use datalib_search_index::Reader;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,17 +21,24 @@ async fn main() -> Result<()> {
         bail!("usage: search_prompts <root> <out>");
     };
     let root = PathBuf::from(root);
-    let index = Index::open(&datalib_runtime::layout::grid_index_db(&root)).await?;
+    let Some(index) = Reader::open(
+        &datalib_runtime::layout::grid_index_db(&root),
+        &datalib_runtime::layout::inference_cache_db(&root),
+    )
+    .await?
+    else {
+        bail!("{}: no search index", root.display());
+    };
     let mut prompts: BTreeMap<String, String> = BTreeMap::new();
     let sources: Vec<String> = sources(&root)?;
     for source in &sources {
-        let spans = index.chunk_spans(source).await?;
+        let spans = index.chunk_hashes(source).await?;
         if spans.is_empty() {
             continue;
         }
         let docs = {
             let (root, source) = (root.clone(), source.clone());
-            let uuids: Vec<String> = spans.iter().map(|s| s.markdown_uuid.clone()).collect();
+            let uuids: Vec<String> = spans.iter().map(|(doc, _)| doc.clone()).collect();
             tokio::task::spawn_blocking(move || docs(&root, &source, uuids)).await??
         };
         let mut drawn: BTreeMap<String, String> = BTreeMap::new();
@@ -40,14 +47,11 @@ async fn main() -> Result<()> {
                 drawn.insert(p.hash, p.prompt);
             }
         }
-        for span in spans {
-            let p = drawn.get(&span.hash).with_context(|| {
-                format!(
-                    "{}: a chunk its document no longer draws",
-                    span.markdown_uuid
-                )
-            })?;
-            prompts.insert(span.hash, p.clone());
+        for (doc, hash) in spans {
+            let p = drawn
+                .get(&hash)
+                .with_context(|| format!("{doc}: a chunk its document no longer draws"))?;
+            prompts.insert(hash, p.clone());
         }
     }
     index.close().await;

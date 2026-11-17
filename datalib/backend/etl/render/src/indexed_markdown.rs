@@ -103,7 +103,7 @@ impl KeptSection {
 pub fn index_key(row: &datalib_schema::markdowns::MarkdownRow) -> Option<String> {
     row.content_hash
         .as_ref()
-        .map(|h| format!("{h}.t{}", datalib_search_index::text::INDEX_TEXT_VERSION))
+        .map(|h| format!("{h}{}", datalib_search_index::text::key_suffix()))
 }
 
 /// Replace what the store keeps of `md`'s sections. The grid index keeps

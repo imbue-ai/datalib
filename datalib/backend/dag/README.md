@@ -279,7 +279,9 @@ appended (`docs/dev/step_protocol.md` § Migrate). A raw store is
 migrated in place, and the step reports its new head, which the record
 takes as its version while keeping the step's last success. A render
 store or the index in another shape is rebuilt by running the step, so
-that step answers `needs_rerun`: the record keeps the flag
+that step answers `needs_rerun`, and so does a source's `keyword_index`
+whose part of the search index was drawn by another version of the index
+text or its chunking (`INDEX_TEXT_VERSION`), which no render moved: the record keeps the flag
 (`steps.needs_rerun`), the tick holds the step due until it next
 succeeds (rule 5), and `round::rerun_offer` lists it for the app, which
 asks whether to re-render now and opens one request rooted at the list

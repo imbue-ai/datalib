@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use datalib_runtime::layout;
-use datalib_search_index::{Held, Reader};
+use datalib_search_index::{Held, HeldDoc, Reader};
 
 use crate::qmd::index_state::IndexStamp;
-use crate::qmd::lex::Fts5Query;
+use crate::qmd::lex::{Fts5Query, PageTerms};
 use crate::qmd::mapping::Place;
 use crate::qmd::vectors::{dot_and_norm, Freshness, Kept};
 use crate::qmd::QmdHit;
@@ -49,10 +49,34 @@ pub async fn word_hits(
         found?
             .into_iter()
             .map(|h| {
-                let place = Place::Bytes {
-                    start: h.start,
-                    end: h.end,
-                };
+                let place = Place::Item { uuid: h.uuid };
+                (h.markdown_uuid, hit(h.score, place))
+            })
+            .collect(),
+    ))
+}
+
+/// Pages holding every one of `terms` between their pieces and none of
+/// `excluded` ([`Reader::page_words`]); `None` with no index yet.
+pub async fn page_word_hits(
+    root: &Path,
+    terms: &PageTerms,
+    sources: Option<&[String]>,
+    among: Option<&HashSet<String>>,
+    limit: usize,
+) -> Result<Option<Vec<DocumentHit>>> {
+    let Some(reader) = open(root).await? else {
+        return Ok(None);
+    };
+    let found = reader
+        .page_words(&terms.required, &terms.excluded, sources, among, limit)
+        .await;
+    reader.close().await;
+    Ok(Some(
+        found?
+            .into_iter()
+            .map(|h| {
+                let place = Place::Item { uuid: h.uuid };
                 (h.markdown_uuid, hit(h.score, place))
             })
             .collect(),
@@ -183,7 +207,7 @@ impl HeldVectors {
         let norm = norm2.sqrt();
         let sources: Option<HashSet<&str>> =
             sources.map(|s| s.iter().map(String::as_str).collect());
-        let mut ranked: Vec<(&str, f32, usize)> = held
+        let mut ranked: Vec<(&HeldDoc, f32, usize)> = held
             .docs
             .iter()
             .filter(|d| {
@@ -205,21 +229,22 @@ impl HeldVectors {
                     .filter(|&c| kept.is_none_or(|k| held.covered(d, c).any(|u| k.contains(u))))
                     .map(|c| (dot_and_norm(held.vector(c), query).0 / norm, c))
                     .max_by(|a, b| a.0.total_cmp(&b.0))?;
-                Some((d.markdown_uuid.as_str(), best.0, best.1))
+                Some((d, best.0, best.1))
             })
             .collect();
-        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        ranked.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then_with(|| a.0.markdown_uuid.cmp(&b.0.markdown_uuid))
+        });
         ranked.truncate(limit);
         Ok(Some(
             ranked
                 .into_iter()
                 .map(|(doc, score, c)| {
-                    let chunk = &held.chunks[c];
-                    let place = Place::Bytes {
-                        start: chunk.start,
-                        end: chunk.end,
+                    let place = Place::Item {
+                        uuid: held.covered(doc, c).next().map(str::to_string),
                     };
-                    (doc.to_string(), hit(f64::from(score), place))
+                    (doc.markdown_uuid.clone(), hit(f64::from(score), place))
                 })
                 .collect(),
         ))

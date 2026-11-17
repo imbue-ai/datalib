@@ -52,9 +52,11 @@ pub enum Place {
     /// A Meaning chunk, from `pos` to `next` (the end when `None`), in the
     /// UTF-16 units qmd's chunker counts.
     Chunk { pos: i64, next: Option<i64> },
-    /// A message or a chunk the search index names, by its bytes in the
-    /// document: from `start` up to `end`.
-    Bytes { start: i64, end: i64 },
+    /// The item the search index matched: the message a keyword hit is
+    /// in, the first a Meaning chunk covers. `None` for a piece that is no
+    /// item's (a page's text), which lands on the document. Never a place
+    /// in the file: the index holds text drawn for it, not the file's.
+    Item { uuid: Option<String> },
 }
 
 /// The bits of a `grid_rows` row that the hit↔row mapping needs.
@@ -181,10 +183,11 @@ fn placed(text: &str, hit: &QmdHit, place: &Place) -> QmdHit {
             crate::qmd::vectors::chunk_snippet(text, *pos),
             Some(crate::qmd::vectors::chunk_lines(text, *pos, *next)),
         ),
-        Place::Bytes { start, end } => {
-            let lines: Vec<&str> = text.lines().collect();
-            let (line, span) = byte_lines(text, *start, *end);
-            (quoted_from(&lines[line - 1..], line), Some(span))
+        Place::Item { .. } => {
+            return QmdHit {
+                lines: None,
+                ..hit.clone()
+            }
         }
         // ASCII lowercasing keeps every byte where it was, so the line
         // counted is the file's.
@@ -202,25 +205,6 @@ fn placed(text: &str, hit: &QmdHit, place: &Place) -> QmdHit {
         place: None,
         ..hit.clone()
     }
-}
-
-/// The 1-based line byte `start` of `text` is on, and how many lines the
-/// bytes up to `end` span, at least one. Offsets past the end, or inside a
-/// character, from an index older than the file, count from the nearest
-/// line before.
-fn byte_lines(text: &str, start: i64, end: i64) -> (usize, usize) {
-    let at = |b: i64| {
-        let mut b = usize::try_from(b).unwrap_or(0).min(text.len());
-        while !text.is_char_boundary(b) {
-            b -= 1;
-        }
-        b
-    };
-    let (from, to) = (at(start), at(end));
-    let line = 1 + text[..from].matches('\n').count();
-    let span = text[from..to.max(from)].lines().count().max(1);
-    let last = text.lines().count().max(1);
-    (line.min(last), span)
 }
 
 /// `lines`, the first of them line `line` of the file, as a hit's snippet:
@@ -296,6 +280,11 @@ impl GridIndex {
             return Vec::new();
         };
         let kept = |r: &GridRowRef| self.allowed.as_ref().is_none_or(|a| a.contains(&r.uuid));
+        if let Some(Place::Item { uuid: Some(uuid) }) = &hit.place {
+            if let Some(row) = self.by_uuid.get(uuid.as_str()).filter(|r| kept(r)) {
+                return vec![row.clone()];
+            }
+        }
         if let Some(uuid) = text.and_then(|text| self.section_for_line(text, hit)) {
             if let Some(row) = self.by_uuid.get(uuid.as_str()).filter(|r| kept(r)) {
                 return vec![row.clone()];
@@ -361,7 +350,7 @@ impl GridIndex {
                 .unwrap_or(row)
         };
         let quoted = match (&text, &hit.place) {
-            (Some(text), Some(Place::Words { .. } | Place::Bytes { .. })) => {
+            (Some(text), Some(Place::Words { .. } | Place::Item { .. })) => {
                 self.quote(text, &row.uuid)
             }
             _ => None,
@@ -703,40 +692,34 @@ mod tests {
         assert!(quoted.contains("## Assistant"), "{quoted}");
     }
 
-    /// The search index names a message by its bytes in the document: the
-    /// hit lands on the message those bytes are, whichever it is.
+    /// The search index names the item it matched, and the hit lands on
+    /// that item's row and quotes it, whatever the file holds where: the
+    /// index's text is drawn for it, not cut from the file, so its offsets
+    /// are no place in the file. A hit naming no item, or one the grid
+    /// does not have, lands on the document.
     #[test]
-    fn a_hit_placed_by_bytes_lands_on_the_message_they_are() {
+    fn a_hit_lands_on_the_item_the_index_names() {
         let tmp = tempfile::tempdir().unwrap();
-        let rows = write_two_message_doc(tmp.path(), CHAT);
+        let mut rows = write_two_message_doc(tmp.path(), CHAT);
+        rows.push(document(CHAT, "Chat", CHAT, "claude"));
         let idx = GridIndex::new(tmp.path(), rows);
-        let text = std::fs::read_to_string(tmp.path().join(path_of("claude", CHAT))).unwrap();
-        let first = text.find("<div id=\"m-aaaa").unwrap();
-        let second = text.find("<div id=\"m-bbbb").unwrap();
-        for (start, end, uuid, says) in [
-            (
-                first,
-                second,
-                "aaaaaaaa-0000-0000-0000-000000000001",
-                "first message",
-            ),
-            (
-                second,
-                text.len(),
-                "bbbbbbbb-0000-0000-0000-000000000002",
-                "second message",
-            ),
+        let named = |uuid: Option<&str>| QmdHit {
+            place: Some(Place::Item {
+                uuid: uuid.map(String::from),
+            }),
+            ..hit(&path_of("claude", CHAT), "")
+        };
+        for (uuid, says) in [
+            ("aaaaaaaa-0000-0000-0000-000000000001", "first message"),
+            ("bbbbbbbb-0000-0000-0000-000000000002", "second message"),
         ] {
-            let hit = QmdHit {
-                place: Some(Place::Bytes {
-                    start: start as i64,
-                    end: end as i64,
-                }),
-                ..hit(&path_of("claude", CHAT), "")
-            };
-            let (row, quoted) = idx.land(&hit, false).unwrap();
+            let (row, quoted) = idx.land(&named(Some(uuid)), false).unwrap();
             assert_eq!(row.uuid, uuid);
             assert!(quoted.contains(says), "{quoted}");
+        }
+        for nowhere in [None, Some("not-a-row-of-the-grid")] {
+            let (row, _) = idx.land(&named(nowhere), false).unwrap();
+            assert!(row.is_document, "{nowhere:?} landed on {}", row.uuid);
         }
     }
 
