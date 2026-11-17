@@ -22,6 +22,7 @@ rust_library(
         "@datalib_crates//:rustls",
         "@datalib_crates//:sha2",
         "@datalib_crates//:tar",
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:webpki-roots",
     ],
 )
@@ -30,7 +31,4 @@ rust_test(
     name = "fetch_unittests",
     size = "small",
     crate = ":datalib_fetch",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )
