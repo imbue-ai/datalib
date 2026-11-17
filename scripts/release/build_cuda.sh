@@ -16,6 +16,7 @@ flags=(--config=cuda "$@")
 targets=(
     @llama_cpp//:ggml_cuda_so
     @llama_cpp//:cublas_libs
+    @llama_cpp//:nvidia_licenses
     //datalib/backend/datalib_step:datalib_step
 )
 
@@ -31,6 +32,10 @@ module="$(files @llama_cpp//:ggml_cuda_so)"
 step="$(files //datalib/backend/datalib_step:datalib_step)"
 cublas=()
 while IFS= read -r f; do cublas+=("$f"); done < <(files @llama_cpp//:cublas_libs)
+nvidia_licenses="$(files @llama_cpp//:nvidia_licenses)"
+cudart_license="$(grep '/nvidia/cudart/LICENSE$' <<< "$nvidia_licenses")"
+cublas_license="$(grep '/nvidia/cublas/LICENSE$' <<< "$nvidia_licenses")"
 license="$(cd "$repo_root" && "$bazel" info "${flags[@]}" output_base 2>/dev/null)/external/+http_archive+llama_cpp/LICENSE"
 
-"$BASH" "$script_dir/stage_cuda.sh" "$module" "$step" "$license" "${cublas[@]}"
+"$BASH" "$script_dir/stage_cuda.sh" "$module" "$step" "$license" \
+    "$cudart_license" "$cublas_license" "${cublas[@]}"

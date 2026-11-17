@@ -115,7 +115,16 @@ cuda.redist_json(
     version = "12.9.1",
 )
 cuda.toolkit(name = "cuda")
-use_repo(cuda, "cuda")
+
+# The two components a release redistributes, by the names rules_cuda
+# gives them (which carry the version), for the LICENSE in each archive:
+# `@llama_cpp//:nvidia_licenses`.
+use_repo(
+    cuda,
+    "cuda",
+    "cuda_cublas_linux_x86_64_12_9_1",
+    "cuda_cudart_linux_x86_64_12_9_1",
+)
 
 # cuobjdump, from the same manifest but unknown to rules_cuda, reports
 # what GPU code the module holds (.github/workflows/cuda.yml).

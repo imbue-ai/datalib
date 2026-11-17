@@ -17,6 +17,7 @@ on:
       - MODULE.bazel
       - datalib/docker/Dockerfile
       - scripts/release/build_cuda.sh
+      - scripts/release/cuda_layer_digests.py
       - scripts/release/stage_cuda.sh
       - scripts/release/stage_docker_context.sh
       - datalib/backend/embedder/**
@@ -108,6 +109,10 @@ jobs:
   # assets and the latest release's binaries, which a PR builds no tarball
   # of and which cannot run this tree's demo config: the CUDA stage's layers
   # and the image's own check that the module lacks nothing but the driver.
+  # Built twice from a cold cache, the second time over another Ubuntu, and
+  # pushed to a registry on the runner: the two CUDA layers must have the
+  # same digests in both, as a pull of the next release will compare them
+  # (docs/dev/docker.md § "The CUDA variant").
   image:
     name: build the -cuda image
     needs: build
@@ -136,22 +141,54 @@ jobs:
           scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu \
               "$RUNNER_TEMP/release" "$RUNNER_TEMP/cuda"
 
-      # As release.yml's docker-image job sets it up.
+      - name: Start a registry
+        run: |
+          docker run --detach --name registry --publish 127.0.0.1:5000:5000 \
+              mirror.gcr.io/library/registry:3@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
+
+      # As release.yml's docker-image job sets it up, on the runner's network
+      # so that it can push to the registry above.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          driver-opts: |
+            image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+            network=host
           cache-binary: false
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
+            [registry."localhost:5000"]
+              http = true
 
-      - name: Build it
+      # Each from an empty cache, as each release's runner starts.
+      - name: Build it twice and push both
         env:
           BUILDKIT_PROGRESS: plain
         run: |
+          set -euo pipefail
           docker buildx build --platform linux/amd64 --build-arg CUDA=12 \
-              --target app --tag datalib:cuda-first --load ctx
-          docker run --rm --entrypoint sh datalib:cuda-first -c \
+              --target app --tag localhost:5000/datalib:cuda-first --push ctx
+          docker buildx prune --all --force
+          docker buildx build --platform linux/amd64 --build-arg CUDA=12 \
+              --build-context ubuntu:26.04=docker-image://mirror.gcr.io/library/ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5 \
+              --target app --tag localhost:5000/datalib:cuda-second --push ctx
+
+      - name: The CUDA layers have the same digests in both
+        run: |
+          set -euo pipefail
+          for tag in cuda-first cuda-second; do
+            python3 scripts/release/cuda_layer_digests.py localhost:5000 datalib "$tag" > "$RUNNER_TEMP/$tag.txt"
+            echo "$tag:" && cat "$RUNNER_TEMP/$tag.txt"
+          done
+          if ! diff "$RUNNER_TEMP/cuda-first.txt" "$RUNNER_TEMP/cuda-second.txt"; then
+            echo "::error::the CUDA layers' digests moved between two builds"
+            exit 1
+          fi
+
+      - name: Look inside it
+        run: |
+          docker pull localhost:5000/datalib:cuda-first
+          docker run --rm --entrypoint sh localhost:5000/datalib:cuda-first -c \
               'ls -la /opt/datalib/lib /usr/local/lib/datalib-cuda/cublas; ldd /opt/datalib/lib/libggml-cuda.so | grep -E "cublas|cuda"'
-          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' datalib:cuda-first | cut -c1-160
+          docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' localhost:5000/datalib:cuda-first | cut -c1-160
