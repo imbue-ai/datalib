@@ -53,16 +53,29 @@ environment's settings on claude.ai/code:
 - **Network access**: Limited, with "Allow package managers" on, and
   these added to the allowed domains: `bcr.bazel.build`,
   `releases.bazel.build`, `mirror.bazel.build`, `nodejs.org`,
-  `huggingface.co`, `*.huggingface.co`, `*.hf.co`. GitHub, crates.io,
-  PyPI, npm and `static.rust-lang.org` are allowed already. The list
-  comes from the URLs in `MODULE.bazel` and its lockfile. A fetch that
-  fails naming another host means that host belongs on the list.
-- **Environment variables**: none. Anyone who uses the environment can
-  read them, so the BuildBuddy key (`.bazelrc.user`) stays out, and a
-  cloud build starts from an empty cache.
+  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, and
+  `imbue.buildbuddy.io` for the cache. GitHub, crates.io, PyPI, npm and
+  `static.rust-lang.org` are allowed already. The list comes from the
+  URLs in `MODULE.bazel` and its lockfile. A fetch that fails naming
+  another host means that host belongs on the list.
+- **Environment variables**: `BUILDBUDDY_API_KEY=<your key>`, for the
+  contributor cache. At the start of every session the SessionStart hook
+  in [`.claude/settings.json`](../../.claude/settings.json) runs
+  [`scripts/cloud_session_start.sh`](../../scripts/cloud_session_start.sh),
+  which writes `.bazelrc.user` from it the way CI's `prepare-bazel`
+  does. Without the variable the hook does nothing, and the first build
+  in a session compiles everything on the VM's 4 vCPUs.
 
-The VM has about 4 vCPUs, 16 GB of memory and 30 GB of disk, and the
-first build in a session compiles everything from nothing.
+**Keep an environment that holds a key to yourself.** Anyone who uses
+an environment can read its variables. One you create is personal; the
+"Who can use it" row is what shares it with the whole organization, so
+leave it alone. Inside the VM the key is as exposed as on a laptop: any
+build script can read `.bazelrc.user`
+([`security_posture.md`](security_posture.md)).
+
+The VM has about 4 vCPUs, 16 GB of memory and 30 GB of disk. The hook
+turns bazel's local disk cache off, since BuildBuddy is the cache and
+the disk is small.
 `//datalib/ui:e2e_test` needs Playwright's browsers, which the script
 does not install.
 
