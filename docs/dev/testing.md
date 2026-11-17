@@ -606,7 +606,13 @@ reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. For a
 target that is one message of a page, it also says where the hit on that
 page lands, read from the row's `link`: on the message, how many
-messages off, and whether the snippet shown came from it.
+messages off, and whether the snippet shown came from it. A target may
+also name a `region`, a passage copied from its page, for a page that is
+one long section (a Notion page of weekly notes): the report then says
+whether the words shown came from within about a screen of that passage,
+and how far off they were. A target's `at`, where it sits in its page as a
+fraction, splits the scores by the page's first, middle and last third, so
+a search that finds the start of a long page but not its end shows up.
 
 `--modes app` asks each query the way the search card does, and is the
 number to quote for how long a search takes. The card sends two requests
