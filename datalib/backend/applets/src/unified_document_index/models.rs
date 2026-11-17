@@ -7,8 +7,29 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
-use datalib_qmd_indexer::{ModelsNotReady, VerifiedModels};
 use datalib_runtime::qmd::EMBED_MODELS;
+
+/// Where the pinned models are, once something has verified them. The
+/// query embedder loads the model only with an answer.
+pub(super) trait VerifiedModels: Send + Sync {
+    /// The directory holding the verified models, waiting until
+    /// `deadline` at most. An error, a [`ModelsNotReady`] when they are
+    /// still being fetched or could not be, fails the query.
+    fn dir(&self, deadline: Instant) -> Result<PathBuf>;
+}
+
+/// The models a query needs are not verified yet: what a search says
+/// instead of an answer by meaning.
+#[derive(Debug)]
+pub(super) struct ModelsNotReady(pub String);
+
+impl std::fmt::Display for ModelsNotReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ModelsNotReady {}
 
 #[derive(Clone)]
 pub(super) struct ModelGate(Arc<Inner>);

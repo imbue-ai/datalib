@@ -46,12 +46,15 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 
 /// Put the embedding model in place, sha256-verified, and answer its
 /// directory. A no-op once it is.
-fn provision_embed_model(root: &Path, models_dir: Option<PathBuf>) -> Result<PathBuf> {
+fn provision_embed_model(
+    root: &Path,
+    models_dir: Option<PathBuf>,
+    fetch: datalib_qmd_models::Fetch,
+) -> Result<PathBuf> {
     let models = datalib_runtime::qmd::EMBED_MODELS;
     let dir = models_dir.unwrap_or_else(|| datalib_qmd_models::models_dir_for(root));
-    let outcomes =
-        datalib_qmd_models::ensure_models(&dir, models, datalib_qmd_models::Fetch::from_env())
-            .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
+    let outcomes = datalib_qmd_models::ensure_models(&dir, models, fetch)
+        .with_context(|| format!("provision the embedding model in {}", dir.display()))?;
     let missing = datalib_qmd_models::missing(models, &outcomes);
     if !missing.is_empty() {
         anyhow::bail!(
@@ -164,9 +167,11 @@ pub async fn run_embed(
     let progress = emitter.progress();
     progress.set_message("embedding");
     let root = data_root.to_path_buf();
-    let models = tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir))
-        .await
-        .context("model provisioning panicked")??;
+    let fetch = datalib_qmd_models::Fetch::from_env();
+    let models =
+        tokio::task::spawn_blocking(move || provision_embed_model(&root, models_dir, fetch))
+            .await
+            .context("model provisioning panicked")??;
     let model = crate::search_index::model_file(&models);
     let done = crate::search_index::embed(data_root, &env.group, &model, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
@@ -283,6 +288,31 @@ mod tests {
         assert!(!qmd.exists());
         assert!(models.join("m.gguf").exists());
         retire_qmd(root).unwrap();
+    }
+
+    /// With fetching off, a missing model is an error that says where it
+    /// should be and why it was not fetched, and nothing is written there.
+    #[test]
+    fn a_missing_model_with_fetching_off_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("models");
+        let err = provision_embed_model(
+            tmp.path(),
+            Some(dir.clone()),
+            datalib_qmd_models::Fetch::Never,
+        )
+        .unwrap_err();
+        let why = format!("{err:#}");
+        assert!(why.contains("the embedding model is missing from"), "{why}");
+        assert!(why.contains(&dir.display().to_string()), "{why}");
+        assert!(
+            why.contains(datalib_runtime::qmd::EMBED_MODELS[0].file),
+            "{why}"
+        );
+        let written = std::fs::read_dir(&dir)
+            .map(|d| d.count())
+            .unwrap_or_default();
+        assert_eq!(written, 0, "nothing fetched into {}", dir.display());
     }
 
     /// An input is a step id, which is also the tree it writes. The

@@ -130,7 +130,6 @@ rust_binary(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/probe:datalib_probe",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/qmd_models:datalib_qmd_models",
         "//datalib/backend/search_index:datalib_search_index",

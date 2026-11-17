@@ -1,6 +1,6 @@
-//! qmd's lex syntax in a free-text query: a quoted phrase, and a
-//! `-`-prefixed exclusion. The daemon sends the text as is to qmd's
-//! lexical search and without that syntax to its vector search.
+//! The syntax free text may carry: a quoted phrase, and a `-`-prefixed
+//! exclusion. A search by words asks it of the keyword index as FTS5; a
+//! search by meaning embeds the text without it.
 
 use datalib_query::tokenize;
 
@@ -10,7 +10,7 @@ pub fn has_lex_syntax(s: &str) -> bool {
         .any(|t| t.starts_with('"') || t.starts_with('-'))
 }
 
-/// Strip qmd lex syntax from `s`: drop `-`-prefixed tokens entirely
+/// Strip that syntax from `s`: drop `-`-prefixed tokens entirely
 /// (exclusions are meaningless to vector search), strip surrounding
 /// quotes from phrases, and rejoin with single spaces. Returns an empty
 /// string if every token is an exclusion.
@@ -32,14 +32,10 @@ fn strip_outer_quotes(s: &str) -> &str {
     }
 }
 
-/// Free text as an FTS5 query over qmd's `documents_fts` titles and bodies,
-/// for the Words tab, which reads that table itself.
+/// Free text as an FTS5 query over the keyword index's titles and bodies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fts5Query {
     pub expr: String,
-    /// The first word or phrase it requires, as typed: what the line a hit
-    /// lands on is looked for by.
-    pub first: String,
 }
 
 /// Every word and quoted phrase required, a `-` one excluded. `None` when
@@ -48,17 +44,15 @@ pub fn fts5_query(s: &str) -> Option<Fts5Query> {
     let quote = |t: &str| format!("\"{}\"", strip_outer_quotes(t).replace('"', "\"\""));
     let mut required: Vec<String> = Vec::new();
     let mut excluded: Vec<String> = Vec::new();
-    let mut first: Option<String> = None;
     for token in tokenize(s) {
         match token.strip_prefix('-').filter(|t| !t.is_empty()) {
             Some(t) => excluded.push(quote(t)),
-            None => {
-                first.get_or_insert_with(|| strip_outer_quotes(&token).to_string());
-                required.push(quote(&token));
-            }
+            None => required.push(quote(&token)),
         }
     }
-    let first = first?;
+    if required.is_empty() {
+        return None;
+    }
     let mut expr = required.join(" AND ");
     for e in excluded {
         expr.push_str(" NOT ");
@@ -66,7 +60,6 @@ pub fn fts5_query(s: &str) -> Option<Fts5Query> {
     }
     Some(Fts5Query {
         expr: format!("{{title body}} : ({expr})"),
-        first,
     })
 }
 
@@ -82,7 +75,6 @@ pub fn fts5_phrase_query(s: &str) -> Option<Fts5Query> {
     let phrase = tokens.join(" ");
     Some(Fts5Query {
         expr: format!("{{title body}} : (\"{phrase}\")"),
-        first: tokens[0].clone(),
     })
 }
 
@@ -127,7 +119,6 @@ mod fts5_tests {
             fts5_phrase_query("warp core breach"),
             Some(Fts5Query {
                 expr: r#"{title body} : ("warp core breach")"#.into(),
-                first: "warp".into(),
             })
         );
         assert_eq!(fts5_phrase_query("warp"), None);
@@ -141,7 +132,6 @@ mod fts5_tests {
             fts5_query("warp core \"deck twelve\" -breach"),
             Some(Fts5Query {
                 expr: r#"{title body} : ("warp" AND "core" AND "deck twelve" NOT "breach")"#.into(),
-                first: "warp".into(),
             })
         );
     }
