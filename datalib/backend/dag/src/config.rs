@@ -4314,6 +4314,34 @@ inputs = [\"*/embed\"]
             ["slack/embed"]
         );
     }
+
+    /// With no `embed` anywhere the map reads nothing, and it is still no
+    /// download: it holds `index`, not a `network` slot a download waits
+    /// for.
+    #[test]
+    fn the_map_with_no_embed_to_read_holds_no_network_slot() {
+        let text = format!(
+            "{CONFIG}
+[[steps]]
+group = \"unified_grid_and_search_index\"
+function = \"embedding_map\"
+command = \"datalib-step\"
+inputs = [\"*/embed\"]
+"
+        );
+        let check = check_text(&text);
+        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
+        let map = "unified_grid_and_search_index/embedding_map";
+        let spec = &check.graph.steps[check.graph.by_id[map]];
+        assert!(spec.inputs.is_empty(), "{:?}", spec.inputs);
+        assert_eq!(
+            crate::supervisor::locks::held_by(spec),
+            [(
+                crate::supervisor::locks::INDEX.to_string(),
+                crate::supervisor::locks::Hold::Shared
+            )]
+        );
+    }
 }
 
 #[cfg(test)]
