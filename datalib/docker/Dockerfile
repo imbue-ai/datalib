@@ -22,10 +22,11 @@
 #
 # and, for the CUDA variant only (`--build-arg CUDA=12`, amd64):
 #
-#     cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz   cuBLAS 12
-#     cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz   lib/libggml-cuda.so
+#     cuda/rootfs-cuda-libs.tar   cuBLAS 12, at usr/local/lib/datalib-cuda/
+#     cuda/rootfs-ggml-cuda.tar   opt/datalib/lib/libggml-cuda.so
 #
-# (scripts/release/stage_cuda.sh stages both).
+# (scripts/release/stage_cuda.sh stages them, and stage_docker_context.sh
+# roots them at /).
 #
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
@@ -118,14 +119,17 @@ FROM os AS cuda-none
 
 # cuBLAS and the CUDA module, below everything a release changes, with
 # `--link`, which builds each layer apart from the ones under it, so that a
-# pull of the next release can reuse the ~700 MB. Whether the pushed layers
-# keep their digests when Ubuntu's change is not yet shown
+# pull of the next release can reuse the ~700 MB. Each archive is rooted at
+# /, so every directory in its layer comes from the archive with a fixed
+# time: one `ADD` makes for its destination would carry the build's clock
+# and a new digest every release. `.github/workflows/cuda.yml` holds the
+# pushed layers' digests across two builds over different Ubuntus
 # (docs/dev/docker.md § "The CUDA variant"). NVIDIA's container
 # runtime passes in the driver (libcuda.so.1) and nothing else, so cuBLAS
 # ships here; datalib-step finds the module in /opt/datalib/lib/.
 FROM os AS cuda-12
-ADD --link cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz /usr/local/lib/datalib-cuda/
-ADD --link cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz /opt/datalib/
+ADD --link cuda/rootfs-cuda-libs.tar /
+ADD --link cuda/rootfs-ggml-cuda.tar /
 ENV LD_LIBRARY_PATH=/usr/local/lib/datalib-cuda/cublas
 
 # The app without the demo: what `.github/workflows/cuda.yml` builds
