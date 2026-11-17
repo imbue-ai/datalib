@@ -13,6 +13,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/html_entities:datalib_html_entities",
         "//datalib/backend/etl/calendar-common:datalib_etl_calendar_common",
         "//datalib/backend/etl/providers/calendar:datalib_etl_calendar",
         "//datalib/backend/etl/providers/calendar_config:datalib_etl_calendar_config",

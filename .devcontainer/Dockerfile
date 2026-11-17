@@ -6,30 +6,26 @@
 # releases while that job failed on an unrelated doc check (#469).
 #
 # What the build needs from the host is short, because Bazel brings its
-# own Node, Python, Rust, qmd, doltlite and models: a C/C++ toolchain
+# own Node, Python, Rust, doltlite and models: a C/C++ toolchain
 # and the libraries two build scripts link, `python3` for the fixture
 # scripts, `rsync` for the e2e wrapper, the stock `sqlite3` CLI for the
 # beeper extract, and Playwright's browsers with their OS libraries.
-# Node, latchkey and bun are here for the person, not the build: the
-# app falls back to `npx -y latchkey@<pin>` for auth, and qmd's own dev
-# loop is `bun`.
+# Node and latchkey are here for the person, not the build: the app
+# falls back to `npx -y latchkey@<pin>` for auth.
 #
 # Published by `.github/workflows/devcontainer.yml` — on every `v*`
 # tag, and on demand — as
 # `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>`, `:X.Y.Z` and
 # `:latest`. It does not wait on any other release job.
 #
-# Node and bun come out of their official images rather than from
+# Node comes out of its official image rather than from
 # `curl | bash` installers: a digest-pinned image is verified by Docker
 # on pull, the way the uv binary below already arrives. The tag is
 # documentation; the digest is what is fetched. A bump moves both, and
 # the version check after each COPY fails the build if only one moved.
 ARG NODE_VERSION=22.23.4
 ARG NODE_IMAGE_DIGEST=sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
-ARG BUN_VERSION=1.4.0
-ARG BUN_IMAGE_DIGEST=sha256:e0ee68d16ccb9927bf02aa7dd8fd4bf3369ee6d46da04faa72b05ce8bfd135f6
 FROM node:${NODE_VERSION}-bookworm-slim@${NODE_IMAGE_DIGEST} AS node_dist
-FROM oven/bun:${BUN_VERSION}-slim@${BUN_IMAGE_DIGEST} AS bun_dist
 
 FROM ubuntu:26.04
 
@@ -85,13 +81,6 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 ARG LATCHKEY_VERSION=3.24.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 
-# bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
-ARG BUN_VERSION
-COPY --from=bun_dist /usr/local/bin/bun /usr/local/bin/bun
-RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
-    && test "$(bun --version)" = "${BUN_VERSION}" \
-    || { echo "bun is $(bun --version), not ${BUN_VERSION}: BUN_IMAGE_DIGEST and BUN_VERSION moved apart" >&2; exit 1; }
-
 # Playwright's browsers + their OS libraries, for `//datalib/ui:e2e_test`.
 # Both engines the suite drives: Chromium runs the bulk of it, WebKit the
 # grid-bearing specs in the engine the Tauri app uses (WKWebView), where
@@ -112,7 +101,7 @@ RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webki
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # uv — `//:lint` drives ruff / pyright through it. The static binary from
-# astral's image, the same way Node and bun arrive above.
+# astral's image, the same way Node arrives above.
 COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
 # bazelisk reads `.bazelversion` and downloads the matching bazel. Its

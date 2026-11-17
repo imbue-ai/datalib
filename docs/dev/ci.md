@@ -19,8 +19,8 @@ reference behind them.
 - `cargo deny` — a RustSec and license scan of both Cargo lockfiles
   (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
   runner, with no bazel in it.
-- `pnpm audit` — `pnpm audit --prod --audit-level high` over the three
-  npm trees a release ships (`datalib/ui`, `third-party/qmd/runtime`,
+- `pnpm audit` — `pnpm audit --prod --audit-level high` over the two
+  npm trees a release ships (`datalib/ui` and
   `third-party/latchkey/runtime`), also on the bare runner. An advisory
   is fixed by a bump or a pnpm `overrides` entry in that tree's
   `pnpm-workspace.yaml`, held to the 7-day burn-in
@@ -86,9 +86,8 @@ pruned. It is a workflow of its own so that nothing in a release can
 keep it from publishing (#500).
 
 **`release.yml`** runs on a `v*` tag: the runtime assets first
-(the Node runtime `qmd` and `latchkey` run from, which the binaries
-fetch on first use — `runtime_fetch.md`; one per host platform, plus a
-CUDA overlay for Linux x86_64), then the five tarballs (macOS arm64,
+(the Node runtime `latchkey` runs from, which the binaries
+fetch on first use — `runtime_fetch.md`; one per host platform), then the five tarballs (macOS arm64,
 Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
 the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 #469). It does not build the CI image. The steps that

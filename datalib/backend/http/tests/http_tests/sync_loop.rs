@@ -509,7 +509,8 @@ fn alive(pid: i32) -> bool {
 }
 
 /// A step that will not stop: it ignores its SIGINT, spawns a child of
-/// its own — the shape of `embed` running qmd under node — and
+/// its own — the shape of a download running `latchkey curl` under
+/// node — and
 /// otherwise runs forever.
 const DEAF: &str = r#"
     trap '' INT

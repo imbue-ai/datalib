@@ -18,6 +18,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/html_entities:datalib_html_entities",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/google_takeout_config:datalib_etl_google_takeout_config",

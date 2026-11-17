@@ -2,8 +2,8 @@
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
 # per-triple tarball to a GitHub Release.
-# The `runtime` job stages the Node runtime the binaries run `qmd` and
-# `latchkey` from as its own asset per platform
+# The `runtime` job stages the Node runtime the binaries run `latchkey`
+# from as its own asset per platform
 # (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
 # from the `runtime.manifest` the `build` job writes beside them — see
 # docs/dev/runtime_fetch.md.
@@ -60,9 +60,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
-  # and `latchkey` trees, only this platform's CPU binding of
-  # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
+  # The Node runtime — the pinned Node plus the lockfile-pinned
+  # `latchkey` tree — as `runtime-<triple>.tar.gz`, one per host
   # platform. Its own job rather than a step of `build` so that the
   # musl legs (whose glibc host runs the same runtime as their gnu
   # sibling) can name an asset that already exists, with its sha256:
@@ -70,7 +69,7 @@ jobs:
   # `runtime.manifest`. The tarball no longer carries the
   # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
   #
-  # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
+  # `stage_runtime.sh` is a `bazel build` of three fetch-and-extract
   # targets and an rsync: a few minutes, most of it runner setup.
   runtime:
     name: runtime (${{ matrix.triple }})
@@ -78,22 +77,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `cuda`: also publish `runtime-<triple>-cuda.tar.gz`, the two
-        # CUDA packages the resolver overlays where an NVIDIA driver is
-        # present. Only Linux x86_64 has prebuilt CUDA bindings.
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-26  # Apple Silicon; docs/dev/release_steps.md §"The mac legs' runner image"
-            cuda: false
           # Every Linux leg here and below runs on the oldest supported
           # Ubuntu, never `ubuntu-latest`: a build links against its
           # runner's glibc (release_steps.md §"The Linux floor").
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-24.04
-            cuda: true
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm
-            cuda: false
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,22 +102,21 @@ jobs:
           external-cache: false
 
       # The step is a script so //tools:stage_runtime_test runs the same
-      # lines before a tag does (docs/dev/release_steps.md). The trees
-      # come out of Bazel; the script prunes the bindings this platform
-      # cannot use, proves the one it keeps loads, and tars the tree
-      # with its contents at the top (`node/`, `qmd/`, `latchkey/`),
+      # lines before a tag does (docs/dev/release_steps.md). The tree
+      # comes out of Bazel; the script proves its node runs and latchkey
+      # resolves playwright, and tars the tree with its contents at the
+      # top (`node/`, `latchkey/`),
       # which is how the resolver unpacks it into
       # `~/.cache/datalib/runtime/<sha12>/`.
       - name: Stage the runtime
         id: stage
         env:
           TRIPLE: ${{ matrix.triple }}
-          CUDA: ${{ matrix.cuda }}
         run: |
           set -euo pipefail
           {
               echo "files<<FILES"
-              scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}"
+              scripts/release/stage_runtime_asset.sh "${TRIPLE}"
               echo "FILES"
           } >> "$GITHUB_OUTPUT"
 
@@ -727,7 +719,7 @@ jobs:
       # uniquely caught was a regression in the entrypoint's
       # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
       # (`datalib-dag --version`, `datalib-http --help`)
-      # duplicate `qmd --version` + binary-presence checks the
+      # duplicate the binary-presence checks the
       # Dockerfile already runs inline. If the latchkey bootstrap ever
       # regresses, ghcr.io will briefly have a broken `:latest` until
       # someone notices — acceptable while the user base is small;

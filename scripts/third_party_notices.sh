@@ -34,9 +34,9 @@
 # The last seven come out of Bazel (//third-party:bundled_licenses and
 # //datalib/ui:dist), and so does cargo-about itself (a pinned release,
 # //third-party/cargo-about). It needs `cargo` on PATH and fetches crate
-# sources itself, so it needs the network on a cold machine. The qmd and latchkey trees in the runtime asset keep
-# each package's own LICENSE file inside node_modules and are not
-# repeated here.
+# sources itself, so it needs the network on a cold machine. The latchkey
+# tree in the runtime asset keeps each package's own LICENSE file inside
+# node_modules, and they are not repeated here.
 
 set -euo pipefail
 
@@ -114,8 +114,8 @@ directory is those notices.
 | `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 
 The runtime asset itself carries the same Node notice beside its
-binary, and the `qmd` and `latchkey` package trees in it carry each
-package's own license file inside `node_modules/`.
+binary, and the `latchkey` package tree in it carries each package's
+own license file inside `node_modules/`.
 EOF
 
 for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md emoji-data/LICENSE node/LICENSE curl-impersonate/LICENSE-curl latchkey-garmin/LICENSE llama.cpp/LICENSE llama.cpp/LICENSE-llamafile-sgemm; do

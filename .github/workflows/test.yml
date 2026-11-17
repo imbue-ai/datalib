@@ -182,12 +182,11 @@ jobs:
       - name: cargo deny check (tauri shell)
         run: cd datalib/tauri && cargo deny check
 
-  # The same for the three npm trees a release ships: the UI bundle, and
-  # the qmd and latchkey trees in the runtime asset, the app and the
-  # docker image. A high or critical advisory against a production
-  # dependency of any of them fails this job; the fix is a bump, or a
-  # pnpm `overrides` entry in that tree's pnpm-workspace.yaml
-  # (third-party/qmd/runtime has some). `pnpm audit` reads the lockfile
+  # The same for the two npm trees a release ships: the UI bundle, and
+  # the latchkey tree in the runtime asset, the app and the docker image.
+  # A high or critical advisory against a production dependency of either
+  # fails this job; the fix is a bump, or a pnpm `overrides` entry in that
+  # tree's pnpm-workspace.yaml. `pnpm audit` reads the lockfile
   # and asks the registry; nothing is installed.
   npm-audit:
     name: pnpm audit
@@ -206,7 +205,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=""
-          for tree in datalib/ui third-party/qmd/runtime third-party/latchkey/runtime; do
+          for tree in datalib/ui third-party/latchkey/runtime; do
             echo "::group::$tree"
             (cd "$tree" && pnpm audit --prod --audit-level high) || failed="$failed $tree"
             echo "::endgroup::"

@@ -15,9 +15,9 @@ brew install bazelisk
 # it on the Python the repo pins. The build and the tests do not use it.
 brew install uv
 
-# That is all: Node, qmd and latchkey are Bazel inputs, so the build
+# That is all: Node and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
-# latchkey and qmd through a staged `runtime/` tree (the dev launchers
+# latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
 # A sync's first `embed` step fetches the pinned embedding model,
 # sha256-verified, into qmd's cache (`~/.cache/qmd/models`).
@@ -38,6 +38,47 @@ devcontainer exec --workspace-folder . bazelisk build //datalib/backend:dist -c 
 Caches (bazel output base, disk cache, npm cache) live in named volumes
 so rebuilds aren't cold.
 
+### Claude Code cloud environments
+
+A Claude Code session on the web runs in a VM built from Anthropic's
+Ubuntu 24.04 image, which cannot be swapped for ours. What it lacks is
+installed by [`scripts/cloud_env_setup.sh`](../../scripts/cloud_env_setup.sh):
+bazelisk and the few packages the devcontainer adds. In the
+environment's settings on claude.ai/code:
+
+- **Setup script**: paste that file's text. The VM is snapshotted after
+  it runs, and the snapshot is reused until the pasted text changes, so
+  a change to the file reaches the environment only when it is pasted
+  again.
+- **Network access**: Limited, with "Allow package managers" on, and
+  these added to the allowed domains: `bcr.bazel.build`,
+  `releases.bazel.build`, `mirror.bazel.build`, `nodejs.org`,
+  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, and
+  `imbue.buildbuddy.io` for the cache. GitHub, crates.io, PyPI, npm and
+  `static.rust-lang.org` are allowed already. The list comes from the
+  URLs in `MODULE.bazel` and its lockfile. A fetch that fails naming
+  another host means that host belongs on the list.
+- **Environment variables**: `BUILDBUDDY_API_KEY=<your key>`, for the
+  contributor cache. At the start of every session the SessionStart hook
+  in [`.claude/settings.json`](../../.claude/settings.json) runs
+  [`scripts/cloud_session_start.sh`](../../scripts/cloud_session_start.sh),
+  which writes `.bazelrc.user` from it the way CI's `prepare-bazel`
+  does. Without the variable the hook does nothing, and the first build
+  in a session compiles everything on the VM's 4 vCPUs.
+
+**Keep an environment that holds a key to yourself.** Anyone who uses
+an environment can read its variables. One you create is personal; the
+"Who can use it" row is what shares it with the whole organization, so
+leave it alone. Inside the VM the key is as exposed as on a laptop: any
+build script can read `.bazelrc.user`
+([`security_posture.md`](security_posture.md)).
+
+The VM has about 4 vCPUs, 16 GB of memory and 30 GB of disk. The hook
+turns bazel's local disk cache off, since BuildBuddy is the cache and
+the disk is small.
+`//datalib/ui:e2e_test` needs Playwright's browsers, which the script
+does not install.
+
 ## What's in the repo
 
 Two coupled projects that mirror personal data into a queryable local store:
@@ -45,7 +86,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
-  doltlite DB, renders one Markdown file per conversation, builds a qmd
+  doltlite DB, renders one Markdown file per conversation, builds a
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and a Docker image.
@@ -250,8 +291,8 @@ fetched: [`step_protocol.md`](step_protocol.md) §"Running
 `datalib-step` by hand". Use a root no app is serving; on one the app
 serves, `datalib-dag <config> --sync <step>` is the way.
 
-A sync also spawns `latchkey` and `qmd`, which the binaries run from a
-`runtime/` tree (Node plus both package trees, lockfile-pinned by
+A sync also spawns `latchkey`, which the binaries run from a
+`runtime/` tree (Node plus latchkey's package tree, lockfile-pinned by
 Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR` — a
 release install fetches it instead, see `runtime_fetch.md`. The
 `bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;

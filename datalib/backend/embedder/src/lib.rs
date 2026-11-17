@@ -1,7 +1,7 @@
 //! Text to vectors, in process: llama.cpp (`third-party/llama_cpp`) running
 //! a GGUF embedding model, behind a small C shim (`csrc/embedder.cpp`). Set
 //! up as qmd's node-llama-cpp set it up, so the vectors are the ones qmd
-//! wrote; `tests/parity.rs` holds that against qmd itself.
+//! wrote; `tests/parity.rs` holds that against a golden of qmd's answers.
 
 use std::ffi::{c_char, CString};
 use std::ops::Range;

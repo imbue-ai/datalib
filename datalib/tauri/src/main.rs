@@ -814,7 +814,7 @@ fn main() {
 /// Apps launched from Finder/Dock inherit launchd's minimal PATH
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which lacks the Homebrew / nvm
 /// directories where node and npx live. The backend normally runs
-/// latchkey/qmd via the bundled runtime under `Resources/runtime/`
+/// latchkey via the bundled runtime under `Resources/runtime/`
 /// (see `datalib_core::node_runtime`) and doesn't need host node —
 /// but its `npx` fallback (unstaged version pins, dev-ish setups) still
 /// does. Capture the user's login-shell PATH so that fallback keeps

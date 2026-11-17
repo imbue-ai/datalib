@@ -3,382 +3,190 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === tng_contacts 00000000-0000-8140-88d9-42badf1b195b drone.4.of.12@unimatrix01.borg
---- -
----
-markdown_uuid: 00000000-0000-8140-88d9-42badf1b195b
-source_id: tng_contacts
-provider: contacts
-group: "Borg"
-external_id: "Borg#Borg:Borg:3"
-title: "drone.4.of.12@unimatrix01.borg"
----
+--- chunk 0
+title: drone.4.of.12@unimatrix01.borg | text: Source: contacts
+Group: Borg
 
---- 00000000-0000-8140-88d9-42badf1b195b
-<div class="contact-head" data-page-title-uuid="00000000-0000-8140-88d9-42badf1b195b">
+# drone.4.of.12@unimatrix01.borg
 
-<div class="contact-who">
+Email:
 
-# [drone.4.of.12@unimatrix01.borg](mailto:drone.4.of.12@unimatrix01.borg "drone.4.of.12@unimatrix01.borg")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Email</dt><dd class="chip-identifiers">
-
-[drone.4.of.12@unimatrix01.borg](mailto:drone.4.of.12@unimatrix01.borg "drone.4.of.12@unimatrix01.borg")
-
-</dd>
-</dl>
+drone.4.of.12@unimatrix01.borg
 
 === tng_contacts 00000000-0000-81e2-8596-1ee8f9640d13 Jean-Luc Picard
---- -
----
-markdown_uuid: 00000000-0000-81e2-8596-1ee8f9640d13
-source_id: tng_contacts
-provider: contacts
-group: "Bridge"
-external_id: "Bridge#tng-picard"
-title: "Jean-Luc Picard"
-created_at: "2370-01-02T09:00:00+00:00"
-modified_at: "2371-01-09T00:00:00+00:00"
----
+--- chunk 0
+title: Jean-Luc Picard | text: Source: contacts
+Group: Bridge
 
---- 00000000-0000-81e2-8596-1ee8f9640d13
-<div class="contact-head" data-page-title-uuid="00000000-0000-81e2-8596-1ee8f9640d13">
+Jean-Luc Picard
 
-<div class="contact-photo">
+# Jean-Luc Picard <jlpicard@enterprise.starfleet>
 
-![Jean-Luc Picard](/data/tng_contacts/ingest/blob/1c42de715f8d5864999f75b7223a8f312472e3b5faf08c7cd830c27c26a9ecd2)
+Captain · Starfleet — USS Enterprise NCC-1701-E
 
-</div>
+Senior Staff
 
-<div class="contact-who">
+Email work:
 
-# [Jean-Luc Picard](mailto:jlpicard@enterprise.starfleet "Jean-Luc Picard <jlpicard@enterprise.starfleet>")
+jlpicard@enterprise.starfleet
 
-<p class="contact-role">Captain · Starfleet — USS Enterprise NCC-1701-E</p>
+Email work:
 
-<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+picard@enterprise.starfleet
 
-</div>
-</div>
+Phone work: +1-555-NCC-1701
+Phone cell:
 
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
++1-202-555-0101 <+12025550101>
 
-[jlpicard@enterprise.starfleet](mailto:jlpicard@enterprise.starfleet "jlpicard@enterprise.starfleet")
-
-</dd>
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[picard@enterprise.starfleet](mailto:picard@enterprise.starfleet "picard@enterprise.starfleet")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-NCC-1701</dd>
-<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
-
-[+1-202-555-0101](tel:+12025550101 "+1-202-555-0101 (+12025550101)")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">home</span></dt><dd>+33-555-LABARRE</dd>
-<dt>Address <span class="contact-qualifier">work</span></dt><dd>Ready Room, Deck 1, Saucer Section</dd>
-<dt>Note</dt><dd>Make it so.</dd>
-</dl>
+Phone home: +33-555-LABARRE
+Address work: Ready Room, Deck 1, Saucer Section
+Note: Make it so.
 
 === tng_contacts 00000000-0000-829a-bb9d-4c1b203d3251 Senior Staff
---- -
----
-markdown_uuid: 00000000-0000-829a-bb9d-4c1b203d3251
-source_id: tng_contacts
-provider: contacts
-group: "Bridge"
-external_id: "Bridge#tng-senior-staff"
-title: "Senior Staff"
-created_at: "2370-01-05T09:00:00+00:00"
----
-
---- 00000000-0000-829a-bb9d-4c1b203d3251
-<div class="contact-head" data-page-title-uuid="00000000-0000-829a-bb9d-4c1b203d3251">
-
-<div class="contact-who">
+--- chunk 0
+title: Senior Staff | text: Source: contacts
+Group: Bridge
 
 # Senior Staff
 
-</div>
-</div>
-
-<div class="contact-members">
-
 ## Members
 
-- [Jean-Luc Picard](mailto:jlpicard@enterprise.starfleet "Jean-Luc Picard <jlpicard@enterprise.starfleet>")
-- [William T. Riker](mailto:wriker@enterprise.starfleet "William T. Riker <wriker@enterprise.starfleet>")
-
-</div>
+- Jean-Luc Picard <jlpicard@enterprise.starfleet>
+- William T. Riker <wriker@enterprise.starfleet>
 
 === tng_contacts 00000000-0000-85d8-ac4b-9c4472cee5ea Worf
---- -
----
-markdown_uuid: 00000000-0000-85d8-ac4b-9c4472cee5ea
-source_id: tng_contacts
-provider: contacts
-group: "Bridge"
-external_id: "Bridge#tng-worf"
-title: "Worf"
-created_at: "2371-01-01T09:00:00+00:00"
-modified_at: "2371-01-02T00:00:00+00:00"
----
+--- chunk 0
+title: Worf | text: Source: contacts
+Group: Bridge
 
---- 00000000-0000-85d8-ac4b-9c4472cee5ea
-<div class="contact-head" data-page-title-uuid="00000000-0000-85d8-ac4b-9c4472cee5ea">
+Worf
 
-<div class="contact-photo">
+# Worf <worf@enterprise.starfleet>
 
-![Worf](/data/tng_contacts/ingest/blob/2d9e4ad303d6425c603c7a3331786ede74f907ef0666c8838f32bb8ee8a91e8f)
+Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security
 
-</div>
+Email work:
 
-<div class="contact-who">
+worf@enterprise.starfleet
 
-# [Worf](mailto:worf@enterprise.starfleet "Worf <worf@enterprise.starfleet>")
+Phone cell:
 
-<p class="contact-role">Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security</p>
++1-202-555-0102 <+12025550102>
 
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[worf@enterprise.starfleet](mailto:worf@enterprise.starfleet "worf@enterprise.starfleet")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">cell</span></dt><dd class="chip-identifiers">
-
-[+1-202-555-0102](tel:+12025550102 "+1-202-555-0102 (+12025550102)")
-
-</dd>
-<dt>Note</dt><dd>Son of Mogh. Prefers prune juice.</dd>
-</dl>
+Note: Son of Mogh. Prefers prune juice.
 
 === tng_contacts 00000000-0000-861c-8d00-be0043b71820 tng_contacts storage
---- -
----
-title: tng_contacts storage
-source: tng_contacts
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: tng_contacts storage | text: Source: datalib
 
-# [tng_contacts](datalib:group/tng_contacts "tng_contacts") — storage
+# tng_contacts — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest` | <size> | 3 files | <span id="m-00000000-0000-861c-8d00-be0043b71820" data-section-uuid="00000000-0000-861c-8d00-be0043b71820">`00000000`</span> |
-| Store | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8259-a0d2-e528ffccfef3" data-section-uuid="00000000-0000-8259-a0d2-e528ffccfef3">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/blobs.sqlite#cas_objects` |  | 6 rows | <span id="m-00000000-0000-8a0d-bc9d-0691496517bf" data-section-uuid="00000000-0000-8a0d-bc9d-0691496517bf">`00000000`</span> |
-| Store | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8bd6-a178-01cd291ca9db" data-section-uuid="00000000-0000-8bd6-a178-01cd291ca9db">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#accounts` |  | 1 row | <span id="m-00000000-0000-8f63-9d6e-3e955329f6bd" data-section-uuid="00000000-0000-8f63-9d6e-3e955329f6bd">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#addressbooks` |  | 3 rows | <span id="m-00000000-0000-8054-a55c-9861830039fa" data-section-uuid="00000000-0000-8054-a55c-9861830039fa">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#contact_categories` |  | 4 rows | <span id="m-00000000-0000-8f98-b83b-67e66eab4b75" data-section-uuid="00000000-0000-8f98-b83b-67e66eab4b75">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#contact_group_members` |  | 2 rows | <span id="m-00000000-0000-8497-9cec-1c68e1fc4a4e" data-section-uuid="00000000-0000-8497-9cec-1c68e1fc4a4e">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 9 rows | <span id="m-00000000-0000-8705-8b70-e0a88b95679c" data-section-uuid="00000000-0000-8705-8b70-e0a88b95679c">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | <span id="m-00000000-0000-8919-97a4-33ae39cca441" data-section-uuid="00000000-0000-8919-97a4-33ae39cca441">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | <span id="m-00000000-0000-83eb-b583-df2094428b5d" data-section-uuid="00000000-0000-83eb-b583-df2094428b5d">`00000000`</span> |
-| Table | [ingest](datalib:step/tng_contacts/ingest "tng_contacts/ingest") | `tng_contacts/ingest/entities.doltlite_db#ingested_files` |  | 3 rows | <span id="m-00000000-0000-8017-ba56-4e23d13b12c3" data-section-uuid="00000000-0000-8017-ba56-4e23d13b12c3">`00000000`</span> |
+| Source Size | ingest | `tng_contacts/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `tng_contacts/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `tng_contacts/ingest/blobs.sqlite#cas_objects` |  | 6 rows | `00000000` |
+| Store | ingest | `tng_contacts/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#accounts` |  | 1 row | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#addressbooks` |  | 3 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_categories` |  | 4 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_group_members` |  | 2 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 9 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#ingested_files` |  | 3 rows | `00000000` |
 
 === tng_contacts 00000000-0000-8acb-9e72-ef58e1a96813 Seven of Nine
---- -
----
-markdown_uuid: 00000000-0000-8acb-9e72-ef58e1a96813
-source_id: tng_contacts
-provider: contacts
-group: "Borg"
-external_id: "Borg#dc936615-3b18-5362-800c-c2b6837a4caa"
-title: "Seven of Nine"
----
+--- chunk 0
+title: Seven of Nine | text: Source: contacts
+Group: Borg
 
---- 00000000-0000-8acb-9e72-ef58e1a96813
-<div class="contact-head" data-page-title-uuid="00000000-0000-8acb-9e72-ef58e1a96813">
+# Seven of Nine <seven.of.nine@unimatrix01.borg>
 
-<div class="contact-who">
+Email work:
 
-# [Seven of Nine](mailto:seven.of.nine@unimatrix01.borg "Seven of Nine <seven.of.nine@unimatrix01.borg>")
+seven.of.nine@unimatrix01.borg
 
-</div>
-</div>
+Email:
 
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+annika.hansen@raven.fed
 
-[seven.of.nine@unimatrix01.borg](mailto:seven.of.nine@unimatrix01.borg "seven.of.nine@unimatrix01.borg")
-
-</dd>
-<dt>Email</dt><dd class="chip-identifiers">
-
-[annika.hansen@raven.fed](mailto:annika.hansen@raven.fed "annika.hansen@raven.fed")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">home</span></dt><dd>+1-555-TERTIARY</dd>
-</dl>
+Phone home: +1-555-TERTIARY
 
 === tng_contacts 00000000-0000-8b00-b38c-a2a290dad572 William T. Riker
---- -
----
-markdown_uuid: 00000000-0000-8b00-b38c-a2a290dad572
-source_id: tng_contacts
-provider: contacts
-group: "Bridge"
-external_id: "Bridge#tng-riker"
-title: "William T. Riker"
-created_at: "2370-01-03T09:00:00+00:00"
-modified_at: "2370-08-22T00:00:00+00:00"
----
+--- chunk 0
+title: William T. Riker | text: Source: contacts
+Group: Bridge
 
---- 00000000-0000-8b00-b38c-a2a290dad572
-<div class="contact-head" data-page-title-uuid="00000000-0000-8b00-b38c-a2a290dad572">
+William T. Riker
 
-<div class="contact-photo">
+# William T. Riker <wriker@enterprise.starfleet>
 
-![William T. Riker](/data/tng_contacts/ingest/blob/7671dd5f6feb7d479adaa497f2965aad615951cc8040127e5244845fddf5e7ab)
+Commander · Starfleet — USS Enterprise NCC-1701-D
 
-</div>
+Senior Staff
 
-<div class="contact-who">
+Email work:
 
-# [William T. Riker](mailto:wriker@enterprise.starfleet "William T. Riker <wriker@enterprise.starfleet>")
+wriker@enterprise.starfleet
 
-<p class="contact-role">Commander · Starfleet — USS Enterprise NCC-1701-D</p>
+Email home:
 
-<p class="contact-groups"><span class="contact-group">Senior Staff</span></p>
+will.riker@alaska.earth
 
-</div>
-</div>
+Email work:
 
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
+riker@enterprise.starfleet
 
-[wriker@enterprise.starfleet](mailto:wriker@enterprise.starfleet "wriker@enterprise.starfleet")
-
-</dd>
-<dt>Email <span class="contact-qualifier">home</span></dt><dd class="chip-identifiers">
-
-[will.riker@alaska.earth](mailto:will.riker@alaska.earth "will.riker@alaska.earth")
-
-</dd>
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[riker@enterprise.starfleet](mailto:riker@enterprise.starfleet "riker@enterprise.starfleet")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">cell</span></dt><dd>+1-555-NUMBER-1</dd>
-<dt>Note</dt><dd>Plays the trombone. Owns a beard.</dd>
-</dl>
+Phone cell: +1-555-NUMBER-1
+Note: Plays the trombone. Owns a beard.
 
 === tng_contacts 00000000-0000-8c51-a4b4-dde335468f6c Hugh
---- -
----
-markdown_uuid: 00000000-0000-8c51-a4b4-dde335468f6c
-source_id: tng_contacts
-provider: contacts
-group: "Borg"
-external_id: "Borg#8b87ba88-d403-50a2-a4df-2cf7c65f8c10"
-title: "Hugh"
----
+--- chunk 0
+title: Hugh | text: Source: contacts
+Group: Borg
 
---- 00000000-0000-8c51-a4b4-dde335468f6c
-<div class="contact-head" data-page-title-uuid="00000000-0000-8c51-a4b4-dde335468f6c">
+# Hugh <third.of.five@unimatrix01.borg>
 
-<div class="contact-who">
+Email work:
 
-# [Hugh](mailto:third.of.five@unimatrix01.borg "Hugh <third.of.five@unimatrix01.borg>")
+third.of.five@unimatrix01.borg
 
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[third.of.five@unimatrix01.borg](mailto:third.of.five@unimatrix01.borg "third.of.five@unimatrix01.borg")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-THIRD-OF-5</dd>
-</dl>
+Phone work: +1-555-THIRD-OF-5
 
 === tng_contacts 00000000-0000-8d78-9232-e6b0deeebfb7 Geordi La Forge
---- -
----
-markdown_uuid: 00000000-0000-8d78-9232-e6b0deeebfb7
-source_id: tng_contacts
-provider: contacts
-group: "Engineering"
-external_id: "Engineering#tng-laforge"
-title: "Geordi La Forge"
-created_at: "2370-01-06T09:00:00+00:00"
-modified_at: "2370-09-04T00:00:00+00:00"
----
+--- chunk 0
+title: Geordi La Forge | text: Source: contacts
+Group: Engineering
 
---- 00000000-0000-8d78-9232-e6b0deeebfb7
-<div class="contact-head" data-page-title-uuid="00000000-0000-8d78-9232-e6b0deeebfb7">
+Geordi La Forge
 
-<div class="contact-photo">
+# Geordi La Forge <glaforge@enterprise.starfleet>
 
-![Geordi La Forge](/data/tng_contacts/ingest/blob/4964516d71ee9b989f0a59d61f9ba1a00e1de3e4bea18b53b3fcb9c484a0e458)
+Chief Engineer · Starfleet — USS Enterprise NCC-1701-D — Engineering
 
-</div>
+Email work:
 
-<div class="contact-who">
+glaforge@enterprise.starfleet
 
-# [Geordi La Forge](mailto:glaforge@enterprise.starfleet "Geordi La Forge <glaforge@enterprise.starfleet>")
+Email work:
 
-<p class="contact-role">Chief Engineer · Starfleet — USS Enterprise NCC-1701-D — Engineering</p>
+laforge@enterprise.starfleet
 
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[glaforge@enterprise.starfleet](mailto:glaforge@enterprise.starfleet "glaforge@enterprise.starfleet")
-
-</dd>
-<dt>Email <span class="contact-qualifier">work</span></dt><dd class="chip-identifiers">
-
-[laforge@enterprise.starfleet](mailto:laforge@enterprise.starfleet "laforge@enterprise.starfleet")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-WARP-FAC</dd>
-<dt>Note</dt><dd>If we modulate the deflector array we should be able to render this contact correctly.</dd>
-</dl>
+Phone work: +1-555-WARP-FAC
+Note: If we modulate the deflector array we should be able to render this contact correctly.
 
 === tng_contacts 00000000-0000-8f5b-ab9b-f6b9fbf217b5 Locutus of Borg
---- -
----
-markdown_uuid: 00000000-0000-8f5b-ab9b-f6b9fbf217b5
-source_id: tng_contacts
-provider: contacts
-group: "Borg"
-external_id: "Borg#5b78774d-0ffc-5a98-ab83-6eab2d2f6461"
-title: "Locutus of Borg"
----
+--- chunk 0
+title: Locutus of Borg | text: Source: contacts
+Group: Borg
 
---- 00000000-0000-8f5b-ab9b-f6b9fbf217b5
-<div class="contact-head" data-page-title-uuid="00000000-0000-8f5b-ab9b-f6b9fbf217b5">
+# Locutus of Borg <locutus@unicomplex.borg>
 
-<div class="contact-who">
+Email:
 
-# [Locutus of Borg](mailto:locutus@unicomplex.borg "Locutus of Borg <locutus@unicomplex.borg>")
+locutus@unicomplex.borg
 
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Email</dt><dd class="chip-identifiers">
-
-[locutus@unicomplex.borg](mailto:locutus@unicomplex.borg "locutus@unicomplex.borg")
-
-</dd>
-<dt>Phone <span class="contact-qualifier">Subspace relay</span></dt><dd>+1-555-FUTILE</dd>
-</dl>
+Phone Subspace relay: +1-555-FUTILE

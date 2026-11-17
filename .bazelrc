@@ -100,12 +100,9 @@ build:macos --host_macos_minimum_os=11.0
 # directory turned into a build failure rather than a warning.
 #
 # The host cache still exists and still matters — it is where the SHIPPED
-# app puts models at sync time, which is why
-# `datalib_qmd_models::shared_models_dir()` still has to agree with qmd's
-# own `MODEL_CACHE_DIR`, where earlier builds put them. That agreement is
-# asserted by the rust unit test
-# `the_shared_cache_is_where_qmd_kept_its_models` and by
-# `//tools:qmd_model_cache_path_test`.
+# app puts models at sync time, where qmd kept them before search had its
+# own index (`datalib_qmd_models::shared_models_dir()`, held there by the
+# rust unit test `the_shared_cache_is_where_qmd_kept_its_models`).
 #
 # `--action_env=HOME` stays. It was introduced alongside the mount, but
 # it is not specific to it, and the actions that would notice its

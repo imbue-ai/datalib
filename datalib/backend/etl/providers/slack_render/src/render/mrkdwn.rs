@@ -1,6 +1,7 @@
 //! Slack mrkdwn → CommonMark converter. Port of `src/ingest/providers/
 //! slack/mrkdwn.py`.
 
+use datalib_html_entities::decode;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -61,7 +62,7 @@ pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
             format!("#{}", channel_label(caps, labels, slack_encode))
         })
         .into_owned();
-    decode_entities(&emojize(&replaced))
+    decode(&emojize(&replaced)).into_owned()
 }
 
 /// The people a message's text mentions (`<@U…>`), each once, in the
@@ -78,16 +79,9 @@ pub fn mentioned_users(text: &str, team_id: &str) -> Vec<Handle> {
     out
 }
 
-/// The three entities Slack escapes in message text (per its
-/// Formatting reference), back to the characters typed.
-fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-}
-
-/// Plain text as Slack writes it in a message: [`decode_entities`]'s
-/// inverse.
+/// Plain text as Slack writes it in a message, escaping the three
+/// characters its Formatting reference names; every other `&` it writes
+/// is `&amp;`, so `datalib_html_entities::decode` reads it back exactly.
 fn slack_encode(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -100,7 +94,7 @@ fn slack_encode(text: &str) -> String {
 fn user_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let uid = &caps[1];
     match caps.get(2) {
-        Some(label) => name(&decode_entities(label.as_str())),
+        Some(label) => name(&decode(label.as_str())),
         None => labels
             .users
             .get(uid)
@@ -123,7 +117,7 @@ fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
 fn channel_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let cid = &caps[1];
     match caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty()) {
-        Some(label) => name(&decode_entities(label)),
+        Some(label) => name(&decode(label)),
         None => labels
             .channels
             .get(cid)
@@ -180,7 +174,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     out = SUBTEAM_REF
         .replace_all(&out, |caps: &Captures<'_>| {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("group");
-            hold(format!("@{}", md_name(&decode_entities(name))))
+            hold(format!("@{}", md_name(&decode(name))))
         })
         .into_owned();
 
@@ -190,7 +184,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 
     out = URL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
-            let url = decode_entities(&caps[1]);
+            let url = decode(&caps[1]);
             match caps.get(2).map(|m| m.as_str()) {
                 Some(label) if !label.is_empty() && label != &caps[1] => {
                     format!(
@@ -367,7 +361,7 @@ fn decode_entities_where_literal(text: &str) -> String {
         .into_iter()
         .map(|(part, is_code)| {
             if is_code {
-                decode_entities(part)
+                decode(part).into_owned()
             } else {
                 part.to_string()
             }

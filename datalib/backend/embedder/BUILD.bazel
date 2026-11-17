@@ -83,25 +83,20 @@ rust_test(
     ],
 )
 
-# The embedder against qmd itself: the pinned qmd package run by the
-# pinned node, on the pinned model, on the same texts.
+# The embedder against qmd's own answers on the same texts, captured once
+# (tests/qmd_cpu_golden.json), on the pinned model.
 rust_test(
     name = "parity_test",
     size = "medium",
     srcs = ["tests/parity.rs"],
     data = [
-        "tests/qmd_embed.mjs",
-        "@nodejs_host//:node_bin",
-        "//third-party/qmd/runtime:qmd_package_dir",
-        "//third-party/qmd/runtime:qmd_tree",
+        "tests/qmd_cpu_golden.json",
         "//third-party/qmd_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
         "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
-        "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-        "QMD_PACKAGE_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
-        "QMD_SCRIPT_RLOC": "$(rlocationpath tests/qmd_embed.mjs)",
+        "QMD_GOLDEN_RLOC": "$(rlocationpath tests/qmd_cpu_golden.json)",
     },
     tags = ["cpu:2"],
     deps = [
@@ -109,6 +104,5 @@ rust_test(
         "//datalib/backend/search_index:datalib_search_index",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:tempfile",
     ],
 )

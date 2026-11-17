@@ -169,7 +169,7 @@ group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 
-# Each source's keyword (BM25) part of the qmd index. Cheap enough to
+# Each source's keyword (BM25) part of the search index. Cheap enough to
 # build with the image, so free-text search works the moment the demo
 # starts; the embeddings below the cut are what a first sync adds.
 

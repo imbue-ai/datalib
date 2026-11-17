@@ -4,7 +4,7 @@ The embedder runs the search model, embeddinggemma 300M (Q8_0, the file
 `datalib-step pull-models` puts in place), through llama.cpp
 (`third-party/llama_cpp`) behind a small C shim (`csrc/embedder.cpp`). It
 is set up as qmd's node-llama-cpp set it up, so the vectors are the ones
-qmd wrote; `tests/parity.rs` holds that against qmd itself.
+qmd wrote; `tests/parity.rs` holds that against a golden of qmd's answers.
 
 **The facts below are tests.** `//datalib/backend/embedder:embedding_facts`
 (`tests/embedding_facts.rs`) checks each one, in this order. Run it after

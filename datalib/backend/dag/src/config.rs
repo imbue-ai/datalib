@@ -1021,8 +1021,8 @@ struct RawConfig {
 const RETIRED_TOP_KEYS: &[(&str, &str)] = &[
     (
         "embed_contexts",
-        "has no effect: it set how many contexts qmd embedded with, and search no longer \
-         runs qmd",
+        "has no effect: it set how many contexts qmd embedded with, and the embed step \
+         runs the embedding model in process",
     ),
     (
         "embed_search_index",

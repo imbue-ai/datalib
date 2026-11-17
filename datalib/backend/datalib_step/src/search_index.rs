@@ -925,11 +925,15 @@ mod tests {
             markdown_uuid: "d".into(),
             content_hash: "h".into(),
             title: "T".into(),
-            sections: text::draw(&[Piece {
-                text: "hello".into(),
-                framed: true,
-                ..Piece::default()
-            }]),
+            head: None,
+            sections: text::draw(
+                &[Piece {
+                    text: "hello".into(),
+                    framed: true,
+                    ..Piece::default()
+                }],
+                &text::Facts::default(),
+            ),
         };
         let drawn = doc.prompted();
         let good: HashSet<&str> = [drawn[0].hash.as_str()].into();

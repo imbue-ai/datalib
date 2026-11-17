@@ -27,9 +27,6 @@ pin brought, is [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md).
        ▼
    //third-party/doltlite:sqlite3
        (cc_library — compiles sqlite3.c into libsqlite3.a)
-       │      ▲
-       │      │  deps=[":blake3_kernels"]  (BLAKE3's SIMD kernels,
-       │      │  one compile each, from @blake3_c//)
        │
        ├─────────────────────────────┐
        │                             │
@@ -65,34 +62,23 @@ agree.
 doltlite names every chunk it stores by its BLAKE3 hash, and hashes
 again on the way back in to check what it read. The amalgamation
 embeds BLAKE3 1.8.5 with its dispatcher, which asks the CPU at run time
-which kernel it can run, but turns every SIMD kernel off
-(`BLAKE3_NO_SSE2` … `BLAKE3_USE_NEON 0`): each kernel needs its own
-`-m` flags, and one file cannot carry them. doltlite's own make build
-compiles them (`main.mk`); the amalgamation does not. So doltlite
-hashed every chunk with the portable code, even on a mac.
+which kernel it can run, and its SIMD kernels: SSE2, SSE4.1, AVX2 and
+AVX-512 on x86_64, each compiled for its own instructions inside the
+one file, and NEON on aarch64. An x86 CPU without AVX2 still runs: the
+dispatcher picks the widest kernel it has. It names every BLAKE3 symbol
+`doltlite_<name>`, so the Rust `blake3` crate's own kernels, under the
+plain names, never meet it in a static musl link. Nothing here compiles
+a kernel: `:sqlite3`, `libdoltlite` and the reader wheels
+(`scripts/release/compile_reader_library.sh`) each compile the one file.
 
-That cost real time. On a 1.46 GB Lightroom catalog (28.6k images)
-the ingest's writer thread spent over 40% of its busy time in the
-portable code. So here:
+The kernels matter. On the portable code alone, a 1.46 GB Lightroom
+catalog's ingest spent over 40% of its writer thread hashing.
 
-- `-DDOLTLITE_BLAKE3_SIMD_OBJECTS` (in `DOLTLITE_DEFINES`) tells the
-  amalgamation the kernels are compiled as objects of their own, so it
-  skips the lines that turn them off.
-- `@blake3_c` is BLAKE3's source at the version the amalgamation
-  embeds, and `:blake3_<kernel>` compiles each kernel with its own
-  flags (`BLAKE3_KERNELS` in `BUILD.bazel`): SSE2, SSE4.1, AVX2 and
-  AVX-512 on x86_64, NEON on aarch64. An x86 CPU without AVX2 still
-  runs: the dispatcher picks the widest kernel it has.
-- Every global symbol of the kernels is renamed `doltlite_<name>`
-  (`BLAKE3_KERNEL_SYMBOLS`): the Rust `blake3` crate links its own
-  kernels under the same names, and a static musl link refuses two.
-- The reader wheels compile the same kernels with the same flags
-  (`:blake3_kernel_sources`, `scripts/release/compile_reader_library.sh`).
-
-The hashes do not change: every kernel computes the same BLAKE3.
-`:blake3_kernels_test` checks that against BLAKE3's own test vectors,
-that the dispatcher has a kernel to pick, and that `@blake3_c` is the
-version the amalgamation embeds.
+`:blake3_kernels_test` checks doltlite's hashing against BLAKE3's own
+test vectors, that the dispatcher has a SIMD kernel to pick, and that
+`@blake3_c`, which supplies the vectors and the header the test
+declares BLAKE3's functions with, is the version the amalgamation
+embeds.
 
 ## How caching works
 
@@ -135,15 +121,11 @@ Steps:
    - `doltlite-autoconf-X.Y.Z.tar.gz` — for its pre-generated `shell.c`
      only. The amalgamation is library-only (no `main()`), so the CLI
      has to come from here.
-3. Check that `DOLTLITE_BLAKE3_SIMD_OBJECTS` still guards the lines
-   that turn BLAKE3's kernels off (grep it in the new `doltlite.c`;
-   `:blake3_kernels_test` fails if no kernel is dispatched), and the
-   BLAKE3 the new amalgamation embeds:
-   grep `BLAKE3_VERSION_STRING` in it, and move `@blake3_c` in
+3. Check the BLAKE3 the new amalgamation embeds: grep
+   `BLAKE3_VERSION_STRING` in it, and move `@blake3_c` in
    `MODULE.bazel` to that version (`:blake3_kernels_test` fails until
-   they agree). If the release ships the kernels itself
-   ([dolthub/doltlite#4956](https://github.com/dolthub/doltlite/issues/4956)),
-   drop the define and `@blake3_c` instead.
+   they agree, and fails too if the release stops dispatching a SIMD
+   kernel).
 4. Check the chunk-store format before anything else: grep
    `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. A different
    number means every existing `.doltlite_db` is refused at open — a
@@ -184,9 +166,9 @@ Steps:
 
 | Path                        | Purpose                                                                |
 |-----------------------------|------------------------------------------------------------------------|
-| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, the BLAKE3 kernels, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `library_copts` (the flags, for the reader wheels' compile), `cli_version_test`. |
+| `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `library_copts` (the flags, for the reader wheels' compile), `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
-| `blake3.BUILD`              | BUILD file injected into the `@blake3_c//` external repo: the kernels' sources and headers, and the test vectors. |
+| `blake3.BUILD`              | BUILD file injected into the `@blake3_c//` external repo: BLAKE3's header and test vectors, for `blake3_kernels_test`. |
 | `blake3_kernels_test.c`     | doltlite's BLAKE3 against BLAKE3's test vectors, with a SIMD kernel to dispatch to. |
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
 | `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` check compares `DOLTLITE_VERSION` with itself, so pin drift is `//tools:version_pins_test`'s job. |

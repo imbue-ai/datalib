@@ -22,11 +22,11 @@ instead from `bazel run //:precommit` and as a plain step in
      grid within each tier's table).
  10. No workflow step initializes an empty bash array: expanding one
      is "unbound variable" on the macOS runners' bash 3.2.
- 11. No doc, config or script tells anyone to run latchkey or
-     `@tobilu/qmd` through a package runner (`npx`, `npm exec`,
-     `pnpm dlx`, `yarn dlx`, `bunx`) without an exact version: a runner
-     resolves anything else at run time, and those two commands are the
-     ones a person pastes a live session cookie into.
+ 11. No doc, config or script tells anyone to run latchkey through a
+     package runner (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`)
+     without an exact version: a runner resolves anything else at run
+     time, and latchkey is what a person pastes a live session cookie
+     into.
  12. Every sqlx SQLite pool turns off `idle_timeout` and `max_lifetime`,
      and none is built by a shortcut that takes sqlx's defaults: either
      setting gives the pool a maintenance task, and sqlx 0.9's can spin
@@ -959,10 +959,10 @@ def _check_manual_targets_still_build(root: Path) -> int:
     return 1
 
 
-# --- Check 11: no floating `npx -y latchkey` / `npx -y @tobilu/qmd` ----
+# --- Check 11: no floating `npx -y latchkey` --------------------------
 #
-# The code pins both (`LATCHKEY_VERSION`, `DEFAULT_QMD_VERSION` in
-# datalib/backend/runtime), the installer puts a `latchkey` launcher on
+# The code pins it (`LATCHKEY_VERSION` in
+# datalib/backend/runtime/src/node_runtime.rs), the installer puts a `latchkey` launcher on
 # the PATH, and the app renders the pinned form in every hint it shows.
 # The docs were the one place the version floated (#140): `npx -y
 # latchkey auth set … $(pbpaste)` hands a session cookie to whatever npm
@@ -979,7 +979,7 @@ def _check_manual_targets_still_build(root: Path) -> int:
 _PACKAGE_RUNNER = re.compile(
     r"(?<![\w-])(?:npx|bunx|bun\s+x|npm\s+exec|npm\s+x|pnpm\s+dlx|yarn\s+dlx)\b"
 )
-_PINNED_PACKAGES = ("latchkey", "@tobilu/qmd")
+_PINNED_PACKAGES = ("latchkey",)
 _EXACT_VERSION = re.compile(
     r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?"
 )
@@ -1021,7 +1021,7 @@ def _unpinned(package: str) -> bool:
 
 
 def floating_npx(line: str) -> bool:
-    """Whether `line` runs latchkey or qmd through a runner at no exact version."""
+    """Whether `line` runs latchkey through a runner at no exact version."""
     for runner in _PACKAGE_RUNNER.finditer(line):
         rest = line[runner.end() :]
         end = _COMMAND_ENDS.search(rest)
@@ -1062,14 +1062,14 @@ def _check_no_floating_npx(root: Path) -> int:
             if floating_npx(line):
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
     if not hits:
-        print("OK: no floating `npx -y latchkey` / `npx -y @tobilu/qmd`.")
+        print("OK: no floating `npx -y latchkey`.")
         return 0
     print(
         "ERROR: a command that resolves `latest` from npm at run time:\n\n"
         + "\n".join(hits)
         + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
-        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
-        "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
+        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pin lives in\n"
+        "  datalib/backend/runtime/src/node_runtime.rs.",
         file=sys.stderr,
     )
     return 1

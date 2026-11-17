@@ -3,128 +3,138 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === slack 00000000-0000-8087-98c3-35796eae6f68 #ten-forward
---- 0b7698fa-7fc0-89d7-af94-d89a1724367f
-William T. Riker — Wed 28 May 2369 15:16
+--- chunk 0
+title: #ten-forward | text: William T. Riker — Wed 28 May 2369 15:16
 
 Anyone up for poker tonight?
 
---- 0b7698fc-0660-889a-8ed4-b5b9b5c39786
-Worf — Wed 28 May 2369 15:18
+
+--- chunk 1
+title: #ten-forward | text: Worf — Wed 28 May 2369 15:18
 
 I do not understand the appeal of this Earth game.
 
+
 === slack 00000000-0000-80d6-b5a5-2617d0679dab @William T. Riker, Worf
---- 0b7698ff-2340-8846-8c6a-4796fd32ae08
-Jean-Luc Picard — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker, Worf | text: Jean-Luc Picard — Wed 28 May 2369 15:21
 
 Noted, Mr. Worf. Phasers on stun.
 
+
 === slack 00000000-0000-8119-8c96-61dfdcca24d4 #bridge
---- 0b769903-a780-8b46-b987-b030e43d4ae0
-William T. Riker — Wed 28 May 2369 15:26
+--- chunk 0
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:26
 
 Shields up. Red alert.
 
+
 === slack 00000000-0000-811d-904c-516d04a43f68 #bridge
---- 0b7698fd-8d00-84ad-8dc9-0a79dbe69904
-Lt. Cmdr. Data — Wed 28 May 2369 15:20
+--- chunk 0
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:20
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
 
+
 === slack 00000000-0000-81d7-a9c9-0ee77752a4e6 #engineering
---- 0b7698f8-f920-898c-8557-00e23e5954e1
-Lt. Cmdr. Data — Wed 28 May 2369 15:15
+--- chunk 0
+title: #engineering | text: Lt. Cmdr. Data — Wed 28 May 2369 15:15
 
 Warp core efficiency at 99.7%.
 
+
 === slack 00000000-0000-828b-b39d-73c49d6cb65c slack storage
---- -
----
-title: slack storage
-source: slack
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: slack storage | text: Source: datalib
 
-# [slack](datalib:group/slack "slack") — storage
+# slack — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest` | <size> | 3 files | <span id="m-00000000-0000-828b-b39d-73c49d6cb65c" data-section-uuid="00000000-0000-828b-b39d-73c49d6cb65c">`00000000`</span> |
-| Store | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-82dc-b3bb-cac0a58e1932" data-section-uuid="00000000-0000-82dc-b3bb-cac0a58e1932">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | <span id="m-00000000-0000-8e1d-8172-8ddcd05eb415" data-section-uuid="00000000-0000-8e1d-8172-8ddcd05eb415">`00000000`</span> |
-| Store | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8910-acae-05b085c15fd2" data-section-uuid="00000000-0000-8910-acae-05b085c15fd2">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | <span id="m-00000000-0000-832a-b8c5-bee251b65c0a" data-section-uuid="00000000-0000-832a-b8c5-bee251b65c0a">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | <span id="m-00000000-0000-8398-beee-d95388e81c61" data-section-uuid="00000000-0000-8398-beee-d95388e81c61">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | <span id="m-00000000-0000-84db-afe6-9a7dcc37a664" data-section-uuid="00000000-0000-84db-afe6-9a7dcc37a664">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | <span id="m-00000000-0000-832f-a345-ae979cf8e91d" data-section-uuid="00000000-0000-832f-a345-ae979cf8e91d">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | <span id="m-00000000-0000-8fd1-a783-56b261b146ca" data-section-uuid="00000000-0000-8fd1-a783-56b261b146ca">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | <span id="m-00000000-0000-8c70-9bd9-88037880fe89" data-section-uuid="00000000-0000-8c70-9bd9-88037880fe89">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | <span id="m-00000000-0000-8e11-bb52-ccb088e26eae" data-section-uuid="00000000-0000-8e11-bb52-ccb088e26eae">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | <span id="m-00000000-0000-8f9f-ab8b-629c47f1ef42" data-section-uuid="00000000-0000-8f9f-ab8b-629c47f1ef42">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | <span id="m-00000000-0000-8b2d-90f4-4d08d8ca2844" data-section-uuid="00000000-0000-8b2d-90f4-4d08d8ca2844">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | <span id="m-00000000-0000-8847-ab80-7567f44dac43" data-section-uuid="00000000-0000-8847-ab80-7567f44dac43">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | <span id="m-00000000-0000-81f5-9488-eaba3bd0fd05" data-section-uuid="00000000-0000-81f5-9488-eaba3bd0fd05">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | <span id="m-00000000-0000-80cd-b2f2-893abd0a6dbb" data-section-uuid="00000000-0000-80cd-b2f2-893abd0a6dbb">`00000000`</span> |
-| Table | [ingest](datalib:step/slack/ingest "slack/ingest") | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | <span id="m-00000000-0000-84f3-9406-19d73c28936b" data-section-uuid="00000000-0000-84f3-9406-19d73c28936b">`00000000`</span> |
+| Source Size | ingest | `slack/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `slack/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Store | ingest | `slack/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | `00000000` |
 
 === slack 00000000-0000-84d6-b1f0-0b22f0528e5c #bridge
---- 0b7698f2-dea0-84c2-a732-f51e3d0eed12
-Jean-Luc Picard — Wed 28 May 2369 15:08
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:08
 
 Mr. Data, status report.
 
---- 0b7698f4-6540-8740-8097-5bd209562812
-Lt. Cmdr. Data — Wed 28 May 2369 15:10
+
+--- chunk 1
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:10
 
 All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
 
---- 0b7698f5-ebe0-8636-907d-ec3c06dd8caf
-William T. Riker — Wed 28 May 2369 15:11
+
+--- chunk 2
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:11
 
 Set a course, Mr. Data. Warp factor five.
 
---- 0b769902-20e0-82a9-bcd1-b91ee7c07e1d
-Worf — Wed 28 May 2369 15:25
+
+--- chunk 3
+title: #bridge | text: Worf — Wed 28 May 2369 15:25
 
 Long-range sensors confirm it, Captain: a Warbird, decloaking.
 
+
 === slack 00000000-0000-8630-8d5e-f4aae259bc1c @William T. Riker
---- 0b7698ff-13a0-808c-b7ce-cea9b1aeadd7
-William T. Riker — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker | text: William T. Riker — Wed 28 May 2369 15:21
 
 Captain, the away team roster is ready for your review.
 
+
 === slack 00000000-0000-89a0-9bd6-7e928c9b2396 @Lt. Cmdr. Data
---- 0b7698ff-1b70-8b07-b467-aa4ec3751924
-Lt. Cmdr. Data — Wed 28 May 2369 15:21
+--- chunk 0
+title: @Lt. Cmdr. Data | text: Lt. Cmdr. Data — Wed 28 May 2369 15:21
 
 Sir, I have completed my analysis of the Romulan signature.
 
+
 === slack 00000000-0000-8ac1-a181-7b8e737cbd85 @William T. Riker
---- 0b7698ff-1788-803e-99f1-66c2a1e051e2
-Jean-Luc Picard — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker | text: Jean-Luc Picard — Wed 28 May 2369 15:21
 
 Thank you, Number One. Make it so.
 
+
 === slack 00000000-0000-8b0f-9140-61eaa37493ff #bridge
---- 0b7698fc-0660-82bf-8e80-6e3a63abace6
-Jean-Luc Picard — Wed 28 May 2369 15:18
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:18
 
 New combadge prototypes — thoughts?
 
 🖼 *[Delta shield prototype (not yet fetched)]*
 *(source: https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)*
 
+
 === slack 00000000-0000-8bff-b36c-0096661fd9fa #bridge
---- 0b7698f7-7280-8ed4-adc1-7d90bde8bac5
-Worf — Wed 28 May 2369 15:13
+--- chunk 0
+title: #bridge | text: Worf — Wed 28 May 2369 15:13
 
 I recommend raising shields **now**, Captain.
 
+
 === slack 00000000-0000-8d9c-9316-43944fcd9e60 @William T. Riker, Worf
---- 0b7698ff-1f58-8154-ac8f-29f1f51d27f8
-Worf — Wed 28 May 2369 15:21
+--- chunk 0
+title: @William T. Riker, Worf | text: Worf — Wed 28 May 2369 15:21
 
 @Jean-Luc Picard, I must object to beaming down unarmed.
