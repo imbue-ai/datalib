@@ -146,6 +146,9 @@ pub enum Retired {
     /// A `qmd_aggregator` step, from before `grid_index` swept the vectors
     /// and reported (`aggregator_drop.rs`).
     AggregatorStep,
+    /// A step's `locks` or a `[[locks]]` entry naming `qmd_embed` or
+    /// `qmd_keyword` (`lock_names.rs`).
+    SearchLockNames,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }

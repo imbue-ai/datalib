@@ -102,7 +102,11 @@ Args (positional):
                       path is to the .json file itself; the images it
                       names sit beside it). `datalib-step synthesize
                       google_drive` expands it into playback fixtures.
-    31: datalib-http binary, optional. Given, every sync goes through a
+    31: embeddinggemma  The pinned embedding model. Linked where the
+                      steps look in the root first, so `grid_index`'s
+                      keyword pass reads its tokenizer without fetching
+                      it into the host's model cache.
+    32: datalib-http binary, optional. Given, every sync goes through a
                       server on the root, driven over its API the way
                       the web client drives it (`sync_drivers.py`);
                       absent, through `datalib-dag`.
@@ -146,6 +150,9 @@ FIXTURE_SIGNAL_AEP = "0" * 64
 # to this; we set the env var here so the extract path doesn't
 # need any special wiring.
 FIXTURE_WHATSAPP_KEY = "0" * 64
+
+# The name the steps look the embedding model up by (`PinnedModel::cache_name`).
+EMBED_MODEL_FILE = "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
 
 # Sources whose raw store this harness seeds directly, so the generated
 # config emits no download step for them.
@@ -244,9 +251,15 @@ def prepare(argv: list[str]) -> Prepared:
     codex_fx = Path(argv[28]).resolve()
     calendar_fx = Path(argv[29]).resolve()
     google_drive_spec = Path(argv[30]).resolve()
-    http_bin = Path(argv[31]).resolve() if len(argv) > 31 else None
+    embed_model = Path(argv[31]).resolve()
+    http_bin = Path(argv[32]).resolve() if len(argv) > 32 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
+    models = data_root / "unified_grid_and_search_index" / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    model_link = models / EMBED_MODEL_FILE
+    model_link.unlink(missing_ok=True)
+    model_link.symlink_to(embed_model)
     # The DAG config + playback fixtures + per-source input dirs all
     # stashed under the data_root. The pipeline lays out its own
     # `<name>/ingest`, `<name>/render_markdown`, and `system/` directly
@@ -263,6 +276,9 @@ def prepare(argv: list[str]) -> Prepared:
     own_cache_env = {
         **os.environ,
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
+        # The model is linked into the root above; a step that looks
+        # anywhere else fails rather than downloading.
+        "DATALIB_MODELS_NO_FETCH": "1",
     }
 
     # Contacts are ingested twice: once from the checked-in address

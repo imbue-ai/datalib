@@ -24,8 +24,13 @@
 //! `since`; then `problem_inputs.rs`: `grid_index` reads each
 //! `render_time_series` and `render_occurrences` step, for its problem
 //! rows; then `conversation_settings.rs`: the ChatGPT and Claude
-//! ingests' API settings take the names they share. Those last nine
-//! rewrites are also the ones `datalib-http` makes by itself
+//! ingests' API settings take the names they share; then
+//! `keyword_fold.rs`: each source's `keyword_index` folds into
+//! `grid_index`; then `aggregator_drop.rs`: the `qmd_aggregator` step
+//! goes; then `input_patterns.rs`: an index step reads every source's
+//! step of a function by pattern; then `lock_names.rs`: the `qmd_embed`
+//! lock is `embedder` and `qmd_keyword` goes. Every rewrite from
+//! `lowercase_ids.rs` on is also one `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
 pub mod aggregator_drop;
@@ -34,6 +39,7 @@ pub mod convert;
 pub mod index_name;
 pub mod input_patterns;
 pub mod keyword_fold;
+pub mod lock_names;
 pub mod lowercase_ids;
 pub mod problem_inputs;
 pub mod qmd_steps;
@@ -94,6 +100,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if aggregator_drop::is_retired(text)? {
         return Ok(LegacyFormat::AggregatorStep);
     }
+    if lock_names::is_retired(text)? {
+        return Ok(LegacyFormat::SearchLockNames);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -109,7 +118,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::UnreadProblems
         | LegacyFormat::ConversationSettingNames
         | LegacyFormat::KeywordIndexSteps
-        | LegacyFormat::AggregatorStep => text.to_string(),
+        | LegacyFormat::AggregatorStep
+        | LegacyFormat::SearchLockNames => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -128,6 +138,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = keyword_fold::rewrite(&out)?;
     let out = aggregator_drop::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
+    let out = lock_names::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -273,6 +284,19 @@ pub fn upgrade_aggregator_drop(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Rename `qmd_embed` to `embedder` and drop `qmd_keyword`, in steps'
+/// `locks` and in `[[locks]]` entries (`lock_names.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did.
+pub fn upgrade_lock_names(text: &str) -> Result<Option<String>> {
+    if !lock_names::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = lock_names::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Write a pattern (`*/render_markdown`) in each index step's `inputs`
 /// where it names every step of that function (`input_patterns.rs`).
 /// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
@@ -325,7 +349,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 12] = [
+pub const UNATTENDED: [Rewrite; 13] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -401,6 +425,13 @@ pub const UNATTENDED: [Rewrite; 12] = [
         what: "an index step reads every source's step of a function by pattern \
                (`*/render_markdown`), so a source added later is read without editing it",
         run: upgrade_input_patterns,
+    },
+    Rewrite {
+        why: "names the `qmd_embed` or `qmd_keyword` lock",
+        what: "every embed holds the `embedder` lock, which was `qmd_embed`; \
+               `qmd_keyword` is gone, since only `grid_index` writes the grid index's file, \
+               and a step that named it holds its default lock",
+        run: upgrade_lock_names,
     },
 ];
 

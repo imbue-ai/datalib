@@ -210,10 +210,10 @@ inputs = ["unified_grid_and_search_index/grid_index"]
 # What keeps steps apart beyond the trees they write and read. Every
 # config has three budgets, `network` (4 slots), `cpu` (4) and `index`
 # (2), and a step that names none holds one of them by its shape: a
-# download `network`, a render `cpu`, an index `index`. The search steps
-# hold one of two locks of one slot instead: `qmd_keyword` (`grid_index`,
-# which writes the grid index's file) and `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
-# own and name it on the steps that hold it:
+# download `network`, a render `cpu`, an index `index`. Every `embed`
+# holds `embedder` instead, one slot, so one embedding model is loaded at
+# a time. Declare a budget to resize it, or add your own and name it on
+# the steps that hold it:
 #
 #   [[locks]]
 #   name = "slack-api"   # two sources on one workspace's rate limit
