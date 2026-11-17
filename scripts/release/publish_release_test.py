@@ -19,8 +19,8 @@ from typing import Any
 
 import publish_release
 from publish_release import (
-    DMG,
     CUDA_IMAGE_DIGEST,
+    DMG,
     IMAGE_DIGEST,
     IMAGE_DIGESTS,
     Refused,
