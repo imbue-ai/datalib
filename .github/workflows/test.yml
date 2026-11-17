@@ -316,7 +316,8 @@ jobs:
         run: |
           # Everything but `//datalib/ui:e2e_test`, which the `e2e` job
           # below runs. The two patterns are complements — `//...` less
-          # one label, and that label — so a new test lands in this job
+          # one label, and that label (a `test_suite`, whose tests the
+          # minus takes out with it) — so a new test lands in this job
           # without anyone choosing.
           #
           # `--test_env=PLAYWRIGHT_BROWSERS_PATH` stays although only the
@@ -498,7 +499,8 @@ jobs:
           # the step after this one uploads when the run is red; see
           # datalib/ui/tests/e2e/README-artifacts.md.
           #
-          # It is `no-sandbox` + `requires-network` and takes ~4 min, so
+          # It is `no-sandbox` + `requires-network` and takes ~11 min (its
+          # three parts, one after another), so
           # it lands on the critical path rather than being a cache
           # replay like the rest of a warm `main` run. That is the price
           # of gating UI regressions; see `docs/dev/testing.md`.
@@ -552,25 +554,29 @@ jobs:
         run: |
           set -euo pipefail
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          zip="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.outputs/outputs.zip"
-          if [[ -f "${zip}" ]]; then
-            mkdir -p e2e-report && cp -L "${zip}" e2e-report/playwright-report.zip
-          else
-            echo "no e2e outputs at ${zip} — the suite did not run, or passed"
-          fi
+          testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
+          mkdir -p e2e-report
+          for part in chromium sandboxes webkit; do
+            zip="${testlogs}/datalib/ui/e2e_${part}_test/test.outputs/outputs.zip"
+            if [[ -f "${zip}" ]]; then
+              cp -L "${zip}" "e2e-report/playwright-report-${part}.zip"
+            else
+              echo "no e2e outputs at ${zip} — that part did not run, or passed"
+            fi
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() && hashFiles('e2e-report/playwright-report.zip') != ''
+        if: failure() && hashFiles('e2e-report/playwright-report-*.zip') != ''
         with:
           name: e2e-playwright-report
-          path: e2e-report/playwright-report.zip
+          path: e2e-report/playwright-report-*.zip
           retention-days: 7
 
       # The suite's console log, green or red: Playwright's list of every
       # test with its duration, and the specs' own `[e2e]` lines. This is
       # the only record of what the suite spends its minutes on when it
-      # passes — bazel prints one wall-clock number for the whole target.
-      # When the test step says `(cached) PASSED` for the target, the
-      # suite did not run here and this log is the run's that did.
+      # passes — bazel prints one wall-clock number per part. One file
+      # per part, `<part>.log`. When the test step says `(cached) PASSED`
+      # for a part, it did not run here and its log is the run's that did.
       # `!cancelled()`, not `always()`: on a cancelled run the bazel
       # server is still winding down the build, `bazel info` queues
       # behind it, and the job then holds its concurrency group — and
@@ -580,17 +586,21 @@ jobs:
         run: |
           set -euo pipefail
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          log="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.log"
-          if [[ -f "${log}" ]]; then
-            mkdir -p e2e-report && cp -L "${log}" e2e-report/test.log
-          else
-            echo "no e2e log at ${log} — the suite did not run"
-          fi
+          testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
+          mkdir -p e2e-report
+          for part in chromium sandboxes webkit; do
+            log="${testlogs}/datalib/ui/e2e_${part}_test/test.log"
+            if [[ -f "${log}" ]]; then
+              cp -L "${log}" "e2e-report/${part}.log"
+            else
+              echo "no e2e log at ${log} — that part did not run"
+            fi
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && hashFiles('e2e-report/test.log') != '' }}
+        if: ${{ !cancelled() && hashFiles('e2e-report/*.log') != '' }}
         with:
           name: e2e-test-log
-          path: e2e-report/test.log
+          path: e2e-report/*.log
           retention-days: 14
 
       - uses: ./.github/actions/disk-low-point

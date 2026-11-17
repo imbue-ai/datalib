@@ -186,6 +186,15 @@ one binary would be indistinguishable.
 * **`warmup`** — the search model's cold load, paid once before `chromium`
   and `webkit` start.
 
+Bazel runs them as three tests, each with its own timeout, and
+`//datalib/ui:e2e_test` is the `test_suite` of all three:
+`e2e_chromium_test` runs `warmup` and `chromium`, `e2e_sandboxes_test`
+the `chromium-<spec>` projects, and `e2e_webkit_test` `warmup` and
+`webkit`. `DATALIB_TEST_E2E_PART` tells `playwright.config.ts` which
+part it is, and it starts only that part's backends; unset, as under
+`bazel run //datalib/ui:e2e`, it runs everything. A new spec lands in a
+part by the project it lands in, with nothing to choose.
+
 The `webkit` project exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a
 way that has shipped twice. WebKit resolves a child's percentage `height`
@@ -393,8 +402,8 @@ source.
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
 hunt one, repeat the spec (§"Running one spec, and running it several
-times") or `bazelisk test //datalib/ui:e2e_test --runs_per_test=N
---local_test_jobs=1`. `scripts/flaky_tests.py` lists the targets that
+times") or `bazelisk test //datalib/ui:e2e_<part>_test --runs_per_test=N
+--local_test_jobs=1` for the part that holds it. `scripts/flaky_tests.py` lists the targets that
 went red and then green on the same commit.
 
 ## The sign-in suite
