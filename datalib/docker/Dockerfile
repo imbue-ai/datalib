@@ -127,7 +127,10 @@ ADD --link cuda/cuda-libs-x86_64-unknown-linux-gnu.tar.gz /usr/local/lib/datalib
 ADD --link cuda/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz /opt/datalib/
 ENV LD_LIBRARY_PATH=/usr/local/lib/datalib-cuda/cublas
 
-FROM cuda-${CUDA}
+# The app without the demo: what `.github/workflows/cuda.yml` builds
+# (`--target app`) over the latest release's binaries, which cannot run a
+# newer demo config.
+FROM cuda-${CUDA} AS app
 
 # Everything below is the release tarball and the entrypoint. A
 # contributor in the devcontainer builds the binaries from source with
@@ -221,6 +224,8 @@ ENV DATALIB_NO_FETCH=1
 # per-bind-mount key file before exec'ing the user's command. See the
 # script header and docs/docker.md for the security model.
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
+
+FROM app
 
 # --- The demo data library ------------------------------------------
 #

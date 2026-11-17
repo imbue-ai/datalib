@@ -524,7 +524,7 @@ matches.
   does.
 - The `cuda` job's stamped build and the `-cuda` image's push. On a PR,
   `.github/workflows/cuda.yml` runs `build_cuda.sh` unstamped and builds
-  the `-cuda` image over the latest release's binaries, so the scripts,
+  the `-cuda` image, up to its demo, over the latest release's binaries, so the scripts,
   the Dockerfile's CUDA stage and its layer reuse are tried; the release
   runner without a cache (about 1 GB of NVIDIA's toolkit, and the GPU
   code compiled cold) and the push first happen on a tag.

@@ -104,8 +104,9 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The `-cuda` image from this run's CUDA assets and the latest release's
-  # binaries, which a PR builds no tarball of: the CUDA stage's layers, the
+  # The `-cuda` image, up to its demo (`--target app`), from this run's CUDA
+  # assets and the latest release's binaries, which a PR builds no tarball
+  # of and which cannot run this tree's demo config: the CUDA stage's layers, the
   # image's own check that the module lacks nothing but the driver, and the
   # claim the Dockerfile makes for `ADD --link` — rebuilt over a fresh OS
   # stage, the two CUDA layers come out byte for byte the same.
@@ -152,7 +153,7 @@ jobs:
           BUILDKIT_PROGRESS: plain
         run: |
           docker buildx build --platform linux/amd64 --build-arg CUDA=12 \
-              --tag datalib:cuda-first --load ctx
+              --target app --tag datalib:cuda-first --load ctx
           docker run --rm --entrypoint sh datalib:cuda-first -c \
               'ls -la /opt/datalib/lib /usr/local/lib/datalib-cuda/cublas; ldd /opt/datalib/lib/libggml-cuda.so | grep -E "cublas|cuda"'
           docker history --no-trunc --format '{{.Size}}\t{{.CreatedBy}}' datalib:cuda-first | cut -c1-160
@@ -163,7 +164,7 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx build --platform linux/amd64 --build-arg CUDA=12 \
-              --no-cache-filter os --tag datalib:cuda-second --load ctx
+              --target app --no-cache-filter os --tag datalib:cuda-second --load ctx
           layers() { docker image inspect "$1" --format '{{range .RootFS.Layers}}{{println .}}{{end}}'; }
           layers datalib:cuda-first > first.txt
           layers datalib:cuda-second > second.txt
