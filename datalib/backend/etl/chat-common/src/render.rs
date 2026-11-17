@@ -2221,10 +2221,8 @@ mod tests {
         assert!(md.contains("id=\"m-44444444"));
     }
 
-    /// The header stays a real `##` — qmd scores an `h2` far above the
-    /// blank line it would otherwise cut a chunk at, so dropping the
-    /// heading for a plain `<div>` would quietly coarsen every chat's
-    /// chunk boundaries.
+    /// The header stays a real `##`: the UI's styles find a message's
+    /// header by it (chat-common's README, "The message header").
     #[test]
     fn message_header_is_an_h2_with_a_hoverable_short_timestamp() {
         let chat = mk_chat();

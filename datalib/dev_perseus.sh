@@ -40,7 +40,7 @@ trap 'rm -rf "$ROOT"' EXIT INT TERM
 echo "Perseus data root: $ROOT" >&2
 
 # Render-only DAG config: no download step, so the render step reads
-# the TEI XMLs directly from `input_path`. We build the qmd index here
+# the TEI XMLs directly from `input_path`. We build the search index here
 # even though we won't use the search bar, because the `unified_grid_and_search_index`
 # applet serves the grid off both indexes and paying for it once is
 # easier than special-casing it out.
@@ -81,16 +81,6 @@ group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 EOF
-
-# Mirror the model-cache symlink that materialize_tng_root.sh sets up,
-# so qmd-indexer can find the GGUF weights without re-downloading them
-# on every launch. Path matches qmd's own default; the cache itself is
-# populated externally (per README's first-time setup).
-SHARED_MODELS="${HOME:-.}/.cache/qmd/models"
-if [[ -d "$SHARED_MODELS" ]]; then
-  mkdir -p "$ROOT/qmd"
-  ln -sfn "$SHARED_MODELS" "$ROOT/qmd/models"
-fi
 
 # Deterministic `--now` so re-runs of this script don't bump the
 # row's rendered_at and confuse the user when comparing across

@@ -761,7 +761,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """The `pdf` source's contribution, by grid_rows kind.
 
         Pinned rather than merely non-empty because this source is the
-        one whose output feeds the qmd index by *page*: silent growth
+        one whose output feeds the search index by *page*: silent growth
         here shows up as a slower fixture build for everyone, and a
         silent drop to zero would mean PDFs stopped being searchable
         without any test going red.
@@ -781,14 +781,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_grid_and_search_index/src/hits/mapping.rs) keys grid
-        rows by `norm_path(qmd_path)` and looks each qmd hit up by the
-        hit's own data-root-relative path — the same spelling
-        `apply_one` stores in `markdowns.md_path`. A provider that
-        stamps any other form still renders correct markdown and still
-        gets indexed by qmd, so nothing else goes red; its documents
-        just vanish from free-text search, because every hit in them
-        resolves to zero grid rows and is dropped. `pdf` shipped that
+        way: a search hit names its document's file, the spelling
+        `apply_one` stores in `markdowns.md_path`, while search reads a
+        row by its `qmd_path`, whose first segment is the row's
+        `source_id`. A provider that stamps any other form still renders
+        correct markdown and still gets indexed, so nothing else goes
+        red; its documents just vanish from free-text search, because
+        their hits land on no row search reads. `pdf` shipped that
         way — it wrote the out-dir-relative `docs/<blake3>.md` while
         every other provider wrote `<stanza>/render_markdown/...`.
 
@@ -1803,8 +1802,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
         # Every page row must carry a `qmd_path`, since that column is
-        # what lets a qmd hit resolve back to a grid row — a page indexed
-        # without one is findable by search but unreachable from the UI.
+        # what lets a search hit land on a grid row — a page indexed
+        # without one is in the search index but never shown from it.
         self.assertEqual(
             self._pdf_shape(),
             {"PDF Document": 4, "PDF Page": 5},
@@ -1822,7 +1821,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # Cross-provider: `grid_rows.qmd_path` must be byte-equal to
         # its markdown's `markdowns.md_path`. Asserted over the whole
         # index rather than per-provider so a new source inherits the
-        # check for free — this is the invariant the qmd hit→row
+        # check for free — this is the invariant the search hit→row
         # mapping is built on.
         self.assertEqual(
             self._qmd_path_mismatches(),
@@ -2359,8 +2358,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
                 "longer lists it, but /applet/unified_grid_and_search_index/chat/{uuid} "
-                "still resolves and qmd still finds it — a deletion the "
-                "user can read",
+                "still resolves — a deletion the user can read",
             )
         # Nothing else moved. A sweep that takes the neighbours with it is
         # worse than one that never fires.

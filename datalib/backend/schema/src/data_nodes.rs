@@ -3,7 +3,7 @@
 // document that names it, the way a person is (`source_contacts`): a
 // re-render replaces its own rows, and a channel named by many threads
 // has a row under each, one container when read
-// (docs/dev/plans/messages_not_documents.md).
+// (docs/dev/plans/documents_to_blocks.md).
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

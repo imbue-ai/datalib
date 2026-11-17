@@ -226,9 +226,9 @@ mod tests {
         format!("{err:#}")
     }
 
-    /// The regression: a search while the models were still downloading
-    /// started qmd, which fetched its own unpinned copy, before search ran the model in process. Until they are
-    /// verified the gate answers no directory at all.
+    /// A search while the models are still downloading must not load an
+    /// unverified copy: until they are verified the gate answers no
+    /// directory at all.
     #[test]
     fn no_directory_while_the_models_are_being_provisioned() {
         let gate = ModelGate::new(Path::new("/nonexistent"));

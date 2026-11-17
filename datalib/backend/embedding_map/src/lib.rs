@@ -1,7 +1,8 @@
 //! A 2-D map of document embeddings: nearest neighbours, a starting
 //! layout seeded from the previous map, UMAP, and a fit back onto the
 //! previous map's frame. Pure computation over values; the step that
-//! reads qmd's vectors and writes the map is `datalib_step::embedding_map`.
+//! reads the inference cache's vectors and writes the map is
+//! `datalib_step::embedding_map`.
 //! The README beside this file says why each stage is there.
 
 use std::collections::HashMap;

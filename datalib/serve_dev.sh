@@ -14,7 +14,7 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
   || { echo>&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
 set -u
 
-# The Node + qmd + latchkey trees a sync spawns (see dev_runtime.sh).
+# The Node + latchkey trees a sync spawns (see dev_runtime.sh).
 # shellcheck disable=SC1090
 source "$(rlocation _main/datalib/dev_runtime.sh)"
 # shellcheck disable=SC1090

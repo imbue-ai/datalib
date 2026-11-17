@@ -96,11 +96,6 @@ rust_test(
 
 insta_update(
     name = "applet_unittests.update",
-    extra_data = SEARCH_FIXTURE_DATA + [":datalib_applet"],
-    extra_env = SEARCH_FIXTURE_ENV | {
-        "APPLET_BIN": "$(rootpath :datalib_applet)",
-        "RUST_TEST_THREADS": "1",
-    },
     test = ":applet_unittests",
 )
 

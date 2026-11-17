@@ -1,9 +1,9 @@
-# Messages, not documents: grouping chosen when a search runs
+# Moving from documents to blocks: grouping chosen when a search runs
 
-**Status: proposal (2026-11-17). Steps 1, 2, 3a and 3b have landed
-(#1765, #1770, #1775, #1782); 3c is next and not started; nothing
-else is.** Facts about the tree were checked against the code on
-2026-11-16; file references are to that tree.
+**Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
+landed (#1765, #1770, #1775, #1782, #1818); nothing else has
+started.** Facts about the tree were checked against
+the code on 2026-11-16; file references are to that tree.
 
 ## The problem
 

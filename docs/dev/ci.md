@@ -48,13 +48,20 @@ reference behind them.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 
-Each bazel job first deletes the runner's unused preinstalls (Android
-SDK, .NET, GHC), which the job mounts into its container for the
-purpose (`prepare-bazel`'s "Free the runner's disk"). A runner starts
-with about 14 GB free, and the image and the build have left as little
-as 2.6 GB of it: under the pipeline's 10 GB `[disk_space]` floor, so
-every test that syncs waited on `waiting for disk space` until it timed
-out. The step prints `df -h /` before and after.
+Each bazel job mounts the runner's unused preinstalls (Android SDK,
+.NET, GHC) into its container, and `prepare-bazel`'s "Free the runner's
+disk" deletes them when the runner starts with under 40 GB free. Some
+runners have started with about 14 GB, and the image and the build have
+left as little as 2.6 GB of it: under the pipeline's 10 GB
+`[disk_space]` floor, so every test that syncs waited on `waiting for
+disk space` until it timed out (2026-11-02). Every job measured from
+2026-11-03 to 2026-11-17 started with about 80 GB free of 145 GB
+instead, and deleting the preinstalls, which frees about 17 GB, took 50
+to 130 s there; so a runner with room keeps them. The step prints
+`df -h /` first. `prepare-bazel` also samples the free space every 10 s
+for the rest of the job, and each bazel job ends with
+`.github/actions/disk-low-point`, which prints the lowest it saw: the
+number to judge the 40 GB threshold by.
 
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
@@ -211,10 +218,16 @@ BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
-nothing. An action's key covers its toolchain, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one never share an entry — locally the
-remote cache buys sharing with your own other worktrees and machines,
-not a replay of CI's work.
+nothing. An action's key covers its toolchain and every input it
+reads. On Linux the C/C++ toolchain is the hermetic LLVM one
+`MODULE.bazel` registers, not the machine's gcc, so the proc-macros and
+build scripts every Rust compile reads come out byte for byte the same
+on CI's runner, in a cloud VM and on a Linux laptop, and those share
+CI's entries when they build with CI's flags (`-c opt --config=release
+--nostamp --config=pr-tests` for a PR's). A mac builds with Apple's
+toolchain, so a darwin-arm64 rustc action and CI's linux-x86_64 one
+never share an entry: there the remote cache buys sharing with your own
+other worktrees and machines, not a replay of CI's work.
 
 **`--remote_download_minimal`** (`build:ci`, #497). A warm run has
 ~4400 cache hits; without this each hit's outputs were downloaded to
@@ -259,7 +272,7 @@ what a run uses.
 `buildbuddy` configs, with a local fallback) serves repository
 downloads from BuildBuddy instead of the origin, so a repository added
 after the image was built never reaches crates.io or GitHub from a
-runner. The qmd GGUF models are build actions rather than repositories
+runner. The embedding model GGUFs are build actions rather than repositories
 (`//third-party/embedding_models`, #499): fetched once per pin into the
 action cache, with retries on HuggingFace's 429, and never moved on a
 warm run.
@@ -494,6 +507,6 @@ done
 Not in `$HOME/.bazelrc`: the `buildbuddy` config exists only in this
 repo's `.bazelrc`, and every other workspace on the machine would fail
 with "Config value 'buildbuddy' is not defined". `--config=remote` is
-CI-only for the same reason the cache shares nothing with a mac: the
-autodetected cc toolchain is generated from the client host, so
-driving Linux executors from a mac hands them a darwin toolchain.
+CI-only for the same reason the cache shares nothing with a mac:
+toolchains are resolved on the client, so driving Linux executors from
+a mac hands them a darwin toolchain.

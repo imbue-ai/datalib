@@ -350,7 +350,7 @@ impl Embedder {
     }
 
     /// [`Self::embed`], with a text longer than the context cut to fit
-    /// first, as qmd does; and whether it was cut.
+    /// first, as qmd did; and whether it was cut.
     pub fn embed_fitted(&mut self, text: &str) -> Result<(Vec<f32>, bool)> {
         let tokens = self.tokenize(text)?;
         let (tokens, cut) = fit(tokens, self.context);

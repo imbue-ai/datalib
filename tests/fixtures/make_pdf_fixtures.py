@@ -188,7 +188,8 @@ def mixed_doc(
     "no extractable text" note rather than silently vanishing.
 
     Deliberately two pages and no more: only page 1 is embedded by the
-    qmd indexer, so the fixture costs one page on every full build.
+    search index's `embed`, so the fixture costs one page on every full
+    build.
     """
     img = bytes([0x00, 0xFF, 0xFF, 0x00])
     image_content = b"q 612 0 0 792 0 0 cm /Im0 Do Q"
@@ -261,7 +262,7 @@ def main() -> int:
 
     # The corpus is deliberately tiny: 3 renderable documents totalling
     # 4 pages. It feeds the shared TNG fixture pipeline, where every
-    # rendered page is embedded by the qmd indexer — so pages here cost
+    # rendered page is embedded for the search index — so pages here cost
     # real wall-clock on every full fixture build. Each document earns
     # its place by covering a behavior nothing else does.
 
@@ -345,7 +346,7 @@ def main() -> int:
     )
 
     # Image-only: classified `scanned`, recorded with needs_ocr, and NOT
-    # rendered — so it costs the qmd indexer nothing.
+    # rendered — so it costs the embedding nothing.
     FIXTURES["holodeck/scanned_blueprint.pdf"] = scanned_doc(
         title="Holodeck Blueprint", doc_id="feedfacefeedfacefeedfacefeedface"
     )
@@ -356,7 +357,7 @@ def main() -> int:
     # PK differs) that must share one content hash.
     #
     # Built on the scanned document deliberately: it is the one fixture
-    # that never renders, so this pair costs the qmd indexer nothing.
+    # that never renders, so this pair costs the embedding nothing.
     # Doing the same to a text document would add a page to embed on
     # every full fixture build.
     FIXTURES["holodeck/scanned_blueprint_retitled.pdf"] = scanned_doc(

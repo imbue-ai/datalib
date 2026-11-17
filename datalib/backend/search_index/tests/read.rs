@@ -357,8 +357,8 @@ fn conversation() -> IndexDoc {
     c
 }
 
-/// A page holds the words between its pieces, as qmd scored a whole
-/// document, and lands on the piece holding the most of them; a
+/// A page holds the words between its pieces, and lands on the piece
+/// holding the most of them; a
 /// conversation that says them in different messages is not found.
 #[tokio::test]
 async fn a_page_holds_the_words_between_its_pieces() {

@@ -98,9 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # holds that id and goes.
 #
 # Its home stays /root, a path and nothing more: every `docker run` a
-# person has written mounts `/root/.latchkey`, and every data root an
-# earlier image wrote links its qmd models at `/root/.cache/qmd/models`
-# (a link the indexer never repoints).
+# person has written mounts `/root/.latchkey`.
 #
 # The bind-mount targets are made here so empty-dir mounts behave
 # predictably and an unmounted run still has somewhere to write.
@@ -214,16 +212,18 @@ RUN set -eux; \
 # app; from here on, everything runs as the app's user.
 USER datalib
 
-# qmd's embedding model (about 330 MB), the one model search loads,
-# from its pinned HuggingFace revision and sha256-verified into qmd's
-# cache (`/root/.cache/qmd/models`) — the same table the `embed` step and
-# the search applet check, so a rebuilt image with the same pins lands
-# the same bytes, and search by meaning works with nothing fetched.
+# The embedding model (about 330 MB), the one model search loads,
+# from its pinned HuggingFace revision and sha256-verified into the
+# shared model cache (`/root/.cache/qmd/models`, the path qmd chose) —
+# the same table the `embed` step and the search applet check, so a
+# rebuilt image with the same pins lands the same bytes, and search by
+# meaning works with nothing fetched.
 RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
 
 # Nothing is fetched at run time: what the image ships is all it runs.
-# Every first-use fetch datalib makes (qmd's model, the Node runtime, a
-# package) is refused under this switch, naming what was missing.
+# Every first-use fetch datalib makes (the embedding model, the Node
+# runtime, a package) is refused under this switch, naming what was
+# missing.
 # `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
 ENV DATALIB_NO_FETCH=1
 

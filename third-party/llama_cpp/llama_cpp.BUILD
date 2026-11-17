@@ -40,6 +40,17 @@ COMMON_COPTS = [
     "//conditions:default": [],
 }) + ["-D_XOPEN_SOURCE=600"]
 
+# llama.cpp uses getenv, atoi and errno without including <cstdlib> or
+# <cerrno>, which libstdc++ and Apple's libc++ bring in by the way and
+# LLVM's libc++, the Linux toolchain's, does not.
+CXXOPTS = [
+    "-std=c++17",
+    "-include",
+    "cstdlib",
+    "-include",
+    "cerrno",
+]
+
 # ggml picks its x86 kernels at compile time, by these flags. Without them
 # x86_64 gets the SSE2 baseline and an embedding runs tens of times slower.
 # They are upstream's non-native default (GGML_NATIVE=OFF in
@@ -184,7 +195,7 @@ cc_library(
         "@platforms//os:macos": ["-DGGML_METAL_EMBED_LIBRARY"],
         "//conditions:default": [],
     }),
-    cxxopts = ["-std=c++17"],
+    cxxopts = CXXOPTS,
     defines = ["GGML_USE_CPU"] + select({
         "@platforms//os:macos": ["GGML_USE_METAL"],
         "//conditions:default": [],
@@ -199,10 +210,8 @@ cc_library(
     # default libraries, and ends in -Bdynamic, where a bare -l finds a
     # .so. So name the archives, after the C++ runtime what it calls:
     # libc, and libgcc's helpers (aarch64's outline atomics among them).
-    # The glibc link needs libgcc.a named too: rustc puts -lgcc_s before
-    # its last -lllama.pic, so with gcc 13 (ubuntu-24.04-arm) llama's
-    # `__aarch64_ldset4_relax` and its kin are wanted after libgcc was
-    # scanned, and the link fails.
+    # The glibc link is the LLVM toolchain's, whose compiler-rt carries
+    # those helpers and comes last on the line, so it names none.
     linkopts = select({
         ":musl": [
             "-l:libstdc++.a",
@@ -213,10 +222,8 @@ cc_library(
             "-lpthread",
             "-ldl",
             "-lm",
-            "-l:libgcc.a",
             # For libggml-cuda.so, which takes ggml from the program
-            # that loads it (below). A list, not --export-dynamic-symbol:
-            # gold, which links the gnu builds, takes no glob there.
+            # that loads it (below).
             "-Wl,--dynamic-list=$(execpath @@//third-party/llama_cpp:ggml_exports.dynlist)",
         ],
         "@platforms//os:macos": [
@@ -250,7 +257,7 @@ cc_library(
     ]),
     hdrs = ["include/llama.h"],
     copts = COMMON_COPTS,
-    cxxopts = ["-std=c++17"],
+    cxxopts = CXXOPTS,
     includes = [
         "include",
         "src",

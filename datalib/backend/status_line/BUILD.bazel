@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # `status_line!` and the process-wide `MultiProgress` it writes above.
-# Its own crate so a small library (the qmd indexer) can print a status
-# line without linking `datalib_obs` (tokio, OpenTelemetry, tonic).
+# Its own crate so a small library can print a status line without
+# linking `datalib_obs` (tokio, OpenTelemetry, tonic).
 rust_library(
     name = "datalib_status_line",
     srcs = glob(["src/**/*.rs"]),
