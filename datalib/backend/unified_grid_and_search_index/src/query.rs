@@ -561,15 +561,15 @@ mod tests {
 
     #[test]
     fn quoted_value_with_escapes() {
-        let q = parse_query(r#"datalib_id:"a\"b\\c""#);
+        let q = parse_query(r#"datalib_document_id:"a\"b\\c""#);
         assert_eq!(q.terms[0].value, "a\"b\\c");
     }
 
     #[test]
     fn negated_quoted_value() {
-        let q = parse_query(r#"-datalib_id:"hello world""#);
+        let q = parse_query(r#"-datalib_document_id:"hello world""#);
         assert!(q.terms[0].negate);
-        assert_eq!(q.terms[0].field, col("datalib_id"));
+        assert_eq!(q.terms[0].field, col("datalib_document_id"));
         assert_eq!(q.terms[0].value, "hello world");
     }
 

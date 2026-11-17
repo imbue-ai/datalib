@@ -633,7 +633,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ("email:picard@enterprise.org", vec!["picard-card"]),
         // A document, and every row in it.
         (
-            "datalib_id:riker-thread",
+            "datalib_document_id:riker-thread",
             vec!["riker-email", "riker-thread"],
         ),
         // A row by the id its source gave it: here an email's.
@@ -663,7 +663,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // Column keys: the whole value, case and all.
         "kind:email",
         "contact:Picard",
-        "datalib_id:riker",
+        "datalib_document_id:riker",
         // `id:` is the source's id, whole: not part of it, not datalib's.
         "id:ncc1701",
         "id:riker-email",
@@ -713,7 +713,7 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         assert_eq!(found(&s, q, fields).await, want, "fields: {q}");
     }
 
-    // `convo:` was `datalib_id:`'s old name, and is gone: refused by name.
+    // `convo:` was `datalib_document_id:`'s old name, and is gone: refused by name.
     let r = search(&s, "convo:riker-thread", None, 50, None).await;
     assert!(r.rows.is_empty(), "{:?}", uuids(&r));
     assert!(

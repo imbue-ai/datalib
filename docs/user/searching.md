@@ -101,10 +101,11 @@ The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
-`datalib_id:` (a document by datalib's id for it, and every row in it),
-`contact:` and `email:` (an address book's columns), and the id of any
-other column the grid shows (`org_name:`, `created_at:`, …). These match
-the whole value as stored, case and all: `kind:Email`, not `kind:email`.
+`datalib_document_id:` (a document by datalib's id for it, and every
+row in it), `contact:` and `email:` (an address book's columns), and
+the id of any other column the grid shows (`org_name:`, `created_at:`,
+…). These match the whole value as stored, case and all: `kind:Email`,
+not `kind:email`.
 
 `id:` takes the id as the source spells it: an email's id in Gmail or
 on a JMAP server (not its `Message-ID` header), a Notion page's id, a
@@ -118,10 +119,11 @@ ranked. `id:` is the exact match: the rows whose source id is that
 value, and nothing else, and it combines with other keys like any key
 does.
 
-`datalib_id:` takes the id datalib gave a document (a thread, a
-conversation, a page) and keeps that document and every row in it, over
-every month of a chat; Keep only on a Subject cell writes it. A message's own
-id finds nothing, since a message is a row inside a document.
+`datalib_document_id:` takes the id datalib gave a document (a thread,
+a conversation, a page) and keeps that document and every row in it,
+over every month of a chat; Keep only on a Subject cell writes it. A
+message's own id finds nothing, since a message is a row inside a
+document.
 
 ### Writing a time
 
