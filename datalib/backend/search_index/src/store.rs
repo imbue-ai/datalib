@@ -143,8 +143,9 @@ impl Index {
     /// Indexes `docs`, committing after about [`PUT_BYTES`] of their text
     /// so the file's other writers wait seconds, not the whole batch. A
     /// document already held with the same hash is left alone; a changed
-    /// one has its sections and chunks replaced, in one transaction.
-    pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
+    /// one has its sections and chunks replaced, in one transaction. Its
+    /// chunks are counted in `ends`'s tokens before the transaction opens.
+    pub async fn put(&self, docs: &[IndexDoc], ends: crate::chunk::TokenEnds<'_>) -> Result<()> {
         let mut rest = docs;
         while !rest.is_empty() {
             let mut bytes = 0;
@@ -157,10 +158,17 @@ impl Index {
                 })
                 .count();
             let (now, later) = rest.split_at(take);
+            let chunked = now
+                .iter()
+                .map(|d| {
+                    d.prompted(ends)
+                        .with_context(|| format!("chunk document {}", d.markdown_uuid))
+                })
+                .collect::<Result<Vec<_>>>()?;
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let mut changed = false;
-            for doc in now {
-                changed |= put_one(&mut tx, doc)
+            for (doc, chunks) in now.iter().zip(&chunked) {
+                changed |= put_one(&mut tx, doc, chunks)
                     .await
                     .with_context(|| format!("index document {}", doc.markdown_uuid))?;
             }
@@ -268,7 +276,11 @@ impl Index {
 }
 
 /// `false` when the document was already held as it is.
-async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
+async fn put_one(
+    conn: &mut SqliteConnection,
+    doc: &IndexDoc,
+    chunks: &[crate::chunk::Prompted],
+) -> Result<bool> {
     let held: Option<(i64, String, String)> = sqlx::query_as(
         "SELECT doc_id, source_id, content_hash FROM search_documents WHERE markdown_uuid = ?",
     )
@@ -329,7 +341,7 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
             .await?;
         at = end;
     }
-    for (seq, p) in doc.prompted().iter().enumerate() {
+    for (seq, p) in chunks.iter().enumerate() {
         let c = &p.chunk;
         sqlx::query(
             "INSERT INTO search_chunks \

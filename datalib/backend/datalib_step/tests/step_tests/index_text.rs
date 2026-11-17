@@ -15,6 +15,17 @@ fn every_sources_index_text_is_this() {
     tar::Archive::new(std::fs::File::open(tarball).unwrap())
         .unpack(td.path())
         .unwrap();
+    // Where the steps keep the model for this root: `--chunks` cuts the
+    // chunks with its tokenizer.
+    let model =
+        std::fs::canonicalize(std::env::var_os("EMBED_MODEL").expect("EMBED_MODEL")).unwrap();
+    let models = td.path().join("qmd/unified_grid_and_search_index/models");
+    std::fs::create_dir_all(&models).unwrap();
+    std::os::unix::fs::symlink(
+        model,
+        models.join("hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"),
+    )
+    .unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .arg("index-text")
         .arg(td.path().join("qmd"))

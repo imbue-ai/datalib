@@ -73,6 +73,7 @@ rust_binary(
     visibility = ["//tests/fixtures:__pkg__"],
     deps = [
         ":datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/runtime:datalib_runtime",

@@ -305,6 +305,11 @@ const DRAWN: &[(u32, &str)] = &[
         5,
         "71ddcdd5d3bfc7fc0315a4aec050de3f61f9975240c2d18b20b808c64402e804",
     ),
+    // The same text, chunked by the model's tokens.
+    (
+        6,
+        "71ddcdd5d3bfc7fc0315a4aec050de3f61f9975240c2d18b20b808c64402e804",
+    ),
 ];
 
 /// The guard on [`INDEX_TEXT_VERSION`]: a drawing that changes while the

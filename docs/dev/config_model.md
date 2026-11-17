@@ -429,8 +429,10 @@ rendered tree is still on disk, and `qmd_aggregator` retires the
 collections no group claims.
 
 A source's `keyword_index` (input: its render) registers its own
-collection and fills it with the keyword index; its `embed` (input: the
-`keyword_index`) fetches the embedding model and fills the vectors.
+collection and fills it with the keyword index, cutting the chunks with
+the embedding model's tokenizer, so it needs the model file too; its
+`embed` (input: the `keyword_index`) loads the model and fills the
+vectors. Both fetch the model when it is missing.
 `qmd_aggregator` reads every source's pair, so it runs after all of
 them: it retires the collections of sources it does not name and
 reports each collection's counts. Nothing of a source's reads the

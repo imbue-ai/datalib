@@ -196,9 +196,11 @@ insta_update(
     extra_data = [
         ":datalib_step",
         "//tests/fixtures:ingested/qmd.tar",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     extra_env = {
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
+        "EMBED_MODEL": "$(rootpath //third-party/qmd_models:embeddinggemma)",
         "INGESTED_QMD_TAR": "$(rootpath //tests/fixtures:ingested/qmd.tar)",
     },
     test = ":step_tests",
@@ -245,6 +247,7 @@ rust_test(
         "//tests/fixtures:ingested/qmd.tar",
         "//tests/fixtures:ingested/search_index.sqlite",
         "//third-party/doltlite:doltlite",
+        "//third-party/qmd_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
@@ -252,6 +255,7 @@ rust_test(
         "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "EMBED_MODEL": "$(rootpath //third-party/qmd_models:embeddinggemma)",
         "INGESTED_QMD_TAR": "$(rootpath //tests/fixtures:ingested/qmd.tar)",
         "INSTA_WORKSPACE_ROOT": ".",
         "SEARCH_INDEX_CACHE": "$(rootpath //tests/fixtures:ingested/inference_cache.sqlite)",

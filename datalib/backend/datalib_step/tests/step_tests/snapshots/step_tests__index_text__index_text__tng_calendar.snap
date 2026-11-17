@@ -31,6 +31,12 @@ Take the core offline, recalibrate the dilithium matrix.
 
 Join from the pod: https://meet.enterprise.test/warp-core
 
+
+--- chunk 1
+title: Warp core maintenance | text: Source: calendar
+Kind: Recurring Event
+Calendar: Engineering
+
 ## Occurrences
 
 Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
@@ -102,6 +108,12 @@ Senior staff briefing
 | Deanna Troi <troi@enterprise.test> | Maybe |
 | Geordi La Forge <laforge@enterprise.test> | No reply |
 
+
+--- chunk 1
+title: Senior staff briefing | text: Source: calendar
+Kind: Recurring Event
+Calendar: Bridge
+
 ## Description
 
 Ship's status, then department heads in turn.
@@ -163,6 +175,12 @@ Senior staff briefing — Borg incursion
 | William Riker <riker@enterprise.test> | Accepted |
 | Geordi La Forge <laforge@enterprise.test> | Accepted |
 | Worf <worf@enterprise.test> | Accepted |
+
+
+--- chunk 1
+title: Senior staff briefing — Borg incursion | text: Source: calendar
+Kind: Changed Occurrence
+Calendar: Bridge
 
 ## Description
 
