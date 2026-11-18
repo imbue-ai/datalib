@@ -24,11 +24,9 @@ published from a local machine — the tag is the trigger.
   every file it checks.
 - The git tag is `vX.Y.Z` with the same number. Minor bump for
   feature releases, patch for fix-only ones — and **a change that
-  moves any store's shape is a minor bump** (the `schema_inventory`
-  golden, a `RENDER_VERSION`, `LAYOUT_VERSION` or
-  `datalib_runs::SCHEMA_VERSION`): the downgrade guard lets a newer
-  patch open a store and refuses a newer minor
-  (`docs/dev/release_steps.md`).
+  moves any store's shape is a minor bump**: what counts, and why, is
+  `docs/dev/release_steps.md` §"A patch release never changes a store's
+  shape".
 - `datalib/tauri/tauri.conf.json`'s `"version"` is the desktop
   app's own version and is **not** part of this procedure.
 - One repo outside this one pins the released version:
@@ -49,12 +47,9 @@ published from a local machine — the tag is the trigger.
    bazelisk run //tools:release_steps_docker
    ```
 
-   It runs `//tools:stage_runtime_test` and `//tools:stage_tarball_test`
-   in the devcontainer; the first run builds the image and the Linux
-   binaries cold (the better part of an hour), later ones take minutes.
-   `docs/dev/release_steps.md` says what it covers and what stays
-   release-only. A mac's `bazel test //...` has already run the same
-   tests under macOS and under `/bin/bash` 3.2.
+   `docs/dev/release_steps.md` §"Before a tag: the Linux run from a
+   mac" says what it runs and how long it takes, and the rest of that
+   page what stays release-only.
 1. Start from a clean, current main:
    `git fetch origin && git checkout -b release-vX.Y.Z origin/main`.
 2. Pick the version by reviewing what's shipping:
@@ -136,8 +131,9 @@ published from a local machine — the tag is the trigger.
    empty. If it still isn't, the lock didn't converge and the next
    person to build inherits the dirty file.
 8. Land the bump on main through a PR. `main` carries a ruleset ("CI
-   green before merge") that requires the `bazel test //...` and
-   `bazel build :dist (musl static)` checks, so a direct
+   green before merge") that requires CI's checks (`bazel test //...`,
+   `bazel test //datalib/ui:e2e_test` and `bazel build :dist (musl
+   static)` among them), so a direct
    `git push origin release-vX.Y.Z:main` is rejected with `GH013`:
 
    ```sh
@@ -174,10 +170,8 @@ published from a local machine — the tag is the trigger.
     The last job has already checked that it is immutable, holds what the
     run made, and is `releases/latest`; if that job failed after publishing,
     its log says what is wrong, and a person should look before going on.
-    The `attest` job before it signed and verified a build provenance
-    attestation for every asset and the image; the release notes can point
-    readers at `docs/user/first_time_user.md` §"Checking who built what you
-    downloaded".
+    The release notes can point readers at `docs/user/first_time_user.md`
+    §"Checking who built what you downloaded".
 
     Then give the release its notes. The workflow creates it with an
     empty body, and apps that read the raw stores learn of a change
@@ -204,10 +198,10 @@ published from a local machine — the tag is the trigger.
     uv run python scripts/release/pin_release.py vX.Y.Z
     ```
 
-    It downloads the five tarballs (about 450 MB) to check each one's
-    attestation before writing its hash, and refuses the release if any
-    check fails: say so rather than editing the pins by hand.
-    Open a PR with what it changed, and land it like any other.
+    It checks each tarball's attestation before writing its hash
+    (`docs/dev/release_steps.md` §"Pinning what people get by default").
+    If it refuses the release, say so rather than editing the pins by
+    hand. Open a PR with what it changed, and land it like any other.
 13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
     tag-relative URL that has to resolve when a workspace first uses

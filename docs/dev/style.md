@@ -95,9 +95,7 @@ Concretely:
   renderer that built it.
 - **A plan before a loop.** When a walk has passes — a forward walk
   from a cursor, a refresh window, a backfill — compute the list of
-  passes first, as a value, then loop over it. Slack's
-  `export_channel` computes them inline between fetches and is the
-  counter-example.
+  passes first, as a value, then loop over it.
 - **Reducers on the frontend.** A handler that turns `(rows, event)`
   into `rows` is a pure function in a `.ts` file with a test, called
   from the component; it is not a method on the component.

@@ -19,14 +19,14 @@ brew install uv
 # needs nothing in your home directory. The binaries shell out to
 # latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
-# A sync's first `embed` step fetches the pinned embedding model,
+# A sync's first search-index pass fetches the pinned embedding model,
 # sha256-verified, into the shared cache (`~/.cache/qmd/models`).
 ```
 
 ### Linux iteration via devcontainer
 
-If you're debugging a Linux-only build issue (e.g. one the macOS host masks
-because clang is more permissive than gcc), `.devcontainer/` ships the
+If you're debugging a Linux-only build issue (glibc, GNU tools, the
+hermetic LLVM toolchain Linux builds with), `.devcontainer/` ships the
 Ubuntu image CI runs `bazel test //...` in. Open in VS Code via
 "Reopen in Container", or from the CLI:
 
@@ -86,30 +86,13 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
-  doltlite DB, renders one Markdown file per conversation, builds a
+  doltlite DB, renders one Markdown file per document, builds a
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and a Docker image.
 
-```
-.
-├── MODULE.bazel              Bzlmod root
-├── BUILD.bazel               :all_tests aggregator, :precommit, :lint
-├── docs/                     dev/ architecture notes · user/ guides + config_examples
-├── tests/fixtures/           the TNG fixture pipeline (the ingested_tng genrule)
-└── datalib/
-    ├── backend/              Rust crates (Bazel); Cargo.toml lists their third-party deps
-    │   ├── schema/           render schema: grid_rows / edges / markdowns structs
-    │   ├── app_schema/       app-state schema: feedback / disk usage / remote media / runs
-    │   ├── core/             the app stores + deeplink grammar
-    │   ├── etl/              shared ingest machinery; etl/render/ the render framework
-    │   ├── etl/providers/*/  per-provider ingest / render / config crates
-    │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
-    │   ├── datalib_step/     datalib-step built-in step commands
-    │   └── http/             axum binary
-    ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
-    └── tauri/                Tauri shell (out of Bazel)
-```
+Where each crate and directory is, and what belongs in it:
+[`AGENTS.md`](../../AGENTS.md) §"Repo layout".
 
 ## Building & testing
 
@@ -311,7 +294,7 @@ their install scripts run.
 
 ### Search index (default-on, incremental)
 
-Three steps build the search index
+Two kinds of step build the search index
 ([`datalib/backend/search_index`](../../datalib/backend/search_index)).
 `unified_grid_and_search_index`, after the grid, brings each searched source's documents in
 the index in line with its render store: it chunks each changed document
@@ -348,14 +331,14 @@ Design notes:
 
 ### Manual integration tests (live provider APIs)
 
-Several provider crates ship a `*_live` snapshot test that hits the real
-service API through `latchkey`:
-`//datalib/backend/etl/providers/claude:claude_live`, plus the
-sibling `chatgpt_live`, `github_live`, `gitlab_live` and `notion_live`
-targets. Each downloads a small known fixture (e.g. one conversation),
-then asserts a curated stable view against committed
-[insta](https://insta.rs) snapshots. `email:gmail_live` is the one that
-does not: it downloads and checks the store it wrote, with no golden.
+Several provider crates ship a `*_live` target that hits the real
+service API through `latchkey` (`git grep -n 'name = ".*_live"' --
+'*.bazel'` lists them). `claude_live`, `chatgpt_live`, `github_live`,
+`gitlab_live` and `notion_live` each download a small known fixture
+(e.g. one conversation), then assert a curated stable view against
+committed [insta](https://insta.rs) snapshots. The others
+(`email:gmail_live`, `calendar_live`, `google_drive_live`,
+`todoist_live`) check what they downloaded with no golden.
 They are `bazel run` targets, not tests, so `bazel test //...` never
 runs them. They need `latchkey` creds for the service and
 `LATCHKEY_CURL` pointing at the router curl (which hands
@@ -418,7 +401,9 @@ which applies the same 7-day burn-in.
 
 ## What Bazel does not own
 
-- The Tauri shell and its bundler (`pnpm tauri` / `cargo tauri`); only
-  `datalib/tauri/src/launcher.rs` is compiled under Bazel, to run its tests.
+- The Tauri shell and its bundler (`pnpm tauri` / `cargo tauri`); Bazel
+  compiles only the shell's files that are kept free of `tauri`, to run
+  their tests ([`datalib/tauri/README.md`](../../datalib/tauri/README.md)
+  names them).
 - The Docker image, built from the release tarball
   ([`docker.md`](docker.md)).

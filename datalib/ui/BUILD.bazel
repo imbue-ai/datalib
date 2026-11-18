@@ -208,9 +208,9 @@ sh_binary(
 # projects (`DATALIB_TEST_E2E_PART`), and `:e2e_test` runs them all.
 # Whole it took 600-850 s on CI against the 900 s ceiling, and one run
 # timed out two-thirds of the way through; each part takes about a
-# third of that, under its own ceiling. On one four-core runner they run
-# one after another (each is `cpu:4`), so the split buys headroom, not
-# wall clock. docs/dev/testing.md § "The Playwright suite runs in two
+# third of that, under its own ceiling. CI gives each part a runner of
+# its own; on one machine they run one after another (each is `cpu:4`).
+# docs/dev/testing.md § "The Playwright suite runs in two
 # engines" says which spec lands in which part.
 #
 # Each test's `tags`, `timeout` and `env_inherit`, said once:
