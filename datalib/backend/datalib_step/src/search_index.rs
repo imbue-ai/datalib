@@ -124,7 +124,10 @@ pub(crate) async fn update_keywords(
 ) -> Result<Done> {
     retire_separate_file(root)?;
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
-    let store = match indexed_markdown::path_for(&render_root).is_file() {
+    // A source in the config whose render has not run yet has no file;
+    // it is read as a store with nothing in it, like the grid pass does.
+    let rendered = indexed_markdown::path_for(&render_root).is_file();
+    let store = match rendered {
         false => None,
         true => tokio::task::spawn_blocking(move || {
             IndexedMarkdownStore::open_for_reading(&render_root, None)
@@ -1061,6 +1064,21 @@ mod tests {
         assert_eq!(update(root).await.removed, 1);
         assert!(indexed(root).await.is_empty());
         assert_eq!(indexed_of(root, OTHER).await, other);
+    }
+
+    /// A source added to the config but not yet rendered has no render
+    /// store on disk. Its keyword pass indexes nothing and fails nothing;
+    /// it once failed the whole index step, which held every `embed`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_with_no_render_store_yet_indexes_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, OTHER, "d-hypo", "a hypospray");
+        assert!(!datalib_etl_render::indexed_markdown::path_for(&render_root(root)).exists());
+
+        assert_eq!(update(root).await, Done::default());
+        assert!(indexed(root).await.is_empty());
+        assert_eq!(update_of(root, OTHER).await.put, 1);
     }
 
     /// A stop asked for before a keyword pass begins puts nothing; the
