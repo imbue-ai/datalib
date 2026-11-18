@@ -131,6 +131,22 @@ py_test(
     main = "scripts/search_eval_test.py",
 )
 
+# devcontainer.yml's prune: what it deletes, and that a pinned image is not.
+py_test(
+    name = "prune_devcontainer_test",
+    size = "small",
+    srcs = [
+        "scripts/prune_devcontainer.py",
+        "scripts/prune_devcontainer_test.py",
+    ],
+    data = [
+        ".github/workflows/cargo-update.yml",
+        ".github/workflows/test.yml",
+    ],
+    imports = ["scripts"],
+    main = "scripts/prune_devcontainer_test.py",
+)
+
 # release.yml's steps that are Python, and the one the release procedure runs.
 py_test(
     name = "unpack_compiled_app_test",

@@ -94,9 +94,13 @@ runs in this image holding the release org's write key: `test.yml` and
 `cargo-update.yml` name it by digest, and `pin_release.py` moves them
 to each release's image in the PR it prepares
 (`release_steps.md` §"Pinning what people get by default"). To move CI
-between releases, write the digest of a `sha-` tag into both. The newest six `sha-` versions are kept and older ones
-pruned. It is a workflow of its own so that nothing in a release can
-keep it from publishing (#500).
+between releases, write the digest of a `sha-` tag into both. After each
+push, `scripts/prune_devcontainer.py` deletes the older `sha-` builds,
+keeping the newest six. It never deletes an image a release tag or
+`latest` names, one a workflow pins by digest, or a manifest a kept
+image lists: GHCR files each push as three versions, the tagged index
+and, untagged, its image and its provenance. It is a workflow of its own
+so that nothing in a release can keep it from publishing (#500).
 
 **`release.yml`** runs on a `v*` tag: the runtime assets first
 (the Node runtime `latchkey` runs from, which the binaries
