@@ -2239,8 +2239,11 @@ pub async fn collect_garbage(db_path: &Path) -> Result<bool> {
 }
 
 /// The writer's open with no schema work: the lock, the working set
-/// discarded and a stranded seal published, and nothing else.
-async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
+/// discarded and a stranded seal published, and nothing else. For a
+/// caller that is not the store's owner and so knows neither its DDL nor
+/// its ladder; [`open`] without them would refuse a store the ladder has
+/// climbed, and record the wrong shape on one it has not.
+pub async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
     open_inner(
         db_path,
         &[],
