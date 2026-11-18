@@ -42,6 +42,12 @@ what broke — bazel prints one number per part. If the job's test step
 says `(cached) PASSED` for a part, it did not run in that job and its
 log is from the run that did.
 
+The zip also holds `diagnostics/`: `cpu.tsv`, the machine's busy
+percentage and load once a second for the part's whole run (Linux
+only), and `servers/<name>.log`, what each backend the part started
+wrote. Lay a failure's trace against `cpu.tsv` to tell a page that was
+slow from one that was starved of CPU.
+
 ```bash
 gh run download <run-id> -n e2e-test-log -D /tmp/e2e
 grep -hE '^\s+(✓|✘)' /tmp/e2e/*.log | grep -oE '\[[a-z0-9-]+\] › [^›]+ › .*\([0-9.]+m?s\)$'

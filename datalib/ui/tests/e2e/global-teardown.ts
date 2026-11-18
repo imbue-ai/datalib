@@ -7,6 +7,10 @@
 // once this runner exits — its stdin is our pipe, and the parent-gone
 // deadline ends it — so without the wait a broken shutdown is invisible
 // here, which is how it stayed broken for a person at a terminal.
+//
+// Their logs are kept on the way out, beside the report.
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+
 declare const process: {
   env: Record<string, string | undefined>;
   kill(pid: number, signal?: string | number): void;
@@ -31,6 +35,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/// Each backend's log, into the report zip CI keeps for a red run: what
+/// the server, its runner and its applets said is otherwise lost with
+/// the test's scratch directory.
+function keepServerLogs(servers: Server[]): void {
+  const out = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
+  if (!out) return;
+  const dir = `${out}/diagnostics/servers`;
+  mkdirSync(dir, { recursive: true });
+  for (const s of servers) {
+    if (existsSync(s.log)) copyFileSync(s.log, `${dir}/${s.name}.log`);
+  }
+}
+
 export default async function globalTeardown(): Promise<void> {
   const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[];
   for (const s of servers) {
@@ -47,6 +64,7 @@ export default async function globalTeardown(): Promise<void> {
     await sleep(100);
     stillUp = stillUp.filter((s) => alive(s.pid));
   }
+  keepServerLogs(servers);
   if (stillUp.length > 0) {
     throw new Error(
       `${stillUp.length} backend(s) still running ${EXIT_TIMEOUT_MS}ms after SIGTERM:\n` +
