@@ -342,6 +342,51 @@ export async function fillConfigEditor(page: Page, text: string) {
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
 
+/// Wait for the sources card's "Sync everything", which it shows only
+/// once the card has drawn and while nothing syncs. When it is not
+/// there, fail with what the card and the server say instead, so the
+/// report names the state rather than "element(s) not found".
+export async function expectSyncEverything(page: Page, timeout = 5_000): Promise<void> {
+  const started = Date.now();
+  try {
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible({ timeout });
+  } catch (err) {
+    const waited = Date.now() - started;
+    throw new Error(
+      `${(err as Error).message}\n\nAfter ${waited} ms, instead of "Sync everything":\n` +
+        (await describeManage(page)),
+    );
+  }
+}
+
+async function describeManage(page: Page): Promise<string> {
+  const head = page.locator(".sx-head");
+  const lines = [`page: ${page.url()}`];
+  if ((await head.count()) === 0) {
+    lines.push("the sources card has no header yet: it has not drawn");
+  } else {
+    lines.push(`header: ${JSON.stringify(await head.first().innerText())}`);
+    const buttons = await head.first().getByRole("button").allInnerTexts();
+    lines.push(`header buttons: ${JSON.stringify(buttons)}`);
+  }
+  try {
+    const config = await (await page.request.get("/api/config")).json();
+    lines.push(`launch pass settled: ${JSON.stringify(config.upgrade?.settled)}`);
+    const manage = await (await page.request.get("/api/manage/rows")).json();
+    const steps = (manage.rows ?? [])
+      .filter((r: { kind: string }) => r.kind === "step")
+      .map((r: { id: string; status: { label: string } }) => `${r.id}: ${r.status.label}`);
+    lines.push(
+      `sync paused: ${JSON.stringify(manage.sync_paused)}`,
+      `run open: ${manage.run !== null}`,
+      `steps:\n  ${steps.join("\n  ")}`,
+    );
+  } catch (err) {
+    lines.push(`the server did not answer: ${(err as Error).message}`);
+  }
+  return lines.join("\n");
+}
+
 /// A Pipeline row, by the key its record carries. A step under a
 /// group has a row only while the group is open — see `expandGroup`.
 export const pipelineRow = (page: Page, id: string) =>
