@@ -38,7 +38,7 @@ import { isDesktopApp } from "./desktop";
  * body's link can name any other, a chip's `slack://` and `datalib:`
  * among them, and the OS would hand each to whatever app claims it. The
  * desktop app's opener is scoped to the same four
- * (`library-capabilities/open-external-urls.json`), and so is its shell
+ * (`capabilities/open-external-urls.json`), and so is its shell
  * (`datalib/tauri/src/navigation.rs`). `file:` has its own way out, the
  * grid's reveal (`desktop.ts`).
  */
@@ -105,7 +105,7 @@ export async function openExternal(url: string): Promise<void> {
     await openUrl(parsed.href);
   } catch (e) {
     // Reachable when the opener capability is missing or its scope
-    // stopped matching (see `datalib/tauri/library-capabilities/`). There is no
+    // stopped matching (see `datalib/tauri/capabilities/`). There is no
     // fallback: `window.open` in the app is a window of the app.
     console.warn("openUrl failed", e);
   }

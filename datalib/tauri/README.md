@@ -138,7 +138,16 @@ starts with `--init`, so it opens on the Dashboard.
 The app's top bar leads back here: "Data Liberation ✊" closes the
 library and opens this screen, and the library's name opens a menu of
 the other libraries to switch to (`library_menu`, `library_switch`, `libraries_show`, granted to the
-app's page by `library-capabilities/switch-libraries.json`).
+app's page by `capabilities/switch-libraries.json`).
+
+The screen can delete a library, so it runs under a content security
+policy of its own (`app.security.csp` in `tauri.conf.json`): its own
+script and style and the shell's IPC, nothing else. A library's page is
+served by the backend and has the policy the backend sends. The screen
+calls the shell through `window.__TAURI_INTERNALS__.invoke`, the call
+`@tauri-apps/api` makes too; `withGlobalTauri` stays off, so no page,
+a library's included, gets `window.__TAURI__`.
+`//datalib/tauri:webview_policy_test` checks both.
 
 `src/launcher.rs` holds every decision the screen makes — which
 libraries it lists, whether a directory is a data library at all,
@@ -151,10 +160,8 @@ bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
 folder, below) for `//datalib/tauri:protected_test`,
 `src/backend_output.rs` (the backend's URL and output) for
-`//datalib/tauri:backend_output_test`, `src/navigation.rs` (where a window may go) for
-`//datalib/tauri:navigation_test`, and `src/library_capabilities.rs`
-(what a library's page may do) for
-`//datalib/tauri:library_capabilities_test`. Those
+`//datalib/tauri:backend_output_test`, and `src/navigation.rs` (where a window may go) for
+`//datalib/tauri:navigation_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
 not build. Anything in those files that reaches for `tauri` breaks its
