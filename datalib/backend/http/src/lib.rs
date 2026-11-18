@@ -1,7 +1,8 @@
 //! axum router for the Datalib HTTP API.
 //!
-//! Dolt is the source of truth. **Rendered markdown is write-only output**: `/api/chat`
-//! serves the file body verbatim, sans frontmatter, and the UI renders it. We
+//! Dolt is the source of truth. **Rendered markdown is write-only output**: the
+//! applet's `/chat` serves it verbatim, sans frontmatter, as the render store
+//! spells it, and the UI renders it. We
 //! never parse rendered markdown back into structured data — structured fields come from
 //! `grid_rows`.
 //!

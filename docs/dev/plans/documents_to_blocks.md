@@ -1,7 +1,8 @@
 # Moving from documents to blocks: grouping chosen when a search runs
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
-landed (#1765, #1770, #1775, #1782, #1818); 4a and 5 are under way;
+landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
+step 1 (#1765): a chat is one document. 4a and 5 are under way;
 nothing else has started.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
@@ -24,7 +25,8 @@ only index files. Now that search reads its own index
 ([`search_index_from_ram.md`](search_index_from_ram.md)), the file is
 a choice, and it is costing us in three ways.
 
-- **A chat is cut into months.** A Signal, WhatsApp, Beeper, Messages
+- **A chat is cut into months** (fixed with step 1, #1765: a chat is one
+  document now). A Signal, WhatsApp, Beeper, Messages
   or SMS conversation becomes one document per calendar month (Google
   Chat and Voice the same, Messenger one per year). A conversation that
   runs across midnight on the 31st is two documents. A search ranks the
@@ -581,7 +583,9 @@ against the eval before the next.
      the folder the renderer files the document under, until 5e takes
      the paths away and the renderer says so itself.
    - **5c.** The viewer and search landing read the render store, at the
-     commit the grid index read.
+     commit the grid index read (`source_cursors`), so the text matches
+     the rows the grid shows; a render the index has not read yet shows
+     once it has.
    - **5d.** A command prints or exports a document's markdown: the way
      out the README and the first-time guide promise as the `.md` files.
      Tests and fixtures read drawn text.
@@ -589,8 +593,8 @@ against the eval before the next.
      deleted, each render store kept; the rule that rendered markdown is
      write-only goes with them. Paging through what is read together, a
      page at a time, comes after.
-6. **No time buckets.** A bucketed source renders one container per
-   chat. The `period` setting goes.
+6. **No time buckets.** Landed with step 1 (#1765): a bucketed source
+   renders one container per chat, and the `period` setting is gone.
 7. **Embedding context.** Chunks are cut from windows of what is read
    together, and the eval picks the window.
 8. **Browsing the tree.** The ancestors table in `unified_grid_and_search_index`, with

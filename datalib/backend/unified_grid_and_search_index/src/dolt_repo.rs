@@ -22,7 +22,7 @@ use crate::hits::GridRowRef;
 use crate::problems::{Ids, ProblemsQuery};
 use crate::query::ParsedQuery;
 use crate::repo::{
-    DocRow, DocumentFile, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,
+    DocRow, DocumentStore, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,
 };
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
@@ -31,7 +31,6 @@ use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
-use datalib_schema::markdowns::parse_layout;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
@@ -66,22 +65,6 @@ struct At {
     markdowns: &'static str,
     edges: &'static str,
     problems: &'static str,
-}
-
-async fn document_file_row(
-    at: &mut At,
-    markdown_uuid: &str,
-    layout_column: &'static str,
-) -> Result<Option<sqlx::sqlite::SqliteRow>, sqlx::Error> {
-    // Audited: `at.markdowns` and `layout_column` are literals; the uuid is bound.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT md_path, {layout_column} FROM {} \
-         WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
-        at.markdowns
-    )))
-    .bind(markdown_uuid)
-    .fetch_optional(&mut *at.tx)
-    .await
 }
 
 /// The rows `uuids` name, in that order, read inside `at`'s snapshot; one
@@ -1673,83 +1656,47 @@ impl IndexRepo for DoltRepo {
         Ok(out)
     }
 
-    async fn md_paths_for(
+    async fn document_stores(
         &self,
         markdown_uuids: &[String],
-    ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError> {
+    ) -> Result<std::collections::HashMap<String, DocumentStore>, RepoError> {
         let mut out = std::collections::HashMap::with_capacity(markdown_uuids.len());
         let Some(mut at) = self.pinned().await? else {
             return Ok(out);
         };
-        // Chunked to stay under SQLite's bind-variable ceiling; the
-        // grid asks about one batch per result set, not per row.
-        for chunk in markdown_uuids.chunks(400) {
-            let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT markdown_uuid, md_path FROM {} \
-                  WHERE md_path IS NOT NULL AND markdown_uuid IN ({placeholders})",
-                at.markdowns
-            );
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for u in chunk {
-                q = q.bind(u);
+        // Audited: `at.markdowns` is a literal table name; the set is one
+        // bound JSON array.
+        let sql = format!(
+            "SELECT m.markdown_uuid, m.source_id, c.store_commit FROM {} m \
+             JOIN source_cursors c ON c.source_id = m.source_id \
+             WHERE m.markdown_uuid IN (SELECT value FROM json_each(?))",
+            at.markdowns
+        );
+        let rows: Vec<(String, String, String)> = match sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(
+                serde_json::to_string(markdown_uuids)
+                    .map_err(|e| RepoError::Internal(e.to_string()))?,
+            )
+            .fetch_all(&mut *at.tx)
+            .await
+        {
+            Ok(rows) => rows,
+            // A root whose index has never run has no tables yet: nothing
+            // rendered, not a failure.
+            Err(e)
+                if is_missing_table(&e, "markdowns") || is_missing_table(&e, "source_cursors") =>
+            {
+                return Ok(out)
             }
-            let rows = match q.fetch_all(&mut *at.tx).await {
-                Ok(rows) => rows,
-                // A data root whose renderers have never run has no
-                // `markdowns` table; that is "nothing rendered yet",
-                // not a failure.
-                Err(e) if is_missing_table(&e, "markdowns") => return Ok(out),
-                Err(e) => return Err(RepoError::Internal(e.to_string())),
-            };
-            for row in rows {
-                let uuid: String = match row.try_get("markdown_uuid") {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let rel: String = match row.try_get("md_path") {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                out.insert(uuid, self.root.as_ref().join(rel));
+            Err(e) => {
+                return Err(RepoError::Internal(format!(
+                    "read where documents are kept: {e}"
+                )))
             }
+        };
+        for (markdown_uuid, source_id, commit) in rows {
+            out.insert(markdown_uuid, DocumentStore { source_id, commit });
         }
         Ok(out)
-    }
-
-    async fn document_file(&self, markdown_uuid: &str) -> Result<Option<DocumentFile>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(None);
-        };
-        let lacks_layouts = |e: &sqlx::Error| matches!(missing_schema(e), Some(Missing::Column(c)) if c.ends_with("section_layout"));
-        let row = match document_file_row(&mut at, markdown_uuid, "section_layout").await {
-            // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it:
-            // the document goes out as one piece.
-            Err(e) if lacks_layouts(&e) => {
-                tracing::info!(
-                    document = %markdown_uuid,
-                    "the grid index has no section layouts yet; the document goes out \
-                     without one until the `unified_grid_and_search_index` step rebuilds it",
-                );
-                document_file_row(&mut at, markdown_uuid, "NULL AS section_layout").await
-            }
-            other => other,
-        };
-        let row = match row {
-            Ok(row) => row,
-            Err(e) if is_missing_table(&e, "markdowns") => return Ok(None),
-            Err(e) => return Err(RepoError::Internal(format!("read the file: {e}"))),
-        };
-        let Some(r) = row else { return Ok(None) };
-        let rel: String = r
-            .try_get("md_path")
-            .map_err(|e| RepoError::Internal(format!("decode md_path: {e}")))?;
-        let layout: Option<String> = r
-            .try_get("section_layout")
-            .map_err(|e| RepoError::Internal(format!("decode section_layout: {e}")))?;
-        Ok(Some(DocumentFile {
-            path: self.root.as_ref().join(rel),
-            section_layout: layout.as_deref().and_then(parse_layout),
-        }))
     }
 }

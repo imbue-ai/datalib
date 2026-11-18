@@ -160,8 +160,10 @@ write what datalib's own render steps write, in the same place:
   `.md` files beside it. `unified_grid_and_search_index` reads the store into the grid,
   and its keyword pass and the source's `embed` draw what search sees
   from its `sections` table alone: a document whose pieces it does not
-  keep there is found by its title and nothing else. The viewer serves
-  the files. The step reports the store's tree hash as its version.
+  keep there is found by its title and nothing else. The viewer and a
+  search's quotes read each document as the store spells it
+  (`sections` and `drawn_pieces`), not the files. The step reports the
+  store's tree hash as its version.
 - **`<group>/render_time_series/time_series.doltlite_db`**, which
   `time_series_index` lists and the Time series card charts. The step
   reports the store's commit hash as its version.

@@ -443,8 +443,9 @@ with one SELECT — no per-provider branches in the query path.
 
 ## Rendered markdown is write-only
 
-The render step emits markdown files; the backend serves them
-**verbatim** and never parses them back. Structured fields come from
+The render step emits markdown; the backend serves it **verbatim**, as
+the render store spells it (the viewer and search quotes read the store,
+not the `.md` files), and never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing
