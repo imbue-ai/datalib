@@ -82,7 +82,10 @@ rust_test(
     deps = [
         ":datalib_embedder",
         "@datalib_crates//:runfiles",
-    ],
+    ] + select({
+        "@platforms//os:linux": ["@datalib_crates//:libc"],
+        "//conditions:default": [],
+    }),
 )
 
 # The embedder against qmd's own answers on the same texts, captured once

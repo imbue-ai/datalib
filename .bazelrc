@@ -36,10 +36,10 @@ common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 test --zip_undeclared_test_outputs=true
 
 # The embedder computes on two threads in every test, and in every step
-# and applet a test starts. Left to llama.cpp it takes four, which wait
-# for each other spinning: beside other tests on CI's four vCPUs that
-# made an embed ten times slower, and `applet_unittests` ran past its
-# 300 s. datalib/backend/embedder/README.md § "Threads" has the numbers.
+# and applet a test starts, rather than llama.cpp's four: several tests
+# share CI's four vCPUs, and `applet_unittests` beside busy processes
+# took 44 s at two against 50 s at four.
+# datalib/backend/embedder/README.md § "Threads" has the numbers.
 test --test_env=DATALIB_EMBED_THREADS=2
 
 # Every bazel action inherits a fixed PATH, not the developer's host

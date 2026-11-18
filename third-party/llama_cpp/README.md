@@ -16,6 +16,19 @@ what qmd 2.8.3 runs. Running the same release gives the same tokenizer,
 graph and kernels as the vectors qmd wrote, which
 `//datalib/backend/embedder:parity_test` checks against qmd itself.
 
+**One patch.** [`ggml_barrier_sleeps.patch`](ggml_barrier_sleeps.patch)
+changes `ggml_barrier`, where the CPU backend's threads meet hundreds of
+times per forward pass. Upstream waits there in a pure busy loop, so on
+a machine with more runnable threads than cores each crossing waits for
+a thread the scheduler set aside, while the waiters burn the cores it
+needs. Patched, a waiter spins 1,024 rounds and then sleeps on a futex
+until the last thread arrives and wakes it; off Linux it yields
+instead. Embedding 60 prompts on four threads on a 4-vCPU VM beside 3
+busy processes took 166 s before and 70 s after; beside 6, 286 s and
+84 s; idle, 25.7 s and 23.5 s, with the same vectors to the bit.
+`datalib/backend/embedder/README.md` § "Threads" has the rest. A bump
+re-applies it; if it no longer applies, re-read upstream's barrier first.
+
 **Bumping it.** Change the tag, URL and `sha256` in `MODULE.bazel`, then
 re-read `ggml/src/CMakeLists.txt`, `ggml/src/ggml-cpu/CMakeLists.txt`
 and `src/CMakeLists.txt` at the new tag for added or removed sources and

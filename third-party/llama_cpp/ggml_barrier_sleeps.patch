@@ -1,0 +1,60 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -572,6 +572,37 @@
+ 
+ static struct ggml_state g_state = {0};
+ 
++// datalib's patch (third-party/llama_cpp/README.md): a thread waiting at the
++// barrier spins a while, then sleeps until the last thread arrives, so a
++// thread the scheduler set aside gets a core to arrive on.
++#ifndef GGML_BARRIER_SPINS
++#define GGML_BARRIER_SPINS 1024
++#endif
++
++#if defined(__linux__)
++#include <limits.h>
++#include <linux/futex.h>
++#include <sys/syscall.h>
++
++static void ggml_barrier_sleep(atomic_int * passed, int seen) {
++    syscall(SYS_futex, (int *) passed, FUTEX_WAIT_PRIVATE, seen, NULL, NULL, 0);
++}
++
++static void ggml_barrier_wake(atomic_int * passed) {
++    syscall(SYS_futex, (int *) passed, FUTEX_WAKE_PRIVATE, INT_MAX, NULL, NULL, 0);
++}
++#else
++static void ggml_barrier_sleep(atomic_int * passed, int seen) {
++    (void) passed;
++    (void) seen;
++    sched_yield();
++}
++
++static void ggml_barrier_wake(atomic_int * passed) {
++    (void) passed;
++}
++#endif
++
+ void ggml_barrier(struct ggml_threadpool * tp) {
+     int n_threads = atomic_load_explicit(&tp->n_graph, memory_order_relaxed) & GGML_THREADPOOL_N_THREADS_MASK;
+     if (n_threads == 1) {
+@@ -592,12 +623,17 @@
+ 
+         // exit barrier (full seq-cst fence)
+         atomic_fetch_add_explicit(&tp->n_barrier_passed, 1, memory_order_seq_cst);
++        ggml_barrier_wake(&tp->n_barrier_passed);
+         return;
+     }
+ 
+     // wait for other threads
+-    while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
+-        ggml_thread_cpu_relax();
++    for (int spins = 0; atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed; spins++) {
++        if (spins < GGML_BARRIER_SPINS) {
++            ggml_thread_cpu_relax();
++        } else {
++            ggml_barrier_sleep(&tp->n_barrier_passed, n_passed);
++        }
+     }
+ 
+     // exit barrier (full seq-cst fence)
