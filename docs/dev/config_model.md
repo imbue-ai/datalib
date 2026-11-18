@@ -410,10 +410,8 @@ can point elsewhere.
 A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network`, `cpu` or `index`, the
-three budgets every config has — or, for the built-in index steps, one
-of the two one-slot locks every config has too: `qmd_keyword`, held by
-the `unified_grid_and_search_index` step, which writes the grid index's
-file, and `qmd_embed`, held by every `embed`, so one embedding model is
+three budgets every config has — or, for a built-in `embed`, the
+one-slot `embedder` lock every config has too, so one embedding model is
 loaded at a time.
 `reads = "files"` says a step reads its inputs off disk, so no writer of
 them runs beside it. `start = "after_inputs_settle"` says a step waits
@@ -576,7 +574,7 @@ download …` command lines become groups and steps whose command is
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Thirteen rewrites are made without asking,
+well enough to name the tool. Fourteen rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -687,6 +685,13 @@ the next would put the first back:
    they did was run it again after every such render. An index step that
    runs a program other than `datalib-step` is left as written. It runs
    after the rename above, so it finds the step by its new function.
+14. The search locks (`upgrade_lock_names`, `lock_names.rs`): a step's
+   `locks` that named `qmd_embed` name `embedder`, in a list or a
+   table, and `qmd_keyword` is dropped from them; a step left holding
+   nothing loses the key and holds its default lock. A `[[locks]]`
+   entry for `qmd_embed` resizes `embedder` instead, and one for
+   `qmd_keyword` goes, with its comments. The loader refuses a step
+   holding a lock nothing declares, which both once were by default.
 
 A source may not take `unified_index`, `unified_document_index`,
 `unified_grid_and_search_index` or `unified_time_series_index` as its id

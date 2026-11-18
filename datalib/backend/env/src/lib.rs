@@ -161,8 +161,8 @@ const STEP_ALSO: &[&str] = &[
 ];
 
 /// What an applet reads beyond every child's: the search's pinned now,
-/// in tests.
-const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW"];
+/// and whether it warms the search by meaning at launch, both for tests.
+const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW", "DATALIB_SEARCH_NO_WARM"];
 
 /// What Modal's SDK signs in with and is pointed by, beyond every child's.
 /// A step is not handed these: a sync's runner passes them on only when
@@ -250,6 +250,15 @@ mod tests {
         assert!(hands_down("HOME", Child::Modal, &[]));
         assert!(hands_down("HTTPS_PROXY", Child::Modal, &[]));
         assert!(!hands_down("LATCHKEY_ENCRYPTION_KEY", Child::Modal, &[]));
+    }
+
+    /// The e2e suite turns the applet's launch warming off for its sandbox
+    /// backends; dropped on the way down, the variable would leave every
+    /// one of them loading the model at once.
+    #[test]
+    fn the_search_warming_switch_reaches_the_applet() {
+        assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
+        assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
     }
 
     fn step_protocol_doc() -> String {
