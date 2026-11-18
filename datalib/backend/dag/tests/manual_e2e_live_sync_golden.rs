@@ -1311,7 +1311,7 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
         if embeds {
             assert_eq!(
                 h.not_embedded, 0,
-                "{} has an embed step, yet {} of its chunks are not embedded",
+                "{} has an embed step, yet {} of its documents are not embedded",
                 h.source, h.not_embedded
             );
         } else if h.documents > 0 {
@@ -1327,7 +1327,7 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
             serde_json::json!({
                 "documents": h.documents,
                 "embed_step": embeds,
-                "chunks_not_embedded": h.not_embedded,
+                "documents_not_embedded": h.not_embedded,
             }),
         );
     }

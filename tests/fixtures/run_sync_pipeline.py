@@ -117,12 +117,14 @@ the py_test's arg list.
 
 Environment:
     INGESTED_TNG_EMBED_MODEL  the embedding model's GGUF, a Bazel input
-                      (`//third-party/embedding_models:embeddinggemma`).
-                      The `unified_grid_and_search_index` step reads
-                      its tokenizer to cut the search chunks; it is linked into the root's own
-                      `unified_grid_and_search_index/models/` and
-                      fetching is turned off, so no step reads `$HOME`
-                      or reaches HuggingFace.
+                      (`//third-party/embedding_models:embeddinggemma`),
+                      for a run whose syncs embed. Optional: the
+                      fixture's own sync runs no `embed`, which is the
+                      one step that reads the model. When given, it is
+                      linked into the root's own
+                      `unified_grid_and_search_index/models/`. Fetching
+                      is turned off either way, so no step reaches
+                      HuggingFace.
 """
 
 from __future__ import annotations
@@ -218,7 +220,10 @@ class Prepared:
 
 
 def _stage_embed_model(workspace: Path) -> None:
-    model = Path(os.environ["INGESTED_TNG_EMBED_MODEL"]).resolve()
+    given = os.environ.get("INGESTED_TNG_EMBED_MODEL")
+    if not given:
+        return
+    model = Path(given).resolve()
     if not model.is_file():
         raise SystemExit(f"INGESTED_TNG_EMBED_MODEL is not a file: {model}")
     models = workspace / "unified_grid_and_search_index" / "models"
@@ -636,7 +641,7 @@ group = "unified_grid_and_search_index"
 function = "unified_grid_and_search_index"
 inputs = [{grid_list}]"""
         )
-        # Each source embeds what the `unified_grid_and_search_index` step's keyword pass cut of it.
+        # Each source cuts its documents into chunks and embeds them.
         # The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)

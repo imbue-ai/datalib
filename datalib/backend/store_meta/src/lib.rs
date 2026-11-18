@@ -59,6 +59,10 @@ pub enum StoreKind {
     /// Each chunk's vector under the model that made it and the hash of
     /// its prompt (`unified_grid_and_search_index/search_index`). Plain SQLite.
     InferenceCache,
+    /// Where each embedded document's chunks fall and their prompts'
+    /// hashes, which each source's `embed` cuts: a part of the inference
+    /// cache's file.
+    SearchChunks,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.

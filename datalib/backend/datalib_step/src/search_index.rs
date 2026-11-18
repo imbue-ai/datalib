@@ -1,23 +1,27 @@
 //! The search index (docs/dev/plans/search_index_from_ram.md): what the
 //! `unified_grid_and_search_index` step's keyword pass and sweep, and
-//! each source's `embed`, do with it.
+//! each source's `embed`, do with it. The keyword pass needs no model.
+//! An `embed` cuts each document the keyword index holds into chunks and
+//! files them beside the vectors, then embeds the chunks with none; it
+//! opens the tokenizer only when a document needs cutting, and the model
+//! only when a chunk needs a vector.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use datalib_embedder::{Device, Embedder};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
-use datalib_etl_render::indexed_markdown::{index_key, IndexedMarkdownStore};
+use datalib_etl_render::indexed_markdown::{self, index_key, IndexedMarkdownStore};
 use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
-use datalib_search_index::chunk::TokenEnds;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
-use datalib_search_index::{Index, IndexDoc, InferenceCache, Reader};
+use datalib_search_index::{ChunkedDoc, FiledChunk, Index, IndexDoc, InferenceCache, Reader};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::modal::{self, Reply, Route, SignIn};
@@ -29,11 +33,17 @@ const CHUNK_BATCH: usize = 32;
 /// Vectors from Modal written to the cache together.
 const MODAL_PUT_BATCH: usize = 256;
 
+/// The model's tokenizer as the chunker counts with it: where each of a
+/// text's tokens ends ([`datalib_search_index::chunk::TokenEnds`]).
+pub(crate) type Cutter = Box<dyn Fn(&str) -> Result<Vec<usize>> + Send + Sync>;
+
 /// What a keyword pass or an embed did, for its log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Done {
     pub(crate) put: usize,
     pub(crate) removed: usize,
+    /// Documents an embed cut into chunks, new or changed since it last did.
+    pub(crate) cut: usize,
     /// Chunks the cache had no vector for when the embed began.
     pub(crate) owed: usize,
     pub(crate) embedded: usize,
@@ -104,11 +114,11 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
 /// render store: the `unified_grid_and_search_index` step's keyword pass, once per searched source.
 /// The store is read at one commit for the whole pass, and a source whose
 /// store and text version are where its last finished pass left them is
-/// not read at all.
+/// not read at all. A source not rendered yet has no store, and nothing
+/// of it is indexed.
 pub(crate) async fn update_keywords(
     root: &Path,
     group: &str,
-    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -116,7 +126,7 @@ pub(crate) async fn update_keywords(
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
     // A source in the config whose render has not run yet has no file;
     // it is read as a store with nothing in it, like the grid pass does.
-    let rendered = datalib_etl_render::indexed_markdown::path_for(&render_root).is_file();
+    let rendered = indexed_markdown::path_for(&render_root).is_file();
     let store = match rendered {
         false => None,
         true => tokio::task::spawn_blocking(move || {
@@ -129,7 +139,7 @@ pub(crate) async fn update_keywords(
     let index = Index::open(&layout::grid_index_db(root)).await;
     let out = match index {
         Ok(index) => {
-            let out = keyword_pass(&index, group, store.clone(), ends, progress, stop).await;
+            let out = keyword_pass(&index, group, store.clone(), progress, stop).await;
             index.close().await;
             out
         }
@@ -158,7 +168,6 @@ async fn keyword_pass(
     index: &Index,
     group: &str,
     store: Option<Arc<IndexedMarkdownStore>>,
-    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -219,7 +228,7 @@ async fn keyword_pass(
             .await
             .context("render store read panicked")??;
         done.unsettled += batch.len() - docs.len();
-        index.put(&docs, ends).await?;
+        index.put(&docs).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
     }
@@ -262,20 +271,26 @@ impl Modal {
     }
 }
 
-/// `<group>/embed`'s half: every chunk of this source the inference cache
-/// has no vector for, embedded and cached, here or on Modal.
+/// `<group>/embed`'s half: every document of this source the keyword
+/// index holds cut into chunks and filed, then every chunk the inference
+/// cache has no vector for embedded and cached, here or on Modal. The
+/// model's file is put in place, and its tokenizer and weights opened,
+/// only when a document needs cutting or a chunk a vector.
 pub(crate) async fn embed(
     root: &Path,
     group: &str,
-    model_path: &Path,
-    ends: TokenEnds<'_>,
+    model: crate::index_steps::ModelFile,
     on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    let model_path = model_path.to_path_buf();
+    let for_cutting = model.clone();
+    let cutter = move || -> Result<Cutter> {
+        let tokenizer = datalib_embedder::Tokenizer::open(&for_cutting.path()?)?;
+        Ok(Box::new(move |text: &str| tokenizer.ends(text)))
+    };
     let open = move || {
-        let embedder = Embedder::open(&model_path, Device::Best, 0)?;
+        let embedder = Embedder::open(&model.path()?, Device::Best, 0)?;
         let batching = embedder.batching();
         tracing::info!(
             device = %embedder.device(),
@@ -286,16 +301,16 @@ pub(crate) async fn embed(
         );
         Ok(embedder)
     };
-    embed_with(root, group, open, ends, on_modal, progress, stop).await
+    embed_with(root, group, cutter, open, on_modal, progress, stop).await
 }
 
-/// [`embed`] with the model `open` loads, which it calls only when a chunk
-/// is owed here.
+/// [`embed`] with the tokenizer `cutter` opens and the model `open`
+/// loads, each called only when it is needed.
 async fn embed_with<E: EmbedPrompt>(
     root: &Path,
     group: &str,
+    cutter: impl FnOnce() -> Result<Cutter> + Send + 'static,
     open: impl FnOnce() -> Result<E> + Send + 'static,
-    ends: TokenEnds<'_>,
     on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
@@ -310,43 +325,161 @@ async fn embed_with<E: EmbedPrompt>(
     else {
         return Ok(Done::default());
     };
-    let spans = reader.chunk_hashes(group).await;
+    let indexed = reader.documents_of(group).await;
+    let finished = reader.pass_finished(group).await;
     reader.close().await;
-    let spans = spans?;
+    let (indexed, finished) = (indexed?, finished?);
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
-    let out = embed_into(
-        &cache, root, group, open, ends, on_modal, spans, progress, stop,
-    )
+    let out = async {
+        let cut = cut_owed(
+            &cache, root, group, &indexed, finished, cutter, progress, stop,
+        )
+        .await?;
+        if stop.requested() {
+            return Ok(cut);
+        }
+        let embedded = embed_into(&cache, root, group, open, on_modal, progress, stop).await?;
+        Ok(Done {
+            cut: cut.cut,
+            removed: cut.removed,
+            unsettled: cut.unsettled + embedded.unsettled,
+            ..embedded
+        })
+    }
     .await;
     cache.close().await;
     out
 }
 
+/// Cuts into chunks, and files, every document of `group` the keyword
+/// index holds (`indexed`, `markdown_uuid → content_hash`) that was not
+/// cut from the rendering it holds, and forgets the ones it no longer
+/// holds once its keyword pass has `finished`: a pass cut short, over an
+/// index emptied for a new shape, has not put back what it will, and
+/// forgetting those would cost their vectors at the next sweep. `cutter`
+/// is called only when a document is owed.
 #[allow(clippy::too_many_arguments)]
+async fn cut_owed(
+    cache: &InferenceCache,
+    root: &Path,
+    group: &str,
+    indexed: &BTreeMap<String, String>,
+    finished: bool,
+    cutter: impl FnOnce() -> Result<Cutter> + Send + 'static,
+    progress: &Progress,
+    stop: &StopFlag,
+) -> Result<Done> {
+    let mut done = Done::default();
+    let owed = datalib_search_index::owed(indexed, &cache.chunked(group).await?);
+    if finished {
+        cache.forget_chunked(&owed.remove).await?;
+        done.removed = owed.remove.len();
+    } else if !owed.remove.is_empty() {
+        tracing::info!(
+            group,
+            documents = owed.remove.len(),
+            "the keyword pass has not finished; their chunks are kept until it does"
+        );
+    }
+    if owed.put.is_empty() {
+        return Ok(done);
+    }
+    progress.set_message("search index: cutting chunks");
+    progress.set_length(Some(owed.put.len() as u64));
+    let cutter: Arc<Cutter> = Arc::new(
+        tokio::task::spawn_blocking(cutter)
+            .await
+            .context("tokenizer open panicked")??,
+    );
+    for batch in owed.put.chunks(DOCUMENT_BATCH) {
+        if stop.requested() {
+            break;
+        }
+        let drawn = draw_batch(root, group, batch.to_vec()).await?;
+        // A document drawn from another rendering than the index holds is
+        // cut once the keyword pass has taken that rendering.
+        let settled: Vec<IndexDoc> = drawn
+            .into_iter()
+            .filter(|d| indexed.get(&d.markdown_uuid) == Some(&d.content_hash))
+            .collect();
+        done.unsettled += batch.len() - settled.len();
+        let cut = cut_batch(Arc::clone(&cutter), settled).await?;
+        cache.file_chunks(&cut).await?;
+        done.cut += cut.len();
+        progress.inc(batch.len() as u64);
+    }
+    Ok(done)
+}
+
+/// `docs` cut into chunks on every core, off the runtime, in the order
+/// given.
+async fn cut_batch(cutter: Arc<Cutter>, docs: Vec<IndexDoc>) -> Result<Vec<ChunkedDoc>> {
+    tokio::task::spawn_blocking(move || {
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(docs.len().max(1));
+        let next = AtomicUsize::new(0);
+        let mut out: Vec<(usize, ChunkedDoc)> = std::thread::scope(|s| {
+            let workers: Vec<_> = (0..threads)
+                .map(|_| {
+                    s.spawn(|| {
+                        let mut mine = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(doc) = docs.get(i) else {
+                                return Ok::<_, anyhow::Error>(mine);
+                            };
+                            let prompted = doc
+                                .prompted(&**cutter)
+                                .with_context(|| format!("cut document {}", doc.markdown_uuid))?;
+                            mine.push((i, ChunkedDoc::from_prompted(doc, &prompted)));
+                        }
+                    })
+                })
+                .collect();
+            let mut all = Vec::with_capacity(docs.len());
+            for worker in workers {
+                all.extend(worker.join().map_err(|_| anyhow!("cutting panicked"))??);
+            }
+            Ok::<_, anyhow::Error>(all)
+        })?;
+        out.sort_by_key(|(i, _)| *i);
+        Ok(out.into_iter().map(|(_, doc)| doc).collect())
+    })
+    .await
+    .context("cutting panicked")?
+}
+
+/// Each owed hash once, under the first document that names it: `markdown_uuid
+/// → (the rendering it was cut from, its chunks to embed)`.
+type OwedByDoc = BTreeMap<String, (String, Vec<FiledChunk>)>;
+
+/// Every chunk of `group` filed in the cache with no vector, embedded and
+/// cached. `open` is called only when one is owed here.
 async fn embed_into<E: EmbedPrompt>(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
-    ends: TokenEnds<'_>,
     on_modal: Option<Modal>,
-    spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
     let model = datalib_search_index::model_key();
-    let hashes: Vec<String> = spans.iter().map(|(_, hash)| hash.clone()).collect();
-    let missing: HashSet<String> = cache.missing(&model, &hashes).await?.into_iter().collect();
-    if missing.is_empty() {
-        return Ok(done);
-    }
-    let mut by_doc: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
+    let mut by_doc: OwedByDoc = BTreeMap::new();
     let mut queued = HashSet::new();
-    for (doc, hash) in &spans {
-        if missing.contains(hash) && queued.insert(hash.as_str()) {
-            by_doc.entry(doc).or_default().insert(hash);
+    for (doc, cut_from, chunk) in cache.owed_chunks(&model, group).await? {
+        if queued.insert(chunk.hash.clone()) {
+            by_doc
+                .entry(doc)
+                .or_insert_with(|| (cut_from, Vec::new()))
+                .1
+                .push(chunk);
         }
+    }
+    if queued.is_empty() {
+        return Ok(done);
     }
     done.owed = queued.len();
     progress.set_length(Some(queued.len() as u64));
@@ -357,7 +490,6 @@ async fn embed_into<E: EmbedPrompt>(
                 cache,
                 root,
                 group,
-                ends,
                 &by_doc,
                 queued.len(),
                 on_modal,
@@ -376,12 +508,10 @@ async fn embed_into<E: EmbedPrompt>(
     );
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut result = Ok(());
-    let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
+    let owing: Vec<String> = by_doc.keys().cloned().collect();
     'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
         for doc in draw_batch(root, group, uuids.to_vec()).await? {
-            let wanted = &by_doc[doc.markdown_uuid.as_str()];
-            let prompts = prompts_for(&doc, wanted, ends)?;
-            let Some(prompts) = prompts else {
+            let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
                 done.unsettled += 1;
                 continue;
             };
@@ -443,8 +573,7 @@ async fn embed_on_modal(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
-    ends: TokenEnds<'_>,
-    by_doc: &BTreeMap<&str, HashSet<&str>>,
+    by_doc: &OwedByDoc,
     owed: usize,
     on_modal: Modal,
     progress: &Progress,
@@ -486,14 +615,13 @@ async fn embed_on_modal(
         let mut stdin = stdin;
         let mut unsettled = 0;
         let mut prompt_bytes = 0;
-        let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
+        let owing: Vec<String> = by_doc.keys().cloned().collect();
         'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
             for doc in draw_batch(root, group, uuids.to_vec()).await? {
                 if stop.requested() {
                     break 'docs;
                 }
-                let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()], ends)?
-                else {
+                let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
                     unsettled += 1;
                     continue;
                 };
@@ -620,21 +748,25 @@ async fn embed_on_modal(
     })
 }
 
-/// `(hash, prompt)` for each chunk of `doc` the cache lacks, or `None`
-/// when the document no longer draws one of them: it changed after the
-/// keyword pass, and the next one re-chunks it.
+/// `(hash, prompt)` for each of `owed`'s chunks of `doc`, made from the
+/// spans filed for it with no tokenizer, or `None` when the document is
+/// no longer the rendering they were cut from: the next embed cuts it
+/// again.
 fn prompts_for(
     doc: &IndexDoc,
-    wanted: &HashSet<&str>,
-    ends: TokenEnds<'_>,
+    (cut_from, owed): &(String, Vec<FiledChunk>),
 ) -> Result<Option<Vec<(String, String)>>> {
-    let prompts: BTreeMap<String, String> = doc
-        .prompted(ends)?
-        .into_iter()
-        .filter(|p| wanted.contains(p.hash.as_str()))
-        .map(|p| (p.hash, p.prompt))
-        .collect();
-    Ok((prompts.len() == wanted.len()).then(|| prompts.into_iter().collect()))
+    if doc.content_hash != *cut_from {
+        return Ok(None);
+    }
+    let spans: Vec<_> = owed.iter().map(|f| f.chunk).collect();
+    let prompted = doc.prompts(&spans)?;
+    if prompted.iter().zip(owed).any(|(p, f)| p.hash != f.hash) {
+        return Ok(None);
+    }
+    Ok(Some(
+        prompted.into_iter().map(|p| (p.hash, p.prompt)).collect(),
+    ))
 }
 
 /// Each prompt's vector, and how many had to be cut to fit the context.
@@ -666,26 +798,36 @@ async fn embed_batch<E: EmbedPrompt>(
     })
 }
 
-/// The `unified_grid_and_search_index` step's sweep: the cache keeps only
-/// the vectors a chunk of the index still names. Answers how many went.
-/// Touches nothing that does not exist yet.
-pub(crate) async fn sweep(root: &Path) -> Result<u64> {
+/// The `unified_grid_and_search_index` step's sweep, after its keyword
+/// passes: the cache forgets the chunks of every source it does not
+/// search, then keeps only the vectors a filed chunk names. Answers how
+/// many vectors went. Touches nothing that does not exist yet.
+pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     retire_separate_file(root)?;
-    let index_path = layout::grid_index_db(root);
     let cache_path = layout::inference_cache_db(root);
-    if !index_path.exists() || !cache_path.exists() {
+    if !cache_path.exists() {
         return Ok(0);
     }
-    let index = Index::open(&index_path).await?;
-    let hashes = index.all_hashes().await;
-    index.close().await;
-    let hashes = hashes?;
     let cache = InferenceCache::open(&cache_path).await?;
-    let gone = cache
-        .keep_only(&datalib_search_index::model_key(), &hashes)
-        .await;
+    let gone = async {
+        cache.keep_chunked_sources(searched).await?;
+        cache.sweep(&datalib_search_index::model_key()).await
+    }
+    .await;
     cache.close().await;
     gone
+}
+
+/// Before the keyword passes: the chunks a build before this one filed in
+/// the keyword index move into the cache, before the index's next open
+/// empties them, so nothing is cut again and the sweep keeps the vectors
+/// they name. Answers how many documents came over.
+pub(crate) async fn carry_chunks(root: &Path) -> Result<usize> {
+    datalib_search_index::carry_chunks_from_the_index(
+        &layout::grid_index_db(root),
+        &layout::inference_cache_db(root),
+    )
+    .await
 }
 
 /// The `unified_grid_and_search_index` step's half after its keyword passes: every document of a
@@ -822,15 +964,9 @@ mod tests {
     }
 
     async fn update_of(root: &Path, group: &str) -> Done {
-        update_keywords(
-            root,
-            group,
-            &four_bytes_a_token,
-            &Progress::noop(),
-            &StopFlag::new(),
-        )
-        .await
-        .unwrap()
+        update_keywords(root, group, &Progress::noop(), &StopFlag::new())
+            .await
+            .unwrap()
     }
 
     async fn indexed(root: &Path) -> BTreeMap<String, String> {
@@ -891,33 +1027,23 @@ mod tests {
         }
     }
 
-    /// Which of `group`'s chunks the cache has no vector for.
+    /// How many of `group`'s documents Meaning does not find yet: not cut,
+    /// or a chunk with no vector. What the index step reports.
     async fn unembedded(root: &Path, group: &str) -> usize {
-        let reader = Reader::open(
-            &layout::grid_index_db(root),
-            &layout::inference_cache_db(root),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        let hashes: Vec<String> = reader
-            .chunk_hashes(group)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(_, h)| h)
-            .collect();
-        reader.close().await;
-        assert!(!hashes.is_empty(), "{group} has chunks");
-        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+        let held = datalib_search_index::holdings(root, &[group.to_string()])
             .await
             .unwrap();
-        let missing = cache
-            .missing(&datalib_search_index::model_key(), &hashes)
-            .await
-            .unwrap();
-        cache.close().await;
-        missing.len()
+        held[0].not_embedded
+    }
+
+    /// The chunker counting a token every four bytes.
+    fn four_bytes() -> Result<Cutter> {
+        Ok(Box::new(four_bytes_a_token))
+    }
+
+    /// A tokenizer that must not be opened: nothing needed cutting.
+    fn never_cut() -> Result<Cutter> {
+        bail!("the tokenizer was opened with nothing to cut")
     }
 
     /// A keyword pass is one source's: it indexes that source's documents,
@@ -964,7 +1090,7 @@ mod tests {
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
         let stop = StopFlag::new();
         stop.request();
-        let done = update_keywords(root, GROUP, &four_bytes_a_token, &Progress::noop(), &stop)
+        let done = update_keywords(root, GROUP, &Progress::noop(), &stop)
             .await
             .unwrap();
         assert_eq!(done.put, 0);
@@ -988,7 +1114,7 @@ mod tests {
         commit(root, &docs, &[]);
         let bar = Recorder::default();
         let stop = StopFlag::new();
-        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &bar.progress(), &stop)
             .await
             .unwrap();
         let events = bar.take();
@@ -1002,13 +1128,13 @@ mod tests {
             .sum();
         assert_eq!(filled, 2, "{events:?}");
 
-        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &bar.progress(), &stop)
             .await
             .unwrap();
         assert_eq!(bar.take(), [], "the store has not moved");
 
         one_doc(root, GROUP, "d-quarters", "Captain's quarters");
-        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &bar.progress(), &stop)
             .await
             .unwrap();
         assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
@@ -1039,11 +1165,10 @@ mod tests {
         let run = |not_searched: Vec<String>| {
             let env = &env;
             async move {
-                crate::unified_grid_and_search_index::run_with(
+                crate::unified_grid_and_search_index::run(
                     root,
                     env,
                     &crate::unified_grid_and_search_index::Params { not_searched },
-                    &four_bytes_a_token,
                     Some("2026-01-01T00:00:00+00:00"),
                     &crate::events::Emitter::new("test".into()),
                     &StopFlag::new(),
@@ -1064,8 +1189,188 @@ mod tests {
         assert_eq!(indexed_of(root, OTHER).await.len(), 1);
     }
 
-    /// An embed is one source's: it embeds that source's chunks and no
-    /// other's, and with nothing owed it loads no model at all.
+    /// A keyword pass cut short, as after the index was emptied for a new
+    /// shape, has not put every document back: the embed keeps the chunks
+    /// of the ones it lacks, so the sweep keeps their vectors, and forgets
+    /// them only once a pass has finished without them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unfinished_keyword_pass_forgets_no_ones_chunks() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        one_doc(root, GROUP, "d-hush", "Shields up");
+        update(root).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let embed = |cutter: fn() -> Result<Cutter>| {
+            let local = calls.clone();
+            async move {
+                embed_with(
+                    root,
+                    GROUP,
+                    cutter,
+                    move || Ok(Fixed(local)),
+                    None,
+                    &Progress::noop(),
+                    &StopFlag::new(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(embed(four_bytes).await.cut, 2);
+        let cut = || async {
+            let cache = InferenceCache::open(&layout::inference_cache_db(root))
+                .await
+                .unwrap();
+            let out = cache.chunked(GROUP).await.unwrap();
+            cache.close().await;
+            out
+        };
+        let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
+        index.set_read_at(GROUP, None).await.unwrap();
+        index.remove(&["d-hush".to_string()]).await.unwrap();
+        index.close().await;
+        assert_eq!(embed(never_cut).await.removed, 0);
+        assert_eq!(cut().await.len(), 2, "kept while the pass is unfinished");
+
+        assert_eq!(update(root).await.put, 1, "the pass puts it back");
+        let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
+        index.remove(&["d-hush".to_string()]).await.unwrap();
+        index.close().await;
+        assert_eq!(embed(never_cut).await.removed, 1);
+        assert_eq!(cut().await.keys().collect::<Vec<_>>(), ["d-tea"]);
+    }
+
+    /// The index step over these render inputs, as the runner runs it.
+    async fn index_step(root: &Path, groups: &[&str]) -> Result<Vec<crate::events::OutputClaim>> {
+        let env = crate::source::StepEnv {
+            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
+            group: "unified_grid_and_search_index".into(),
+            group_type: None,
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::UnifiedGridAndSearchIndex,
+            inputs: groups
+                .iter()
+                .map(|g| format!("{g}/render_markdown"))
+                .collect(),
+        };
+        crate::unified_grid_and_search_index::run(
+            root,
+            &env,
+            &crate::unified_grid_and_search_index::Params::default(),
+            Some("2026-01-01T00:00:00+00:00"),
+            &crate::events::Emitter::new("test".into()),
+            &StopFlag::new(),
+        )
+        .await
+    }
+
+    /// A source added to the config is an input of the index step before
+    /// its first render has made a store. The step indexes the others and
+    /// takes that one as holding nothing; it failed on opening the store
+    /// that was not there.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_source_not_rendered_yet_holds_nothing_and_fails_nothing() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        index_step(root, &[GROUP, "a-new-source"]).await.unwrap();
+        assert_eq!(indexed(root).await.len(), 1);
+        assert!(indexed_of(root, "a-new-source").await.is_empty());
+    }
+
+    /// A root a build before this one indexed, its chunks filed in the
+    /// keyword index and their vectors cached: the index step moves the
+    /// chunks beside the vectors before the index is emptied for its new
+    /// shape, so the sweep keeps every vector and the documents are still
+    /// embedded, with nothing cut or embedded again.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_older_builds_chunks_and_vectors_survive_the_upgrade() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        update(root).await;
+        let doc = draw_batch(root, GROUP, vec!["d-tea".into()])
+            .await
+            .unwrap()
+            .remove(0);
+        let cut = doc.prompted(&four_bytes_a_token).unwrap();
+        // What an older build left: its chunks in the keyword index's file,
+        // which was in another shape, and their vectors in the cache.
+        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(layout::grid_index_db(root));
+        let grid = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE search_chunks (doc_id INTEGER NOT NULL, seq INTEGER NOT NULL, \
+             start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, \
+             first_section INTEGER NOT NULL, last_section INTEGER NOT NULL, \
+             hash TEXT NOT NULL, PRIMARY KEY (doc_id, seq)) WITHOUT ROWID",
+        )
+        .execute(&grid)
+        .await
+        .unwrap();
+        for (seq, p) in cut.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO search_chunks SELECT doc_id, ?, ?, ?, ?, ?, ? \
+                   FROM search_documents WHERE markdown_uuid = 'd-tea'",
+            )
+            .bind(seq as i64)
+            .bind(p.chunk.start as i64)
+            .bind(p.chunk.end as i64)
+            .bind(p.chunk.first_section as i64)
+            .bind(p.chunk.last_section as i64)
+            .bind(&p.hash)
+            .execute(&grid)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "UPDATE _datalib_meta SET value = 'an older shape' \
+              WHERE key = 'search_index_schema_hash'",
+        )
+        .execute(&grid)
+        .await
+        .unwrap();
+        grid.close().await;
+        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+            .await
+            .unwrap();
+        let vectors: Vec<(String, Vec<f32>)> = cut
+            .iter()
+            .map(|p| (p.hash.clone(), vec![0.6, 0.8]))
+            .collect();
+        cache
+            .put(&datalib_search_index::model_key(), &vectors)
+            .await
+            .unwrap();
+        cache.close().await;
+
+        index_step(root, &[GROUP]).await.unwrap();
+        assert_eq!(cached(root).await.len(), cut.len(), "the sweep kept them");
+        assert_eq!(unembedded(root, GROUP).await, 0);
+        let done = embed_with(
+            root,
+            GROUP,
+            never_cut,
+            never_opened,
+            None,
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done, Done::default());
+    }
+
+    /// An embed is one source's: it cuts and embeds that source's
+    /// documents and no other's, and with nothing owed it opens neither
+    /// the tokenizer nor the model.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_embed_fills_only_its_own_source() {
         let td = tempfile::tempdir().unwrap();
@@ -1075,7 +1380,7 @@ mod tests {
         update(root).await;
         update_of(root, OTHER).await;
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let run = |group: &'static str| {
+        let run = |group: &'static str, cutter: fn() -> Result<Cutter>| {
             let calls = calls.clone();
             async move {
                 let opened = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1087,8 +1392,8 @@ mod tests {
                 let done = embed_with(
                     root,
                     group,
+                    cutter,
                     open,
-                    &four_bytes_a_token,
                     None,
                     &Progress::noop(),
                     &StopFlag::new(),
@@ -1099,17 +1404,17 @@ mod tests {
             }
         };
 
-        let (done, opened) = run(GROUP).await;
+        let (done, opened) = run(GROUP, four_bytes).await;
         assert!(opened);
-        assert_eq!(done.embedded, 1);
+        assert_eq!((done.cut, done.embedded), (1, 1));
         assert_eq!(unembedded(root, GROUP).await, 0);
         assert_eq!(unembedded(root, OTHER).await, 1, "not its source");
 
-        let (done, _) = run(OTHER).await;
+        let (done, _) = run(OTHER, four_bytes).await;
         assert_eq!(done.embedded, 1);
         assert_eq!(unembedded(root, OTHER).await, 0);
 
-        let (done, opened) = run(GROUP).await;
+        let (done, opened) = run(GROUP, never_cut).await;
         assert_eq!(done, Done::default());
         assert!(!opened, "nothing owed, no model loaded");
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -1277,8 +1582,9 @@ mod tests {
         assert_eq!(Done::default().rate(), None);
     }
 
-    /// A chunk is embedded only while the document still draws it; else
-    /// the document waits for the next keyword pass.
+    /// A filed chunk is embedded only while the document is the rendering
+    /// it was cut from and makes the prompt it was filed under; else the
+    /// next embed cuts the document again.
     #[test]
     fn a_chunk_the_document_no_longer_draws_is_not_embedded() {
         let doc = IndexDoc {
@@ -1297,16 +1603,64 @@ mod tests {
             ),
         };
         let drawn = doc.prompted(&four_bytes_a_token).unwrap();
-        let good: HashSet<&str> = [drawn[0].hash.as_str()].into();
+        let filed = FiledChunk {
+            chunk: drawn[0].chunk,
+            hash: drawn[0].hash.clone(),
+        };
         assert_eq!(
-            prompts_for(&doc, &good, &four_bytes_a_token).unwrap(),
+            prompts_for(&doc, &("h".into(), vec![filed.clone()])).unwrap(),
             Some(vec![(drawn[0].hash.clone(), drawn[0].prompt.clone())])
         );
-        let stale: HashSet<&str> = ["not-a-chunk-of-it"].into();
         assert_eq!(
-            prompts_for(&doc, &stale, &four_bytes_a_token).unwrap(),
+            prompts_for(&doc, &("another rendering".into(), vec![filed.clone()])).unwrap(),
             None
         );
+        let misfiled = FiledChunk {
+            hash: "not-a-chunk-of-it".into(),
+            ..filed
+        };
+        assert_eq!(
+            prompts_for(&doc, &("h".into(), vec![misfiled])).unwrap(),
+            None
+        );
+    }
+
+    /// Chunks filed and owed a vector are embedded with no tokenizer: the
+    /// prompts are made from the spans filed. Here the first run cut the
+    /// documents and its model failed, so the second owes only vectors.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filed_chunks_are_embedded_without_the_tokenizer() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let err = embed_with(
+            root,
+            GROUP,
+            four_bytes,
+            || -> Result<Fixed> { bail!("the model would not load") },
+            None,
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("would not load"), "{err:#}");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let local = calls.clone();
+        let done = embed_with(
+            root,
+            GROUP,
+            never_cut,
+            move || Ok(Fixed(local)),
+            None,
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!((done.cut, done.embedded), (0, 5));
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        assert_eq!(unembedded(root, GROUP).await, 0);
     }
 
     /// The driver over a runtime tree of the test's making: the pinned
@@ -1452,35 +1806,40 @@ mod tests {
         assert_eq!(unembedded(root, GROUP).await, 5);
     }
 
-    /// A model that must not be loaded: the run went to Modal.
+    /// A model that must not be loaded: the run went to Modal, or owed
+    /// nothing.
     fn never_opened() -> Result<Fixed> {
-        panic!("the local model was loaded for a run that should have gone to Modal")
+        panic!("the local model was loaded for a run that owed it nothing")
     }
 
     /// Each cached vector, by hash.
-    async fn cached(root: &Path, group: &str) -> BTreeMap<String, Vec<f32>> {
-        let reader = Reader::open(
-            &layout::grid_index_db(root),
-            &layout::inference_cache_db(root),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        let hashes: Vec<String> = reader
-            .chunk_hashes(group)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|(_, h)| h)
-            .collect();
-        reader.close().await;
-        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+    async fn cached(root: &Path) -> BTreeMap<String, Vec<f32>> {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(layout::inference_cache_db(root))
+            .read_only(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(opts)
             .await
             .unwrap();
-        let model = datalib_search_index::model_key();
-        let out = cache.get(&model, &hashes).await.unwrap();
-        cache.close().await;
-        out.into_iter().collect()
+        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as("SELECT hash, vector FROM vectors")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        rows.into_iter()
+            .map(|(hash, blob)| {
+                let floats = blob
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|w| f32::from_le_bytes(*w))
+                    .collect();
+                (hash, floats)
+            })
+            .collect()
     }
 
     /// Over the threshold, every owed chunk goes to Modal: one Sandbox per
@@ -1499,8 +1858,8 @@ mod tests {
         let done = embed_with(
             root,
             GROUP,
+            four_bytes,
             never_opened,
-            &four_bytes_a_token,
             Some(fake.modal(5, true, &[])),
             &Progress::new(reported.clone()),
             &StopFlag::new(),
@@ -1511,7 +1870,7 @@ mod tests {
         assert!(done.prompt_bytes > 0);
         assert_eq!(unembedded(root, GROUP).await, 0);
         // fake_embed_prompts answers [prompt length, 1].
-        for (hash, vector) in cached(root, GROUP).await {
+        for (hash, vector) in cached(root).await {
             assert_eq!(vector.len(), 2, "{hash}");
             assert_eq!(vector[1], 1.0, "{hash}");
         }
@@ -1564,8 +1923,8 @@ mod tests {
         let again = embed_with(
             root,
             GROUP,
+            four_bytes,
             never_opened,
-            &four_bytes_a_token,
             Some(fake.modal(0, true, &[])),
             &Progress::noop(),
             &StopFlag::new(),
@@ -1589,8 +1948,8 @@ mod tests {
         let done = embed_with(
             root,
             GROUP,
+            four_bytes,
             move || Ok(Fixed(local)),
-            &four_bytes_a_token,
             Some(fake.modal(6, true, &[])),
             &Progress::noop(),
             &StopFlag::new(),
@@ -1622,8 +1981,8 @@ mod tests {
             let err = embed_with(
                 root,
                 GROUP,
+                four_bytes,
                 never_opened,
-                &four_bytes_a_token,
                 Some(fake.modal(1, signed_in, env)),
                 &Progress::noop(),
                 &StopFlag::new(),
@@ -1652,8 +2011,8 @@ mod tests {
         let done = embed_with(
             root,
             GROUP,
+            four_bytes,
             never_opened,
-            &four_bytes_a_token,
             Some(fake.modal(0, true, &[("FAKE_MODAL_FAIL", "1")])),
             &Progress::new(reported.clone()),
             &StopFlag::new(),
@@ -1683,8 +2042,8 @@ mod tests {
         let err = embed_with(
             root,
             GROUP,
+            four_bytes,
             never_opened,
-            &four_bytes_a_token,
             // One at a time, so the first slice is the one that fails twice.
             Some(fake.modal_with(0, true, &[("FAKE_MODAL_FAIL", "2")], 1)),
             &Progress::noop(),
@@ -1718,8 +2077,8 @@ mod tests {
         let done = embed_with(
             root,
             GROUP,
+            four_bytes,
             never_opened,
-            &four_bytes_a_token,
             Some(fake.modal_with(0, true, &[("FAKE_MODAL_SHORT", "99")], 1)),
             &Progress::noop(),
             &StopFlag::new(),

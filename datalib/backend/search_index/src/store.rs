@@ -1,9 +1,10 @@
-//! The index: tables in the grid index's file (plain SQLite, WAL) that
-//! every source's index steps write their own documents into, and search
-//! reads beside `grid_rows`. They hold where each message and chunk falls
-//! in its document, each chunk's prompt hash, and the keyword postings,
-//! and never the text. The vectors are in the inference cache
-//! (`cache.rs`), under those hashes. Every table's name starts with
+//! The keyword index: tables in the grid index's file (plain SQLite, WAL)
+//! that the `unified_grid_and_search_index` step writes each searched
+//! source's documents into, and search reads beside `grid_rows`. They
+//! hold where each message falls in its document and the keyword
+//! postings, and never the text. Where each chunk falls, and its vector,
+//! are in the inference cache's file, which each source's `embed` writes
+//! (`chunked.rs`, `cache.rs`). Every table's name starts with
 //! [`crate::TABLE_PREFIX`]; the grid index's own tables are not ours.
 
 use std::collections::BTreeMap;
@@ -17,7 +18,7 @@ use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
 
-const DDL: [&str; 8] = [
+const DDL: [&str; 6] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
     // whose pieces are parts of one thing and may hold the words between
@@ -45,17 +46,6 @@ const DDL: [&str; 8] = [
         title, body,
         content='', contentless_delete=1, tokenize='porter unicode61'
     )",
-    "CREATE TABLE IF NOT EXISTS search_chunks (
-        doc_id INTEGER NOT NULL,
-        seq INTEGER NOT NULL,
-        start_byte INTEGER NOT NULL,
-        end_byte INTEGER NOT NULL,
-        first_section INTEGER NOT NULL,
-        last_section INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        PRIMARY KEY (doc_id, seq)
-    ) WITHOUT ROWID",
-    "CREATE INDEX IF NOT EXISTS search_chunks_by_hash ON search_chunks (hash)",
     // Raised by every write, so a reader holding what it read can tell
     // whether the index moved without stat-ing a file the grid also writes.
     "CREATE TABLE IF NOT EXISTS search_state (
@@ -76,9 +66,9 @@ const DDL: [&str; 8] = [
 const WAIT_FOR_THE_GRID: Duration = Duration::from_secs(60 * 60);
 
 /// About how much drawn text one transaction of [`Index::put`] indexes.
-/// Its FTS rows and chunks take a few hundred milliseconds a megabyte; a
-/// whole batch of large documents in one held another writer of the file
-/// for over half a minute.
+/// Its FTS rows take a few hundred milliseconds a megabyte; a whole batch
+/// of large documents in one held another writer of the file for over
+/// half a minute.
 pub const PUT_BYTES: usize = 1 << 20;
 
 /// Documents removed in one transaction, so a large removal never holds
@@ -94,16 +84,6 @@ pub struct Index {
     pool: SqlitePool,
 }
 
-/// One chunk of an indexed document: its bytes in the document, and the
-/// hash of the prompt it is embedded as.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChunkSpan {
-    pub markdown_uuid: String,
-    pub start: usize,
-    pub end: usize,
-    pub hash: String,
-}
-
 impl Index {
     /// Opens the index in the grid index's file at `path`, creating its
     /// tables, or emptying them when they were written in another shape:
@@ -112,8 +92,7 @@ impl Index {
     pub async fn open(path: &Path) -> Result<Index> {
         let pool = crate::file::open(
             path,
-            &DDL,
-            crate::file::Owns::Part(StoreKind::SearchIndex),
+            &[(&DDL, crate::file::Owns::Part(StoreKind::SearchIndex))],
             WAIT_FOR_THE_GRID,
         )
         .await
@@ -149,9 +128,8 @@ impl Index {
     /// Indexes `docs`, committing after about [`PUT_BYTES`] of their text
     /// so the file's other writers wait seconds, not the whole batch. A
     /// document already held with the same hash is left alone; a changed
-    /// one has its sections and chunks replaced, in one transaction. Its
-    /// chunks are counted in `ends`'s tokens before the transaction opens.
-    pub async fn put(&self, docs: &[IndexDoc], ends: crate::chunk::TokenEnds<'_>) -> Result<()> {
+    /// one has its sections replaced, in one transaction.
+    pub async fn put(&self, docs: &[IndexDoc]) -> Result<()> {
         let mut rest = docs;
         while !rest.is_empty() {
             let mut bytes = 0;
@@ -164,17 +142,10 @@ impl Index {
                 })
                 .count();
             let (now, later) = rest.split_at(take);
-            let chunked = now
-                .iter()
-                .map(|d| {
-                    d.prompted(ends)
-                        .with_context(|| format!("chunk document {}", d.markdown_uuid))
-                })
-                .collect::<Result<Vec<_>>>()?;
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let mut changed = false;
-            for (doc, chunks) in now.iter().zip(&chunked) {
-                changed |= put_one(&mut tx, doc, chunks)
+            for doc in now {
+                changed |= put_one(&mut tx, doc)
                     .await
                     .with_context(|| format!("index document {}", doc.markdown_uuid))?;
             }
@@ -269,54 +240,6 @@ impl Index {
         Ok(())
     }
 
-    /// Every chunk hash the index names, each once: what the inference
-    /// cache keeps on a sweep.
-    pub async fn all_hashes(&self) -> Result<std::collections::HashSet<String>> {
-        let rows: Vec<String> = sqlx::query_scalar("SELECT DISTINCT hash FROM search_chunks")
-            .fetch_all(&self.pool)
-            .await
-            .context("read every chunk hash")?;
-        Ok(rows.into_iter().collect())
-    }
-
-    /// Every chunk of `source_id`'s documents with where it lies, in
-    /// document order: what the embed step cuts each chunk's text by.
-    pub async fn chunk_spans(&self, source_id: &str) -> Result<Vec<ChunkSpan>> {
-        let rows: Vec<(String, i64, i64, String)> = sqlx::query_as(
-            "SELECT d.markdown_uuid, c.start_byte, c.end_byte, c.hash FROM search_chunks c \
-               JOIN search_documents d ON d.doc_id = c.doc_id \
-              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
-        )
-        .bind(source_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("read the indexed chunks")?;
-        rows.into_iter()
-            .map(|(markdown_uuid, start, end, hash)| {
-                Ok(ChunkSpan {
-                    markdown_uuid,
-                    start: usize::try_from(start)?,
-                    end: usize::try_from(end)?,
-                    hash,
-                })
-            })
-            .collect()
-    }
-
-    /// Every chunk of `source_id`'s documents: `(markdown_uuid, seq, prompt
-    /// hash)`, in document order. What the embed step asks the cache about.
-    pub async fn chunks(&self, source_id: &str) -> Result<Vec<(String, i64, String)>> {
-        sqlx::query_as(
-            "SELECT d.markdown_uuid, c.seq, c.hash FROM search_chunks c \
-               JOIN search_documents d ON d.doc_id = c.doc_id \
-              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
-        )
-        .bind(source_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("read the indexed chunks")
-    }
-
     #[cfg(test)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
@@ -324,11 +247,7 @@ impl Index {
 }
 
 /// `false` when the document was already held as it is.
-async fn put_one(
-    conn: &mut SqliteConnection,
-    doc: &IndexDoc,
-    chunks: &[crate::chunk::Prompted],
-) -> Result<bool> {
+async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
     let held: Option<(i64, String, String)> = sqlx::query_as(
         "SELECT doc_id, source_id, content_hash FROM search_documents WHERE markdown_uuid = ?",
     )
@@ -389,23 +308,6 @@ async fn put_one(
             .await?;
         at = end;
     }
-    for (seq, p) in chunks.iter().enumerate() {
-        let c = &p.chunk;
-        sqlx::query(
-            "INSERT INTO search_chunks \
-             (doc_id, seq, start_byte, end_byte, first_section, last_section, hash) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(doc_id)
-        .bind(seq as i64)
-        .bind(c.start as i64)
-        .bind(c.end as i64)
-        .bind(c.first_section as i64)
-        .bind(c.last_section as i64)
-        .bind(&p.hash)
-        .execute(&mut *conn)
-        .await?;
-    }
     Ok(true)
 }
 
@@ -424,7 +326,6 @@ async fn clear(conn: &mut SqliteConnection, doc_ids: &[i64]) -> Result<()> {
         "DELETE FROM search_fts WHERE rowid IN \
          (SELECT section_id FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?)))",
         "DELETE FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?))",
-        "DELETE FROM search_chunks WHERE doc_id IN (SELECT value FROM json_each(?))",
     ] {
         sqlx::query(sql).bind(&ids).execute(&mut *conn).await?;
     }

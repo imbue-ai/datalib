@@ -3,7 +3,8 @@
 use std::collections::{HashMap, HashSet};
 
 use datalib_search_index::{
-    chunk::chunk_hash, Index, IndexDoc, IndexSection, InferenceCache, Reader,
+    chunk::{chunk_hash, four_bytes_a_token},
+    ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache, Reader,
 };
 
 fn doc(source: &str, uuid: &str, sections: &[(Option<&str>, &str)]) -> IndexDoc {
@@ -41,17 +42,31 @@ struct Fixture {
     reader: Reader,
 }
 
+/// `docs` in the keyword index, each cut into chunks as its `embed` cuts
+/// it, and `vectors` cached.
 async fn fixture(docs: &[IndexDoc], vectors: &[(String, Vec<f32>)]) -> Fixture {
+    fixture_cut(docs, docs, vectors).await
+}
+
+/// [`fixture`] with only `cut` cut into chunks: a document its `embed`
+/// has not reached, or one cut from another rendering.
+async fn fixture_cut(
+    docs: &[IndexDoc],
+    cut: &[IndexDoc],
+    vectors: &[(String, Vec<f32>)],
+) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let index_path = dir.path().join("index.sqlite");
     let cache_path = dir.path().join("cache.sqlite");
     let index = Index::open(&index_path).await.unwrap();
-    index
-        .put(docs, &datalib_search_index::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(docs).await.unwrap();
     index.close().await;
     let cache = InferenceCache::open(&cache_path).await.unwrap();
+    let filed: Vec<ChunkedDoc> = cut
+        .iter()
+        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
+        .collect();
+    cache.file_chunks(&filed).await.unwrap();
     cache
         .put(&datalib_search_index::model_key(), vectors)
         .await
@@ -218,6 +233,39 @@ async fn a_document_is_embedded_when_every_chunk_has_a_vector() {
     f.reader.close().await;
 }
 
+/// A document counts as embedded only when its chunks were cut from the
+/// rendering the keyword index holds: one its `embed` has not reached,
+/// or reached at an older rendering, is neither held nor embedded,
+/// though the old chunk's vector is cached.
+#[tokio::test]
+async fn only_chunks_cut_from_the_indexed_rendering_count() {
+    let t = thread();
+    let text: String = t.sections.iter().map(|s| s.text.as_str()).collect();
+    let vector = (chunk_hash(&t.title, &text), vec![3.0, 4.0]);
+    let mut older = t.clone();
+    older.content_hash = "an older rendering".into();
+    let model = datalib_search_index::model_key();
+    let asked = ["thread".to_string()];
+    for cut in [vec![], vec![older]] {
+        let f = fixture_cut(
+            std::slice::from_ref(&t),
+            &cut,
+            std::slice::from_ref(&vector),
+        )
+        .await;
+        assert!(f.reader.held(&model).await.unwrap().docs.is_empty());
+        assert_eq!(
+            f.reader.states(&model, &asked).await.unwrap(),
+            HashMap::from([("thread".to_string(), false)])
+        );
+        assert_eq!(f.reader.coverage(&model).await.unwrap(), (1, 0));
+        f.reader.close().await;
+    }
+    let f = fixture(&[t], std::slice::from_ref(&vector)).await;
+    assert_eq!(f.reader.coverage(&model).await.unwrap(), (1, 1));
+    f.reader.close().await;
+}
+
 /// A message of `text`, drawn with an envelope: it starts a chunk of its
 /// own.
 fn message(uuid: &str, text: &str) -> IndexSection {
@@ -234,16 +282,10 @@ fn message(uuid: &str, text: &str) -> IndexSection {
 async fn a_document_is_embedded_only_once_every_chunk_is() {
     let mut two = doc("mail", "two", &[]);
     two.sections = vec![message("m1", "warp core"), message("m2", "coolant leak")];
-    let halves = two
-        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
-        .unwrap();
+    let halves = two.prompted(&four_bytes_a_token).unwrap();
     assert_eq!(halves.len(), 2, "a message starts a chunk of its own");
     let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
-    let chat_chunk = chat
-        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
-        .unwrap()[0]
-        .hash
-        .clone();
+    let chat_chunk = chat.prompted(&four_bytes_a_token).unwrap()[0].hash.clone();
     let model = datalib_search_index::model_key();
     let asked = ["two", "chat"].map(String::from);
 

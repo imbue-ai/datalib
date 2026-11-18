@@ -619,16 +619,29 @@ async fn only_a_document_meant_to_have_vectors_counts_as_lacking_them() {
         .connect()
         .await
         .unwrap();
-    let hashes: Vec<String> = sqlx::query_scalar(
-        "SELECT c.hash FROM search_chunks c JOIN search_documents d ON d.doc_id = c.doc_id \
-          WHERE d.markdown_uuid = (SELECT d2.markdown_uuid FROM search_documents d2 \
-            JOIN grid_rows g ON g.uuid = d2.markdown_uuid \
-           WHERE d2.source_id = 'slack' AND g.is_document = 1 ORDER BY 1 LIMIT 1)",
+    let slack_doc: String = sqlx::query_scalar(
+        "SELECT d.markdown_uuid FROM search_documents d \
+           JOIN grid_rows g ON g.uuid = d.markdown_uuid \
+          WHERE d.source_id = 'slack' AND g.is_document = 1 ORDER BY 1 LIMIT 1",
     )
-    .fetch_all(&mut grid)
+    .fetch_one(&mut grid)
     .await
     .unwrap();
     sqlx::Connection::close(grid).await.unwrap();
+    let mut chunks = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_runtime::layout::inference_cache_db(root.path()))
+        .connect()
+        .await
+        .unwrap();
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT c.hash FROM search_chunks c JOIN search_chunked d ON d.doc_id = c.doc_id \
+          WHERE d.markdown_uuid = ?",
+    )
+    .bind(&slack_doc)
+    .fetch_all(&mut chunks)
+    .await
+    .unwrap();
+    sqlx::Connection::close(chunks).await.unwrap();
     assert!(!hashes.is_empty(), "the fixture indexes its slack");
 
     let mut cache = sqlx::sqlite::SqliteConnectOptions::new()

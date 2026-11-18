@@ -1,9 +1,10 @@
 //! The search's per-source step beside the `unified_grid_and_search_index` step's keyword pass:
-//! each source's `embed`, which fills the vectors its chunks lack
-//! (`search_index.rs`).
+//! each source's `embed`, which cuts its documents into chunks and fills
+//! the vectors they lack (`search_index.rs`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
@@ -60,23 +61,52 @@ pub(crate) fn ensure_embed_model(dir: &Path, fetch: datalib_embedding_models::Fe
     Ok(())
 }
 
-/// The pinned model, provisioned, and its tokenizer, read without the
-/// weights: the `unified_grid_and_search_index` step's keyword pass and
-/// each embed cut chunks counted in its tokens.
-pub(crate) async fn open_model(
-    data_root: &Path,
+/// The pinned model's file, put in place, sha256-verified, the first time
+/// something asks for it, and never before: an embed with nothing to cut
+/// or embed provisions nothing.
+#[derive(Clone)]
+pub(crate) struct ModelFile {
+    inner: Arc<ModelFileInner>,
+}
+
+struct ModelFileInner {
+    root: PathBuf,
     models_dir: Option<PathBuf>,
-) -> Result<(PathBuf, datalib_embedder::Tokenizer)> {
-    let root = data_root.to_path_buf();
-    let fetch = datalib_embedding_models::Fetch::from_env();
-    tokio::task::spawn_blocking(move || {
-        let models = provision_embed_model(&root, models_dir, fetch)?;
+    fetch: datalib_embedding_models::Fetch,
+    path: Mutex<Option<PathBuf>>,
+}
+
+impl ModelFile {
+    pub(crate) fn new(root: &Path, models_dir: Option<PathBuf>) -> ModelFile {
+        ModelFile {
+            inner: Arc::new(ModelFileInner {
+                root: root.to_path_buf(),
+                models_dir,
+                fetch: datalib_embedding_models::Fetch::from_env(),
+                path: Mutex::new(None),
+            }),
+        }
+    }
+
+    /// Blocks while the model is fetched or verified.
+    pub(crate) fn path(&self) -> Result<PathBuf> {
+        let mut path = self
+            .inner
+            .path
+            .lock()
+            .map_err(|_| anyhow::anyhow!("the model file's lock is poisoned"))?;
+        if let Some(path) = path.as_ref() {
+            return Ok(path.clone());
+        }
+        let models = provision_embed_model(
+            &self.inner.root,
+            self.inner.models_dir.clone(),
+            self.inner.fetch,
+        )?;
         let model = crate::search_index::model_file(&models);
-        let tokenizer = datalib_embedder::Tokenizer::open(&model)?;
-        Ok((model, tokenizer))
-    })
-    .await
-    .context("model provisioning panicked")?
+        *path = Some(model.clone());
+        Ok(model)
+    }
 }
 
 /// `<group>/embed`: the vectors this source's chunks are missing from the
@@ -95,12 +125,9 @@ pub async fn run_embed(
         .map(crate::search_index::Modal::for_this_process);
     let progress = emitter.progress();
     progress.set_message("embedding");
-    let (model, tokenizer) = open_model(data_root, models_dir).await?;
-    let ends = |text: &str| tokenizer.ends(text);
-    let done = crate::search_index::embed(
-        data_root, &env.group, &model, &ends, on_modal, &progress, stop,
-    )
-    .await?;
+    let model = ModelFile::new(data_root, models_dir);
+    let done =
+        crate::search_index::embed(data_root, &env.group, model, on_modal, &progress, stop).await?;
     report_unsettled(&progress, &env.group, done.unsettled);
     progress.metric(
         "search_chunks_not_embedded",
@@ -111,6 +138,7 @@ pub async fn run_embed(
     progress.metric("embedding_ms", &[], done.embed_time.as_millis() as i64);
     let (chunks_per_sec, kb_per_sec) = done.rate().unwrap_or_default();
     tracing::info!(
+        cut = done.cut,
         embedded = done.embedded,
         unsettled = done.unsettled,
         truncated = done.truncated,

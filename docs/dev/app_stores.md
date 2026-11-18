@@ -25,11 +25,13 @@
                                                   SQLite in WAL mode, its version the
                                                   `store_generation` row. Beside them the
                                                   search index's `search_*` tables: each
-                                                  message's keyword postings and each
-                                                  chunk's place and prompt hash, no text
+                                                  message's keyword postings, no text
                                                   (`datalib/backend/search_index`)
 <data_root>/unified_grid_and_search_index/search_index/inference_cache.sqlite
-                                                  each chunk's vector under its model and
+                                                  each embedded document's chunks, their
+                                                  places and prompt hashes, which the
+                                                  sources' `embed` steps cut, and each
+                                                  chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
 <data_root>/unified_grid_and_search_index/qmd_aggregator/           left by an older build, where qmd kept
