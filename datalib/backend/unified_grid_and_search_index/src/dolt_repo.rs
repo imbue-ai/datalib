@@ -1501,14 +1501,13 @@ impl IndexRepo for DoltRepo {
         let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(format!(
             "SELECT DISTINCT markdown_uuid, source_id FROM {g}{where_sql}{joiner} \
              EXISTS (SELECT 1 FROM {m} WHERE {m}.markdown_uuid = {g}.markdown_uuid \
-                     AND {m}.md_path NOT LIKE ?)",
+                     AND {m}.searchable = 1)",
             g = at.grid_rows,
             m = at.markdowns,
         )));
         for p in &params {
             query = query.bind(p);
         }
-        query = query.bind(format!("%/{}/%", datalib_runtime::layout::UNINDEXED_DIR));
         match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows),
             Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "markdowns") => {

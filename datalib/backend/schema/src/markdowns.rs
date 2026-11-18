@@ -110,6 +110,11 @@ pub struct MarkdownRow {
     /// older build wrote.
     #[col(sql = "TEXT")]
     pub front: Option<String>,
+    /// The search indexes this document: false for one filed for the grid
+    /// alone (Notion's table of contents), which the keyword pass and the
+    /// embeddings leave out.
+    #[col(sql = "INTEGER")]
+    pub searchable: bool,
 }
 
 /// One piece of a document's `.md`: the `data-section-uuid` it wraps, or

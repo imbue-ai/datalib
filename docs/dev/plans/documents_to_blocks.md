@@ -577,7 +577,9 @@ against the eval before the next.
      facts can follow one fact at a time, each checked against the
      stored drawing.
    - **5b.** "Unindexed" (Notion's table of contents) is a `markdowns`
-     column, not a folder in the file's path.
+     column, `searchable`, which every reader reads. It is still set from
+     the folder the renderer files the document under, until 5e takes
+     the paths away and the renderer says so itself.
    - **5c.** The viewer and search landing read the render store, at the
      commit the grid index read.
    - **5d.** A command prints or exports a document's markdown: the way
