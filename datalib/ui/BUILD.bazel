@@ -12,7 +12,6 @@ load("//datalib:dev_runtime.bzl", "DEV_RUNTIME_DATA", "DEV_RUNTIME_ENV")
 
 # Materializes the npm dep graph from pnpm-lock.yaml into a virtual
 # node_modules/ tree backing the js_run_binary action below.
-# Resolved @playwright/test version, read by //tools:version_pins_test.
 exports_files([
     "pnpm-lock.yaml",
     # Generated from the provider config crates; see

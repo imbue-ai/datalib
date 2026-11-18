@@ -230,7 +230,6 @@ py_test(
         "//:scripts/cloud_env_setup.sh",
         "//datalib/backend/runtime:src/node_runtime.rs",
         "//datalib/tauri:rust-toolchain.toml",
-        "//datalib/ui:pnpm-lock.yaml",
         "//third-party/doltlite:BUILD.bazel",
         "//third-party/latchkey/runtime:package.json",
         "//third-party/modal/runtime:package.json",
