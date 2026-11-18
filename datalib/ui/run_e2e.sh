@@ -224,14 +224,13 @@ export DATALIB_TEST_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
 # dash-separated name** — the layout `scripts/install.sh` produces on a
 # user's machine, and the one `//datalib/backend:bin` builds.
 #
-# The onboarding spec needs it, and nothing else here does. That spec
-# starts from an empty data root and clicks the button that writes the
-# starter config, so its config is the scaffold `datalib-http` emits:
-# bare `datalib-step …` / `datalib-applet …` commands, resolved against
-# PATH. Every other spec's config names an absolute runfiles path
-# instead, which is why they have never needed this. Symlinks rather
-# than a copy_to_directory dep: bazel names each output after its target
-# (`datalib_step`, `datalib_applet`), and the rename is the whole point.
+# Every root's steps name `command = "datalib-step"` bare, as the wizard
+# and the starter config write them, and each backend's first launch
+# spawns every step to migrate. So every backend is told this directory:
+# the onboarding one on its PATH, the rest as `DATALIB_BINARY_DIR`
+# (playwright.config.ts). Symlinks rather than a copy_to_directory dep:
+# bazel names each output after its target (`datalib_step`,
+# `datalib_applet`), and the rename is the whole point.
 BIN_STAGE="$DATALIB_TEST_E2E_RUN_DIR/bin"
 mkdir -p "$BIN_STAGE"
 APPLET_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_APPLET_BIN_RLOC:-}" -x)"

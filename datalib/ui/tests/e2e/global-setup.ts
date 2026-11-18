@@ -39,12 +39,22 @@ function assertOnlyKnownSpecsWriteTheConfig(dir: string): void {
 }
 
 type Server = { name: string; url: string; log: string };
+// `/api/config`'s `upgrade`, the part of it read here.
+type Upgrade = {
+  settled: boolean;
+  steps: { step: string; state: string; error: string | null }[];
+};
 
 /// A backend announces its URL as soon as it has bound a port, which is
 /// several seconds before it can answer anything — so this is where the
 /// suite waits for the servers `playwright.config.ts` started. It is
 /// what Playwright's `webServer` readiness probe would do, if the
 /// servers could be run under `webServer` at all.
+///
+/// A pass that settled with a step it could not migrate is an error here,
+/// not a banner: every spec on that root would run under "N sources
+/// could not be updated", and the cause is in the server's log, where no
+/// spec looks.
 async function awaitHealthy(servers: Server[], token: string): Promise<void> {
   const deadline = Date.now() + 60_000;
   for (const server of servers) {
@@ -54,11 +64,22 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
         // Listening is not enough: the first boot of a build asks every
         // step to migrate before it syncs, and a spec that syncs would
         // find its Sync disabled until then.
-        const ok = await ctx
+        const upgrade = await ctx
           .get(`/api/config`, { headers: { authorization: `Bearer ${token}` } })
-          .then(async (res) => res.ok() && (await res.json()).upgrade?.settled === true)
-          .catch(() => false);
-        if (ok) break;
+          .then(async (res) => (res.ok() ? ((await res.json()).upgrade as Upgrade) : undefined))
+          .catch(() => undefined);
+        if (upgrade?.settled === true) {
+          const failed = upgrade.steps.filter((s) => s.state === "failed");
+          if (failed.length > 0) {
+            throw new Error(
+              `backend ${server.name} (${server.url}) could not migrate ` +
+                `${failed.length} of the ${upgrade.steps.length} steps its launch pass asked, ` +
+                `so its specs would run under the "could not be updated" banner. ` +
+                `First: ${failed[0].step}: ${failed[0].error}. Its output is in ${server.log}`,
+            );
+          }
+          break;
+        }
         if (Date.now() >= deadline) {
           throw new Error(
             `backend ${server.name} (${server.url}) never answered ` +
