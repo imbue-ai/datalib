@@ -71,13 +71,13 @@ pub(crate) async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
     }
 }
 
-/// A document row: a chat, filed under the path's first segment.
-fn chat_row(uuid: &str, qmd_path: &str) -> GridRow {
-    chat_row_at(uuid, qmd_path, "2026-04-01T10:00:00+00:00")
+/// A document row: a chat, filed under `source`.
+fn chat_row(uuid: &str, source: &str) -> GridRow {
+    chat_row_at(uuid, source, "2026-04-01T10:00:00+00:00")
 }
 
-fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
-    GridRow::builder()
+fn chat_row_at(uuid: &str, source: &str, created_at: &str) -> GridRow {
+    let row = GridRow::builder()
         .uuid(uuid)
         .provider(Provider::Claude)
         .kind("Chat")
@@ -89,11 +89,14 @@ fn chat_row_at(uuid: &str, qmd_path: &str, created_at: &str) -> GridRow {
         .conversation_uuid(uuid)
         .entire_chat(format!("/chat/{uuid}"))
         .body("summary")
-        .qmd_path(Some(qmd_path.to_string()))
         .source_url(Some(format!("https://claude.ai/chat/{uuid}")))
         .markdown_uuid(Some(uuid.to_string()))
         .build()
-        .expect("a valid chat row")
+        .expect("a valid chat row");
+    GridRow {
+        source_id: Some(source.to_string()),
+        ..row
+    }
 }
 
 fn order(spelled: &str) -> Vec<Sort> {
@@ -181,8 +184,8 @@ async fn a_hit_finds_the_rows_of_its_document_and_no_others() {
     insert_rows(
         &writer,
         &[
-            chat_row("week-12", "calendar/render_markdown/12/week-12.md"),
-            chat_row("week-13", "calendar/render_markdown/13/week-13.md"),
+            chat_row("week-12", "calendar"),
+            chat_row("week-13", "calendar"),
         ],
     )
     .await;
@@ -238,7 +241,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .markdown_uuid(Some("c-1".to_string()))
         .build()
         .unwrap();
-    insert_rows(&writer, &[chat_row("c-1", "chats/c-1.md"), message]).await;
+    insert_rows(&writer, &[chat_row("c-1", "chats"), message]).await;
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
          renderer_version, title) \
@@ -357,10 +360,10 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
     insert_rows(
         &writer,
         &[
-            chat_row_at("c-old", "enterprise/a.md", "2026-01-01T09:00:00+00:00"),
-            chat_row_at("c-new", "enterprise/b.md", "2026-03-01T09:00:00+00:00"),
-            chat_row_at("c-mid", "enterprise/c.md", "2026-02-01T09:00:00+00:00"),
-            chat_row_at("v-1", "voyager/d.md", "2026-02-15T09:00:00+00:00"),
+            chat_row_at("c-old", "enterprise", "2026-01-01T09:00:00+00:00"),
+            chat_row_at("c-new", "enterprise", "2026-03-01T09:00:00+00:00"),
+            chat_row_at("c-mid", "enterprise", "2026-02-01T09:00:00+00:00"),
+            chat_row_at("v-1", "voyager", "2026-02-15T09:00:00+00:00"),
         ],
     )
     .await;
@@ -414,7 +417,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
     let got: Vec<&str> = rows.iter().map(|r| r.uuid.as_str()).collect();
     assert_eq!(got, ["c-old", "v-1"]);
 
-    insert_rows(&writer, &[chat_row("c-later", "enterprise/e.md")]).await;
+    insert_rows(&writer, &[chat_row("c-later", "enterprise")]).await;
     commit(&writer, "more rows").await;
     assert_ne!(
         repo.head().await.unwrap().as_deref(),
@@ -435,20 +438,20 @@ async fn a_key_suggests_its_values_most_rows_first() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
     create_grid_tables(&writer).await;
-    let in_channel = |uuid: &str, path: &str, channel: &str| {
-        let mut row = chat_row(uuid, path);
+    let in_channel = |uuid: &str, source: &str, channel: &str| {
+        let mut row = chat_row(uuid, source);
         row.channel = Some(channel.to_string());
         row
     };
     insert_rows(
         &writer,
         &[
-            in_channel("e-1", "enterprise/a.md", "bridge"),
-            in_channel("e-2", "enterprise/b.md", "bridge"),
-            in_channel("e-3", "enterprise/c.md", "Engineering"),
-            in_channel("e-4", "enterprise/d.md", "50%_off"),
-            in_channel("v-1", "voyager/a.md", "bridge"),
-            chat_row("v-2", "voyager/b.md"),
+            in_channel("e-1", "enterprise", "bridge"),
+            in_channel("e-2", "enterprise", "bridge"),
+            in_channel("e-3", "enterprise", "Engineering"),
+            in_channel("e-4", "enterprise", "50%_off"),
+            in_channel("v-1", "voyager", "bridge"),
+            chat_row("v-2", "voyager"),
         ],
     )
     .await;
@@ -496,7 +499,7 @@ async fn create_grid_tables(writer: &sqlx::SqlitePool) {
 }
 
 async fn insert_chat_row(writer: &sqlx::SqlitePool, uuid: &str) {
-    insert_rows(writer, &[chat_row(uuid, "chats/x.md")]).await;
+    insert_rows(writer, &[chat_row(uuid, "chats")]).await;
 }
 
 /// The repo reads what the step committed, never what it is writing: a
@@ -513,7 +516,7 @@ async fn a_row_the_step_has_not_committed_is_not_served() {
     let repo = DoltRepo::open(root.clone()).await.unwrap();
 
     let mut tx = writer.begin().await.unwrap();
-    let row = chat_row("c-1", "chats/x.md");
+    let row = chat_row("c-1", "chats");
     let columns = std::iter::once(GridRow::ID_COLUMN)
         .chain(GridRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
@@ -585,13 +588,11 @@ async fn a_repo_opened_before_the_first_commit_reads_after_it() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// A source's storage report is written into that source's own
-/// `render_markdown/` tree, so the first segment of its `qmd_path` is
-/// the measured source. It must not be filed there: `source:` has
-/// to answer `datalib` for it, and the measured source's own name has to
-/// leave it out. Both halves — the column's value and the SQL filter —
-/// are checked here against a real store, because the two are derived
-/// separately and can disagree.
+/// A source's storage report is written into that source's own render
+/// store, and filed under `datalib` there (`grid_rows::filed_under`), so
+/// `source:` has to answer `datalib` for it and the measured source's own
+/// name has to leave it out. Checked against a real store, through the
+/// column the writer fills and the SQL filter that reads it.
 #[tokio::test]
 async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     let db_path = unique_db_path();
@@ -618,20 +619,17 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
         .conversation_uuid("s-1")
         .entire_chat("/chat/s-1")
         .body("claude-work/ingest/entities.doltlite_db")
-        .qmd_path(Some(
-            "claude-work/render_markdown/_datalib/storage.md".to_string(),
-        ))
         .markdown_uuid(Some("s-1".to_string()))
         .build()
         .unwrap();
-    insert_rows(
-        &writer,
-        &[
-            chat_row("c-1", "claude-work/render_markdown/chats/c-1.md"),
-            storage,
-        ],
-    )
-    .await;
+    let storage = GridRow {
+        source_id: Some(datalib_schema::grid_rows::filed_under(
+            &storage.provider,
+            "claude-work",
+        )),
+        ..storage
+    };
+    insert_rows(&writer, &[chat_row("c-1", "claude-work"), storage]).await;
     commit(&writer, "rows").await;
 
     let all = repo.search(&parse_query(""), 100).await.unwrap();
@@ -703,7 +701,6 @@ async fn every_wire_field_survives_the_round_trip() {
         .message_index(Some(0))
         .entire_chat("/chat/row-1")
         .body("Stardate 47988.1")
-        .qmd_path(Some("claude-api/render_markdown/row-1.md".to_string()))
         .source_url(Some("https://claude.ai/chat/row-1".to_string()))
         .git_sha(Some("abc123".to_string()))
         .upstream_id(Some("row-1".to_string()))
@@ -717,8 +714,10 @@ async fn every_wire_field_survives_the_round_trip() {
         .image(Some("datalib:photo/row-1".to_string()))
         .build()
         .unwrap();
-    // The builder has no setters for these: a diff marks a finished row.
+    // The builder has no setters for these: the writer files a row under
+    // its source, and a diff marks a finished row.
     let row = GridRow {
+        source_id: Some("claude-api".to_string()),
         diff_status: Some("modified".to_string()),
         diff_changed_columns: Some("text".to_string()),
         ..row
@@ -1050,7 +1049,7 @@ async fn an_entity_problem_is_located_at_its_items_document() {
         .markdown_uuid(Some("md-2".to_string()))
         .build()
         .unwrap();
-    insert_rows(&writer, &[chat_row("md-2", "slack/md-2.md"), message]).await;
+    insert_rows(&writer, &[chat_row("md-2", "slack"), message]).await;
     let fetch_failed = |key: &str, item: &str| {
         ProblemRow::new(
             "slack",

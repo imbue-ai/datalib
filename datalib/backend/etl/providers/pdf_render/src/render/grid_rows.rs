@@ -84,10 +84,6 @@ pub struct DocumentMeta<'a> {
     /// ISO-8601 with offset, from the PDF's Info dictionary.
     pub created_at: Option<&'a str>,
     pub modified_at: Option<&'a str>,
-    /// Path to the rendered markdown, **relative to the data root**
-    /// (`<stanza>/render_markdown/<xx>/<id>.md`). Anything shorter makes
-    /// the document unfindable through qmd search.
-    pub qmd_path: Option<&'a str>,
 }
 
 /// Display title: the PDF's own title if it has a usable one, else the
@@ -195,7 +191,7 @@ pub fn rows_for_document(
         entire_chat: format!("/chat/{doc_uuid}"),
         preview: preview(&doc_body),
         content_hash: content_hash(&doc_body),
-        qmd_path: meta.qmd_path.map(str::to_string),
+        source_id: None,
         source_url: source_url.clone(),
         git_sha: None,
         // `upstream_account` stays NULL: a content hash needs no further
@@ -254,7 +250,7 @@ pub fn rows_for_document(
             entire_chat: format!("/chat/{doc_uuid}"),
             preview: preview(text),
             content_hash: content_hash(text),
-            qmd_path: meta.qmd_path.map(str::to_string),
+            source_id: None,
             source_url: source_url.clone(),
             git_sha: None,
             upstream_id: Some(page.natural_key),
@@ -291,7 +287,6 @@ mod tests {
             copy_count: 1,
             created_at: Some("2024-01-15T10:30:00-08:00"),
             modified_at: None,
-            qmd_path: Some("papers/render_markdown/docs/abc123.md"),
         }
     }
 

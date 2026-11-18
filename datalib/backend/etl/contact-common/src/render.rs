@@ -142,12 +142,6 @@ fn render_one(
     let sections = render_markdown(profile, doc, source_id, photo.as_deref());
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-
     let mut problems: Vec<ProblemRow> = doc
         .problems
         .iter()
@@ -164,7 +158,7 @@ fn render_one(
         })
         .collect();
     let (data_nodes, at) = tree(profile, doc, source_id);
-    let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
+    let mut row = build_grid_row(profile, doc, source_id, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
         row.parent_uuid = at.parent_uuid;
@@ -583,7 +577,6 @@ fn build_grid_row(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
     source_id: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let contact = &doc.contact;
@@ -608,7 +601,6 @@ fn build_grid_row(
         .conversation_uuid(doc.doc_uuid.clone())
         .entire_chat(format!("/contact/{}", doc.doc_uuid))
         .body(summary(contact))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
         .upstream_id(Some(contact.key.clone()).filter(|k| !k.is_empty()))
         .upstream_entity_kind(Some(profile.contact_entity_kind.to_string()))
@@ -882,14 +874,8 @@ mod tests {
     #[test]
     fn grid_row_carries_uuid_url_and_searchtext() {
         let mut problems = Vec::new();
-        let row = build_grid_row(
-            &mk_profile(),
-            &mk_contact(),
-            "linkedin",
-            "render_markdown/x.md",
-            &mut problems,
-        )
-        .expect("valid contact grid row");
+        let row = build_grid_row(&mk_profile(), &mk_contact(), "linkedin", &mut problems)
+            .expect("valid contact grid row");
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(row.uuid, "11111111-1111-1111-1111-111111111111");
         assert_eq!(row.kind, "Contact");
@@ -1008,7 +994,7 @@ mod tests {
         ];
         doc.contact.note = Some("Plays the trombone".into());
         doc.contact.groups = vec!["Bridge".into()];
-        let row = build_grid_row(&mk_profile(), &doc, "linkedin", "x.md", &mut Vec::new())
+        let row = build_grid_row(&mk_profile(), &doc, "linkedin", &mut Vec::new())
             .expect("valid contact grid row");
         assert_eq!(row.email.as_deref(), Some("riker@enterprise.org"));
         assert_eq!(row.phone.as_deref(), Some("(555) 010-1234"));
@@ -1031,7 +1017,7 @@ mod tests {
             Handle::facebook_name("Will Riker").unwrap(),
         )];
         doc.contact.details = vec![Detail::new("Friends since", "2364-01-05")];
-        let row = build_grid_row(&mk_profile(), &doc, "facebook", "x.md", &mut Vec::new())
+        let row = build_grid_row(&mk_profile(), &doc, "facebook", &mut Vec::new())
             .expect("valid contact grid row");
         assert_eq!(row.preview, "2364-01-05");
     }

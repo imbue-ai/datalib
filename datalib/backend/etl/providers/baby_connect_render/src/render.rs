@@ -169,7 +169,6 @@ pub fn build(
     let mut out = Out {
         source_id,
         doc: &id,
-        md_rel: &rel,
         title: &title,
         kid_name: &kid_name,
         in_kid,
@@ -226,7 +225,6 @@ pub fn build(
         .conversation_uuid(id.uuid.clone())
         .entire_chat(format!("/chat/{}", id.uuid))
         .body(title.clone())
-        .qmd_path(Some(rel.clone()))
         .upstream_id(Some(id.natural_key.clone()))
         .upstream_entity_kind(Some(id.entity_kind.to_string()))
         .markdown_uuid(Some(id.uuid.clone()))
@@ -304,7 +302,6 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
 struct Out<'a> {
     source_id: &'a str,
     doc: &'a Identity,
-    md_rel: &'a str,
     title: &'a str,
     kid_name: &'a str,
     in_kid: Lineage,
@@ -377,7 +374,6 @@ impl Out<'_> {
             .message_index(Some(index))
             .entire_chat(format!("/chat/{}", self.doc.uuid))
             .body(body)
-            .qmd_path(Some(self.md_rel.to_string()))
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
             .markdown_uuid(Some(self.doc.uuid.clone()))

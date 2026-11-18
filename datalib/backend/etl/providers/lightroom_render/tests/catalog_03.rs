@@ -67,7 +67,6 @@ async fn photos(zone: Option<&str>) -> BTreeMap<String, Built> {
                 image,
                 &Context {
                     source_id: "lr",
-                    qmd_path: "lr/render_markdown/xx/doc.md",
                     catalog: catalog.catalog_path.as_deref(),
                     zone: zone.as_ref(),
                 },

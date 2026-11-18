@@ -1948,7 +1948,6 @@ grid_rows
     entire_chat
     preview
     content_hash
-    qmd_path
     source_id
     source_url
     git_sha

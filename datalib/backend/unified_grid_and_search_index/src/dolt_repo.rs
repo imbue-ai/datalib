@@ -1422,7 +1422,7 @@ impl IndexRepo for DoltRepo {
             "SELECT markdown_uuid, source_id, conversation_name, provider, source_label, \
                     kind, created_at, account, channel \
                FROM {} \
-              WHERE is_document = 1 AND markdown_uuid IS NOT NULL AND qmd_path IS NOT NULL",
+              WHERE is_document = 1 AND markdown_uuid IS NOT NULL",
             at.grid_rows
         )))
         .fetch_all(&mut *at.tx)
@@ -1496,12 +1496,14 @@ impl IndexRepo for DoltRepo {
         } else {
             " AND"
         };
-        // Audited: as `matching` — a literal table name and `build_where`'s
+        // Audited: as `matching` — literal table names and `build_where`'s
         // static column names; every value is bound.
         let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT markdown_uuid, source_id FROM {}{where_sql}{joiner} \
-             markdown_uuid IS NOT NULL AND qmd_path IS NOT NULL AND qmd_path NOT LIKE ?",
-            at.grid_rows
+            "SELECT DISTINCT markdown_uuid, source_id FROM {g}{where_sql}{joiner} \
+             EXISTS (SELECT 1 FROM {m} WHERE {m}.markdown_uuid = {g}.markdown_uuid \
+                     AND {m}.md_path NOT LIKE ?)",
+            g = at.grid_rows,
+            m = at.markdowns,
         )));
         for p in &params {
             query = query.bind(p);
@@ -1509,7 +1511,9 @@ impl IndexRepo for DoltRepo {
         query = query.bind(format!("%/{}/%", datalib_runtime::layout::UNINDEXED_DIR));
         match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
+            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "markdowns") => {
+                Ok(Vec::new())
+            }
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }

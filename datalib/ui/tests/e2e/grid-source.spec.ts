@@ -4,7 +4,7 @@
 // The column answers which *configured source* a row came from, led by
 // the mark of the service it mirrors. Two Slack workspaces share the
 // mark and are two sources. The value on the row is the source's id
-// (derived server-side from `qmd_path`); the text in the cell is the
+// (`grid_rows.source_id`); the text in the cell is the
 // `name` that source's steps declare in config.toml, joined
 // client-side. That join is the thing worth an end-to-end test — it
 // crosses the backend, the config file and the grid, and it is the
@@ -85,8 +85,8 @@ test("the Source column shows the configured name, and source: filters by id", a
   expect(cellText.trim()).toBe("slack");
 
   // --- `source:` narrows to one source --------------------------
-  // Every visible cell must read `slack` — the filter is a whole-segment
-  // prefix test on qmd_path, not a substring match on anything.
+  // Every visible cell must read `slack` — the filter is equality on
+  // `source_id`, not a substring match on anything.
   await searchAndSettle(page, "source:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   await expect.poll(() => distinctSourceCells(page)).toEqual(["slack"]);

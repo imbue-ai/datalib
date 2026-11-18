@@ -1519,7 +1519,6 @@ mod plan_tests {
         let file = datalib_schema::grid_rows::doc_file_rel(uuid);
         let row = datalib_schema::grid_rows::GridRow::builder()
             .uuid(uuid)
-            .qmd_path(file.clone())
             .provider(datalib_schema::providers::Provider::Test)
             .kind("Test")
             .source_label("Test")
@@ -1824,7 +1823,6 @@ mod stale_tree_tests {
         let file = datalib_schema::grid_rows::doc_file_rel(chat_uuid);
         let row = GridRow::builder()
             .uuid(chat_uuid)
-            .qmd_path(file.clone())
             .provider(Provider::Test)
             .kind("Test")
             .source_label("Test")

@@ -142,7 +142,7 @@ describe("browseColumns", () => {
 
 describe("browseQuery", () => {
   /// A group id is its directory under the data root, and `source:`
-  /// matches the first segment of a row's `qmd_path` — the same string.
+  /// matches a row's `source_id` — the same string.
   it("filters on the group id", () => {
     expect(browseQuery("tiny-slack")).toBe("source:tiny-slack is:document");
   });

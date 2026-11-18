@@ -38,8 +38,7 @@ struct Harness {
     raw_dir: PathBuf,
     root: PathBuf,
     /// The *data* root — the prefix `grid_index::apply_one` strips off
-    /// `md_path` to produce the stored path, so a test can compare a
-    /// stored `qmd_path` against it.
+    /// `md_path` to produce `markdowns.md_path`.
     data_root: PathBuf,
 }
 
@@ -571,12 +570,10 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     Ok(())
 }
 
-/// Regression: each document is written to the file its id names, and
-/// `grid_rows.qmd_path` is that file's *data-root*-relative path,
-/// byte-equal to what `grid_index::apply_one` stores in
-/// `markdowns.md_path`.
+/// Regression: each document is written to the file its id names, under
+/// the stanza's render tree, and every row it emits is one of its rows.
 #[tokio::test(flavor = "multi_thread")]
-async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
+async fn every_document_is_filed_where_its_id_names() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
     let (_, emitted) = h.render().await?;
@@ -608,9 +605,9 @@ async fn every_qmd_path_equals_its_markdowns_md_path() -> Result<()> {
         assert!(!m.rows.is_empty(), "a rendered doc must emit rows");
         for r in &m.rows {
             assert_eq!(
-                r.qmd_path.as_deref(),
-                Some(stored_md_path.as_str()),
-                "{} row {} points at a different path than its markdown",
+                r.markdown_uuid.as_deref(),
+                Some(m.markdown_uuid.as_str()),
+                "{} row {} names a different document",
                 r.kind,
                 r.uuid
             );

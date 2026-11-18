@@ -104,25 +104,6 @@ impl GridRow {
         split(self.touched_at.as_deref()).map(|(_, offset)| offset)
     }
 
-    /// The source the row is filed under, which is the source it
-    /// *belongs to* rather than the directory it happens to sit in.
-    ///
-    /// For everything a provider rendered the two are the same: the first
-    /// segment of `qmd_path` (`slack/render_markdown/fa/<id>.md` → `slack`),
-    /// the group's directory under the data root. The storage rows are the
-    /// exception: each source's measurements are written into that
-    /// source's own `render_markdown/`, the one tree its render step may
-    /// write, but a measurement is datalib describing the mirror rather
-    /// than part of it, so they are filed under datalib — what their
-    /// `provider` tag already says.
-    pub fn derived_source_id(&self) -> Option<String> {
-        if self.provider == Provider::Datalib.as_str() {
-            return Some(Provider::Datalib.as_str().to_string());
-        }
-        let (first, _) = self.qmd_path.as_deref()?.split_once('/')?;
-        Some(first.to_string())
-    }
-
     pub fn set_supplied_terms(&mut self, terms: impl IntoIterator<Item = SearchTerm>) {
         self.supplied_terms = crate::search_terms::encode_supplied(terms);
     }
@@ -132,6 +113,19 @@ impl GridRow {
         self.supplied_terms
             .as_deref()
             .map_or(Ok(Vec::new()), crate::search_terms::decode_supplied)
+    }
+}
+
+/// The source a row of `source_id`'s render store is filed under: that
+/// source, except a storage row. Each source's measurements are written
+/// into its own render store, the one its render step may write, but a
+/// measurement is datalib describing the mirror rather than part of it,
+/// so it is filed under datalib, which its `provider` tag already says.
+pub fn filed_under(provider: &str, source_id: &str) -> String {
+    if provider == Provider::Datalib.as_str() {
+        Provider::Datalib.as_str().to_string()
+    } else {
+        source_id.to_string()
     }
 }
 
@@ -196,7 +190,6 @@ pub struct GridRowBuilder {
     message_index: Option<i64>,
     entire_chat: String,
     body: String,
-    qmd_path: Option<String>,
     source_url: Option<String>,
     git_sha: Option<String>,
     upstream_id: Option<String>,
@@ -272,7 +265,6 @@ impl GridRowBuilder {
     opt_setter!(org_name);
     opt_setter!(channel);
     opt_setter!(conversation_name);
-    opt_setter!(qmd_path);
     opt_setter!(source_url);
     opt_setter!(git_sha);
     opt_setter!(upstream_id);
@@ -459,7 +451,7 @@ impl GridRowBuilder {
             entire_chat: self.entire_chat,
             preview: preview(&self.body),
             content_hash: content_hash(&self.body),
-            qmd_path: self.qmd_path,
+            source_id: None,
             source_url: self.source_url,
             git_sha: self.git_sha,
             upstream_id: self.upstream_id,
@@ -563,44 +555,16 @@ mod builder_tests {
         assert_eq!(problems[0].field.as_deref(), Some("touched_at"));
     }
 
-    /// The stanza is the first path segment, matching how `datalib-step`
-    /// names a source from its declared outputs and how `unified_grid_and_search_index`
-    /// names one from the directory it walked.
+    /// A row is filed under the source whose store holds it, and a
+    /// storage row under datalib, so the grid never shows a measurement
+    /// in the same bucket as the data it describes.
     #[test]
-    fn source_id_is_the_first_path_segment() {
-        let at = |path: &str| {
-            ok_builder()
-                .qmd_path(path.to_string())
-                .build()
-                .unwrap()
-                .derived_source_id()
-        };
+    fn a_row_is_filed_under_its_source_and_a_measurement_under_datalib() {
+        assert_eq!(filed_under(Provider::Slack.as_str(), "slack"), "slack");
         assert_eq!(
-            at("slack/render_markdown/abc/all.md").as_deref(),
-            Some("slack")
+            filed_under(Provider::Datalib.as_str(), "claude-api"),
+            "datalib"
         );
-        // Sharded renders nest deeper; the stanza is still segment one.
-        assert_eq!(
-            at("beeper/render_markdown/googlechat/x/2024-03.md").as_deref(),
-            Some("beeper")
-        );
-        // No separator means the renderer wrote outside its own tree:
-        // report nothing rather than claim the filename is a source.
-        assert_eq!(at("all.md"), None);
-        assert_eq!(ok_builder().build().unwrap().derived_source_id(), None);
-    }
-
-    /// A storage row sits under the source it measures and is filed under
-    /// datalib anyway, so the grid never shows a measurement in the same
-    /// bucket as the data it describes.
-    #[test]
-    fn measurements_are_filed_under_datalib_not_the_measured_source() {
-        let row = ok_builder()
-            .provider(Provider::Datalib)
-            .qmd_path("claude-api/render_markdown/_datalib/storage.md".to_string())
-            .build()
-            .unwrap();
-        assert_eq!(row.derived_source_id().as_deref(), Some("datalib"));
     }
 
     /// The column that replaced a stored whole body: it must keep the

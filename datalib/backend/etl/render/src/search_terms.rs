@@ -362,7 +362,6 @@ mod tests {
     /// A document of one row: its uuid, its author's handle, its title.
     fn doc(root: &std::path::Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
         let md_path = crate::grid_index::doc_md_path(&root.join("enterprise"), uuid);
-        let file = md_path.strip_prefix(root).unwrap().to_string_lossy();
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Claude)
@@ -376,7 +375,6 @@ mod tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body("")
             .markdown_uuid(Some(uuid.to_string()))
-            .qmd_path(file.into_owned())
             .build()
             .unwrap();
         RenderedMarkdown {

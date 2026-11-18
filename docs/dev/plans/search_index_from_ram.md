@@ -1,15 +1,17 @@
 # Our own search index, fed from memory
 
-**Status: built, but for one name (2026-11-17). All of "Order of work"
+**Status: built (2026-11-18). All of "Order of work"
 is built (`//datalib/backend/search_index`, `//datalib/backend/embedder`):
 search reads only the search index, nothing runs qmd, and qmd's code,
 its runtime, the release's share of it and `third-party/qmd` are
 deleted (#1797), as are the names in the code (#1805). The
 `qmd_aggregator` step is gone, its work done by `grid_index` (#1818);
-the `qmd_embed` lock is `embedder`, and `qmd_keyword` is gone. One name
-remains, left to [`documents_to_blocks.md`](documents_to_blocks.md):
-`qmd_path` goes in its step 5, when the markdown files stop being
-written.** Numbers were
+the `qmd_embed` lock is `embedder`, and `qmd_keyword` is gone (#1845).
+The last name, `grid_rows.qmd_path`, is gone too: a row is filed under
+its `source_id` when it is written, and its document's file is
+`markdowns.md_path` until
+[`documents_to_blocks.md`](documents_to_blocks.md) step 5 stops
+writing the files.** Numbers were
 measured on 2026-11-11 on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
@@ -443,9 +445,8 @@ that matched. Meaning search fills back in over the first day.
    that reruns only when a chunk's prompt changes; qmd's code, its
    runtime, the release's share of it and `third-party/qmd` are deleted,
    and the code that still said qmd is renamed. The aggregator is
-   gone, `qmd_embed` is `embedder` and `qmd_keyword` is gone. Left to
-   [`documents_to_blocks.md`](documents_to_blocks.md): `qmd_path`
-   (step 5).
+   gone, `qmd_embed` is `embedder`, `qmd_keyword` is gone, and so is
+   `grid_rows.qmd_path`.
 
 ## Later
 

@@ -397,7 +397,6 @@ pub fn build(
         .conversation_uuid(facts.id.uuid.clone())
         .entire_chat(format!("/chat/{}", facts.id.uuid))
         .body(body)
-        .qmd_path(Some(facts.md_rel.clone()))
         .source_url(Some(facts.url.clone()))
         .upstream_id(Some(facts.id.natural_key.clone()))
         .upstream_entity_kind(Some(facts.id.entity_kind.to_string()))
@@ -659,7 +658,6 @@ impl Out<'_, '_, '_> {
             .message_index(Some(index))
             .entire_chat(format!("/chat/{}", self.facts.id.uuid))
             .body(body)
-            .qmd_path(Some(self.facts.md_rel.clone()))
             .source_url(Some(task_url(t.id)))
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
@@ -834,7 +832,6 @@ impl Out<'_, '_, '_> {
             .message_index(Some(index))
             .entire_chat(format!("/chat/{}", self.facts.id.uuid))
             .body(body)
-            .qmd_path(Some(self.facts.md_rel.clone()))
             .source_url(Some(match str_of(n, "item_id") {
                 Some(task) => task_url(task),
                 None => self.facts.url.clone(),

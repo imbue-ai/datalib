@@ -16,7 +16,7 @@ crate reads the raw tables into it (`src/render/parse.rs`), mints the ids
 ```
 
 `<xx>` is the id's last two characters
-([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`").
+([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`source_id`, and where a document's file is").
 
 ## Markdown layout
 
@@ -51,7 +51,7 @@ over its body as a blockquote.
 - Then one row per comment, in the document's order (Reviews → General
   → Inline by `(path, line)`), with `message_index` counting from 0.
 
-Every row shares the PR's `qmd_path`, `conversation_uuid` and
+Every row shares the PR's `conversation_uuid` and
 `markdown_uuid`. `upstream_id` is (repo, PR number) for the PR's row and
 (repo, comment or review id) for the rest. A row that will not validate
 is dropped and recorded as a problem rather than failing the render.

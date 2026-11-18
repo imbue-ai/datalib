@@ -152,10 +152,7 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
         &datalib_etl::layout::render_markdown_root(out.path(), "perseus"),
         &expected,
     );
-    assert_eq!(
-        row.qmd_path.as_deref(),
-        page.strip_prefix(out.path()).unwrap().to_str()
-    );
+    assert_eq!(chapter.md_path, page);
 
     let book = emitted
         .iter()

@@ -2,7 +2,7 @@
 
 The render step of a `garmin` group turns the raw store into these
 markdown documents, each filed by its id under
-`<data_root>/<group>/render_markdown/` ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`"). A
+`<data_root>/<group>/render_markdown/` ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`source_id`, and where a document's file is"). A
 chart on a page is a `data-time-series` element naming time series from
 §"Time series", which the document view draws
 (`docs/dev/time_series.md` §"Charts in documents"):

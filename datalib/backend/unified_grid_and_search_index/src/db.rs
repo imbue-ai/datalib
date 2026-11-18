@@ -425,12 +425,12 @@ mod tests {
         assert!(params.is_empty(), "{params:?}");
     }
 
-    /// What a row's `source_id` is,
-    /// storage rows filed under datalib included, is decided once at index
-    /// time (`GridRow::derived_source_id`); the filter only compares, so
-    /// the `(source_id, …)` index can serve it.
+    /// What a row's `source_id` is, storage rows filed under datalib
+    /// included, is decided once when the row is written
+    /// (`grid_rows::filed_under`); the filter only compares, so the
+    /// `(source_id, …)` index can serve it.
     #[test]
-    fn source_id_filter_is_equality_on_the_derived_column() {
+    fn source_id_filter_is_equality_on_the_column() {
         let (sql, params) = build_where(&parse_query("source:slack_work"));
         assert_eq!(sql, " WHERE source_id = ?");
         assert_eq!(params, vec!["slack_work"]);

@@ -102,8 +102,8 @@ struct Row {
 }
 
 /// Whether a document is filed for the grid alone, so the search index has no text of it.
-fn is_unindexed(qmd_path: &str) -> bool {
-    qmd_path
+fn is_unindexed(md_path: &str) -> bool {
+    md_path
         .split('/')
         .any(|part| part == datalib_runtime::layout::UNINDEXED_DIR)
 }
@@ -118,10 +118,13 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
         source_id: String,
         markdown_uuid: Option<String>,
         is_document: bool,
-        qmd_path: Option<String>,
+        md_path: Option<String>,
+        group_id: Option<String>,
     }
     let read: Vec<Read> = sqlx::query_as(
-        "SELECT uuid, source_id, markdown_uuid, is_document, qmd_path FROM grid_rows",
+        "SELECT g.uuid, g.source_id, g.markdown_uuid, g.is_document, m.md_path, \
+                m.source_id AS group_id \
+           FROM grid_rows g LEFT JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid",
     )
     .fetch_all(&mut grid)
     .await
@@ -130,12 +133,13 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
     let mut rows = HashMap::new();
     let mut searched: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for r in read {
-        if let (true, Some(md), Some(path)) = (r.is_document, &r.markdown_uuid, &r.qmd_path) {
+        if let (true, Some(md), Some(path), Some(group)) =
+            (r.is_document, &r.markdown_uuid, &r.md_path, &r.group_id)
+        {
             if !is_unindexed(path) {
                 // The group whose store holds it, which for a storage
                 // report is not the source its row is filed under.
-                let group = path.split('/').next().unwrap_or_default().to_string();
-                searched.entry(group).or_default().push(md.clone());
+                searched.entry(group.clone()).or_default().push(md.clone());
             }
         }
         rows.insert(

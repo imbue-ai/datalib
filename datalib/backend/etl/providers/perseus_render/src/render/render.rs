@@ -128,10 +128,10 @@ fn render_book(
 ) -> Result<()> {
     let m_uuid = ids::book(source_id, &book.n).uuid;
     let (front, md) = render_book_md(book);
-    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
+    let md_path = write_doc(out_dir, source_id, &m_uuid, &md)?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
+    let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
         .into_iter()
         .collect();
     let data_nodes = tree::book(source_id, &book.n, &m_uuid, &book_title(&book.n));
@@ -177,7 +177,7 @@ fn render_chapter(
 ) -> Result<()> {
     let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
     let (front, sections) = render_chapter_sections(source_id, chapter, edition, alignments);
-    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &join(&sections))?;
+    let md_path = write_doc(out_dir, source_id, &m_uuid, &join(&sections))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -186,7 +186,6 @@ fn render_chapter(
         chapter,
         edition,
         &m_uuid,
-        &rel,
         source_id,
         &mut problems,
     ));
@@ -204,7 +203,6 @@ fn render_chapter(
             edition,
             &s_uuid,
             &m_uuid,
-            &rel,
             text,
             idx,
             source_id,
@@ -252,19 +250,13 @@ fn render_chapter(
     Ok(())
 }
 
-/// Write a document to the file its id names; its path, and that path
-/// relative to the data root, which its rows name.
-fn write_doc(out_dir: &Path, source_id: &str, m_uuid: &str, md: &str) -> Result<(PathBuf, String)> {
+/// Write a document to the file its id names, and return that path.
+fn write_doc(out_dir: &Path, source_id: &str, m_uuid: &str, md: &str) -> Result<PathBuf> {
     let md_path = doc_md_path(&render_markdown_root(out_dir, source_id), m_uuid);
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    Ok((md_path, md_rel))
+    Ok(md_path)
 }
 
 fn chapter_locator(book_n: &str, ch_n: &str) -> String {
@@ -420,7 +412,6 @@ fn book_grid_row(
     stanza: &str,
     book: &Book,
     bk_uuid: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     GridRow::builder()
@@ -438,7 +429,6 @@ fn book_grid_row(
         .conversation_uuid(bk_uuid.to_string())
         .entire_chat(format!("/chat/{bk_uuid}"))
         .body(book_text_for_grid(book))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{DEFAULT_EDITION_URN}:{}/",
             book.n
@@ -457,7 +447,6 @@ fn chapter_grid_row(
     chapter: &Chapter,
     edition: &Edition,
     ch_uuid: &str,
-    md_rel: &str,
     stanza: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
@@ -479,7 +468,6 @@ fn chapter_grid_row(
         .conversation_uuid(ch_uuid.to_string())
         .entire_chat(format!("/chat/{ch_uuid}"))
         .body(chapter_text_for_grid(chapter, edition))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci_u}/",
             edition.id
@@ -502,7 +490,6 @@ fn section_grid_row(
     edition: &Edition,
     sec_uuid: &str,
     ch_uuid: &str,
-    md_rel: &str,
     text: &str,
     idx: i64,
     stanza: &str,
@@ -531,7 +518,6 @@ fn section_grid_row(
         .message_index(Some(idx))
         .entire_chat(format!("/chat/{ch_uuid}"))
         .body(text.to_string())
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci}.{si}/",
             edition.id

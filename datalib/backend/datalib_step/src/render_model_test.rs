@@ -327,11 +327,7 @@ impl RenderProcessor for SynthRender {
             let md_path = doc_md_path(&root, &id);
             std::fs::create_dir_all(md_path.parent().expect("a folder"))?;
             std::fs::write(&md_path, &doc.content)?;
-            let md_rel = md_path
-                .strip_prefix(ctx.root)?
-                .to_string_lossy()
-                .into_owned();
-            ctx.emit_doc(to_rendered(&id, doc, md_path, &md_rel, version))?;
+            ctx.emit_doc(to_rendered(&id, doc, md_path, version))?;
         }
         ctx.consumed(pin.commit());
         Ok(format!("rendered {rendered}"))
@@ -374,13 +370,7 @@ async fn load_model(pool: &SqlitePool) -> Result<Model> {
     Ok(model)
 }
 
-fn to_rendered(
-    id: &str,
-    doc: &Doc,
-    md_path: PathBuf,
-    md_rel: &str,
-    version: u32,
-) -> RenderedMarkdown {
+fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedMarkdown {
     let rows = doc
         .rows
         .iter()
@@ -393,7 +383,6 @@ fn to_rendered(
                 .conversation_uuid(id)
                 .entire_chat(format!("/chat/{id}"))
                 .body(text)
-                .qmd_path(Some(md_rel.to_string()))
                 .markdown_uuid(Some(id.to_string()))
                 // The synthetic document's first row stands for it.
                 .is_document(*uuid == doc.rows[0].0)

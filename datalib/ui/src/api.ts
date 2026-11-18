@@ -70,7 +70,7 @@ export type SearchRow = {
   // own mark (Gmail, not Mail).
   source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
-  // directory under the data root (the first segment of its qmd_path).
+  // directory under the data root.
   // Empty when the row has no rendered document. The name a person gave
   // that group lives in config.toml, not here — the grid joins the two
   // client-side so renaming never needs a re-index.

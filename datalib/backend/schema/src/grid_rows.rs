@@ -222,29 +222,14 @@ pub struct GridRow {
     /// changes the row, so a diff and doltlite's own dedup both see it.
     #[col(sql = "VARCHAR(64)")]
     pub content_hash: String,
-    /// The rendered Markdown file for this row's thread, relative to the
-    /// data root, so the preview pane can load it with no glob and no
-    /// frontmatter scan. Set on every row; child rows inherit their parent's.
-    ///
-    /// Shape, and the byte-equality invariant against `markdowns.md_path`,
-    /// are in `docs/dev/grid_rows.md`. Getting the prefix wrong silently
-    /// drops the row from free-text results.
-    ///
-    /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you want the
-    /// file itself: same path, one writer, and the column `/api/chat`
-    /// resolves through.
-    ///
-    /// `source_id` is derived from it at index time: the source the row is
-    /// filed under, which the `source:` filter matches
-    /// (`GridRow::derived_source_id`).
-    #[col(sql = "VARCHAR(512)")]
-    #[derived(
-        name = "source_id",
-        sql = "VARCHAR(96)",
-        search = "source",
-        alias = "source_id"
-    )]
-    pub qmd_path: Option<String>,
+    /// The id of the configured source the row is filed under: its
+    /// group's directory under the data root, never the name a person gave
+    /// it. A storage row is filed under `datalib` whatever source it
+    /// measures ([`filed_under`]). Set when the row is written
+    /// (`grid_index::apply_one`), not by a renderer; the `source:` filter
+    /// compares it.
+    #[col(sql = "VARCHAR(96)", search = "source", alias = "source_id")]
+    pub source_id: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.
     #[col(sql = "VARCHAR(1024)")]

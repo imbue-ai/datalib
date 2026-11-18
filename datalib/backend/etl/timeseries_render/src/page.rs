@@ -226,7 +226,7 @@ pub fn render_all(
         sections,
         profile.render_version,
         vec![node],
-        |md_rel, problems| build_grid_rows(profile, page, source_id, &m_uuid, md_rel, problems),
+        |problems| build_grid_rows(profile, page, source_id, &m_uuid, problems),
         on_doc_complete,
     )?;
     progress.inc(1);
@@ -251,7 +251,7 @@ pub fn write_page(
     sections: Vec<Section>,
     render_version: u32,
     data_nodes: Vec<DataNodeRow>,
-    build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
+    build_rows: impl FnOnce(&mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let md_path = doc_md_path(
@@ -263,13 +263,8 @@ pub fn write_page(
     fs::write(&md_path, section::join(&sections))
         .with_context(|| format!("write {}", md_path.display()))?;
 
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows = build_rows(&md_rel, &mut problems);
+    let rows = build_rows(&mut problems);
 
     on_doc_complete(RenderedMarkdown {
         section_layout: None,
@@ -594,7 +589,6 @@ fn build_grid_rows(
     page: &Page<'_>,
     source_id: &str,
     m_uuid: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let title = profile.page_title(source_id);
@@ -626,7 +620,6 @@ fn build_grid_rows(
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))
         .body(doc_text)
-        .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some(KIND_PAGE.to_string()))
@@ -663,7 +656,6 @@ fn build_grid_rows(
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .body(text)
-                .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(dev.key.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
@@ -752,7 +744,7 @@ mod tests {
         let m_uuid = PROFILE.document_uuid("s");
         let node = page_node(&PROFILE, "s", &m_uuid);
         assert!(node.read_together && node.parent_uuid.is_none());
-        let rows = build_grid_rows(&PROFILE, &page, "s", &m_uuid, "x.md", &mut Vec::new());
+        let rows = build_grid_rows(&PROFILE, &page, "s", &m_uuid, &mut Vec::new());
         assert_eq!(rows[0].parent_uuid, None);
         assert_eq!(rows[1].parent_uuid.as_deref(), Some(m_uuid.as_str()));
         assert_eq!(rows[1].read_uuid.as_deref(), Some(m_uuid.as_str()));

@@ -270,7 +270,6 @@ mod tests {
             .source_label("Test")
             .conversation_uuid("md-1")
             .markdown_uuid(Some("md-1".to_string()))
-            .qmd_path(Some(doc_file_rel("md-1")))
             .entire_chat("/chat/md-1")
             .body("Orders \u{202E}exe.live stays as written in a body")
             .is_document(true)
@@ -548,7 +547,7 @@ mod tests {
             "entire_chat",
             "preview",
             "content_hash",
-            "qmd_path",
+            "source_id",
             "source_url",
             "git_sha",
             "upstream_id",

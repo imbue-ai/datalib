@@ -418,10 +418,11 @@ Backpointers and outlinks are first-class in the projection schema.
   back to the provider's API.
 - `source_url` — the canonical URL on the provider's web UI (e.g.
   `pull_request.html_url`), populated everywhere we can construct it.
-- `qmd_path` — the path to the rendered `.md`, relative to the data
-  root: `<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, so a
-  search hit names its document ([`grid_rows.md`](grid_rows.md)
-  §"`qmd_path` and `source_id`").
+- `markdown_uuid` — the document the row belongs to. Its `markdowns`
+  row holds the path to the rendered `.md`, relative to the data root,
+  and `source_id` is filled when the row is written, not by the renderer
+  ([`grid_rows.md`](grid_rows.md) §"`source_id`, and where a
+  document's file is").
 - Provider-specific cross-references (`notion_page_uuid`,
   `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well
   as out.
