@@ -270,7 +270,31 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
 - **Each slice's vectors go into the inference cache as it returns**,
   and the step counts what failed. A slice that fails is re-sent once,
   then reported.
-- **Nothing about the remote work is stored.** An interrupted run loses
+- **Each Sandbox asks only for its GPU**, so Modal reserves its minimum
+  CPU and memory and bills whatever more the run uses. The driver
+  reports each Sandbox as it ends: how long it lived, from its creation to
+  its end, and whether its slice came back. A failed attempt ran, so it
+  is counted too.
+- **What the run spent is reported as it goes**, as running totals the
+  sync dashboard draws and `/metrics` exports: `modal_chunks_total`,
+  and by GPU `modal_sandboxes_total`, `modal_sandboxes_failed_total`,
+  `modal_sandbox_seconds_total` and `modal_cost_estimate_micro_usd_total`.
+  The estimate is each Sandbox's life priced at Modal's list price for
+  its GPU plus an assumed core and 2 GiB of use, at the Sandbox's rate
+  (`modal::estimated_micro_usd`). That use is set high on purpose, since
+  nothing has measured it and a person choosing a threshold is better
+  served by a figure that errs high: a T4 Sandbox comes to $0.78 an hour,
+  of which the GPU is $0.59. The table in `src/modal.rs` was read from
+  modal.com/pricing on 2026-11-18 and has to follow the page. A Sandbox
+  the driver could not end (a SIGKILL) goes uncounted. _To check_
+  against the bill on the first live run, which also measures what a
+  Sandbox uses, so the assumption can be set from that.
+- **The run ends with one line** on its Manage row's Status (a hover)
+  and in its log: "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 6
+  min 0 s of Sandbox time, about $0.08 at list price". A failed run puts
+  the same words in its error instead, since the row shows the error.
+- **Nothing about the remote work is stored** but how much of it there
+  was (the metrics above): no Sandbox to go back to. An interrupted run loses
   the slices in flight and nothing already written: a stop sends the
   driver SIGTERM, and it ends every Sandbox it started before it exits.
   The next run owes what is still missing and sends only that.
@@ -305,6 +329,11 @@ supported"; the issue says what to check for in a new SDK release.
 - With `embed_on_modal_from_n_chunks` on a source, its first embed takes
   minutes rather than hours, and shows the same progress bar; its daily
   embeds run here as before.
+- While it runs, the row's Status says "search index: embedding on
+  Modal". When it ends, it says how many chunks went, on how many
+  Sandboxes of which GPU, for how long and about what that cost at list
+  price; the source's sync dashboard draws the Sandboxes, their seconds
+  and the estimated dollars over the run.
 - A run over the threshold without a Modal sign-in fails and says how to
   sign in or raise the threshold; it does not quietly embed locally,
   which would cost the hours the person chose not to spend.

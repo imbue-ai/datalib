@@ -425,6 +425,7 @@ async fn embed_into<E: EmbedPrompt>(
 #[derive(Default)]
 struct FromModal {
     embedded: usize,
+    usage: modal::Usage,
     truncated: usize,
     failed: usize,
     first_error: Option<String>,
@@ -435,7 +436,7 @@ struct FromModal {
 /// prompts in on its stdin as the documents are read, vectors out of its
 /// stdout into the cache as each slice returns. A stop interrupts the
 /// driver, which ends its Sandboxes; what was cached stays, and the next
-/// run owes the rest. Nothing about the remote work is kept.
+/// run owes the rest. Of the remote work, only its counts are kept.
 #[allow(clippy::too_many_arguments)]
 async fn embed_on_modal(
     cache: &InferenceCache,
@@ -476,6 +477,7 @@ async fn embed_on_modal(
     let stderr = child.stderr.take().context("the driver's stderr")?;
     let started = Instant::now();
     let model = datalib_search_index::model_key();
+    let options = driver.options.clone();
 
     let feed = async move {
         let mut stdin = stdin;
@@ -521,17 +523,23 @@ async fn embed_on_modal(
                     from.first_error.get_or_insert(error);
                 }
                 Reply::Fatal { fatal, sign_in } => from.fatal = Some((fatal, sign_in)),
+                Reply::Sandbox { sandbox_ms, ok } => {
+                    from.usage.add(sandbox_ms, ok);
+                    modal::report(progress, &from.usage, &options);
+                }
             }
             if batch.len() >= MODAL_PUT_BATCH {
                 cache.put(&model, &batch).await?;
                 from.embedded += batch.len();
                 progress.inc(batch.len() as u64);
+                progress.metric("modal_chunks_total", &[], from.embedded as i64);
                 batch.clear();
             }
         }
         cache.put(&model, &batch).await?;
         from.embedded += batch.len();
         progress.inc(batch.len() as u64);
+        progress.metric("modal_chunks_total", &[], from.embedded as i64);
         Ok::<_, anyhow::Error>(from)
     };
     let said = async {
@@ -577,22 +585,31 @@ async fn embed_on_modal(
         embed_time: started.elapsed(),
         ..Done::default()
     };
+    // The row's closing words on a run that ended well or was stopped. A
+    // failed run says the same in its error, which the row shows instead.
+    let spent = modal::summary(from.embedded, &from.usage, &options);
+    tracing::info!(group, "{spent}");
     if stop.requested() {
+        progress.set_message(&spent);
         return Ok(done);
     }
     let (unsettled, prompt_bytes) = fed?;
     if !status.success() {
-        bail!("the Modal driver exited {status}: {}", last.join(" | "));
+        bail!(
+            "the Modal driver exited {status}: {}. So far it {spent}",
+            last.join(" | ")
+        );
     }
     if from.failed > 0 {
         bail!(
             "{} of {owed} chunks could not be embedded on Modal ({}); the {} that were are \
-             cached, and the next run sends the rest again",
+             cached, and the next run sends the rest again. This run {spent}",
             from.failed,
             from.first_error.unwrap_or_default(),
             from.embedded
         );
     }
+    progress.set_message(&spent);
     Ok(Done {
         unsettled,
         prompt_bytes,
@@ -1369,6 +1386,39 @@ mod tests {
         }
     }
 
+    /// What a run reported: each metric's newest value by name and labels,
+    /// and its progress messages in order.
+    #[derive(Default)]
+    struct Reported {
+        metrics: std::sync::Mutex<BTreeMap<String, i64>>,
+        messages: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl datalib_etl::progress::ProgressSink for Reported {
+        fn set_message(&self, msg: &str) {
+            self.messages.lock().unwrap().push(msg.to_string());
+        }
+        fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
+            let labels: Vec<String> = labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let key = format!("{name}{{{}}}", labels.join(","));
+            self.metrics.lock().unwrap().insert(key, value);
+        }
+    }
+
+    impl Reported {
+        fn metric(&self, key: &str) -> Option<i64> {
+            self.metrics.lock().unwrap().get(key).copied()
+        }
+        fn last_message(&self) -> String {
+            self.messages
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
+
     /// Five documents of one chunk each, keyword-indexed and owing their
     /// vectors.
     async fn five_docs(root: &Path) {
@@ -1426,6 +1476,7 @@ mod tests {
         let root = td.path();
         five_docs(root).await;
         let fake = FakeModal::new();
+        let reported = Arc::new(Reported::default());
 
         let done = embed_with(
             root,
@@ -1433,7 +1484,7 @@ mod tests {
             never_opened,
             &four_bytes_a_token,
             Some(fake.modal(5, true, &[])),
-            &Progress::noop(),
+            &Progress::new(reported.clone()),
             &StopFlag::new(),
         )
         .await
@@ -1459,8 +1510,28 @@ mod tests {
                 )
             );
             assert_eq!(s["gpu"], "T4");
+            // No reservation: Modal's minimum, and whatever the run uses.
+            assert!(s["cpu"].is_null() && s["memoryMiB"].is_null(), "{s}");
             assert_eq!(s["app"], "datalib-embed");
         }
+        assert_eq!(reported.metric("modal_chunks_total{}"), Some(5));
+        assert_eq!(reported.metric("modal_sandboxes_total{gpu=T4}"), Some(3));
+        assert_eq!(
+            reported.metric("modal_sandboxes_failed_total{gpu=T4}"),
+            Some(0)
+        );
+        assert!(reported
+            .metric("modal_sandbox_seconds_total{gpu=T4}")
+            .is_some());
+        assert!(reported
+            .metric("modal_cost_estimate_micro_usd_total{gpu=T4}")
+            .is_some_and(|c| c > 0));
+        let said = reported.last_message();
+        assert!(
+            said.starts_with("embedded 5 chunks on Modal: 3 T4 Sandbox(es),")
+                && said.contains("at list price"),
+            "{said}"
+        );
 
         let again = embed_with(
             root,
@@ -1549,19 +1620,33 @@ mod tests {
         let root = td.path();
         five_docs(root).await;
         let fake = FakeModal::new();
+        let reported = Arc::new(Reported::default());
         let done = embed_with(
             root,
             GROUP,
             never_opened,
             &four_bytes_a_token,
             Some(fake.modal(0, true, &[("FAKE_MODAL_FAIL", "1")])),
-            &Progress::noop(),
+            &Progress::new(reported.clone()),
             &StopFlag::new(),
         )
         .await
         .unwrap();
         assert_eq!(done.embedded, 5, "the first failure is sent again");
         assert_eq!(fake.sandboxes().len(), 4);
+        // The failed attempt ran, so it is counted and priced.
+        assert_eq!(reported.metric("modal_sandboxes_total{gpu=T4}"), Some(4));
+        assert_eq!(
+            reported.metric("modal_sandboxes_failed_total{gpu=T4}"),
+            Some(1)
+        );
+        assert!(
+            reported
+                .last_message()
+                .contains("4 T4 Sandbox(es), 1 of them failed"),
+            "{}",
+            reported.last_message()
+        );
 
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
@@ -1583,6 +1668,10 @@ mod tests {
         assert!(
             err.contains("2 of 5 chunks could not be embedded on Modal"),
             "{err}"
+        );
+        assert!(
+            err.contains("This run embedded 3 chunks on Modal: 4 T4 Sandbox(es), 2 of them failed"),
+            "the error says what the run spent: {err}"
         );
         assert_eq!(unembedded(root, GROUP).await, 2);
     }

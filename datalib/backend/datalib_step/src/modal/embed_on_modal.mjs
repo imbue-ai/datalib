@@ -6,8 +6,9 @@
 // each slice through `embed-prompts` in a Modal Sandbox of its own, a few
 // at once. On stdout, as each slice returns: its `{"hash","vector","cut"}`
 // lines, or for a slice that failed twice one `{"failed":[…],"error":…}`;
-// or, when nothing could start, one `{"fatal":…,"sign_in":<bool>}` and
-// exit 1. On stderr, what it is doing, never a prompt's text. SIGTERM ends
+// as each Sandbox ends, `{"sandbox_ms":…,"ok":<bool>}`, its life from
+// creation to end, what Modal bills; or, when nothing could start, one
+// `{"fatal":…,"sign_in":<bool>}` and exit 1. On stderr, what it is doing, never a prompt's text. SIGTERM ends
 // every Sandbox it started, then the driver.
 //
 // DATALIB_MODAL_SDK_ENTRY names Modal's SDK (npm `modal`, from the runtime
@@ -70,6 +71,7 @@ async function runSlice(n, lines) {
     timeoutMs: options.timeoutMs,
   });
   live.add(sb);
+  let ok = false;
   try {
     const stdout = sb.stdout.readText();
     const stderr = sb.stderr.readText();
@@ -90,10 +92,12 @@ async function runSlice(n, lines) {
     }
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     say(`slice ${n}: ${rows.length} prompts on ${options.gpu} in ${secs} s (${sb.sandboxId})`);
+    ok = true;
     return rows;
   } finally {
     live.delete(sb);
     await sb.terminate().catch(() => {});
+    await emit({ sandbox_ms: Date.now() - started, ok });
   }
 }
 

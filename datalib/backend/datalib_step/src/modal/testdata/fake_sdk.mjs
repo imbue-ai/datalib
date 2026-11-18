@@ -3,7 +3,8 @@
 // with each Sandbox a local process running the command it was given.
 //
 //   FAKE_MODAL_LOG        a file that gets one JSON line per Sandbox made:
-//                         its image, gpu, command and the lines it was sent
+//                         its image, gpu, cpu, memory, command and the
+//                         lines it was sent
 //   FAKE_MODAL_SIGNED_OUT `apps.fromName` throws as the SDK does with no
 //                         credentials
 //   FAKE_MODAL_FAIL       how many Sandboxes, the first ones made, exit 1
@@ -89,6 +90,8 @@ export class ModalClient {
               app: app.name,
               image: image.tag,
               gpu: params.gpu,
+              cpu: params.cpu,
+              memoryMiB: params.memoryMiB,
               command: params.command,
               lines: sb.lines,
             }) + "\n",
