@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <set>
@@ -18,9 +17,9 @@
 #include "llama.h"
 
 struct dl_embedder {
-    // Held by every call that reads the model, and by the exit hook.
+    // Held by every call that reads the model, and at exit.
     mutable std::mutex mu;
-    // Both NULL once the exit hook has freed them.
+    // Both NULL once freed at exit.
     llama_model *model;
     llama_context *ctx;
     const char *device;
@@ -53,8 +52,8 @@ void init_once() {
     });
 }
 
-// Every embedder not yet closed. Never destroyed, since the exit hook
-// reads it while the process's statics are being torn down.
+// Every embedder not yet closed. Never destroyed, since it is read
+// while the process's statics are being torn down.
 struct Open {
     std::mutex mu;
     std::set<dl_embedder *> all;
@@ -73,17 +72,21 @@ void free_model(dl_embedder *e) {
 }
 
 // ggml's Metal device is a C++ static whose destructor asserts that no
-// model's buffers are left on it, and aborts the process otherwise. An
-// atexit hook registered after that static was built runs before its
-// destructor, so a model still loaded at exit is freed here first.
-void free_models_left_at_exit() {
-    Open &open = open_embedders();
-    std::lock_guard<std::mutex> all(open.mu);
-    for (dl_embedder *e : open.all) {
-        std::lock_guard<std::mutex> one(e->mu);
-        if (e->model) free_model(e);
+// model's buffers are left on it, and aborts the process otherwise. Statics
+// are torn down in the reverse of the order they were built, so this one,
+// built when the first model has loaded, frees any model still loaded at
+// exit before that device goes. (A static rather than atexit, which glibc
+// keeps in libc_nonshared.a, where the CUDA build's link does not look.)
+struct FreeModelsLeftAtExit {
+    ~FreeModelsLeftAtExit() {
+        Open &open = open_embedders();
+        std::lock_guard<std::mutex> all(open.mu);
+        for (dl_embedder *e : open.all) {
+            std::lock_guard<std::mutex> one(e->mu);
+            if (e->model) free_model(e);
+        }
     }
-}
+};
 
 void track(dl_embedder *e) {
     Open &open = open_embedders();
@@ -91,8 +94,7 @@ void track(dl_embedder *e) {
         std::lock_guard<std::mutex> all(open.mu);
         open.all.insert(e);
     }
-    static std::once_flag once;
-    std::call_once(once, [] { std::atexit(free_models_left_at_exit); });
+    static FreeModelsLeftAtExit at_exit;
 }
 
 void untrack(dl_embedder *e) {
