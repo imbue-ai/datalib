@@ -71,6 +71,7 @@ merge conflict waiting to happen.
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell; how to audit the docs and the code for drift and copies.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
+- [`tests/fixtures/README.md`](tests/fixtures/README.md) — the TNG corpus: the made-up data every source is tested on, where each fixture lives, and how they become one synced library.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
