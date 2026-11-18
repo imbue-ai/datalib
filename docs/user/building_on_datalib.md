@@ -329,7 +329,7 @@ a day. Ask the record of when the download looked instead:
 ## Usable in minutes, complete later: a staged `since`
 
 A first sync of a large source can take hours: a whole Gmail mailbox
-goes at about 80 messages a minute, which is Google's quota. To have
+goes at about 80 messages a minute, under Google's quota. To have
 something useful in minutes, sync a short window first, then widen it in
 two or three stages: a few days, then a month, then everything. Each
 record is still fetched once, because a source owes what its listing
@@ -559,20 +559,13 @@ recipe and its edge cases are in [raw_stores.md](raw_stores.md)
 The mirror answers for what it has fetched. Ask the service when a
 question reaches outside that:
 
-- **Slack**: anything before the source's `since`, when it sets one;
-  a time in a conversation outside every `coverage` span; direct
-  messages unless the source sets `dms = true`; the newest messages of a
-  DM closed in the account's sidebar, for up to a day (a closed DM is
-  checked once a day); channels the account is
-  not in unless it sets `all_channels`; archived channels unless it
-  sets `archived = true` or names them; with `scope = "involves_me"`,
-  a channel where nothing involves the account, and a chosen channel
-  before `context_before` ahead of its first such message; files when
-  `media = false`. A
-  root's `reply_count` is Slack's; the mirror holds every reply up to
-  `latest_reply` only once `threads_bookkeeping.held_version` equals
-  it. A message deleted in Slack more than `refresh_window_days` ago
-  (30 by default) is still in the mirror.
+- **Slack**: what [raw_stores.md](raw_stores.md) § "Slack" lists as
+  not mirrored (anything before `since`, DMs unless `dms = true`,
+  channels the account is not in, …), a `ts` its `coverage` rule there
+  does not vouch for, and a thread whose
+  `threads_bookkeeping.held_version` is behind its root's
+  `latest_reply`. A message deleted in Slack more than
+  `refresh_window_days` ago (30 by default) is still in the mirror.
 - **Email**: with `only_extract_labels` set, only messages in those
   labels and the rest of their threads are mirrored; with
   `whole_threads = false` as well, a thread can be partial, and
@@ -601,29 +594,26 @@ tries the same thing and it works. Problems are how an app tells "not
 in the mirror because it does not exist" from "not in the mirror
 because the download could not get it".
 
-Each source's problems travel with its data. The download writes them
-into its raw store's `problems` table, where `source_id` is empty. The
-render step copies them under the source's id, and `unified_grid_and_search_index` copies
-every source's into one `problems` table in
-`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. That last copy is
-the one to query, since it covers every source:
+Each problem stays in the store of the step that found it, and nothing
+copies it. A download's are in its raw store's `problems` table, under
+the source's id, current at every seal:
 
 ```sh
-datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
-  "SELECT source_id, severity, outcome, reason, scope_key, sample
-     FROM problems WHERE stage = 'fetch' ORDER BY changed_at_utc DESC LIMIT 20"
+datalib-doltlite -readonly gmail/ingest/entities.doltlite_db \
+  "SELECT severity, outcome, reason, scope_key, sample
+     FROM problems ORDER BY changed_at_utc DESC LIMIT 20"
 ```
 
 With the app up, `GET /applet/unified_grid_and_search_index/problems?q=…`
-serves the same rows a page at a time, in the search bar's grammar:
-`source:gmail severity:error`, with `outcome:`, `reason:`, `stage:`
-and `field:` too. Each step's counts are its `problems` series in the
-run store's `metrics`, one per `severity=` label; they are the
-errors and warnings cell on the Manage screen, less the problems a
-person muted there (`muted:yes` lists those; `POST /problems/mute`,
-[applets.md](applets.md)). A muted problem is still in the table. The copies lag the
-download by a render and an index run. The raw store's own `problems`
-table is current at every seal.
+serves every step's rows together, a page at a time, in the search
+bar's grammar: `source:gmail severity:error`, with `outcome:`,
+`reason:`, `stage:` and `field:` too. There a download's problem is
+linked to the document its record renders into, once render has run.
+Each step's counts are its `problems` series in the run store's
+`metrics`, one per `severity=` label; they are the errors and warnings
+cell on the Manage screen, less the problems a person muted there
+(`muted:yes` lists those; `POST /problems/mute`,
+[applets.md](applets.md)). A muted problem is still in its table.
 
 Reading a download's problem (`stage = 'fetch'`):
 

@@ -318,7 +318,9 @@ conversation it predates.
 
 `type = "claude"` — web API through latchkey (`api`), **or** an
 unpacked Claude data export on disk (`export`). Mirrors conversations
-across every org, and projects.
+across every org, and projects. The `api` route also mirrors the Cowork
+tasks run in the cloud, each as a conversation; `cowork = false` leaves
+them out.
 
 `claude.ai` has no official API for your conversations, so the `api`
 route uses the session cookie your browser already has. Register the
@@ -502,8 +504,6 @@ nothing else; `calendars` narrows it to the calendars you name.
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
 latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
-Saying that several handles are one person is [the contacts
-app](contacts_app.md), which needs no source.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
@@ -614,8 +614,9 @@ The first time, latchkey needs an OAuth client to sign in with:
 
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
-events. Google's quota caps throughput at about 100 messages a minute,
-and a slow link or large messages bring it lower, so a large mailbox
+events. The download stays under Google's per-minute quota, about 80
+messages a minute (`quota_units_per_minute`), and a slow link or large
+messages bring it lower, so a large mailbox
 backfills over several runs. With a Takeout
 of the same account, the first sync downloads only what is newer than
 it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
@@ -754,7 +755,7 @@ the events: every sync reads the list first.
 export (`export`, with `google_chat = true`). Mirrors your Google Chat
 DMs, spaces and bots with their attachments, rendered to markdown.
 
-Request a Takeout with **Chat** ticked and unpack it — see
+Request a Takeout with **Chat** ticked — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
@@ -816,11 +817,13 @@ file with a long history then fetches every revision.
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk
 (`export`). Mirrors Google Chat and Voice messages; Maps reviews, saved
-places and photos; YouTube watch history and subscriptions; and Gemini
-Apps activity, each prompt with Gemini's response and the files and
-images either one carried. Everything is rendered to markdown: a
+places, saved lists and photos, and My Maps maps; YouTube watch history
+and subscriptions; Play Books highlights, notes and bookmarks; and
+Gemini Apps activity, each prompt with Gemini's response and the files
+and images either one carried. Everything is rendered to markdown: a
 conversation, and each of Gemini, YouTube and Maps, as one page
-(subscriptions are one list). Voice bills and greetings
+(subscriptions are one list), and each saved list, My Maps map and
+Play Books book as a page of its own. Voice bills and greetings
 are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
@@ -831,7 +834,8 @@ Keep one export per folder: a folder holding parts of two exports is
 refused. An export you have already unpacked works too: point the
 source at its `Takeout` folder.
 
-Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
+Useful products: **Chat**, **Voice**, **Maps**, **Saved** (Maps'
+lists), **My Maps**, **YouTube history**, **Play Books** and
 **Gemini** (read by this source), and **Mail**
 (a single `.mbox`, read by the [email](#email-mbox-or-jmap) source instead). The
 Add source form ticks every product; untick what you want left out. In
@@ -854,7 +858,7 @@ the folder (or, unpacking by hand, unpack every part).
 export (`export`, with `google_voice = true`). Mirrors your texts,
 voicemails and call records, rendered to markdown.
 
-Request a Takeout with **Voice** ticked and unpack it — see
+Request a Takeout with **Voice** ticked — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.

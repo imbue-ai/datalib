@@ -42,7 +42,7 @@ A source's raw directory holds two files:
 **Stock `sqlite3` cannot open `entities.doltlite_db`** (`file is not a
 database`). Doltlite is SQLite with git-shaped history kept inside the
 file. Read it with **`datalib-doltlite`**, which ships beside
-`datalib-dag` (as plain `doltlite` in the Docker image) and takes
+`datalib-dag` (and in the Docker image) and takes
 `sqlite3`'s arguments. The examples assume sources whose ids are
 `gmail`, `slack` and `calendar`; put your own in. **Always pass
 `-readonly`**: a writable session's commits are overwritten by the
@@ -237,14 +237,14 @@ document.
 | column | what it holds |
 |---|---|
 | `problem_uuid` | a stable id for this problem, the same each time it recurs |
-| `source_id` | empty here; the render step fills it when it copies the row |
+| `source_id` | the source's id, its group |
 | `stage` | which stage found it: `fetch` in a raw store |
 | `severity` | `error`, `warning` or `info` |
 | `outcome` | what became of the record: `dropped` (not in the mirror), `nulled` (in it, missing something), `ok` |
 | `reason` | why: `fetch_failed`, `over_size_limit`, `not_found`, `forbidden`, … |
 | `scope_kind` | `entity` in a raw store |
 | `scope_key` | what it is about, as `<table>:<id>` for a record (`emails:018f…`), or `listing:…`, `phase:…` |
-| `item_uuid` | empty here; render fills it with the document's row |
+| `item_uuid` | empty here; the app's problems list fills it from what render recorded of the record's grid row |
 | `field` | the field it is about, when it is one field |
 | `path` | where in the payload, as a JSON pointer, when known |
 | `rule` | the rule that fired, when the loss was deliberate |
@@ -306,11 +306,11 @@ the files and settings match the stamp, the run skips the read.
 | `last_finished_at_utc` | when the read that took it in finished, in UTC |
 | `tz_offset` | the offset for that stamp |
 
-## Gmail, Fastmail and mbox (`email`)
+## Gmail, Fastmail, Apple Mail and mbox (`email`)
 
-All three ways into mail write one schema. Fastmail and other JMAP
-servers send JMAP's own objects; the Gmail API and mbox files are made
-to look like them, so `payload` is a JMAP-shaped **envelope**: who,
+Every way into mail writes one schema. Fastmail and other JMAP
+servers send JMAP's own objects; the Gmail API, Apple Mail and mbox
+files are made to look like them, so `payload` is a JMAP-shaped **envelope**: who,
 when, subject, labels. **There is no body in the envelope.** The message
 itself, headers, body and attachments, is the original RFC 5322 `.eml`,
 stored whole in `blobs.sqlite`. To show a line of a message without
@@ -331,7 +331,7 @@ API spells an id from Gmail's first months with only 15 digits, and the
 mirror adds the leading zero. `listed_messages.id` and
 `thread_members.id` keep the API's own spelling. `label_ids` is set
 only on a message the Gmail API has answered for, so it is NULL for
-Fastmail, for an mbox, and for a message a Takeout seeded until the
+Fastmail, for Apple Mail, for an mbox, and for a message a Takeout seeded until the
 next sync asks Gmail for its labels.
 
 **From the mirror's spelling to the API's, and back.** The Gmail API and
@@ -386,7 +386,7 @@ asks whether a message is in the inbox.
 
 **Traps.**
 
-- **`received_at` is not Gmail's receipt time.** For Gmail and mbox it
+- **`received_at` is not Gmail's receipt time.** For Gmail, Apple Mail and mbox it
   is the message's own `Date:` header (Gmail's receipt time only when
   the header is missing or unreadable), and `sent_at` is the same
   value. For JMAP it is when the server received the message. Either
