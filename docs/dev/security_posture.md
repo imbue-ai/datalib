@@ -442,8 +442,9 @@ it came from, so it gets its own section.
 
 ### What is still open
 
-- **What Modal keeps.** Whether Modal retains a Sandbox's stdin, stdout or
-  logs after it ends, and for how long, has not been read from Modal's
+- **What Modal keeps.** Whether Modal retains a Sandbox's files (the
+  slice and its vectors are files in it) or logs after it ends, and for
+  how long, has not been read from Modal's
   terms or measured. Until it is, treat anything sent as possibly kept
   by Modal under the person's account.
 - **A driver killed outright leaves its Sandboxes running** until their

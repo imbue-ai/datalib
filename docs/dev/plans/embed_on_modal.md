@@ -10,9 +10,10 @@ whose CUDA layers keep their digests from one release to the next
 (docs/dev/docker.md § "The CUDA variant"), and a tarball install
 fetching the module on first use (docs/dev/runtime_fetch.md § "The CUDA
 module"). Step 4, `embed_on_modal_from_n_chunks` and the driver in
-`datalib/backend/datalib_step/src/modal/`, has run once against Modal,
-on the TNG fixture (§ "Measured on Modal"), and not yet on a real
-library. Step 5 is done:
+`datalib/backend/datalib_step/src/modal/`, has run against Modal on the
+TNG fixture and on a real library, where a GPU Sandbox's stdout lost
+answers; slices now move as files, and 5,000 made-up prompts came back
+whole (§ "Measured on Modal"). Step 5 is done:
 docs/dev/security_posture.md § "What leaves the machine for Modal".
 Facts marked _to check_ have not been measured or read from source
 yet.**
@@ -74,8 +75,9 @@ It goes to the person's own Modal account, signed in the way Modal's own
 tools sign in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
 `MODAL_TOKEN_SECRET`). datalib never copies that credential. The text
 crosses Modal's TLS connection into a container that lives for the run
-and is gone after it; whether Modal keeps a container's stdin or logs is
-_to check_, and the step prints nothing of a chunk.
+and is gone after it, the slice a file in its filesystem; whether Modal
+keeps a container's files or logs is _to check_, and the step prints
+nothing of a chunk.
 
 `docs/dev/security_posture.md` § "What leaves the machine for Modal" is
 the section for this: who sees the text (Modal, as the person's
@@ -252,8 +254,23 @@ about 2 s of that, so nearly all of it is the Sandbox's start: pulling
 the image, which this account had not pulled before, and loading the
 model. Every vector came back, and against the fixture's own vectors for
 the same chunks the worst cosine was 0.99966 and the median 0.99977.
-Still to measure: a start once the image is on Modal, a source of a real
-library, many slices at once, and the estimate against the bill.
+Still to measure: a start once the image is on Modal, many slices at
+once, and the estimate against the bill.
+
+**A GPU Sandbox's stdout loses a large answer.** On a real library the
+same day, every slice came back short: 950 and 885 vectors for one slice
+of 4,096 prompts, 1,533 and 1,537 for one of 3,910, each from an
+`embed-prompts` that exited 0. Probes on made-up data in the plain image
+found where. 8 MB sent through a Sandbox's stdin arrived whole, on a CPU
+and on a T4, read at once or 64 lines at a time. 32 MB written to stdout
+over two minutes after 60 s of silence arrived whole from a CPU Sandbox,
+and from a T4 Sandbox as 702 of its 4,096 lines, with three gaps and no
+error. The same 32 MB written to a file in the T4 Sandbox and read with
+the SDK's `filesystem` calls arrived whole, in 34 s. So a slice moves as
+files (§ "How the step drives Modal"), and then 5,000 made-up prompts of
+about 2 KB came back as 5,000 vectors from two T4 Sandboxes: 4,096 in
+132.8 s and 904 in 96.2 s. Against a Mac's Metal on 50 of them, the
+worst cosine was 0.99833.
 
 ## How the step drives Modal
 
@@ -279,16 +296,22 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   the driver cuts them into slices of 4,096, a minute or two of a T4
   each.
 - **One Sandbox per slice**, from the `-cuda` image with a GPU (a T4;
-  ten at once), each running `/opt/datalib/datalib-step embed-prompts
-  --models-dir /root/.cache/qmd/models` (the model the image bakes in)
-  with its slice on stdin, under the Modal App `datalib-embed`.
+  ten at once), under the Modal App `datalib-embed`. The Sandbox idles
+  (`sleep`); the driver writes the slice to `/tmp/datalib-embed/in.jsonl`
+  with `filesystem.writeText`, runs `/opt/datalib/datalib-step
+  embed-prompts --models-dir /root/.cache/qmd/models` (the model the
+  image bakes in) with `exec`, its stdin and stdout on files, and reads
+  `out.jsonl` once it has exited. Nothing crosses the Sandbox's own
+  stdin or stdout, which on a GPU lost answers (§ "Measured on Modal").
   `DATALIB_MODAL_IMAGE`, `DATALIB_MODAL_GPU` and
   `DATALIB_MODAL_SANDBOXES` change the image, the GPU and how many run
   at once, for measuring. Splitting one embed across many cheap GPUs costs the same
   GPU-seconds as one and divides the wait (§ "Measured on Modal").
-- **Each slice's vectors go into the inference cache as it returns**,
-  and the step counts what failed. A slice that fails is re-sent once,
-  then reported.
+- **Each Sandbox's vectors go into the inference cache as it returns**,
+  checked line by line against what it was sent: a line that answers a
+  prompt of its slice is kept, each prompt once. The prompts still
+  missing go to a second Sandbox, and what is missing after that is
+  reported, and the step counts it.
 - **Each Sandbox asks only for its GPU**, so Modal reserves its minimum
   CPU and memory and bills whatever more the run uses. The driver
   reports each Sandbox as it ends: how long it lived, from its creation to
@@ -324,16 +347,16 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   A sync's runner hands a step none of those, so under a sync the
   sign-in is `~/.modal.toml`, unless `DATALIB_CHILD_ENV` names them.
 - **A Sandbox lives at most 15 minutes.** A driver killed outright
-  (SIGKILL, a crash) cannot end its Sandboxes; they stop at that limit
-  (_to check_: whether one whose stdin is never closed runs to it).
+  (SIGKILL, a crash) cannot end its Sandboxes; they stop at that limit,
+  which is also how long the idle `sleep` runs.
 
 A Sandbox's GPU-seconds cost what a Function's do; its CPU and memory
 cost three times a Function's, a small share of the bill. Its output is
 gone if the step stops watching, which is why nothing is kept for later.
 A Sandbox pulls from `ghcr.io` (Modal's examples use Docker Hub): the
-run above did. _To check_: whether the SDK reads a Sandbox's stdout as a
-stream or only whole (a slice small enough to read whole works either
-way), and the largest payload a Sandbox's stdin and stdout carry.
+run above did. _To check_: the largest file `filesystem.writeText` and
+`readText` carry (the SDK names a read size limit; 32 MB passed), and
+whether the SDK's next release fixes a GPU Sandbox's stdout.
 
 **TODO (#1815): durable batch jobs, once we can reach them.** On a
 deployed Function, Modal's `spawn()` and `spawn_map()` keep running when
@@ -378,9 +401,10 @@ supported"; the issue says what to check for in a new SDK release.
    again. What the `cuda` job costs a release is #1861.
 4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
    the `-cuda` image driven by the JavaScript SDK. Tested against a
-   stand-in for the SDK whose Sandboxes run locally, and run once
-   against Modal on the TNG fixture (§ "Measured on Modal"); to be
-   measured on one small source of a real library, then a large one,
-   which is where the _to check_ items above get answered.
+   stand-in for the SDK whose Sandboxes run locally, and run against
+   Modal on the TNG fixture, on a real library, and on 5,000 made-up
+   prompts (§ "Measured on Modal"); to be measured on a real library's
+   sources again with slices moving as files, which is where the
+   _to check_ items above get answered.
 5. ~~The security posture section, and `docs/dev/config_model.md` and
    `configs/dag_example.toml` for the parameter.~~ Done.
