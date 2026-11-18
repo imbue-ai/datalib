@@ -15,6 +15,7 @@ import {
   menuEntry,
   pipelineRow,
   MANAGE_WITH_CONFIG,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
@@ -22,7 +23,7 @@ const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-men
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 test("a row's menu offers the actions for its kind, grouped, wherever the pointer is", async ({

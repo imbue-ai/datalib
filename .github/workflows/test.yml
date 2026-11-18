@@ -562,6 +562,11 @@ jobs:
             zip="${testlogs}/datalib/ui/e2e_${part}_test/test.outputs/outputs.zip"
             if [[ -f "${zip}" ]]; then
               cp -L "${zip}" "e2e-report/playwright-report-${part}.zip"
+              # Each failure's error and the page as it stood, here in the
+              # job's log, readable without downloading the artifact.
+              echo "::group::e2e ${part}: each failure and the page it left"
+              unzip -p "${zip}" 'playwright-report/data/*.md' || true
+              echo "::endgroup::"
             else
               echo "no e2e outputs at ${zip} — that part did not run, or passed"
             fi

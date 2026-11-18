@@ -7,14 +7,14 @@
 // of its own (`CONFIG_MUTATING`).
 
 import { test, expect, type Page } from "@playwright/test";
-import { TABLE_ROWS } from "./grid-helpers";
+import { TABLE_ROWS, expectSyncEverything } from "./grid-helpers";
 
 const header = (page: Page, colId: string) =>
   page.locator(`.tg-grid .slick-header-column[col-id="${colId}"]`);
 
 async function openSources(page: Page) {
   await page.goto("/data_sources");
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await expect(page.locator(TABLE_ROWS)).not.toHaveCount(0, { timeout: 10_000 });
 }
 
