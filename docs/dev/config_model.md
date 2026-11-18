@@ -457,7 +457,7 @@ config may still name: their problems are read in their own stores
 unattended rewrite (`unread_inputs.rs`, below) takes them out.
 Nothing scans the root. A source removed
 from the config stops being indexed on the next run even while its
-rendered tree is still on disk.
+render store is still on disk.
 
 After the grid, `unified_grid_and_search_index` puts each source it reads in the keyword
 search, but those its `params.not_searched` lists, and drops from the

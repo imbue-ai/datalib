@@ -57,11 +57,10 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
         source_id: md.source_id.clone(),
         upstream_cursor: md.upstream_cursor.clone(),
         bucket_key: md.bucket_key.clone(),
-        md_path: md.md_path.clone(),
         render_version: md.render_version,
         rows,
         sections: md.sections.clone(),
-        section_layout: md.section_layout.clone(),
+        searchable: md.searchable,
         content_hash: md.content_hash.clone(),
         front: md.front.clone(),
         edges,
@@ -208,7 +207,7 @@ fn strip(s: &mut String) -> bool {
 mod tests {
     use datalib_contact_schema::{ContactHandle, ContactKind};
     use datalib_photo_schema::{Exposure, MediaKind, Original, Person, Pictures, Place};
-    use datalib_schema::grid_rows::{doc_file_rel, GridRowBuilder};
+    use datalib_schema::grid_rows::GridRowBuilder;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
 
@@ -223,19 +222,15 @@ mod tests {
     fn stored(md: RenderedMarkdown) -> RenderedMarkdown {
         let td = tempfile::tempdir().unwrap();
         let dir = td.path();
-        let md = RenderedMarkdown {
-            md_path: dir.join(doc_file_rel(&md.markdown_uuid)),
-            ..md
-        };
         let st = IndexedMarkdownStore::open(dir).unwrap();
-        st.put_document(dir, &md).unwrap();
+        st.put_document(&md).unwrap();
         st.commit("one document").unwrap();
         st.close();
         let rd = IndexedMarkdownStore::open_for_reading(dir, None)
             .unwrap()
             .expect("a committed store is readable");
         let pin = rd.pin().unwrap().clone();
-        let mut docs = rd.documents_matching(dir, None, &pin).unwrap();
+        let mut docs = rd.documents_matching(None, &pin).unwrap();
         rd.close();
         docs.pop().expect("one document")
     }
@@ -246,12 +241,11 @@ mod tests {
             source_id: "src".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: "md-1.md".into(),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
             front: Default::default(),
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),

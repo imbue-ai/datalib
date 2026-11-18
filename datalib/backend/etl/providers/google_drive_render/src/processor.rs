@@ -90,7 +90,6 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
             None => &[],
         };
         let md = render_doc(
-            ctx.root,
             ctx.name,
             &DocInput {
                 file_id: &file_id,
@@ -101,7 +100,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
                 comments,
             },
             &inputs,
-        )?;
+        );
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for {file_id}"))?;
         buckets.push(Bucket {

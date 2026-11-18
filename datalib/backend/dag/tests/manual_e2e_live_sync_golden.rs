@@ -18,7 +18,6 @@ use std::sync::OnceLock;
 use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
 use datalib_handle::Handle;
-use datalib_runtime::layout::UNINDEXED_DIR;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -1277,8 +1276,8 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
-/// Every searched source holds one document per markdown file
-/// its render tree has outside `unindexed/`, a source with an `embed` step
+/// Every searched source holds one document per searchable document in
+/// its render store, a source with an `embed` step
 /// has nothing left to embed, and one without still has all of it left: the
 /// embed stayed in its own source.
 fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
@@ -1300,11 +1299,11 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
 
     let mut report = serde_json::Map::new();
     for h in held {
-        let on_disk = searchable_markdown_files(&data_root.join(&h.source).join("render_markdown"));
+        let rendered = searchable_documents(&data_root.join(&h.source).join("render_markdown"));
         assert_eq!(
-            h.documents as u64, on_disk,
-            "{}: the search index holds {} documents; its render tree has {on_disk} \
-             markdown files outside unindexed/",
+            h.documents as u64, rendered,
+            "{}: the search index holds {} documents; its render store has {rendered} \
+             searchable ones",
             h.source, h.documents
         );
         let embeds = embedded.contains(&h.source);
@@ -1369,18 +1368,18 @@ fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// The markdown files the search covers under `dir`: every one a renderer
-/// did not file under `UNINDEXED_DIR`.
-fn searchable_markdown_files(dir: &Path) -> u64 {
-    WalkDir::new(dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md"))
-        .filter(|e| {
-            let mut parts = e.path().strip_prefix(dir).unwrap().components();
-            parts.next().map(|c| c.as_os_str()) != Some(UNINDEXED_DIR.as_ref())
-        })
-        .count() as u64
+/// The documents the search covers in the render store under `dir`: every
+/// one its renderer did not keep for the grid alone.
+fn searchable_documents(dir: &Path) -> u64 {
+    let Some(store) =
+        datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(dir, None)
+            .expect("open a render store")
+    else {
+        return 0;
+    };
+    let rows = store.markdown_rows().expect("read the documents");
+    store.close();
+    rows.iter().filter(|r| r.searchable).count() as u64
 }
 
 fn step_id_list(summary: &Value) -> String {

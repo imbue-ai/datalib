@@ -31,7 +31,7 @@ use datalib_schema::data_nodes::{DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODE
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
-use datalib_schema::markdowns::{layout_json, SectionSpan, DDL as MARKDOWNS_TABLE_DDL};
+use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
@@ -43,7 +43,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
-use crate::section::{layout, Section};
+use crate::section::Section;
 
 mod node_rows;
 
@@ -910,9 +910,7 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
     }
 }
 
-/// One markdown's payload as handed from render to the indexer,
-/// constructed once the md and its blobs are durably on disk so that render
-/// and index commit per-document atomically.
+/// One document as handed from render to the render store and the index.
 #[derive(Debug, Clone)]
 pub struct RenderedMarkdown {
     pub markdown_uuid: String,
@@ -927,22 +925,19 @@ pub struct RenderedMarkdown {
     /// provider declares through `RenderCtx::declare_bucket`. `None`
     /// from a renderer that does not declare buckets yet.
     pub bucket_key: Option<String>,
-    /// Absolute path to the rendered `.md`; `markdowns.md_path` is this
-    /// with the out-dir prefix stripped.
-    pub md_path: PathBuf,
     pub render_version: u32,
-    /// Empty means there is no document: the store drops it, `.md` and
-    /// all, keeping only its `problems`.
+    /// Empty means there is no document: the store drops it, keeping only
+    /// its `problems`.
     pub rows: Vec<GridRow>,
-    /// The document piece by piece, in order, each piece keyed by the
+    /// The document section by section, in order, each keyed by the
     /// `data-section-uuid` it wraps or unkeyed when it wraps none —
-    /// concatenated they are the `.md`'s bytes. Empty from a renderer
-    /// that has not been taught sections, and when read back from the
-    /// store, which never holds the markdown.
+    /// concatenated they are the document's markdown. Empty when read
+    /// back from the store for indexing.
     pub sections: Vec<Section>,
-    /// The layout the store holds for this document, when it is read
-    /// back; `None` from a renderer, which hands `sections` instead.
-    pub section_layout: Option<Vec<SectionSpan>>,
+    /// Whether the search indexes it: false for a document kept for the
+    /// grid alone (Notion's table of contents), which only repeats what
+    /// other documents say at a size that would cost real embedding time.
+    pub searchable: bool,
     /// The `content_hash` the store holds for this document, when it is
     /// read back; `None` from a renderer, whose sections give it.
     pub content_hash: Option<String>,
@@ -972,54 +967,13 @@ pub struct RenderedMarkdown {
     pub problems: Vec<datalib_schema::problems::ProblemRow>,
 }
 
-/// Bumped when [`doc_md_path`] files documents somewhere else; every
-/// source carries it in its render params, so a bump renders them all
-/// again and each moved file's old copy is deleted as its document is
-/// written.
-pub const DOC_LAYOUT: u32 = 1;
-
-/// Where a document's markdown goes: [`doc_file_rel`] under its source's
-/// `render_markdown/`, so a search hit's path names its document.
-///
-/// [`doc_file_rel`]: datalib_schema::grid_rows::doc_file_rel
-pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
-    render_root.join(datalib_schema::grid_rows::doc_file_rel(markdown_uuid))
-}
-
-/// [`doc_md_path`] for a document free-text search should not return: one
-/// that only repeats what other documents say, at a size that would cost
-/// real embedding time. Its grid row and its link work as usual.
-/// Whether the search indexes a document filed at `md_rel`: every one
-/// but those its renderer filed under `unindexed/`.
-fn searchable(md_rel: &str) -> bool {
-    !Path::new(md_rel)
-        .components()
-        .any(|c| c.as_os_str() == datalib_etl::layout::UNINDEXED_DIR)
-}
-
-pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
-    doc_md_path(
-        &render_root.join(datalib_etl::layout::UNINDEXED_DIR),
-        markdown_uuid,
-    )
-}
-
-/// Why a document cannot be indexed where it was written: it names no
-/// source, its file is not named for its id, or it holds a row of another
-/// document. `None` when it can.
-fn misfiled(md: &RenderedMarkdown, md_rel: &str) -> Option<String> {
-    use datalib_schema::grid_rows::markdown_uuid_of_path;
+/// Why a document cannot be indexed: it names no source, or it holds a
+/// row of another document. `None` when it can.
+fn misfiled(md: &RenderedMarkdown) -> Option<String> {
     if md.source_id.is_empty() {
         return Some(format!(
             "document {} names no source: its renderer must set \
              `RenderedMarkdown::source_id` to its group's id",
-            md.markdown_uuid
-        ));
-    }
-    if markdown_uuid_of_path(md_rel) != Some(md.markdown_uuid.as_str()) {
-        return Some(format!(
-            "document {} is written to {md_rel}, not to the file its id names \
-             (`datalib_etl_render::grid_index::doc_md_path`)",
             md.markdown_uuid
         ));
     }
@@ -1034,24 +988,12 @@ fn misfiled(md: &RenderedMarkdown, md_rel: &str) -> Option<String> {
         })
 }
 
-/// Write one rendered document into the index unconditionally. `out_dir`
-/// is stripped off `md_path` to give the file's path relative to the data
-/// root, which `markdowns.md_path` keeps. Every document reaches a render
-/// store or the grid index through here, so its names are settled and its
-/// rows filed under their source here ([`crate::names`]).
-pub async fn apply_one(
-    write_lock: &WriteLock,
-    out_dir: &Path,
-    md: &RenderedMarkdown,
-) -> Result<usize> {
-    let md = crate::names::settled(md);
-    let md_rel = md
-        .md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md.md_path)
-        .to_string_lossy()
-        .to_string();
-    apply_markdown(write_lock, &md, &md_rel).await
+/// Write one rendered document into the index unconditionally. Every
+/// document reaches a render store or the grid index through here, so its
+/// names are settled and its rows filed under their source here
+/// ([`crate::names`]).
+pub async fn apply_one(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
+    apply_markdown(write_lock, &crate::names::settled(md)).await
 }
 
 /// Every source under the data root with a render store: the directory
@@ -1164,7 +1106,6 @@ pub async fn build_grid_index_for(
         let read = match read_source(
             &stanza,
             &rendered_root,
-            out_dir,
             cursors.get(&stanza),
             indexed.get(&stanza),
             &mut pass,
@@ -1189,7 +1130,6 @@ pub async fn build_grid_index_for(
         }
         let applied = apply_source(
             &write_lock,
-            out_dir,
             &stanza,
             read,
             (!building).then_some(held),
@@ -1378,7 +1318,6 @@ enum SourceRead {
 fn read_source(
     stanza: &str,
     rendered_root: &Path,
-    out_dir: &Path,
     cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
@@ -1398,7 +1337,7 @@ fn read_source(
         );
         return Ok(None);
     };
-    let read = read_open_store(&store, stanza, out_dir, cursor, indexed, pass);
+    let read = read_open_store(&store, stanza, cursor, indexed, pass);
     store.close();
     match read {
         Err(e) if written_in_another_shape(&e) => {
@@ -1418,7 +1357,6 @@ fn read_source(
 fn read_open_store(
     store: &crate::indexed_markdown::IndexedMarkdownStore,
     stanza: &str,
-    out_dir: &Path,
     cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
@@ -1483,7 +1421,7 @@ fn read_open_store(
         }
     }
     let docs = store
-        .documents_matching(out_dir, scan.render.as_ref(), &pin)
+        .documents_matching(scan.render.as_ref(), &pin)
         .with_context(|| format!("read documents from {stanza}"))?;
     let present: HashSet<&str> = docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
     let removed = match &scan.render {
@@ -1529,7 +1467,6 @@ fn read_open_store(
 #[allow(clippy::too_many_arguments)]
 async fn apply_source(
     write_lock: &WriteLock,
-    out_dir: &Path,
     stanza: &str,
     read: SourceRead,
     held: Option<usize>,
@@ -1578,16 +1515,7 @@ async fn apply_source(
             }
             _ => None,
         };
-        let loaded = load_source(
-            write_lock,
-            out_dir,
-            stanza,
-            &docs,
-            probe.as_ref(),
-            progress,
-            stop,
-        )
-        .await?;
+        let loaded = load_source(write_lock, stanza, &docs, probe.as_ref(), progress, stop).await?;
         let Some(Loaded {
             markdowns,
             rows,
@@ -1769,7 +1697,6 @@ async fn remove_documents(
 /// written without the search indexes.
 async fn load_source(
     write_lock: &WriteLock,
-    out_dir: &Path,
     stanza: &str,
     docs: &[RenderedMarkdown],
     probe: Option<&RemakeProbe>,
@@ -1792,7 +1719,7 @@ async fn load_source(
             problems: Vec::new(),
             ..md.clone()
         };
-        rows += apply_one(write_lock, out_dir, &md)
+        rows += apply_one(write_lock, &md)
             .await
             .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
         progress(&format!("{stanza}: loaded {}/{}", i + 1, docs.len()));
@@ -1921,11 +1848,7 @@ pub(crate) async fn delete_document_rows(
     Ok(gone)
 }
 
-async fn apply_markdown(
-    write_lock: &WriteLock,
-    md: &RenderedMarkdown,
-    md_rel: &str,
-) -> Result<usize> {
+async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
     // Inside `begin_transaction` every guard hands back the same connection,
     // so the per-doc statements accumulate in one batch; otherwise each takes
     // a fresh connection and auto-commits.
@@ -1947,7 +1870,7 @@ async fn apply_markdown(
         return Ok(0);
     }
     let canonical = document_row(&md.rows, &md.markdown_uuid)?;
-    if let Some(why) = misfiled(md, md_rel) {
+    if let Some(why) = misfiled(md) {
         bail!("{why}");
     }
 
@@ -2030,7 +1953,7 @@ async fn apply_markdown(
     for photo in &md.photos {
         insert_source_photo(conn, &md.markdown_uuid, photo).await?;
     }
-    upsert_markdown(conn, md, canonical, md_rel)
+    upsert_markdown(conn, md, canonical)
         .await
         .context("upsert markdowns")?;
     write_lock.note_written(&md.markdown_uuid);
@@ -2078,12 +2001,10 @@ async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
     canonical: &GridRow,
-    md_rel: &str,
 ) -> Result<()> {
     let kind = doc_kind_for(&canonical.kind);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
 
-    let section_layout = section_layout(md)?;
     let content_hash = if md.sections.is_empty() {
         md.content_hash.clone()
     } else {
@@ -2098,9 +2019,9 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
-          content_hash, front, searchable) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          item_count, upstream_cursor, renderer_version, bucket_key, content_hash, front, \
+          searchable) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&md.source_id)
@@ -2110,43 +2031,16 @@ async fn upsert_markdown(
     .bind(canonical.created_at.as_deref())
     .bind(canonical.modified_at.as_deref())
     .bind(canonical.item_count)
-    .bind(md_rel)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
     .bind(&md.bucket_key)
-    .bind(section_layout.as_deref().map(layout_json))
     .bind(content_hash)
     .bind((!md.front.is_empty()).then(|| md.front.to_json()))
-    .bind(searchable(md_rel))
+    .bind(md.searchable)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
     Ok(())
-}
-
-/// The layout to store: the renderer's sections, else what the store
-/// already held when the document was read back from it. Sections that
-/// do not spell the file the renderer wrote are a renderer bug, and would
-/// have the UI cut messages in the wrong places, so they fail the render.
-fn section_layout(md: &RenderedMarkdown) -> Result<Option<Vec<SectionSpan>>> {
-    if md.sections.is_empty() {
-        return Ok(md.section_layout.clone());
-    }
-    let spans = layout(&md.sections);
-    let declared: usize = spans.iter().map(|s| s.bytes).sum();
-    // A photo's document names a file it never writes.
-    if let Ok(meta) = std::fs::metadata(&md.md_path) {
-        if meta.len() != declared as u64 {
-            bail!(
-                "document {}: its sections add up to {declared} bytes, \
-                 but {} holds {}",
-                md.markdown_uuid,
-                md.md_path.display(),
-                meta.len()
-            );
-        }
-    }
-    Ok(Some(spans))
 }
 
 /// One source's account of a person, and each handle it ties to them,
@@ -2628,7 +2522,7 @@ mod write_lock_tests {
     //! and the losers time out. No artificial sleeps — the contention is real,
     //! from the same code path production uses.
     use super::*;
-    use datalib_schema::grid_rows::{content_hash, doc_file_rel, GridRow};
+    use datalib_schema::grid_rows::{content_hash, GridRow};
     use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -2688,13 +2582,12 @@ mod write_lock_tests {
             h3: None,
         };
         RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: PathBuf::from("/tmp/chats").join(doc_file_rel(&uuid)),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -2722,15 +2615,13 @@ mod write_lock_tests {
     }
 
     async fn apply_in_parallel(write_lock: &StdArc<WriteLock>, n_tasks: usize, per_task: usize) {
-        let out_dir = PathBuf::from("/tmp");
         let mut handles = Vec::with_capacity(n_tasks);
         for task in 0..n_tasks {
             let lock = write_lock.clone();
-            let out_dir = out_dir.clone();
             handles.push(tokio::spawn(async move {
                 for idx in 0..per_task {
                     let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md)
+                    apply_one(lock.as_ref(), &md)
                         .await
                         .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
                 }
@@ -2857,11 +2748,10 @@ mod write_lock_tests {
         super::init_schema(&pool).await.expect("init_schema");
 
         let lock = WriteLock::new(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
         lock.begin_transaction().await.unwrap();
         for idx in 0..5 {
-            apply_one(&lock, &out_dir, &mk_md(0, idx)).await.unwrap();
+            apply_one(&lock, &mk_md(0, idx)).await.unwrap();
         }
         lock.rollback_transaction().await.unwrap();
 
@@ -2883,16 +2773,15 @@ mod write_lock_tests {
         let pool = open_pool(&dir.path().join("empty.doltlite_db"), 2).await;
         super::init_schema(&pool).await.expect("init_schema");
         let lock = WriteLock::new(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
         let mut md = mk_md(0, 0);
         md.bucket_key = Some("mr!17".into());
-        apply_one(&lock, &out_dir, &md).await.unwrap();
+        apply_one(&lock, &md).await.unwrap();
 
         let mut moved = mk_md(0, 0);
         moved.bucket_key = Some("mr!17~new".into());
         moved.rows.clear();
-        let inserted = apply_one(&lock, &out_dir, &moved).await.unwrap();
+        let inserted = apply_one(&lock, &moved).await.unwrap();
         assert_eq!(inserted, 0);
 
         let buckets: Vec<Option<String>> =
@@ -3109,12 +2998,12 @@ mod source_cursor_tests {
     use tempfile::tempdir;
 
     use crate::grid_index::{
-        build_grid_index, build_grid_index_for, discover_sources, doc_md_path, load_source_cursors,
-        misfiled, RenderedMarkdown,
+        build_grid_index, build_grid_index_for, discover_sources, load_source_cursors, misfiled,
+        RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl::stop::StopFlag;
-    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
+    use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
@@ -3123,7 +3012,7 @@ mod source_cursor_tests {
             .unwrap()
     }
 
-    fn doc(root: &Path, source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
+    fn doc(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Test)
@@ -3139,14 +3028,13 @@ mod source_cursor_tests {
             .build()
             .unwrap();
         RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
             upstream_cursor: None,
             bucket_key: None,
-            md_path: doc_md_path(&rendered_root(root, source), uuid),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -3160,36 +3048,24 @@ mod source_cursor_tests {
         }
     }
 
-    /// A document must name its source, be written to the file its id
-    /// names, and hold only its own rows; a renderer that forgets its
-    /// group's id would otherwise file every row under nothing.
+    /// A document must name its source and hold only its own rows; a
+    /// renderer that forgets its group's id would otherwise file every row
+    /// under nothing.
     #[test]
     fn misfiled_says_what_a_document_got_wrong() {
-        let root = Path::new("/data");
-        let rel = |md: &RenderedMarkdown| {
-            md.md_path
-                .strip_prefix(root)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        };
-        let good = doc(root, "enterprise", "d-1", "Engage.");
-        assert_eq!(misfiled(&good, &rel(&good)), None);
+        let good = doc("enterprise", "d-1", "Engage.");
+        assert_eq!(misfiled(&good), None);
 
         let nameless = RenderedMarkdown {
             source_id: String::new(),
             ..good.clone()
         };
-        let why = misfiled(&nameless, &rel(&nameless)).expect("refused");
+        let why = misfiled(&nameless).expect("refused");
         assert!(why.contains("names no source"), "{why}");
-
-        let elsewhere = format!("enterprise/render_markdown/{}", doc_file_rel("d-2"));
-        let why = misfiled(&good, &elsewhere).expect("refused");
-        assert!(why.contains("not to the file its id names"), "{why}");
 
         let mut stray = good.clone();
         stray.rows[0].markdown_uuid = Some("d-2".to_string());
-        let why = misfiled(&stray, &rel(&stray)).expect("refused");
+        let why = misfiled(&stray).expect("refused");
         assert!(why.contains("as its document"), "{why}");
     }
 
@@ -3200,7 +3076,7 @@ mod source_cursor_tests {
     fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         for d in docs {
-            store.put_document(root, d).unwrap();
+            store.put_document(d).unwrap();
         }
         store.commit("test render").unwrap();
         store.close();
@@ -3208,20 +3084,17 @@ mod source_cursor_tests {
 
     fn unrender(root: &Path, source: &str, uuid: &str) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
-        store.remove_documents(root, &[uuid.to_string()]).unwrap();
+        store.remove_documents(&[uuid.to_string()]).unwrap();
         store.commit("test unrender").unwrap();
         store.close();
     }
 
-    /// A document under a bucket other than itself, whose `.md` actually
-    /// exists on disk — the shape a periodizing renderer produces, and
-    /// the one the deletion path has to handle.
-    fn doc_in_bucket(root: &Path, source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
-        let mut md = doc(root, source, uuid, "body");
+    /// A document under a bucket other than itself: the shape the
+    /// deletion path has to handle.
+    fn doc_in_bucket(source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
+        let mut md = doc(source, uuid, "body");
         md.rows[0].conversation_uuid = bucket.to_string();
         md.bucket_key = Some(bucket.to_string());
-        std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&md.md_path, "# rendered\n").unwrap();
         md
     }
 
@@ -3233,12 +3106,8 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
-        render(
-            root,
-            "dropped",
-            &[doc(root, "dropped", "md-d", "dropped body")],
-        );
+        render(root, "kept", &[doc("kept", "md-k", "kept body")]);
+        render(root, "dropped", &[doc("dropped", "md-d", "dropped body")]);
 
         let listed = ["kept".to_string(), "not-rendered-yet".to_string()];
         build_grid_index_for(&pool, root, &listed, |_| {}, None, &StopFlag::new())
@@ -3255,17 +3124,16 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 2);
     }
 
-    /// The layout of a document's sections, and the hash of its text, go
-    /// from the renderer through the render store, which never holds the
-    /// markdown, to the index: the layout for the document route, the hash
-    /// for the search index to tell a changed document by.
+    /// The hash of a document's text goes from the renderer through the
+    /// render store to the index, for the search index to tell a changed
+    /// document by.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_documents_section_layout_and_hash_reach_the_index() {
-        use crate::section::{join, layout, Section};
+    async fn a_documents_hash_reaches_the_index() {
+        use crate::section::{join, Section};
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        let mut d = doc(root, "ten-forward", "md-s", "two messages");
+        let mut d = doc("ten-forward", "md-s", "two messages");
         d.sections = vec![
             Section::unkeyed("---\n---\n\n# Ten Forward\n\n".into()),
             Section::keyed(
@@ -3273,44 +3141,18 @@ mod source_cursor_tests {
                 "<div data-section-uuid=\"m1\">\n\nTea, Earl Grey\n\n</div>\n\n".into(),
             ),
         ];
-        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&d.md_path, join(&d.sections)).unwrap();
         render(root, "ten-forward", &[d.clone()]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
-        let stored: Option<String> =
-            sqlx::query_scalar("SELECT section_layout FROM markdowns WHERE markdown_uuid = 'md-s'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let read = stored
-            .as_deref()
-            .and_then(datalib_schema::markdowns::parse_layout);
-        assert_eq!(read, Some(layout(&d.sections)));
-
         let hash: Option<String> =
             sqlx::query_scalar("SELECT content_hash FROM markdowns WHERE markdown_uuid = 'md-s'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let file = std::fs::read(&d.md_path).unwrap();
-        assert_eq!(hash, Some(blake3::hash(&file).to_hex().to_string()));
-    }
-
-    /// Sections that do not spell the file the renderer wrote would have
-    /// the UI cut messages in the wrong places; the render fails instead.
-    #[test]
-    fn sections_that_do_not_spell_the_file_fail_the_render() {
-        use crate::section::Section;
-        let td = tempdir().unwrap();
-        let root = td.path();
-        let mut d = doc(root, "ten-forward", "md-s", "one message");
-        d.sections = vec![Section::keyed("m1", "<div>Tea, Earl Grey</div>\n".into())];
-        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&d.md_path, "<div>Tea, Earl Grey, hot</div>\n").unwrap();
-        let store = IndexedMarkdownStore::open(&rendered_root(root, "ten-forward")).unwrap();
-        let err = store.put_document(root, &d).unwrap_err();
-        store.close();
-        assert!(format!("{err:#}").contains("sections add up to"), "{err:#}");
+        let text = join(&d.sections);
+        assert_eq!(
+            hash,
+            Some(blake3::hash(text.as_bytes()).to_hex().to_string())
+        );
     }
 
     /// A source taken out of the graph leaves the index with its cursor,
@@ -3321,12 +3163,8 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
-        render(
-            root,
-            "dropped",
-            &[doc(root, "dropped", "md-d", "dropped body")],
-        );
+        render(root, "kept", &[doc("kept", "md-k", "kept body")]);
+        render(root, "dropped", &[doc("dropped", "md-d", "dropped body")]);
         let both = ["dropped".to_string(), "kept".to_string()];
         build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
             .await
@@ -3368,14 +3206,9 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let conv = "conv-1";
-        let jan = doc_in_bucket(root, "src", "md-jan", conv);
-        let feb = doc_in_bucket(root, "src", "md-feb", conv);
-        let other = doc_in_bucket(root, "src", "md-other", "conv-2");
-        let (jan_md, feb_md, other_md) = (
-            jan.md_path.clone(),
-            feb.md_path.clone(),
-            other.md_path.clone(),
-        );
+        let jan = doc_in_bucket("src", "md-jan", conv);
+        let feb = doc_in_bucket("src", "md-feb", conv);
+        let other = doc_in_bucket("src", "md-other", "conv-2");
         render(root, "src", &[jan, feb, other]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 3);
@@ -3393,16 +3226,9 @@ mod source_cursor_tests {
             vec!["md-feb".to_string(), "md-jan".to_string()],
             "both of the bucket's periods, and only those"
         );
-        store.remove_documents(root, &gone).unwrap();
+        store.remove_documents(&gone).unwrap();
         store.commit("test: conversation gone upstream").unwrap();
         store.close();
-
-        assert!(!jan_md.exists(), "the rendered markdown must go too");
-        assert!(!feb_md.exists());
-        assert!(
-            other_md.exists(),
-            "an untouched conversation keeps its file"
-        );
 
         // And the index picks the removal up from the store's own diff,
         // which is the only way it ever learns about one.
@@ -3437,13 +3263,13 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["fresh".to_string(), "stale".to_string()];
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
-        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
+        render(root, "stale", &[doc("stale", "md-s", "stale body")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
 
-        render(root, "fresh", &[doc(root, "fresh", "md-f2", "more")]);
+        render(root, "fresh", &[doc("fresh", "md-f2", "more")]);
         into_older_shape(root, "stale").await;
         // As after the index rebuilds itself for a new build: no cursors,
         // so every store is read whole.
@@ -3474,7 +3300,7 @@ mod source_cursor_tests {
         );
 
         // Its next render rebuilds the store in the current shape.
-        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        render(root, "stale", &[doc("stale", "md-s", "stale body")]);
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
@@ -3497,16 +3323,12 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         // "broken" sorts first, so a pass that stops on it reaches nothing.
         let sources = ["broken".to_string(), "fresh".to_string()];
-        render(
-            root,
-            "broken",
-            &[doc(root, "broken", "md-b", "broken body")],
-        );
+        render(root, "broken", &[doc("broken", "md-b", "broken body")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
 
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
         let store = crate::indexed_markdown::path_for(&rendered_root(root, "broken"));
         std::fs::write(&store, b"not a doltlite store").unwrap();
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
@@ -3532,11 +3354,7 @@ mod source_cursor_tests {
         assert_eq!(severity, "error");
 
         std::fs::remove_file(&store).unwrap();
-        render(
-            root,
-            "broken",
-            &[doc(root, "broken", "md-b", "broken body")],
-        );
+        render(root, "broken", &[doc("broken", "md-b", "broken body")]);
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
@@ -3559,7 +3377,7 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["born".to_string(), "fresh".to_string()];
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
         let store = crate::indexed_markdown::path_for(&rendered_root(root, "born"));
         std::fs::create_dir_all(store.parent().unwrap()).unwrap();
         std::fs::write(&store, b"").unwrap();
@@ -3614,7 +3432,7 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["s".to_string()];
-        let mut d = doc(root, "s", "md-a", "body");
+        let mut d = doc("s", "md-a", "body");
         d.data_nodes = vec![DataNodeRow::new("md-a", "md-a", "s", "Chat").read_together()];
         d.filings = vec![datalib_schema::filings::FilingRow::new(
             "md-a", "md-a", "label",
@@ -3636,7 +3454,7 @@ mod source_cursor_tests {
         };
         assert_eq!((count("data_nodes").await, count("filings").await), (1, 1));
 
-        render(root, "s", &[doc(root, "s", "md-a", "body again")]);
+        render(root, "s", &[doc("s", "md-a", "body again")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
@@ -3655,7 +3473,7 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         let sources = ["s".to_string()];
         let carrying = |uuid: &str| {
-            let mut d = doc(root, "s", uuid, "body");
+            let mut d = doc("s", uuid, "body");
             let workspace = DataNodeRow::new(uuid, "ws", "s", "Workspace")
                 .named(Some("Enterprise".to_string()))
                 .place();
@@ -3745,13 +3563,13 @@ mod source_cursor_tests {
             let pool = index_pool(root).await;
             // "damaged" sorts first, so a pass that stops on it reaches nothing.
             let sources = ["damaged".to_string(), "fresh".to_string()];
-            render(root, "damaged", &[doc(root, "damaged", "md-d", "kept")]);
+            render(root, "damaged", &[doc("damaged", "md-d", "kept")]);
             build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
 
-            render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
-            render(root, "damaged", &[doc(root, "damaged", "md-d2", "more")]);
+            render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
+            render(root, "damaged", &[doc("damaged", "md-d2", "more")]);
             alter_store(
                 root,
                 "damaged",
@@ -3791,12 +3609,12 @@ mod source_cursor_tests {
             let root = td.path();
             let pool = index_pool(root).await;
             let sources = ["old".to_string()];
-            render(root, "old", &[doc(root, "old", "md-1", "one")]);
+            render(root, "old", &[doc("old", "md-1", "one")]);
             build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
 
-            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            render(root, "old", &[doc("old", "md-2", "two")]);
             alter_store(root, "old", change, "another build's shape").await;
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
@@ -3806,7 +3624,7 @@ mod source_cursor_tests {
             assert_eq!(rows_of(&pool, "old").await, ["md-1"], "{change}");
 
             // Its next render writes this build's shape, and it reads again.
-            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            render(root, "old", &[doc("old", "md-2", "two")]);
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
@@ -3834,7 +3652,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
 
         let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
@@ -3868,7 +3686,7 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let empty = generation(&pool).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         let first = generation(&pool).await;
         assert_ne!(first, empty, "the first pass loaded a document");
@@ -3883,7 +3701,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_ne!(
@@ -3925,7 +3743,7 @@ mod source_cursor_tests {
         let root = td.path();
         for source in ["a", "b"] {
             let docs: Vec<_> = (1..=3)
-                .map(|i| doc(root, source, &format!("md-{source}{i}"), "body"))
+                .map(|i| doc(source, &format!("md-{source}{i}"), "body"))
                 .collect();
             render(root, source, &docs);
         }
@@ -3975,7 +3793,7 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         let docs = |text: &str| -> Vec<RenderedMarkdown> {
             (1..=4)
-                .map(|i| doc(root, "src", &format!("md-{i}"), text))
+                .map(|i| doc("src", &format!("md-{i}"), text))
                 .collect()
         };
         render(root, "src", &docs("before"));
@@ -4010,10 +3828,10 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let many: Vec<_> = (1..=20)
-            .map(|i| doc(root, "big", &format!("md-big{i}"), "big"))
+            .map(|i| doc("big", &format!("md-big{i}"), "big"))
             .collect();
         render(root, "big", &many);
-        render(root, "small", &[doc(root, "small", "md-small", "small")]);
+        render(root, "small", &[doc("small", "md-small", "small")]);
         let both = ["big".to_string(), "small".to_string()];
         build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
             .await
@@ -4022,7 +3840,7 @@ mod source_cursor_tests {
 
         let store = IndexedMarkdownStore::open(&rendered_root(root, "big")).unwrap();
         let gone: Vec<String> = many.iter().map(|d| d.markdown_uuid.clone()).collect();
-        store.remove_documents(root, &gone[..19]).unwrap();
+        store.remove_documents(&gone[..19]).unwrap();
         store.commit("test: most of big is gone").unwrap();
         store.close();
         let emptied = build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
@@ -4068,7 +3886,7 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         for source in ["a", "b"] {
             let docs: Vec<_> = (1..=3)
-                .map(|i| doc(root, source, &format!("md-{source}{i}"), "body"))
+                .map(|i| doc(source, &format!("md-{source}{i}"), "body"))
                 .collect();
             render(root, source, &docs);
         }
@@ -4127,14 +3945,12 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
 
         // A second document left in the working set, the way a render that is
         // still running (or was killed) leaves one.
         let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
-        store
-            .put_document(root, &doc(root, "src", "md-2", "b"))
-            .unwrap();
+        store.put_document(&doc("src", "md-2", "b")).unwrap();
         store.close();
 
         let summary = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
@@ -4155,7 +3971,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         let cursors = load_source_cursors(&pool).await.unwrap();
@@ -4223,9 +4039,9 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
-        render(root, "src", &[doc(root, "src", "md-2", "b-again")]);
+        render(root, "src", &[doc("src", "md-2", "b-again")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         let before = load_source_cursors(&pool).await.unwrap()["src"].clone();
 
@@ -4236,7 +4052,7 @@ mod source_cursor_tests {
         assert_ne!(after.commit, before.commit);
         assert_eq!(after.tree, before.tree);
 
-        render(root, "src", &[doc(root, "src", "md-1", "a-changed")]);
+        render(root, "src", &[doc("src", "md-1", "a-changed")]);
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(s.markdowns_total, 1, "one document read, not two");
     }
@@ -4251,12 +4067,12 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         // md-2 changes; md-1 does not.
-        render(root, "src", &[doc(root, "src", "md-2", "b-changed")]);
+        render(root, "src", &[doc("src", "md-2", "b-changed")]);
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(s.markdowns_total, 1, "one document read, not two");
         assert_eq!(s.markdowns_loaded, 1);
@@ -4279,7 +4095,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 2);
@@ -4314,9 +4130,9 @@ mod source_cursor_tests {
             Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
             Some(1),
         );
-        let mut bad = doc(root, "src", "md-1", "a");
+        let mut bad = doc("src", "md-1", "a");
         bad.problems.push(problem.clone());
-        render(root, "src", &[bad, doc(root, "src", "md-2", "b")]);
+        render(root, "src", &[bad, doc("src", "md-2", "b")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         let count = || async {
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM problems")
@@ -4334,7 +4150,7 @@ mod source_cursor_tests {
             .execute(&pool)
             .await
             .unwrap();
-        render(root, "src", &[doc(root, "src", "md-2", "b again")]);
+        render(root, "src", &[doc("src", "md-2", "b again")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(count().await, 0, "an older build's copy went");
     }
@@ -4348,7 +4164,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         // A commit and a tree from no history anyone has.
@@ -4381,11 +4197,11 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
-        render(root, "src", &[doc(root, "src", "md-2", "b, changed")]);
+        render(root, "src", &[doc("src", "md-2", "b, changed")]);
         sqlx::query("DELETE FROM source_cursors")
             .execute(&pool)
             .await
@@ -4407,14 +4223,12 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        let mut md = doc(root, "src", "md-1", "a");
+        let mut md = doc("src", "md-1", "a");
         let mut child = md.rows[0].clone();
         child.is_document = false;
         md.rows.push(child);
         let lock = crate::grid_index::WriteLock::new(pool.clone());
-        let err = crate::grid_index::apply_one(&lock, root, &md)
-            .await
-            .unwrap_err();
+        let err = crate::grid_index::apply_one(&lock, &md).await.unwrap_err();
         assert!(
             format!("{err:#}").contains("two of its rows have the uuid md-1"),
             "{err:#}"
@@ -4434,9 +4248,9 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
-        render(root, "other", &[doc(root, "other", "md-3", "c")]);
+        render(root, "other", &[doc("other", "md-3", "c")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 3);
 
@@ -4471,7 +4285,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let holding = |doc_uuid: &str| {
-            let mut md = doc(root, "src", doc_uuid, doc_uuid);
+            let mut md = doc("src", doc_uuid, doc_uuid);
             let mut message = md.rows[0].clone();
             message.uuid = "msg-u".to_string();
             message.is_document = false;

@@ -1,15 +1,14 @@
 //! Shared "section anchor" helpers for provider renderers, and the
-//! [`Section`] a renderer hands over so a document can be read piece by
-//! piece without parsing its markdown.
+//! [`Section`] a renderer hands over so a document can be read section by
+//! section without parsing its markdown.
 
-use datalib_schema::drawn_pieces::{self, DrawnPieceRow};
-use datalib_schema::markdowns::SectionSpan;
+use datalib_schema::drawings::{self, DrawingRow};
 use datalib_schema::providers::Provider;
 use datalib_schema::sections::{addressed_json, labels_json, Addressee, SectionRow};
 
-/// One piece of a rendered document, in document order. `uuid` is the
-/// piece's `data-section-uuid` — a message, a contact — so a row of the
-/// grid names the piece it came from; `None` for a piece that belongs
+/// One section of a rendered document, in document order. `uuid` is the
+/// section's `data-section-uuid` — a message, a contact — so a row of the
+/// grid names the section it came from; `None` for a section that belongs
 /// to no row: the frontmatter and title, a `<details>` opener around a
 /// run of asides. Concatenated in order, a document's sections are its
 /// `.md` byte for byte ([`join`]).
@@ -23,7 +22,7 @@ pub struct Section {
 
 /// What of a section the render store keeps in `sections`, for whatever
 /// draws it again: the viewer, an export, the search index. What it does
-/// not keep there as drawn, `drawn_pieces` keeps ([`drawn`]).
+/// not keep there as drawn, `drawings` keeps ([`drawn`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept {
     /// The piece whole, as drawn, marked framed: from a renderer that has
@@ -126,7 +125,7 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
 /// How the store keeps what `sections` does not hold as drawn: each
 /// message's drawing with its body cut out, and each piece of layout
 /// whole. With [`stored`] it spells the document back ([`spell`]).
-pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawnPieceRow> {
+pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawingRow> {
     sections
         .iter()
         .enumerate()
@@ -136,8 +135,8 @@ pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawnPieceRow> {
                 Kept::Body { text, .. } => Some(text.as_str()),
                 Kept::Frame => None,
             };
-            let (md, body_at) = drawn_pieces::cut(&s.md, body)?;
-            Some(DrawnPieceRow {
+            let (md, body_at) = drawings::cut(&s.md, body)?;
+            Some(DrawingRow {
                 markdown_uuid: markdown_uuid.to_string(),
                 seq: seq as i64,
                 md,
@@ -147,19 +146,19 @@ pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawnPieceRow> {
         .collect()
 }
 
-/// One piece of a document as the store spells it back.
+/// One section of a document as the store spells it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpelledPiece {
-    /// The item it is; `None` for a piece that is no item's.
+pub struct SpelledSection {
+    /// The item it is; `None` for a section that is no item's.
     pub uuid: Option<String>,
     pub md: String,
 }
 
-/// A document spelled back from what the store keeps of it, piece by
-/// piece in order. `None` when the rows cannot spell it: a drawing whose
+/// A document spelled back from what the store keeps of it, section by
+/// section in order. `None` when the rows cannot spell it: a drawing whose
 /// cut falls inside a character.
-pub fn spell(sections: &[SectionRow], drawn: &[DrawnPieceRow]) -> Option<Vec<SpelledPiece>> {
-    let mut by_seq: std::collections::BTreeMap<i64, (Option<&SectionRow>, Option<&DrawnPieceRow>)> =
+pub fn spell(sections: &[SectionRow], drawn: &[DrawingRow]) -> Option<Vec<SpelledSection>> {
+    let mut by_seq: std::collections::BTreeMap<i64, (Option<&SectionRow>, Option<&DrawingRow>)> =
         std::collections::BTreeMap::new();
     for s in sections {
         by_seq.entry(s.seq).or_default().0 = Some(s);
@@ -170,11 +169,11 @@ pub fn spell(sections: &[SectionRow], drawn: &[DrawnPieceRow]) -> Option<Vec<Spe
     by_seq
         .into_values()
         .map(|piece| match piece {
-            (Some(s), None) => Some(SpelledPiece {
+            (Some(s), None) => Some(SpelledSection {
                 uuid: s.uuid.clone(),
                 md: s.text.clone(),
             }),
-            (s, Some(d)) => Some(SpelledPiece {
+            (s, Some(d)) => Some(SpelledSection {
                 uuid: s.and_then(|s| s.uuid.clone()),
                 md: d.spell(s.map(|s| s.text.as_str()))?,
             }),
@@ -200,20 +199,6 @@ pub fn content_hash(sections: &[Section]) -> String {
         hasher.update(s.md.as_bytes());
     }
     hasher.finalize().to_hex().to_string()
-}
-
-/// Where each section lies in the `.md` they spell: what
-/// `markdowns.section_layout` stores, so the UI can render each message
-/// as a fragment of its own without trusting the text to say where one
-/// ends.
-pub fn layout(sections: &[Section]) -> Vec<SectionSpan> {
-    sections
-        .iter()
-        .map(|s| SectionSpan {
-            uuid: s.uuid.clone(),
-            bytes: s.md.len(),
-        })
-        .collect()
 }
 
 /// A document written top to bottom as text, with the pieces that wrap a
@@ -350,21 +335,6 @@ mod tests {
         assert_eq!(join(&sections), "---\n---\n\n<div>a</div>\n<div>b</div>\n");
         assert_eq!(sections[0].uuid, None);
         assert_eq!(sections[1].uuid.as_deref(), Some("a"));
-    }
-
-    #[test]
-    fn a_layout_spans_the_joined_document() {
-        let sections = vec![
-            Section::unkeyed("---\n---\n\n".into()),
-            Section::keyed("a", "<div>é</div>\n".into()),
-        ];
-        let spans = layout(&sections);
-        assert_eq!(
-            spans.iter().map(|s| s.bytes).sum::<usize>(),
-            join(&sections).len()
-        );
-        assert_eq!(spans[1].uuid.as_deref(), Some("a"));
-        assert_eq!(spans[1].bytes, "<div>é</div>\n".len(), "bytes, not chars");
     }
 
     /// A piece is kept by its place among all of them: an item's body

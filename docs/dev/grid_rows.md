@@ -201,7 +201,7 @@ the plain product name ("Claude", "Slack").
 
 ### `is_document`
 
-True on exactly one row per rendered markdown document — the row
+True on exactly one row per rendered document — the row
 whose `uuid` is the document's `markdown_uuid` — and false on every
 row inside it. Every row a document carries has a `markdown_uuid`, so
 this is not "has a document"; it is "opening this row opens a whole
@@ -362,7 +362,7 @@ out its asides, and an email's mailbox labels are not in it at all.
 Changing what a producer puts there changes every row it wrote, so it
 takes a `RENDER_VERSION` bump to reach a store already rendered.
 
-### `source_id`, and where a document's file is
+### `source_id`
 
 `source_id` is the id of the source a row is filed under: its group's
 id, the directory under the data root, never the display name the
@@ -374,23 +374,11 @@ row (provider `datalib`) under `datalib`
 (`RenderedMarkdown::source_id` empty) is refused, and its render fails
 rather than filing rows under nothing. The `source:` filter compares it.
 
-A row names its document by `markdown_uuid`, and the document's file,
-relative to the data root, is `markdowns.md_path`:
-`<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, where `<xx>` is
-the id's last two characters. Those come from the id's hash, so they
-spread documents over 256 folders; the first characters are a stamp or
-zeros and would not. Every renderer gets the path from one function,
-`datalib_etl_render::grid_index::doc_md_path`, and the store refuses a
-document filed any other way, or a row of another document
-(`misfiled` in `grid_index.rs`).
-
-So a search hit's path *is* its document's id
-(`grid_rows::markdown_uuid_of_path`): the search reads the id out of
-the path and finds the document's rows through `grid_rows_by_markdown`,
-with no lookup by path. Changing the layout is a bump of
-`grid_index::DOC_LAYOUT`, which every source carries in its render
-params, so every source renders again; each document's old file is
-deleted as the new one is written.
+A row names its document by `markdown_uuid`. The document's markdown is
+kept in its source's render store under that id, and nowhere else; the
+store refuses a document holding a row of another document (`misfiled`
+in `grid_index.rs`). A search hit names its document by that id and
+finds the document's rows through `grid_rows_by_markdown`.
 
 ### `byte_size`, `item_count`
 
@@ -471,9 +459,8 @@ render gives a row a location and nothing else. `place:<cell>` and
 `near:<cell>` are ranges of this one indexed column, at any resolution
 (`datalib/backend/h3/README.md`).
 
-**A photo's document has no file.** It has a `markdowns.md_path` like
-any document's, so the id-from-path rule holds, but render never writes
-the file: the `photos` applet draws the photo from the
+**A photo's document has no text.** Its render store keeps its rows and
+no markdown: the `photos` applet draws the photo from the
 `NormalizedPhoto` its document carries in `source_photos`
 (`datalib_photo_schema`), which the index copies the way it copies
 `source_contacts`. `/chat/<uuid>` answers such a document with its
@@ -481,10 +468,10 @@ the file: the `photos` applet draws the photo from the
 applet's card. The search index holds nothing for it, which is why a photo's
 caption is a `caption:` term.
 
-**A document can be in the grid and not in the search index.** One filed with
-`grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and is stored with `markdowns.searchable`
-false, which `unified_grid_and_search_index`'s keyword pass, the embeddings
+**A document can be in the grid and not in the search index.** One its
+renderer hands over with `RenderedMarkdown::searchable` false has its rows
+and opens like any other, and is stored with `markdowns.searchable` false,
+which `unified_grid_and_search_index`'s keyword pass, the embeddings
 and the "without vectors" count read. Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found

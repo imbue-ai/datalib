@@ -83,10 +83,9 @@ fn write_source(
     };
     let mut written = 0;
     for uuid in uuids {
-        let Some(pieces) = store.document(&uuid)? else {
+        let Some(text) = store.document_text(&uuid)? else {
             continue;
         };
-        let text: String = pieces.into_iter().map(|p| p.md).collect();
         match ask.out {
             Some(out) => {
                 let file = file_for(out, source, &uuid);

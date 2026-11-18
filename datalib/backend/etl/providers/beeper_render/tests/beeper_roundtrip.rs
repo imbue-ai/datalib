@@ -16,6 +16,7 @@ use datalib_etl_beeper_render::render::parse::{parse, ParsedBeeper};
 use datalib_etl_beeper_render::render::{ids, render_all, RenderSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_sqlite_mirror::mirror;
 use datalib_schema::edges::EdgeKind;
 
@@ -26,7 +27,6 @@ struct Fixture {
     _dir: tempfile::TempDir,
     beeper: PathBuf,
     raw: PathBuf,
-    out: PathBuf,
 }
 
 impl Fixture {
@@ -38,7 +38,6 @@ impl Fixture {
         let raw = dir.path().join("ingest");
         std::fs::create_dir_all(&raw).expect("mkdir ingest");
         Self {
-            out: dir.path().join("render_markdown"),
             _dir: dir,
             beeper,
             raw,
@@ -70,7 +69,6 @@ impl Fixture {
         let mut docs = Vec::new();
         let summary = render_all(
             &parsed,
-            &self.out,
             "tng",
             &Progress::noop(),
             &mut |d| {
@@ -133,7 +131,7 @@ fn bridged(doc: &RenderedMarkdown, network: &str) -> bool {
 fn md_of(docs: &[RenderedMarkdown], network: &str, needle: &str) -> String {
     docs.iter()
         .filter(|d| bridged(d, network))
-        .map(|d| std::fs::read_to_string(&d.md_path).expect("read rendered markdown"))
+        .map(|d| join(&d.sections))
         .find(|md| md.contains(needle))
         .unwrap_or_else(|| panic!("no {network} document holding {needle:?}"))
 }
@@ -420,8 +418,7 @@ async fn people_are_written_by_their_handles() -> Result<()> {
 }
 
 /// Each person with a handle is a source contact, with their avatar
-/// linked where the blob store holds it when the app had cached it and
-/// nothing written beside the page; a chat with no name of its own is
+/// linked where the blob store holds it when the app had cached it; a chat with no name of its own is
 /// called by its other person.
 #[tokio::test(flavor = "multi_thread")]
 async fn people_are_contacts_with_their_avatars() -> Result<()> {
@@ -431,11 +428,11 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let contact = |network: &str, key: &str| {
         docs.iter()
             .filter(|d| bridged(d, network))
-            .flat_map(|d| d.contacts.iter().map(move |c| (d, c)))
-            .find(|(_, c)| c.key == key)
+            .flat_map(|d| d.contacts.iter())
+            .find(|c| c.key == key)
             .unwrap_or_else(|| panic!("no contact {key} bridged to {network}"))
     };
-    let (doc, worf) = contact("Slack", "slack:T1701D/U0WORF");
+    let worf = contact("Slack", "slack:T1701D/U0WORF");
     assert_eq!(worf.names, ["Worf"]);
     let url = worf.photo_url.as_deref().expect("Worf's avatar is served");
     let hash = url
@@ -444,14 +441,13 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
         .map(|(_, hash)| hash)
         .expect("linked at its blob-store address");
     assert_eq!(hash.len(), 64, "{url}");
-    assert!(!doc.md_path.parent().unwrap().join("blobs").exists());
 
-    let (_, data) = contact("Signal", "tel:+15551234001");
+    let data = contact("Signal", "tel:+15551234001");
     assert!(
         data.photo_url.is_some(),
         "Data's on-device avatar is served"
     );
-    let (_, riker) = contact("Google Chat", "email:riker@enterprise.org");
+    let riker = contact("Google Chat", "email:riker@enterprise.org");
     assert_eq!(riker.photo_url, None, "Riker has no avatar");
 
     let data_md = md_of(&docs, "Signal", DATA_ROOM);

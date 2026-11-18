@@ -360,8 +360,7 @@ mod tests {
     }
 
     /// A document of one row: its uuid, its author's handle, its title.
-    fn doc(root: &std::path::Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
-        let md_path = crate::grid_index::doc_md_path(&root.join("enterprise"), uuid);
+    fn doc(uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Claude)
@@ -378,13 +377,12 @@ mod tests {
             .build()
             .unwrap();
         RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -400,28 +398,22 @@ mod tests {
 
     struct Grid {
         _dir: tempfile::TempDir,
-        root: std::path::PathBuf,
         pool: sqlx::SqlitePool,
     }
 
     impl Grid {
         async fn new() -> Grid {
             let dir = tempfile::tempdir().unwrap();
-            let root = dir.path().to_path_buf();
-            let pool = open_index(&datalib_core::layout::grid_index_db(&root))
+            let pool = open_index(&datalib_core::layout::grid_index_db(dir.path()))
                 .await
                 .unwrap();
-            Grid {
-                _dir: dir,
-                root,
-                pool,
-            }
+            Grid { _dir: dir, pool }
         }
 
         async fn seal(&self, put: &[RenderedMarkdown], remove: &[&str]) {
             let lock = WriteLock::for_index(self.pool.clone());
             for md in put {
-                apply_one(&lock, &self.root, md).await.unwrap();
+                apply_one(&lock, md).await.unwrap();
             }
             for md in remove {
                 delete_markdowns(&lock, &[md.to_string()]).await.unwrap();
@@ -495,11 +487,11 @@ mod tests {
     async fn an_author_that_is_another_handle_names_nobody() {
         let g = Grid::new().await;
         let q = "email:q@continuum.test";
-        let mut forged = doc(&g.root, "c-f", q, "Orders");
+        let mut forged = doc("c-f", q, "Orders");
         forged.rows[0].author = Some("picard@enterprise.org".into());
-        let mut own = doc(&g.root, "c-q", q, "Orders");
+        let mut own = doc("c-q", q, "Orders");
         own.rows[0].author = Some("Q".into());
-        let mut bare = doc(&g.root, "c-b", q, "Orders");
+        let mut bare = doc("c-b", q, "Orders");
         bare.rows[0].author = Some("q@continuum.test".into());
         g.seal(&[forged, own, bare], &[]).await;
         let names: Vec<String> =
@@ -515,8 +507,8 @@ mod tests {
     async fn a_row_is_found_by_its_terms_once_it_is_written() {
         let g = Grid::new().await;
         let (a, b) = (
-            doc(&g.root, "c-a", "email:ann@example.com", "Away team"),
-            doc(&g.root, "c-b", "email:bo@example.com", "Bridge"),
+            doc("c-a", "email:ann@example.com", "Away team"),
+            doc("c-b", "email:bo@example.com", "Bridge"),
         );
         g.seal(&[a, b], &[]).await;
         assert_eq!(
@@ -531,11 +523,11 @@ mod tests {
     #[tokio::test]
     async fn only_the_rows_that_changed_have_their_terms_rewritten() {
         let g = Grid::new().await;
-        let kept = doc(&g.root, "c-k", "email:kit@example.com", "Kept");
+        let kept = doc("c-k", "email:kit@example.com", "Kept");
         g.seal(
             &[
-                doc(&g.root, "c-a", "email:ann@example.com", "Away team"),
-                doc(&g.root, "c-b", "email:bo@example.com", "Bridge"),
+                doc("c-a", "email:ann@example.com", "Away team"),
+                doc("c-b", "email:bo@example.com", "Bridge"),
                 kept.clone(),
             ],
             &[],
@@ -544,8 +536,8 @@ mod tests {
 
         g.seal(
             &[
-                doc(&g.root, "c-a", "email:ann@example.org", "Away team"),
-                doc(&g.root, "c-c", "email:cy@example.com", "Cargo"),
+                doc("c-a", "email:ann@example.org", "Away team"),
+                doc("c-c", "email:cy@example.com", "Cargo"),
                 kept,
             ],
             &["c-b"],
@@ -584,7 +576,7 @@ mod tests {
     async fn a_renders_supplied_terms_are_written_and_follow_its_rerender() {
         use SearchTermKind::{Cc, Label, To};
         let g = Grid::new().await;
-        let mut a = doc(&g.root, "c-a", "email:ann@example.com", "Away team");
+        let mut a = doc("c-a", "email:ann@example.com", "Away team");
         supplied(&mut a, &[(To, "email:bo@example.com"), (Label, "Inbox")]);
         g.seal(&[a.clone()], &[]).await;
         assert_eq!(g.matching("email:bo@example.com").await, [hit("c-a", "to")]);

@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_lightroom_config::LightroomRenderConfig;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Input;
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
@@ -79,10 +79,8 @@ impl SourceRender for LightroomRender {
             .catalog_path
             .as_deref()
             .or(catalog.catalog_path.as_deref());
-        let render_root = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
         let mut emitted = 0usize;
         for image in catalog.images.values() {
-            let md_path = doc_md_path(&render_root, &photo::uuid(ctx.name, &image.id_global));
             let built = photo::build(
                 image,
                 &PhotoContext {
@@ -99,14 +97,12 @@ impl SourceRender for LightroomRender {
                 ..r
             });
             ctx.emit_doc(RenderedMarkdown {
-                section_layout: None,
+                searchable: true,
                 content_hash: None,
                 markdown_uuid: built.photo.uuid.clone(),
                 source_id: ctx.name.to_string(),
                 upstream_cursor: None,
                 bucket_key: Some(BUCKET.to_string()),
-                // Named but never written: the applet draws the photo.
-                md_path,
                 render_version: RENDER_VERSION,
                 rows: row.into_iter().collect(),
                 sections: vec![built.section],

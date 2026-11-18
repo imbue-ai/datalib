@@ -273,7 +273,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     datalib_etl_chat_common::render_all(
         &chat_profile(Provider::Email, "Mail", "Email Thread", "Email"),
         &[riker_email()],
-        root,
         "mail",
         &none,
         &progress,
@@ -283,7 +282,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     datalib_etl_chat_common::render_all(
         &chat_profile(Provider::Slack, "Slack", "Slack Thread", "Slack Message"),
         &[worf_slack(), worf_to_data()],
-        root,
         "slack",
         &none,
         &progress,
@@ -298,7 +296,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
             "Message",
         ),
         &[picard_text()],
-        root,
         "messages",
         &none,
         &progress,
@@ -316,15 +313,8 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
             account: None,
             render_version: 1,
         };
-        datalib_etl_contact_common::render_all(
-            &profile,
-            &[doc],
-            root,
-            "contacts",
-            &progress,
-            &mut keep,
-        )
-        .unwrap();
+        datalib_etl_contact_common::render_all(&profile, &[doc], "contacts", &progress, &mut keep)
+            .unwrap();
     }
 
     let supplied = docs
@@ -342,7 +332,7 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
         .unwrap();
     let lock = WriteLock::for_index(pool.clone());
     for md in &docs {
-        apply_one(&lock, root, md).await.unwrap();
+        apply_one(&lock, md).await.unwrap();
     }
     datalib_etl_render::grid_index::seal(&lock).await.unwrap();
     pool.close().await;

@@ -1,14 +1,13 @@
 //! Render-side attachment behaviour, and the incrementality canary.
 
 use std::collections::HashMap;
-use std::fs;
 
 use datalib_etl::blob_cas::{BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_notion_render::render::parse::ParsedNotion;
 use datalib_etl_notion_render::render::render::render_notion;
+use datalib_etl_render::section::join;
 use serde_json::json;
-use tempfile::tempdir;
 
 const SLOT: &str = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/8b76f77e/image.png";
 
@@ -24,38 +23,23 @@ fn page(id: &str, title: &str) -> serde_json::Value {
 }
 
 /// Renders `parsed` with `blobs` as the pages' bytes, one page a batch;
-/// the file each document was written to.
-fn render(
-    parsed: &ParsedNotion,
-    blobs: &HashMap<String, BlobBundle>,
-    root: &std::path::Path,
-) -> Vec<std::path::PathBuf> {
+/// each document's markdown.
+fn render(parsed: &ParsedNotion, blobs: &HashMap<String, BlobBundle>) -> Vec<String> {
     let mut emitted = Vec::new();
     {
         let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
-            emitted.push(md.md_path);
+            emitted.push(join(&md.sections));
             Ok(())
         };
-        render_notion(
-            parsed,
-            root,
-            "notion",
-            &Progress::noop(),
-            &mut on_doc,
-            blobs,
-            1,
-        )
-        .unwrap();
+        render_notion(parsed, "notion", &Progress::noop(), &mut on_doc, blobs, 1).unwrap();
     }
     emitted
 }
 
 /// An attachment whose bytes are in the CAS is linked at its address
-/// there, not at the upstream slot, and no copy is written beside the
-/// page.
+/// there, not at the upstream slot.
 #[test]
 fn an_archived_attachment_is_linked_in_the_blob_store() {
-    let d = tempdir().unwrap();
     let pid = "11111111-2222-3333-4444-555555555555";
     let hash = "ab".repeat(32);
     let mut bundle = BlobBundle::new();
@@ -80,25 +64,18 @@ fn an_archived_attachment_is_linked_in_the_blob_store() {
         comments: vec![],
         ..Default::default()
     };
-    let page = &render(&parsed, &blobs, d.path())[0];
-
-    let md = fs::read_to_string(page).unwrap();
+    let md = &render(&parsed, &blobs)[0];
     assert!(
         md.contains(&format!("![shot](/data/notion/ingest/blob/{hash})")),
         "body should link the blob store: {md}"
     );
     assert!(!md.contains(SLOT), "upstream slot should be gone: {md}");
-    assert!(
-        !page.parent().unwrap().join("blobs").exists(),
-        "no copy beside the page"
-    );
 }
 
 /// A slot with no bytes in the CAS keeps its upstream URL. A broken
 /// relative path would be strictly worse than a link that still works.
 #[test]
 fn an_unarchived_attachment_keeps_its_upstream_url() {
-    let d = tempdir().unwrap();
     let pid = "22222222-2222-3333-4444-555555555555";
     let parsed = ParsedNotion {
         pages: vec![page(pid, "No blobs")],
@@ -108,8 +85,7 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
         comments: vec![],
         ..Default::default()
     };
-    let page = &render(&parsed, &HashMap::new(), d.path())[0];
-    let md = fs::read_to_string(page).unwrap();
+    let md = &render(&parsed, &HashMap::new())[0];
     assert!(md.contains(SLOT), "unarchived slot must survive: {md}");
 }
 
@@ -118,7 +94,6 @@ fn an_unarchived_attachment_keeps_its_upstream_url() {
 /// something.
 #[test]
 fn a_body_less_page_still_renders() {
-    let d = tempdir().unwrap();
     let pid = "33333333-2222-3333-4444-555555555555";
     let mut p = page(pid, "A row");
     p["properties"]["Status"] = json!({"type": "select", "select": {"name": "Active"}});
@@ -128,7 +103,6 @@ fn a_body_less_page_still_renders() {
         comments: vec![],
         ..Default::default()
     };
-    let page = &render(&parsed, &HashMap::new(), d.path())[0];
-    let md = fs::read_to_string(page).unwrap();
+    let md = &render(&parsed, &HashMap::new())[0];
     assert!(md.contains("| Status | Active |"), "{md}");
 }

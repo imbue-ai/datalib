@@ -201,7 +201,7 @@ with their output captured into the run's log (the Manage tab shows it).
 
 Steps run with the data root as their working directory and write the
 one tree their id names, which is what downstream steps' `inputs` name
-— a new source should ultimately produce rendered markdown under
+— a new source should ultimately keep its rendered documents in
 `<group>/render_markdown`, which the index step's `*/render_markdown`
 then reads with no edit.
 

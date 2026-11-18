@@ -17,7 +17,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use datalib_etl::doltlite_raw::{self, DiffScanSpec};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{build_grid_index, doc_md_path, open_index, RenderedMarkdown};
+use datalib_etl_render::grid_index::{build_grid_index, open_index, RenderedMarkdown};
 use datalib_etl_render::indexed_markdown::{blocking, IndexedMarkdownStore};
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, Unparsed};
 use datalib_schema::edges::EdgeRow;
@@ -323,11 +323,7 @@ impl RenderProcessor for SynthRender {
             let Some(doc) = docs.get(&id) else {
                 continue;
             };
-            let root = datalib_etl::layout::render_markdown_root(ctx.root, ctx.name);
-            let md_path = doc_md_path(&root, &id);
-            std::fs::create_dir_all(md_path.parent().expect("a folder"))?;
-            std::fs::write(&md_path, &doc.content)?;
-            ctx.emit_doc(to_rendered(&id, doc, md_path, version))?;
+            ctx.emit_doc(to_rendered(&id, doc, version))?;
         }
         ctx.consumed(pin.commit());
         Ok(format!("rendered {rendered}"))
@@ -370,7 +366,7 @@ async fn load_model(pool: &SqlitePool) -> Result<Model> {
     Ok(model)
 }
 
-fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedMarkdown {
+fn to_rendered(id: &str, doc: &Doc, version: u32) -> RenderedMarkdown {
     let rows = doc
         .rows
         .iter()
@@ -405,16 +401,17 @@ fn to_rendered(id: &str, doc: &Doc, md_path: PathBuf, version: u32) -> RenderedM
         })
         .collect();
     RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
         upstream_cursor: None,
         bucket_key: Some(id.to_string()),
-        md_path,
         render_version: version,
         rows,
-        sections: Vec::new(),
+        sections: vec![datalib_etl_render::section::Section::unkeyed(
+            doc.content.clone(),
+        )],
         front: Default::default(),
         edges,
         contacts: Vec::new(),
@@ -642,12 +639,11 @@ fn docs_of(rendered: &[RenderedMarkdown]) -> BTreeMap<String, Doc> {
         .collect()
 }
 
-/// Documents, the `.md` files on disk, and each document's render version.
-type StoreView = (BTreeMap<String, Doc>, BTreeSet<String>, Vec<u32>);
+/// Documents, each document's text as the store spells it, and each
+/// document's render version.
+type StoreView = (BTreeMap<String, Doc>, BTreeMap<String, String>, Vec<u32>);
 
-/// The render store at one commit, as documents, plus the `.md` files
-/// on disk, which must be exactly the documents' — a deleted document
-/// left on disk stays searchable (`remove_documents`' reason to exist).
+/// The render store at one commit, as documents and their text.
 fn render_store_at(data_root: &Path, commit: Option<&str>) -> StoreView {
     try_render_store_at(data_root, commit).expect("a readable commit")
 }
@@ -657,22 +653,11 @@ fn try_render_store_at(data_root: &Path, commit: Option<&str>) -> Option<StoreVi
     let root = datalib_etl::layout::render_markdown_root(data_root, SOURCE);
     let store = IndexedMarkdownStore::open_for_reading(&root, commit).expect("open for reading")?;
     let pin = store.pin().unwrap().clone();
-    let rendered = store.documents(data_root, &pin).expect("documents");
+    let rendered = store.documents(&pin).expect("documents");
     let versions = rendered.iter().map(|d| d.render_version).collect();
+    let texts = store.document_texts().expect("document texts");
     store.close();
-    let files = std::fs::read_dir(&root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|shard| std::fs::read_dir(shard.path()).ok())
-        .flatten()
-        .flatten()
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            name.strip_suffix(".md").map(str::to_string)
-        })
-        .collect();
-    Some((docs_of(&rendered), files, versions))
+    Some((docs_of(&rendered), texts, versions))
 }
 
 async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
@@ -859,17 +844,20 @@ impl SynthRender {
 }
 
 fn assert_store_is(world: &World, want: &BTreeMap<String, Doc>, ctx: &str) {
-    let (got, files, _) = render_store_at(&world.data_root, None);
+    let (got, texts, _) = render_store_at(&world.data_root, None);
     let d = diff(want, &got);
     assert!(
         d.is_empty(),
         "{ctx}: render store ≠ cold render:\n{d}\nhistory:\n{}",
         world.history.join("\n")
     );
-    let want_files: BTreeSet<String> = want.keys().cloned().collect();
+    let want_texts: BTreeMap<String, String> = want
+        .iter()
+        .map(|(id, d)| (id.clone(), d.content.clone()))
+        .collect();
     assert_eq!(
-        files, want_files,
-        "{ctx}: the .md files on disk are not the documents'"
+        texts, want_texts,
+        "{ctx}: the store does not spell each document as it was rendered"
     );
 }
 

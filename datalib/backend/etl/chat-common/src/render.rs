@@ -3,8 +3,6 @@
 //! `on_doc_complete` callback.
 
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
 
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
@@ -84,9 +82,9 @@ pub fn layout_params_with(own: serde_json::Value) -> serde_json::Value {
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
-use datalib_etl_render::section::{join, msg_div_open_with, Section};
+use datalib_etl_render::section::{msg_div_open_with, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -173,21 +171,13 @@ pub use datalib_etl_render::inputs::{Bucket, Buckets};
 pub fn render_all(
     profile: &RenderProfile,
     chats: &[NormalizedChat],
-    out_dir: &Path,
     source_id: &str,
     blobs_by_chat: &HashMap<String, BlobBundle>,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let docs_total = chats.iter().map(|c| c.buckets.len()).sum();
-    let mut renderer = ChatRenderer::new(
-        profile,
-        out_dir,
-        source_id,
-        docs_total,
-        progress,
-        on_doc_complete,
-    );
+    let mut renderer = ChatRenderer::new(profile, source_id, docs_total, progress, on_doc_complete);
     let empty_bundle = BlobBundle::default();
     for chat in chats {
         let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
@@ -202,7 +192,6 @@ pub fn render_all(
 /// has been built, and holds one chat's bodies in memory, not all.
 pub struct ChatRenderer<'a> {
     profile: &'a RenderProfile,
-    out_dir: &'a Path,
     source_id: &'a str,
     progress: &'a Progress,
     on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -213,7 +202,6 @@ impl<'a> ChatRenderer<'a> {
     /// `docs_total` is announced as the queue straight away.
     pub fn new(
         profile: &'a RenderProfile,
-        out_dir: &'a Path,
         source_id: &'a str,
         docs_total: usize,
         progress: &'a Progress,
@@ -222,7 +210,6 @@ impl<'a> ChatRenderer<'a> {
         progress.set_length(Some(docs_total as u64));
         Self {
             profile,
-            out_dir,
             source_id,
             progress,
             on_doc_complete,
@@ -244,7 +231,6 @@ impl<'a> ChatRenderer<'a> {
                 self.profile,
                 &shown,
                 doc,
-                self.out_dir,
                 self.source_id,
                 bundle,
                 &mut *self.on_doc_complete,
@@ -357,18 +343,10 @@ fn render_one(
     profile: &RenderProfile,
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
-    out_dir: &Path,
     source_id: &str,
     blobs: &BlobBundle,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<(usize, usize)> {
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
-        &doc.markdown_uuid,
-    );
-    let page_dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-
     // Point each attachment at its bytes. Mutates a local copy of `doc` —
     // the same chat may be re-rendered into another bucket later.
     let mut resolved_doc = link_attachments(doc, blobs);
@@ -378,7 +356,6 @@ fn render_one(
 
     let chat_title = chat_heading(chat);
     let sections = render_markdown(profile, chat, doc, &chat_title);
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows = build_grid_rows(profile, chat, doc, &chat_title, source_id, &mut problems);
@@ -395,13 +372,12 @@ fn render_one(
     let reactions_rendered = doc.items.iter().map(|i| i.reactions.len()).sum();
 
     on_doc_complete(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: doc.markdown_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(chat.chat_uuid.clone()),
-        md_path,
         render_version: profile.render_version,
         rows,
         sections,
@@ -1506,7 +1482,7 @@ mod tests {
         rows
     }
     use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
-    use datalib_etl_render::section::{msg_div_open, Kept};
+    use datalib_etl_render::section::{join, msg_div_open, Kept};
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -1708,12 +1684,10 @@ mod tests {
         let mut chat = whole(mk_chat());
         chat.containers = vec![DataNodeRow::new("", "channel", "src", "Slack channel").place()];
         chat.filed_under = vec![vec![DataNodeRow::new("", "label", "src", "Label").place()]];
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &test_profile(),
             &[chat],
-            out.path(),
             "test",
             &HashMap::new(),
             &Progress::noop(),
@@ -2087,9 +2061,22 @@ mod tests {
         chat.buckets[0].items[0].message_uuid = String::new();
         let mut a = Vec::new();
         let mut b = Vec::new();
-        let args = ("Test", "x.md", "test_source");
-        build_grid_rows(&profile, &chat, &chat.buckets[0], args.0, args.2, &mut a);
-        build_grid_rows(&profile, &chat, &chat.buckets[0], args.0, args.2, &mut b);
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "test_source",
+            &mut a,
+        );
+        build_grid_rows(
+            &profile,
+            &chat,
+            &chat.buckets[0],
+            "Test",
+            "test_source",
+            &mut b,
+        );
         assert_eq!(a[0].problem_uuid, b[0].problem_uuid);
     }
 
@@ -2237,12 +2224,10 @@ mod tests {
             source_url: None,
             ref_id: None,
         }];
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &test_profile(),
             &[chat],
-            out.path(),
             "test",
             &HashMap::new(),
             &Progress::noop(),
@@ -2253,7 +2238,7 @@ mod tests {
         )
         .unwrap();
         let rows = serde_json::to_string(&docs[0].rows).unwrap();
-        let md = std::fs::read_to_string(out.path().join(&docs[0].md_path)).unwrap();
+        let md = join(&docs[0].sections);
         for text in [&md, &rows] {
             assert!(
                 !text.contains(['\u{202E}', '\u{2067}', '\u{2069}']),

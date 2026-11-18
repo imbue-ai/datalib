@@ -101,13 +101,6 @@ struct Row {
     markdown_uuid: Option<String>,
 }
 
-/// Whether a document is filed for the grid alone, so the search index has no text of it.
-fn is_unindexed(md_path: &str) -> bool {
-    md_path
-        .split('/')
-        .any(|part| part == datalib_runtime::layout::UNINDEXED_DIR)
-}
-
 /// Every grid row, and each document's text: what the search index draws
 /// of it from its render store, the same call the keyword pass makes.
 async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<String, String>) {
@@ -118,11 +111,11 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
         source_id: String,
         markdown_uuid: Option<String>,
         is_document: bool,
-        md_path: Option<String>,
+        searchable: Option<bool>,
         group_id: Option<String>,
     }
     let read: Vec<Read> = sqlx::query_as(
-        "SELECT g.uuid, g.source_id, g.markdown_uuid, g.is_document, m.md_path, \
+        "SELECT g.uuid, g.source_id, g.markdown_uuid, g.is_document, m.searchable, \
                 m.source_id AS group_id \
            FROM grid_rows g LEFT JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid",
     )
@@ -133,14 +126,13 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
     let mut rows = HashMap::new();
     let mut searched: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for r in read {
-        if let (true, Some(md), Some(path), Some(group)) =
-            (r.is_document, &r.markdown_uuid, &r.md_path, &r.group_id)
+        // A document kept for the grid alone has no text in the search.
+        if let (true, Some(md), Some(true), Some(group)) =
+            (r.is_document, &r.markdown_uuid, r.searchable, &r.group_id)
         {
-            if !is_unindexed(path) {
-                // The group whose store holds it, which for a storage
-                // report is not the source its row is filed under.
-                searched.entry(group.clone()).or_default().push(md.clone());
-            }
+            // The group whose store holds it, which for a storage report
+            // is not the source its row is filed under.
+            searched.entry(group.clone()).or_default().push(md.clone());
         }
         rows.insert(
             r.uuid,

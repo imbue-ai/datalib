@@ -291,10 +291,8 @@ impl Lookups {
 /// hears how each page ended before the next is read. On a full walk
 /// under a label filter, a first page names the threads the filter
 /// keeps out, which were never loaded.
-#[allow(clippy::too_many_arguments)]
 pub fn render_store(
     store: &EmailStore,
-    root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     size: PageSize,
@@ -329,7 +327,6 @@ pub fn render_store(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        root,
         source_id,
         store.threads,
         progress,
@@ -361,11 +358,9 @@ pub fn render_store(
 }
 
 /// Renders `docs` as one page, their `.eml`s already in their bundles.
-#[allow(clippy::too_many_arguments)]
 pub fn render_all(
     shared: &Shared,
     docs: &[EmailThreadBucket],
-    root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     progress: &Progress,
@@ -373,14 +368,8 @@ pub fn render_all(
 ) -> Result<Rendered> {
     let lookups = Lookups::new(shared);
     let profile = profile();
-    let mut renderer = ChatRenderer::new(
-        &profile,
-        root,
-        source_id,
-        docs.len(),
-        progress,
-        on_doc_complete,
-    );
+    let mut renderer =
+        ChatRenderer::new(&profile, source_id, docs.len(), progress, on_doc_complete);
     render_page(
         &lookups,
         docs,
@@ -1809,12 +1798,10 @@ mod tree_tests {
             accounts: vec![(ACCT.into(), json!({"name": ACCT}))],
             mailboxes,
         };
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &shared,
             &[bucket],
-            out.path(),
             "mail",
             None,
             &Progress::noop(),

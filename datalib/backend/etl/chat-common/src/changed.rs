@@ -3,7 +3,6 @@
 //! outcome the processor declares.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -87,9 +86,8 @@ pub struct RenderOutcome {
     pub buckets: Buckets,
 }
 
-/// Where a pass writes and what it tells the step as it goes.
+/// Which source a pass renders and what it tells the step as it goes.
 pub struct RenderTarget<'a> {
-    pub out_root: &'a Path,
     pub source_id: &'a str,
     pub progress: &'a Progress,
     pub on_doc_complete: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,

@@ -210,6 +210,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/contacts:datalib_contacts",
+        "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/runtime:datalib_runtime",

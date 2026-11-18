@@ -3,7 +3,7 @@
 ```
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
-<data_root>/<group>/render_markdown/…             the rendered tree + its render store
+<data_root>/<group>/render_markdown/…             its render store: every document + its rows
 <data_root>/<group>/<function>/problems.sqlite    the problems of a step with no store of
                                                   its own (plain SQLite; `etl/README.md`
                                                   § "Problems stay in the step that found them")

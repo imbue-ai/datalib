@@ -11,6 +11,7 @@ use datalib_etl_claude::synthesize::ClaudeSynth;
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_claude_render::render::render::render_all;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
@@ -78,7 +79,6 @@ async fn a_cowork_task_renders_as_a_conversation() {
     let mut docs = Vec::new();
     render_all(
         &parsed,
-        out.path(),
         "claude",
         Default::default(),
         &datalib_etl::progress::Progress::noop(),
@@ -97,7 +97,7 @@ async fn a_cowork_task_renders_as_a_conversation() {
                 .any(|r| r.upstream_id.as_deref() == Some(ROSTER))
         })
         .expect("the Cowork task rendered a document");
-    let md = std::fs::read_to_string(&doc.md_path).unwrap();
+    let md = join(&doc.sections);
     assert!(
         !md.contains("system-reminder"),
         "what the app attached to a prompt stays out of the page"

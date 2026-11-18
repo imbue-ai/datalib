@@ -66,7 +66,6 @@ impl SourceRender for ClaudeRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
-            ctx.root,
             ctx.name,
             crate::render::render::RenderOptions {
                 max_project_doc_bytes: self.max_project_doc_bytes,

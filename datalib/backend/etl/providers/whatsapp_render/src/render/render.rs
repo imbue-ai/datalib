@@ -64,7 +64,6 @@ pub fn render_all(
     chats: &[NormalizedChat],
     commit: &str,
     raw_dir: &Path,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
@@ -128,7 +127,6 @@ pub fn render_all(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        out_dir,
         source_id,
         to_render.iter().map(|c| c.buckets.len()).sum(),
         progress,
@@ -426,7 +424,7 @@ mod tests {
             .expect("commit_run");
         pool.close().await;
 
-        let (docs, _, _) = render_capture(&raw_dir, &td.path().join("out"), None).await;
+        let (docs, _, _) = render_capture(&raw_dir, None).await;
         assert!(docs.is_empty(), "{docs:?}");
     }
 
@@ -444,7 +442,6 @@ mod tests {
         let td = tempfile::tempdir().expect("tempdir");
         let raw_dir = td.path().join("raw");
         std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
-        let out_dir = td.path().join("out");
         let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
 
         let pool = open_doltlite(&db_path, MSGSTORE_DDL)
@@ -484,7 +481,7 @@ mod tests {
 
         // First render — cold start (no cursor). Both chats should
         // render, and the pass hands back the commit it consumed.
-        let (docs1, _, first_cursor) = render_capture(&raw_dir, &out_dir, None).await;
+        let (docs1, _, first_cursor) = render_capture(&raw_dir, None).await;
         assert_eq!(
             docs1.len(),
             2,
@@ -494,7 +491,7 @@ mod tests {
 
         // Second render — no DB changes since first cursor. dolt_diff
         // should report zero changed chats → zero docs rendered.
-        let (docs2, _, _) = render_capture(&raw_dir, &out_dir, Some(&first_cursor)).await;
+        let (docs2, _, _) = render_capture(&raw_dir, Some(&first_cursor)).await;
         assert!(
             docs2.is_empty(),
             "no-op rerun should render zero docs, got {docs2:?}"
@@ -516,8 +513,7 @@ mod tests {
         pool.close().await;
 
         // Third render — only alice's chat should be in the changed set.
-        let (docs3, gone3, third_cursor) =
-            render_capture(&raw_dir, &out_dir, Some(&first_cursor)).await;
+        let (docs3, gone3, third_cursor) = render_capture(&raw_dir, Some(&first_cursor)).await;
         assert_eq!(
             docs3.len(),
             1,
@@ -556,7 +552,7 @@ mod tests {
             .expect("doltlite returned no hash on delete");
         pool.close().await;
 
-        let (docs4, gone4, _) = render_capture(&raw_dir, &out_dir, Some(&third_cursor)).await;
+        let (docs4, gone4, _) = render_capture(&raw_dir, Some(&third_cursor)).await;
         assert!(
             docs4.is_empty(),
             "a deletion re-renders nothing, got {docs4:?}"
@@ -580,8 +576,7 @@ mod tests {
             .await
             .expect("migrate");
 
-        let out_dir = td.path().join("out");
-        let (docs, gone, cursor) = render_capture(&raw_dir, &out_dir, None).await;
+        let (docs, gone, cursor) = render_capture(&raw_dir, None).await;
         assert!(docs.is_empty(), "rendered {docs:?}");
         assert!(gone.is_empty(), "reported gone {gone:?}");
         assert_eq!(
@@ -604,7 +599,7 @@ mod tests {
         seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
         commit_run(&pool, "first mirror").await.expect("commit_run");
         pool.close().await;
-        let (docs, _, _) = render_capture(&raw_dir, &out_dir, cursor.as_deref()).await;
+        let (docs, _, _) = render_capture(&raw_dir, cursor.as_deref()).await;
         assert_eq!(docs.len(), 1, "rendered {docs:?}");
     }
 
@@ -739,8 +734,7 @@ mod tests {
         commit_run(&pool, "seed").await.expect("commit_run");
         pool.close().await;
 
-        let out_dir = td.path().join("out");
-        let (docs, _, _) = render_capture(&raw_dir, &out_dir, None).await;
+        let (docs, _, _) = render_capture(&raw_dir, None).await;
         let chat = super::super::ids::chat("test", "picard@s.whatsapp.net").uuid;
         assert_eq!(docs, [chat], "one document, the chat's own");
     }
@@ -781,11 +775,9 @@ mod tests {
     /// commit the pass consumed.
     async fn render_capture(
         raw_dir: &Path,
-        out_dir: &Path,
         cursor: Option<&str>,
     ) -> (Vec<String>, Vec<String>, Option<String>) {
         let raw_dir = raw_dir.to_path_buf();
-        let out_dir = out_dir.to_path_buf();
         let cursor = cursor.map(str::to_string);
         // parse + render are sync but call into tokio::task::block_in_place,
         // so we have to push the whole thing off the test's reactor thread.
@@ -812,7 +804,6 @@ mod tests {
                 &parsed.chats,
                 &parsed.commit,
                 &raw_dir,
-                &out_dir,
                 "test",
                 &progress,
                 range,

@@ -50,7 +50,7 @@ per-message fragments, in
 - **`elements`**: how many more of each element the page has than the
   same path draws for the text `Engage.`.
 - **`finds`**: the phrase's words, in order and side by side, in the
-  `.md` file split into words as a keyword index splits them, and in
+  document's markdown split into words as a keyword index splits them, and in
   the grid's text
   (`plain_text`).
 - **Always**: the next message shows whole, outside any code, as the

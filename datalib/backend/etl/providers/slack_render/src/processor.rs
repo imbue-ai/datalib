@@ -73,7 +73,7 @@ impl SourceRender for SlackRender {
             }
             let parsed = parse_raw_json_dir(raw_path)?;
             let mut on_doc = |md| ctx.emit_doc(md);
-            let summary = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+            let summary = render_all(&parsed, ctx.name, ctx.progress, &mut on_doc)
                 .context("slack render_all")?;
             ctx.declare_buckets(&summary.buckets)?;
             return Ok("rendered".into());
@@ -91,7 +91,6 @@ impl SourceRender for SlackRender {
         };
         let rendered = render_store(
             &store,
-            ctx.root,
             ctx.name,
             ctx.page_size,
             ctx.progress,

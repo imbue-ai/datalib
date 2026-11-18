@@ -10,7 +10,7 @@ rust_library(
         "src/data_nodes.rs",
         "src/filings.rs",
         "src/sections.rs",
-        "src/drawn_pieces.rs",
+        "src/drawings.rs",
         "src/search_terms.rs",
         "src/markdowns.rs",
         "src/providers.rs",

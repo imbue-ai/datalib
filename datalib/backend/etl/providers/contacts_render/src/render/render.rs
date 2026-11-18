@@ -2,7 +2,6 @@
 //! [`datalib_etl_contact_common`] renderer.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use anyhow::Result;
 
@@ -70,7 +69,6 @@ fn groups_by_member(contacts: &[ParsedContact]) -> Groups<'_> {
 /// rendered ones with what they read — for the processor to declare.
 pub fn render_all(
     parsed: &ParsedContacts,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
@@ -129,14 +127,7 @@ pub fn render_all(
     let (groups, people): (Vec<_>, Vec<_>) = contacts.into_iter().partition(|(g, _)| *g);
     for (kind, cards) in [("Contact", people), ("Contact group", groups)] {
         let cards: Vec<ContactDoc> = cards.into_iter().map(|(_, c)| c).collect();
-        let summary = cc_render_all(
-            &profile(kind),
-            &cards,
-            out_dir,
-            source_id,
-            progress,
-            on_doc_complete,
-        )?;
+        let summary = cc_render_all(&profile(kind), &cards, source_id, progress, on_doc_complete)?;
         buckets.extend(summary.buckets);
     }
     Ok(buckets)

@@ -26,6 +26,7 @@ fn thread_uuid(account_id: &str, thread_id: &str) -> String {
 }
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 
 /// The part behind each part address `md` links, as the server answers
 /// it from the `.eml`s in the blob store at `cas`. Panics on an address
@@ -59,14 +60,12 @@ fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
 /// Renders `store` with `size`, returning each document and each page's end.
 pub(crate) fn render_paged(
     store: &EmailStore,
-    root: &std::path::Path,
     size: PageSize,
 ) -> (Vec<RenderedMarkdown>, Vec<PageEnd>) {
     let mut docs = Vec::new();
     let mut pages = Vec::new();
     render_store(
         store,
-        root,
         "star-trek-mbox",
         Some(OutlinkFormat::Gmail),
         size,
@@ -382,12 +381,11 @@ async fn render_only_labels_filters_to_thread_subset() {
     assert_eq!(loaded, expected, "the walk loads only the kept threads");
 
     let store = open_sent();
-    let tmp = tempfile::tempdir().unwrap();
     let one_a_page = PageSize {
         buckets: 1,
         bytes: 1,
     };
-    let (docs, pages) = render_paged(&store, tmp.path(), one_a_page);
+    let (docs, pages) = render_paged(&store, one_a_page);
     store.close();
 
     let rendered: HashSet<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
@@ -427,13 +425,12 @@ async fn star_trek_mbox_renders_through_render_all() {
         "a page loaded `.eml` bytes before the render asked for them"
     );
 
-    let tmp = tempfile::tempdir().unwrap();
     // One thread a page and one a batch, so every page boundary is crossed.
     let one_a_page = PageSize {
         buckets: 1,
         bytes: 1,
     };
-    let (docs, pages) = render_paged(&store, tmp.path(), one_a_page);
+    let (docs, pages) = render_paged(&store, one_a_page);
     store.close();
     let mut declared: Vec<String> = pages
         .iter()
@@ -450,27 +447,20 @@ async fn star_trek_mbox_renders_through_render_all() {
     // One rendered document per thread.
     assert_eq!(docs.len(), 6);
 
-    // chat-common owns the layout; locate each thread's page by its
-    // markdown_uuid (= thread_uuid) from the captured RenderedMarkdowns.
-    let page_for = |tuid: &str| -> std::path::PathBuf {
-        docs.iter()
+    // Each thread's page, found by its markdown_uuid (= thread_uuid).
+    let page_for = |tuid: &str| -> String {
+        let doc = docs
+            .iter()
             .find(|d| d.markdown_uuid == tuid)
-            .unwrap_or_else(|| panic!("no rendered doc for {tuid}"))
-            .md_path
-            .clone()
+            .unwrap_or_else(|| panic!("no rendered doc for {tuid}"));
+        join(&doc.sections)
     };
 
     // The briefing thread links its attachment inside the stored `.eml`,
-    // at an address the server finds it by, and writes nothing beside
-    // the page.
+    // at an address the server finds it by.
     let cas = datalib_etl::blob_cas::cas_path_for(&db_path);
     let briefing_tuid = thread_uuid("enterprise", BRIEFING_THREAD);
-    let briefing = page_for(&briefing_tuid);
-    assert!(
-        !briefing.parent().unwrap().join("blobs").exists(),
-        "a blobs/ was written"
-    );
-    let md = std::fs::read_to_string(&briefing).unwrap();
+    let md = page_for(&briefing_tuid);
     let parts = parts_linked(&md, &cas).await;
     assert!(
         parts
@@ -493,7 +483,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     // Risa promo thread prefers the HTML body — `**jewel of the
     // Alpha Quadrant**` appears in the htmd output.
     let risa_tuid = thread_uuid("enterprise", "19b9251e8001a2b3");
-    let risa_md = std::fs::read_to_string(page_for(&risa_tuid)).unwrap();
+    let risa_md = page_for(&risa_tuid);
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
         "expected html-rendered body in risa thread"
@@ -508,12 +498,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     // address. Regression test for the Fastmail case where the inline
     // image is absent from `attachments` but present in the .eml MIME tree.
     let bridge_tuid = thread_uuid("enterprise", "19b97af32801a2b4");
-    let bridge = page_for(&bridge_tuid);
-    let bridge_md = std::fs::read_to_string(&bridge).unwrap();
-    assert!(
-        !bridge.parent().unwrap().join("blobs").exists(),
-        "a blobs/ was written"
-    );
+    let bridge_md = page_for(&bridge_tuid);
     let images: Vec<_> = parts_linked(&bridge_md, &cas)
         .await
         .into_iter()
@@ -567,14 +552,13 @@ async fn an_email_keeps_the_offset_its_date_was_written_in() {
     )
     .expect("open")
     .expect("a committed store");
-    let out = tempfile::tempdir().unwrap();
-    let (docs, _) = render_paged(&store, out.path(), PageSize::DEFAULT);
+    let (docs, _) = render_paged(&store, PageSize::DEFAULT);
     store.close();
 
     let [doc] = docs.as_slice() else {
         panic!("expected one document, got {}", docs.len());
     };
-    let md = std::fs::read_to_string(&doc.md_path).unwrap();
+    let md = join(&doc.sections);
     assert!(
         md.contains("class=\"msg-ts\" datetime=\"2026-01-05T09:00:00+01:00\""),
         "the header lost the email's offset:\n{md}"

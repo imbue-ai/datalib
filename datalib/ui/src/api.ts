@@ -784,7 +784,7 @@ export async function fetchGroups<Row = SearchRow>(
 }
 
 export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
-  // One UUID per rendered `.md` file — no disambiguation needed.
+  // A document's id names it alone — no disambiguation needed.
   return getJson<ChatResponse>(
     `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
     signal,

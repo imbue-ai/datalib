@@ -69,7 +69,7 @@ tree does for a person.
 | word | means |
 |---|---|
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`, `facebook:name/Will Riker`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
-| **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the grid index and the search index read them from there. "Renders again" means those stored documents are rewritten. |
+| **render** | the pipeline's render step: it writes a source's documents (their markdown) and grid rows into its render store during a sync, and the grid index and the search index read them from there. "Renders again" means those stored documents are rewritten. |
 | **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |

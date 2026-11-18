@@ -78,11 +78,9 @@ fn render(raw: &Path, range: RawRange<'_>) -> (Option<HashSet<String>>, Option<S
     let store = datalib_etl_slack_render::render::open(raw, "src", range)
         .unwrap()
         .expect("a committed store");
-    let out = tempdir().unwrap();
     let mut thread = None;
     datalib_etl_slack_render::render::render::render_store(
         &store,
-        out.path(),
         "src",
         datalib_etl_render::pages::PageSize {
             buckets: 1,

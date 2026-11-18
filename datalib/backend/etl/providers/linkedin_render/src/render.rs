@@ -68,7 +68,7 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render every message-shaped table under `raw_dir` into `out_dir`.
+/// Render every message-shaped table in the raw store under `raw_dir`.
 /// No-op if the raw store is absent; each individual table is skipped if
 /// it's missing or empty. Conversations from different feeds keep
 /// distinct ids (namespaced by table) so they never collide.
@@ -79,7 +79,6 @@ pub fn render(
 ) -> Result<FeedOutcome> {
     let Source {
         raw_dir,
-        out_dir,
         name: source_id,
         account,
         owner: _,
@@ -133,7 +132,6 @@ pub fn render(
     let s = cc_render_all(
         &profile(),
         &chats,
-        out_dir,
         source_id,
         &blobs,
         progress,

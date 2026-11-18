@@ -9,11 +9,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_etl_render::section::SpelledPiece;
-use datalib_schema::markdowns::SectionSpan;
+use datalib_etl_render::section::SpelledSection;
 use datalib_unified_grid_and_search_index::repo::DocumentStore;
 
-/// One document spelled out: its text, and where each piece of it lies.
+use super::body_sections::SectionSpan;
+
+/// One document spelled out: its text, and where each section of it lies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spelled {
     pub text: String,
@@ -21,15 +22,15 @@ pub struct Spelled {
 }
 
 impl Spelled {
-    fn of(pieces: Vec<SpelledPiece>) -> Self {
-        let layout = pieces
+    fn of(sections: Vec<SpelledSection>) -> Self {
+        let layout = sections
             .iter()
             .map(|p| SectionSpan {
                 uuid: p.uuid.clone(),
                 bytes: p.md.len(),
             })
             .collect();
-        let text = pieces.into_iter().map(|p| p.md).collect();
+        let text = sections.into_iter().map(|p| p.md).collect();
         Self { text, layout }
     }
 }
@@ -58,8 +59,8 @@ pub fn spell(
             continue;
         };
         let read = documents.iter().try_for_each(|&document| {
-            if let Some(pieces) = store.document(document)? {
-                out.insert(document.to_string(), Spelled::of(pieces));
+            if let Some(sections) = store.document(document)? {
+                out.insert(document.to_string(), Spelled::of(sections));
             }
             anyhow::Ok(())
         });

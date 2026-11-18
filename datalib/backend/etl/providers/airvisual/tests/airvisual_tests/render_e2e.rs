@@ -11,8 +11,9 @@ use datalib_etl_airvisual::ingest::schema_raw::{
 use datalib_etl_airvisual::ingest::{db_path_for, RawDb};
 use datalib_etl_airvisual_render::render::parse::parse;
 use datalib_etl_airvisual_render::render::render::{document_uuid, render_all};
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use sqlx::sqlite::SqlitePool;
 
 const STANZA: &str = "air-cucina";
@@ -88,11 +89,7 @@ async fn seed(pool: &SqlitePool, rows: &[Seed], devices: &[(&str, &str)]) {
 /// Parse at `pin` (HEAD when `None`) and render, the way the processor
 /// does once the driver has decided the page is stale. Returns the
 /// emitted documents and the commit the pass read at.
-fn render_once(
-    raw_path: &Path,
-    root: &Path,
-    pin: Option<&str>,
-) -> (Vec<RenderedMarkdown>, Option<String>) {
+fn render_once(raw_path: &Path, pin: Option<&str>) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
     let range = RawRange {
         pin,
@@ -103,15 +100,14 @@ fn render_once(
         emitted.push(md);
         Ok(())
     };
-    render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
+    render_all(&parsed, STANZA, &Progress::noop(), &mut on_doc).unwrap();
     (emitted, parsed.head.clone())
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     let td = tempfile::tempdir().unwrap();
-    let root = td.path();
-    let raw_path = root.join(STANZA).join("raw");
+    let raw_path = td.path().join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
 
@@ -145,7 +141,7 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     )
     .await;
 
-    let (emitted, cursor) = render_once(&raw_path, root, None);
+    let (emitted, cursor) = render_once(&raw_path, None);
     assert_eq!(emitted.len(), 1, "the whole store renders as one document");
     let doc = &emitted[0];
     assert_eq!(doc.markdown_uuid, document_uuid(STANZA));
@@ -164,13 +160,7 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         2
     );
 
-    let page_dir = root.join(STANZA).join("render_markdown");
-    let page = doc_md_path(&page_dir, &emitted[0].markdown_uuid);
-    let md = std::fs::read_to_string(&page).unwrap();
-    assert!(
-        !page_dir.join("plots").exists(),
-        "charts are drawn from the time-series store, not written as pages"
-    );
+    let md = join(&doc.sections);
 
     // Only the quantities with data get a chart, each naming the time
     // series it draws, in legend order. The sensor-off sample keeps
@@ -220,11 +210,11 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
 
     // ---- second render, nothing appended, read at the same commit ----
     let cursor = cursor.expect("a successful render pins the commit it consumed");
-    let (emitted, cursor_2) = render_once(&raw_path, root, Some(&cursor));
+    let (emitted, cursor_2) = render_once(&raw_path, Some(&cursor));
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
     assert_eq!(emitted.len(), 1);
     assert_eq!(
-        std::fs::read_to_string(&page).unwrap(),
+        join(&emitted[0].sections),
         md_1,
         "an unchanged store must render the same page, so the store records no change"
     );
@@ -242,7 +232,7 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
         &[],
     )
     .await;
-    let (emitted, cursor_3) = render_once(&raw_path, root, None);
+    let (emitted, cursor_3) = render_once(&raw_path, None);
     assert_ne!(
         cursor_3,
         Some(cursor),
@@ -255,15 +245,14 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_empty_store_renders_a_page_without_plots() {
     let td = tempfile::tempdir().unwrap();
-    let root = td.path();
-    let raw_path = root.join(STANZA).join("raw");
+    let raw_path = td.path().join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
     seed(db.pool(), &[], &[("4133WV2JB9Z", "Cucina")]).await;
 
-    let (emitted, _) = render_once(&raw_path, root, None);
+    let (emitted, _) = render_once(&raw_path, None);
     assert_eq!(emitted.len(), 1);
-    let md = std::fs::read_to_string(&emitted[0].md_path).unwrap();
+    let md = join(&emitted[0].sections);
     assert!(md.contains("nothing to plot"), "{md}");
     assert!(md.contains("no samples yet"), "{md}");
     assert!(charts(&md).is_empty(), "no samples, no chart");

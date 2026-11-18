@@ -44,7 +44,7 @@ impl SourceRender for AirvisualRender {
             .with_context(|| format!("airvisual parse {}", raw_path.display()))?;
         ctx.declare_bucket(&page, &inputs())?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+        let s = render_all(&parsed, ctx.name, ctx.progress, &mut on_doc)
             .context("airvisual render_all")?;
         if let Some(head) = parsed.head.as_deref() {
             ctx.consumed(head);

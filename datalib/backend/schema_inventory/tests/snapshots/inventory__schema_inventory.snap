@@ -1975,11 +1975,9 @@ markdowns
     created_at
     modified_at
     item_count
-    md_path
     upstream_cursor
     renderer_version
     bucket_key
-    section_layout
     content_hash
     front
     searchable

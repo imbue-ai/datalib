@@ -16,8 +16,9 @@ use datalib_etl_garmin_render::render::render::{
     activity_uuid, daily_log_uuid, document_uuid, listings_uuid, metric_page_uuid, render_all,
 };
 use datalib_etl_garmin_render::render::time_series;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
 
@@ -56,11 +57,7 @@ async fn ingest(raw: &Path, playback: &Path) {
     db.close().await;
 }
 
-fn render_once(
-    raw: &Path,
-    root: &Path,
-    pin: Option<&str>,
-) -> (Vec<RenderedMarkdown>, Option<String>) {
+fn render_once(raw: &Path, pin: Option<&str>) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
     let range = RawRange {
         pin,
@@ -71,7 +68,7 @@ fn render_once(
         emitted.push(md);
         Ok(())
     };
-    render_all(&parsed, root, SOURCE, &Progress::noop(), &mut on_doc).unwrap();
+    render_all(&parsed, SOURCE, &Progress::noop(), &mut on_doc).unwrap();
     (emitted, parsed.head.clone())
 }
 
@@ -83,7 +80,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     std::fs::create_dir_all(&raw).unwrap();
     ingest(&raw, &root.join("playback")).await;
 
-    let (emitted, cursor) = render_once(&raw, root, None);
+    let (emitted, cursor) = render_once(&raw, None);
     let titles: Vec<&str> = emitted
         .iter()
         .map(|d| d.rows.iter().find(|r| r.is_document).unwrap())
@@ -134,8 +131,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     let device_row = doc.rows.iter().find(|r| r.kind == "Garmin Device").unwrap();
     assert_eq!(device_row.channel.as_deref(), Some("Forerunner 265"));
 
-    let page_dir = root.join(SOURCE).join("render_markdown");
-    let md = std::fs::read_to_string(doc_md_path(&page_dir, &document_uuid(SOURCE))).unwrap();
+    let md = join(&doc.sections);
     assert!(md.contains(">Garmin — Jean-Luc Picard</h1>"), "{md}");
     assert!(md.contains("**77.6 kg**"), "{md}");
     let chart =
@@ -143,10 +139,6 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     assert!(
         md.contains(&chart(time_series::weight_chart(SOURCE))),
         "{md}"
-    );
-    assert!(
-        !page_dir.join("plots").exists(),
-        "charts are drawn from the time-series store, not written as pages"
     );
     assert!(
         md.contains("| <time datetime=\"2369-04-14T"),
@@ -161,8 +153,13 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         "commit messages must not reach the page:\n{md}"
     );
 
-    let sleep_page = doc_md_path(&page_dir, &metric_page_uuid(SOURCE, Family::Sleep));
-    let sleep = std::fs::read_to_string(sleep_page).unwrap();
+    let sleep = join(
+        &emitted
+            .iter()
+            .find(|d| d.markdown_uuid == metric_page_uuid(SOURCE, Family::Sleep))
+            .unwrap()
+            .sections,
+    );
     assert!(
         sleep.contains("**<time datetime=\"2369-04-14\">Mon Apr 14th, 2369</time>:** Sleep score 84 · Asleep 7 h 20 min"),
         "{sleep}"
@@ -184,7 +181,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     let activity_pages: Vec<String> = emitted
         .iter()
         .filter(|d| d.rows.iter().any(|r| r.kind == "Garmin Activity"))
-        .map(|d| std::fs::read_to_string(&d.md_path).unwrap())
+        .map(|d| join(&d.sections))
         .collect();
     let run_chart = chart(time_series::activity_chart(SOURCE, "17010413001"));
     assert_eq!(
@@ -241,7 +238,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
         run.markdown_uuid,
         activity_uuid(SOURCE, "17010413001", Some(12600081000000))
     );
-    let run_md = std::fs::read_to_string(&run.md_path).unwrap();
+    let run_md = join(&run.sections);
     assert!(run_md.contains("| Pace | 5:00 /km |"), "{run_md}");
     assert!(run_md.contains("| Device | Forerunner 265 |"), "{run_md}");
 
@@ -271,7 +268,7 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     // Unchanged store, read at the same commit: identical rows, so the
     // render store records no change.
     let cursor = cursor.expect("a successful render pins the commit it consumed");
-    let (again, cursor_2) = render_once(&raw, root, Some(&cursor));
+    let (again, cursor_2) = render_once(&raw, Some(&cursor));
     assert_eq!(cursor_2.as_deref(), Some(cursor.as_str()));
     let texts = |docs: &[RenderedMarkdown]| {
         docs.iter()

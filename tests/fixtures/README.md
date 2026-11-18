@@ -182,9 +182,9 @@ random id (`store_generation`) so a reader can tell a rebuilt index
 from the one it read, and doltlite stamps two of its own commits with
 the wall clock, so every commit hash after them moves
 ([`doltlite.md`](../../docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)).
-The rendered markdown is stable too, except the "Store" section of
-`yolink/render_markdown/index.md`, which reports the store's commit log.
-Test the rows, not the files. To check stability yourself, build into
+The rendered documents are stable too, except the "Store" section of
+YoLink's page, which reports the store's commit log. Test the rows, not
+the files. To check stability yourself, build into
 two fresh roots more than a second apart: two builds in the same second
 can agree by luck.
 

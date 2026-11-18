@@ -169,8 +169,7 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// A hit's rows are its document's, found by the id its path names, and
-/// no other document's.
+/// A hit's rows are its document's, and no other document's.
 #[tokio::test]
 async fn a_hit_finds_the_rows_of_its_document_and_no_others() {
     let db_path = unique_db_path();
@@ -190,10 +189,8 @@ async fn a_hit_finds_the_rows_of_its_document_and_no_others() {
     .await;
     commit(&writer, "rows").await;
 
-    let hit = "calendar/render_markdown/12/week-12.md";
-    let id = datalib_schema::grid_rows::markdown_uuid_of_path(hit).unwrap();
     let refs = repo
-        .grid_row_refs_for_documents(&[id.to_string()])
+        .grid_row_refs_for_documents(&["week-12".to_string()])
         .await
         .unwrap();
     let uuids: Vec<&str> = refs.iter().map(|r| r.uuid.as_str()).collect();
@@ -242,9 +239,9 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap();
     insert_rows(&writer, &[chat_row("c-1", "chats"), message]).await;
     sqlx::query(
-        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, \
          renderer_version, title, searchable) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1','Test conv',1)",
+         VALUES ('c-1','test','claude','chat','test-v1','Test conv',1)",
     )
     .execute(&writer)
     .await
@@ -954,9 +951,9 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
     sqlx::query(
-        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
+        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, \
          renderer_version, title, searchable) \
-         VALUES ('md-1','slack','slack','thread','slack/md-1.md','test-v1','Away team',1)",
+         VALUES ('md-1','slack','slack','thread','test-v1','Away team',1)",
     )
     .execute(&writer)
     .await

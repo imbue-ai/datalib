@@ -260,9 +260,9 @@ back into other apps.
 
 A mirror you can't leave is just another silo, so the exits are plain:
 
-- **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
-  per conversation or document, and `datalib-step markdown <data_root>
-  --out <folder>` writes the same files anywhere you like.
+- **Markdown** — `datalib-step markdown <data_root> --out <folder>`
+  writes every conversation or document as an ordinary `.md` file, one
+  each, from the render stores that keep them.
 - **Search** — `datalib-applet search <data_root> '<query>'` answers as
   the app's search box does, as JSON, with no server: for scripts and
   agents.

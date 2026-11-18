@@ -87,7 +87,6 @@ impl SourceRender for SignalRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(
             &parsed,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut on_doc,

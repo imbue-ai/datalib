@@ -30,7 +30,7 @@ source's record, the contacts app — is [`contacts.md`](contacts.md).
 ## The link
 
 **A chip is a markdown link whose href the app knows how to resolve.**
-In a `.md` file it is an ordinary link, so any markdown viewer shows a
+In the markdown it is an ordinary link, so any markdown viewer shows a
 named link with a tooltip; datalib recognizes the href and draws a
 chip. Nothing about how the chip looks is written into the file. The
 link carries only what the producer knew when it wrote it:

@@ -443,11 +443,12 @@ from every source's render store and the `unified_grid_and_search_index` applet 
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 
-## Rendered markdown is write-only
+## Rendered markdown is never parsed back
 
-The render step emits markdown; the backend serves it **verbatim**, as
-the render store spells it (the viewer and search quotes read the store,
-not the `.md` files), and never parses it back. Structured fields come from
+The render step hands each document over as markdown, section by
+section, and its render store keeps it; there are no `.md` files. The
+backend serves a document **verbatim**, as the store spells it, and
+never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing

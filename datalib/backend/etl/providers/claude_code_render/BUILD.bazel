@@ -34,5 +34,4 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_claude_code_render",
     edition = "2021",
-    deps = ["@datalib_crates//:tempfile"],
 )

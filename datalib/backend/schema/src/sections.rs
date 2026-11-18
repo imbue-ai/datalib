@@ -1,7 +1,7 @@
 // What each piece of a rendered document says, in order, kept apart from
 // how it is drawn, so the viewer, an export and the search index can each
 // draw it their own way (docs/dev/plans/documents_to_blocks.md
-// §"Store the body, format on read"); `drawn_pieces` keeps how the
+// §"Store the body, format on read"); `drawings` keeps how the
 // document drew it. Held by the render store alone; the grid index never
 // copies it.
 

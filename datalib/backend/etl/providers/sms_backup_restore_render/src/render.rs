@@ -78,7 +78,6 @@ pub use datalib_etl_chat_common::RenderOutcome;
 /// of at most `blob_bytes` at a time.
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -101,7 +100,6 @@ pub fn render(
         range,
         blob_bytes,
         RenderTarget {
-            out_root,
             source_id,
             progress,
             on_doc_complete,

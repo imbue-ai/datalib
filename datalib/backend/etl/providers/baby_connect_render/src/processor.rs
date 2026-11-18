@@ -13,7 +13,7 @@ use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcess
 
 use datalib_time::NamedZone;
 
-use crate::render::{render_child, RENDER_VERSION};
+use crate::render::{build, RENDER_VERSION};
 use crate::store;
 
 pub fn plan_render(
@@ -79,7 +79,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -
     for key in todo {
         ctx.progress.inc(1);
         let inputs = Inputs::default();
-        let md = render_child(ctx.root, ctx.name, &store, key, zone, &inputs)?;
+        let md = build(ctx.name, &store, key, zone, &inputs);
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for {key}"))?;
         buckets.push(Bucket {

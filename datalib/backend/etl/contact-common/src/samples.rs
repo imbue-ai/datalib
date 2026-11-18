@@ -15,6 +15,8 @@ use datalib_etl::progress::Progress;
 use datalib_handle::Handle;
 use datalib_schema::providers::Provider;
 
+use datalib_etl_render::section::join;
+
 use crate::render::{render_all, ContactRenderProfile};
 use crate::types::ContactDoc;
 
@@ -158,18 +160,19 @@ pub fn sample_contacts() -> Vec<ContactDoc> {
     ]
 }
 
-/// Render every sample into `out_dir` as a source named `samples`, and
-/// return the `.md` paths in corpus order.
+/// Render every sample, write each as `<id>.md` into `out_dir`, and
+/// return the paths in corpus order.
 pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
     let mut paths = Vec::new();
     render_all(
         &sample_profile(),
         &sample_contacts(),
-        out_dir,
         "samples",
         &Progress::default(),
         &mut |doc| {
-            paths.push(doc.md_path.display().to_string());
+            let path = out_dir.join(format!("{}.md", doc.markdown_uuid));
+            std::fs::write(&path, join(&doc.sections))?;
+            paths.push(path.display().to_string());
             Ok(())
         },
     )?;

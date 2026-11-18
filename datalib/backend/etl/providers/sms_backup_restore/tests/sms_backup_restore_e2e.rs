@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_sms_backup_restore::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_sms_backup_restore_render::render;
 
@@ -97,8 +98,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // `render` opens the store itself, so hand the file over first:
         // one doltlite file takes one connection at a time.
         db.close().await;
-        let out_dir = tmp.path().join("out");
-        fs::create_dir_all(&out_dir)?;
         let mut docs: Vec<RenderedMarkdown> = Vec::new();
         {
             let mut on_doc = |d: RenderedMarkdown| {
@@ -107,7 +106,6 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
             };
             render::render(
                 &raw_dir,
-                &out_dir,
                 "sms_backup_restore",
                 &Progress::noop(),
                 &mut on_doc,
@@ -167,7 +165,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
 
         let all_md: String = docs
             .iter()
-            .map(|d| fs::read_to_string(&d.md_path).unwrap_or_default())
+            .map(|d| join(&d.sections))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -933,7 +931,6 @@ async fn payloads(db: &RawDb) -> Result<Vec<(String, String)>> {
 fn render_from(
     rt: &tokio::runtime::Runtime,
     raw_dir: &std::path::Path,
-    out_dir: &std::path::Path,
     cursor: Option<&str>,
 ) -> Result<(Vec<RenderedMarkdown>, Option<String>)> {
     let nothing_stale = std::collections::HashSet::<String>::new();
@@ -947,7 +944,6 @@ fn render_from(
     let outcome = rt.block_on(async {
         render::render(
             raw_dir,
-            out_dir,
             "sms_backup_restore",
             &Progress::noop(),
             &mut |d: RenderedMarkdown| {
@@ -963,7 +959,7 @@ fn render_from(
 
 /// The messages a document draws unread, by their wrappers.
 fn unread_in(doc: &RenderedMarkdown) -> Vec<String> {
-    let md = fs::read_to_string(&doc.md_path).unwrap();
+    let md = join(&doc.sections);
     md.split(r#"<div id="m-"#)
         .skip(1)
         .filter(|s| s.split('>').next().unwrap().contains(" unread"))
@@ -1013,7 +1009,7 @@ fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
         anyhow::Ok(())
     })?;
 
-    let (docs, _) = render_from(&rt, &raw_dir, &tmp.path().join("out"), None)?;
+    let (docs, _) = render_from(&rt, &raw_dir, None)?;
     let unread: Vec<String> = docs.iter().flat_map(unread_in).collect();
     assert_eq!(unread.len(), 1, "{unread:?}");
     assert!(unread[0].contains("Make it so."), "{}", unread[0]);
@@ -1051,11 +1047,7 @@ fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
 #[test]
 fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
     let tmp = tempfile::tempdir()?;
-    let (input, raw_dir, out) = (
-        tmp.path().join("in"),
-        tmp.path().join("raw"),
-        tmp.path().join("out"),
-    );
+    let (input, raw_dir) = (tmp.path().join("in"), tmp.path().join("raw"));
     let cache = tmp.path().join("fp.sqlite");
     write_backup(&input, "2369041512000", &backup_xml("0")?)?;
     let rt = tokio::runtime::Runtime::new()?;
@@ -1075,7 +1067,7 @@ fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
     };
     fetch()?;
     let before = version()?;
-    let (_, cursor) = render_from(&rt, &raw_dir, &out, None)?;
+    let (_, cursor) = render_from(&rt, &raw_dir, None)?;
     let cursor = cursor.expect("a rendered commit");
 
     write_backup(&input, "2369041612000", &backup_xml("1")?)?;
@@ -1094,7 +1086,7 @@ fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
         anyhow::Ok(())
     })?;
 
-    let (docs, _) = render_from(&rt, &raw_dir, &out, Some(&cursor))?;
+    let (docs, _) = render_from(&rt, &raw_dir, Some(&cursor))?;
     let redrawn: Vec<&str> = docs.iter().map(conversation_of).collect();
     assert_eq!(redrawn, ["Jean-Luc Picard"]);
     assert!(
