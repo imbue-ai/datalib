@@ -293,10 +293,13 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
 
 - **The step asks the cache what is missing**, as it does locally, and
   writes those prompts to the driver's stdin as it reads the documents;
-  the driver cuts them into slices of 4,096, a minute or two of a T4
-  each.
+  the driver cuts them into slices. A slice is what is owed spread over
+  every Sandbox allowed, but at least 256 prompts, so a Sandbox's start
+  is not most of what it is paid for, and at most 4,096, a minute or two
+  of a T4 (`slice_for` in `src/modal.rs`).
 - **One Sandbox per slice**, from the `-cuda` image with a GPU (a T4;
-  ten at once), under the Modal App `datalib-embed`. The Sandbox idles
+  at most the config's `[modal] max_sandboxes` at once, 100 when it
+  names none), under the Modal App `datalib-embed`. The Sandbox idles
   (`sleep`); the driver writes the slice to `/tmp/datalib-embed/in.jsonl`
   with `filesystem.writeText`, runs `/opt/datalib/datalib-step
   embed-prompts --models-dir /root/.cache/qmd/models` (the model the
@@ -305,7 +308,7 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   stdin or stdout, which on a GPU lost answers (§ "Measured on Modal").
   `DATALIB_MODAL_IMAGE`, `DATALIB_MODAL_GPU` and
   `DATALIB_MODAL_SANDBOXES` change the image, the GPU and how many run
-  at once, for measuring. Splitting one embed across many cheap GPUs costs the same
+  at once, for measuring; the last wins over the config's. Splitting one embed across many cheap GPUs costs the same
   GPU-seconds as one and divides the wait (§ "Measured on Modal").
 - **Each Sandbox's vectors go into the inference cache as it returns**,
   checked line by line against what it was sent: a line that answers a

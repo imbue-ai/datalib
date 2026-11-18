@@ -83,6 +83,10 @@ pub struct DagConfig {
     /// defaults.
     #[serde(default)]
     pub render_pages: Option<RenderPages>,
+    /// What every `embed` that sends its chunks to Modal shares
+    /// (`[modal]`). Omitted means the step's own defaults.
+    #[serde(default)]
+    pub modal: Option<ModalSettings>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -223,6 +227,17 @@ impl RenderPages {
             blob_mb: side(blob_mb)?,
         })
     }
+}
+
+/// `[modal]`, as a person writes it: at most `max_sandboxes` Modal
+/// Sandboxes at once for one `embed` step's chunks. Omitted means the
+/// step's default. The runner forwards the number as it is, and the step
+/// owns what a Sandbox does with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModalSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_sandboxes: Option<u64>,
 }
 
 /// One `[[locks]]` entry: a named lock steps hold while they run, so that
@@ -1031,6 +1046,8 @@ struct RawConfig {
     disk_space: Option<DiskFloor>,
     #[serde(default)]
     render_pages: Option<RenderPages>,
+    #[serde(default)]
+    modal: Option<ModalSettings>,
     /// Retired with qmd; a file naming either still loads, and is warned
     /// at the line ([`RETIRED_TOP_KEYS`]).
     #[serde(default)]
@@ -2428,6 +2445,7 @@ fn entries_of(text: &str) -> Entries {
             log_level: raw.log_level,
             disk_space: raw.disk_space,
             render_pages: raw.render_pages,
+            modal: raw.modal,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2628,6 +2646,7 @@ impl DagConfig {
             log_level: None,
             disk_space: None,
             render_pages: None,
+            modal: None,
         }
     }
 }

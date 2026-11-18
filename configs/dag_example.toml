@@ -101,6 +101,15 @@ disk_usage_days = 30
 buckets = 500
 blob_mb = 64
 
+# What every `embed` step that sends its chunks to Modal shares (an
+# `embed` sends them only when its params set
+# `embed_on_modal_from_n_chunks`). `max_sandboxes` is how many Modal
+# Sandboxes, each a GPU, one step runs at once; it spreads what it owes
+# over them, at least 256 chunks to a Sandbox. Omit it for the default,
+# which is this. Your Modal account's own limit may hold it to fewer.
+[modal]
+max_sandboxes = 100
+
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
 # and the directory every step under it writes into — so changing it
