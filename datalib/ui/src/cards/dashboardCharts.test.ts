@@ -89,7 +89,7 @@ describe("a step's charts", () => {
           {
             name: "modal_cost_estimate_micro_usd_total",
             labels: "gpu=T4",
-            points: [{ at: at(1), value: 611_141 }],
+            points: [{ at: at(1), value: 780_336 }],
           },
           { name: "modal_sandboxes_total", labels: "gpu=T4", points: [{ at: at(1), value: 3 }] },
         ],
@@ -98,7 +98,7 @@ describe("a step's charts", () => {
     expect(cost.title).toBe("modal cost estimate");
     expect(cost.unit).toBe("micro_usd");
     expect(sandboxes.unit).toBe("count");
-    expect(formatMicroUsd(611_141)).toBe("$0.61");
+    expect(formatMicroUsd(780_336)).toBe("$0.78");
     expect(formatMicroUsd(1_640)).toBe("$0.0016");
     expect(formatMicroUsd(0)).toBe("$0.00");
   });

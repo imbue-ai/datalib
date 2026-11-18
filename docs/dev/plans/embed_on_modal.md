@@ -280,19 +280,18 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   and by GPU `modal_sandboxes_total`, `modal_sandboxes_failed_total`,
   `modal_sandbox_seconds_total` and `modal_cost_estimate_micro_usd_total`.
   The estimate is each Sandbox's life priced at Modal's list price for
-  its GPU plus Modal's minimum of an eighth of a core and 128 MiB, at the
-  Sandbox's rate (`modal::estimated_micro_usd`). The table in
-  `src/modal.rs` was read from modal.com/pricing on 2026-11-18 (a T4
-  Sandbox at that minimum: $0.61 an hour) and has to follow the page. It
-  runs low, not high: the CPU and memory a Sandbox uses past the minimum
-  are billed and not counted, nor is a Sandbox the driver could not end
-  (a SIGKILL). The GPU is most of the price. _To check_ against the bill
-  on the first live run, which also measures what a Sandbox uses; if
-  that is much more than the minimum, a reservation of what it uses
-  would make the estimate exact at no extra cost.
+  its GPU plus an assumed core and 2 GiB of use, at the Sandbox's rate
+  (`modal::estimated_micro_usd`). That use is set high on purpose, since
+  nothing has measured it and a person choosing a threshold is better
+  served by a figure that errs high: a T4 Sandbox comes to $0.78 an hour,
+  of which the GPU is $0.59. The table in `src/modal.rs` was read from
+  modal.com/pricing on 2026-11-18 and has to follow the page. A Sandbox
+  the driver could not end (a SIGKILL) goes uncounted. _To check_
+  against the bill on the first live run, which also measures what a
+  Sandbox uses, so the assumption can be set from that.
 - **The run ends with one line** on its Manage row's Status (a hover)
   and in its log: "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 6
-  min 0 s of Sandbox time, about $0.06 at list price". A failed run puts
+  min 0 s of Sandbox time, about $0.08 at list price". A failed run puts
   the same words in its error instead, since the row shows the error.
 - **Nothing about the remote work is stored** but how much of it there
   was (the metrics above): no Sandbox to go back to. An interrupted run loses
