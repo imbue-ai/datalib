@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# The search index that replaces qmd's storage: keyword postings and
-# embeddings keyed by document, holding no text; its tables live in the
-# grid index's file
+# The search index that replaces qmd's storage: keyword postings in the
+# grid index's file, and each document's chunks and their embeddings in
+# the inference cache, holding no text
 # (docs/dev/plans/search_index_from_ram.md).
 rust_library(
     name = "datalib_search_index",
@@ -82,8 +82,10 @@ rust_test(
 )
 
 # The TNG fixture's search index (`//tests/fixtures:ingested_tng_search_index`
-# and `:ingested_tng_inference_cache`): every chunk's prompt, then the
-# vectors `//datalib/backend/embedder:embed_prompts` made of them, cached.
+# and `:ingested_tng_inference_cache`): every document cut into chunks as
+# `embed` cuts them, with each chunk's prompt, then the vectors
+# `//datalib/backend/embedder:embed_prompts` made of them, cached beside
+# the chunks.
 rust_binary(
     name = "search_prompts",
     srcs = ["tools/search_prompts.rs"],

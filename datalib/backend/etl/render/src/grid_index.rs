@@ -2983,13 +2983,7 @@ mod shape_tests {
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
         let search = datalib_search_index::Index::open(&db).await.unwrap();
-        search
-            .put(
-                &[search_doc("md-1")],
-                &datalib_search_index::chunk::four_bytes_a_token,
-            )
-            .await
-            .unwrap();
+        search.put(&[search_doc("md-1")]).await.unwrap();
         search.close().await;
         sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&pool)
@@ -3026,7 +3020,7 @@ mod shape_tests {
         }
         {
             let docs = [search_doc("md-2")];
-            let put = search.put(&docs, &datalib_search_index::chunk::four_bytes_a_token);
+            let put = search.put(&docs);
             tokio::pin!(put);
             let waited =
                 tokio::time::timeout(std::time::Duration::from_millis(500), &mut put).await;

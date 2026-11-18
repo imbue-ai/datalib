@@ -857,7 +857,6 @@ async fn run_function(
                 data_root,
                 &env,
                 &params,
-                models_dir,
                 Some(now),
                 emitter,
                 &control.stop,

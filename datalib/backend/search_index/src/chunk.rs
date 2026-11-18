@@ -22,7 +22,7 @@
 //! is. A budget in bytes let a chunk of links, codes or encoded data run
 //! past the model's window, which then read only its first part.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub const MAX_TOKENS: usize = 900;
 pub const OVERLAP_TOKENS: usize = 135;
@@ -67,40 +67,70 @@ pub struct Prompted {
     pub prompt: String,
 }
 
-/// Each chunk of a document's sections with its prompt: the chunk's text,
-/// after the document's head (a page's facts line) and the lead of the
-/// item it starts inside, so a piece cut from the middle of a long page
-/// still says what the page is, and one from a long message who wrote it
-/// and when. The document's text opens with its head, so the first chunk
-/// is not given it twice, and a chunk holding the head alone is dropped:
-/// every other chunk says it. The keyword pass files chunks by these
-/// hashes and the embed pass embeds these prompts, so the two never
-/// disagree.
+/// Each chunk of a document's sections with its prompt: [`chunks`] then
+/// [`prompts`]. The embed step cuts and files chunks with this, and later
+/// shows the model what [`prompts`] makes of the spans it filed, so the
+/// two never disagree.
 pub fn prompted(
     title: &str,
     head: Option<&str>,
     sections: &[crate::IndexSection],
     ends: TokenEnds,
 ) -> Result<Vec<Prompted>> {
+    let cut = chunks(head, sections, ends)?;
+    prompts(title, head, sections, &cut)
+}
+
+/// Where a document's chunks fall, counted in `ends`'s tokens: the one
+/// part of chunking that needs the model's tokenizer. A chunk holding
+/// the document's head alone is dropped: every other chunk says it.
+pub fn chunks(
+    head: Option<&str>,
+    sections: &[crate::IndexSection],
+    ends: TokenEnds,
+) -> Result<Vec<Chunk>> {
     let texts: Vec<&str> = sections.iter().map(|s| s.text.as_str()).collect();
     let items: Vec<bool> = sections.iter().map(|s| s.lead.is_some()).collect();
     let whole = texts.concat();
-    let mut starts = Vec::with_capacity(texts.len());
-    let mut at = 0;
-    for t in &texts {
-        starts.push(at);
-        at += t.len();
-    }
     let head = head.map(str::trim).filter(|h| !h.is_empty());
     let mut chunks = chunks_within(&texts, &items, MAX_TOKENS, OVERLAP_TOKENS, ends)?;
     if chunks.len() > 1 {
         chunks.retain(|c| Some(whole[c.start..c.end].trim()) != head);
     }
-    Ok(chunks
-        .into_iter()
-        .map(|chunk| {
-            let span = &whole[chunk.start..chunk.end];
-            let lead = sections[chunk.first_section]
+    Ok(chunks)
+}
+
+/// Each of `chunks` with its prompt: the chunk's text, after the
+/// document's head (a page's facts line) and the lead of the item it
+/// starts inside, so a piece cut from the middle of a long page still
+/// says what the page is, and one from a long message who wrote it and
+/// when. The document's text opens with its head, so the first chunk is
+/// not given it twice. No tokenizer: a span filed earlier is shown to
+/// the model by this alone. Fails on a span the sections do not hold.
+pub fn prompts(
+    title: &str,
+    head: Option<&str>,
+    sections: &[crate::IndexSection],
+    chunks: &[Chunk],
+) -> Result<Vec<Prompted>> {
+    let whole: String = sections.iter().map(|s| s.text.as_str()).collect();
+    let mut starts = Vec::with_capacity(sections.len());
+    let mut at = 0;
+    for s in sections {
+        starts.push(at);
+        at += s.text.len();
+    }
+    let head = head.map(str::trim).filter(|h| !h.is_empty());
+    chunks
+        .iter()
+        .map(|&chunk| {
+            let span = whole
+                .get(chunk.start..chunk.end)
+                .with_context(|| format!("a chunk at {chunk:?} the document does not hold"))?;
+            let section = sections
+                .get(chunk.first_section)
+                .with_context(|| format!("a chunk at {chunk:?} the document does not hold"))?;
+            let lead = section
                 .lead
                 .as_deref()
                 .filter(|_| chunk.start > starts[chunk.first_section]);
@@ -110,13 +140,13 @@ pub fn prompted(
                 .flatten()
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            Prompted {
+            Ok(Prompted {
                 chunk,
                 hash: chunk_hash(title, &text),
                 prompt: crate::prompt::document(&text, Some(title)),
-            }
+            })
         })
-        .collect())
+        .collect()
 }
 
 /// `items[i]`: section `i` starts an item, which breaks a chunk as a
@@ -306,6 +336,44 @@ mod tests {
             assert_eq!(text.matches(lead.as_str()).count(), 1, "chunk {i}");
             assert_eq!(p.hash, chunk_hash("Ten Forward", text));
         }
+    }
+
+    /// What an embed shows the model is made from the spans it filed, with
+    /// no tokenizer: every prompt, head and lead included, is the one
+    /// the cut made, and a span the document does not hold is refused.
+    #[test]
+    fn a_filed_span_makes_the_prompt_it_was_cut_with() {
+        let head = "Source: subspace relay";
+        let lead = "Will Riker — Tue 3 Mar 2026 14:05".to_string();
+        let sections = vec![
+            crate::IndexSection {
+                uuid: None,
+                text: format!("{head}\n\n"),
+                lead: None,
+            },
+            crate::IndexSection {
+                uuid: Some("m1".into()),
+                text: format!(
+                    "{lead}\n\n{}",
+                    "The away team reports all clear. ".repeat(300)
+                ),
+                lead: Some(lead.clone()),
+            },
+        ];
+        let cut = prompted("Ten Forward", Some(head), &sections, &four_bytes_a_token).unwrap();
+        assert!(cut.len() > 2, "{} chunks", cut.len());
+        let spans: Vec<Chunk> = cut.iter().map(|p| p.chunk).collect();
+        assert_eq!(
+            prompts("Ten Forward", Some(head), &sections, &spans).unwrap(),
+            cut
+        );
+        let past_the_end = Chunk {
+            start: 0,
+            end: 1 << 20,
+            first_section: 0,
+            last_section: 1,
+        };
+        assert!(prompts("Ten Forward", Some(head), &sections, &[past_the_end]).is_err());
     }
 
     fn page_text(prompt: &str) -> &str {

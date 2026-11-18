@@ -3,14 +3,18 @@ index, with the `unified_grid_and_search_index` step run over them by the real
 `datalib-step`, as a sync runs it: the grid is already loaded, so the
 step's keyword pass over every source is what it writes.
 
-Writes the grid index with the search index's tables in it, and every
-chunk's prompt (`search_prompts`), which `:ingested_tng_vectors` embeds.
-The embedding is its own action so that Bazel reruns it only when a
-prompt changes: this one's inputs carry wall-clock stamps and change on
-every run (tar_rendered.py).
+Writes the grid index with the search index's tables in it; then, as
+each source's `embed` cuts them (`search_prompts`), every document's
+chunks, filed in an inference cache with no vectors yet, and every
+chunk's prompt, which `:ingested_tng_vectors` embeds. The step is given
+no model and may not fetch one: the keyword pass needs none. The
+embedding is its own action so that Bazel reruns it only when a prompt
+changes: this one's inputs carry wall-clock stamps and change on every
+run (tar_rendered.py).
 
 Usage: build_search_index.py <datalib-step> <search_prompts> <model.gguf>
        <rendered.tar> <backend_index.sqlite> <out grid> <out prompts>
+       <out chunks>
 """
 
 import os
@@ -23,7 +27,16 @@ from pathlib import Path
 
 
 def main() -> int:
-    step, prompts_bin, model, rendered_tar, grid, out_grid, out_prompts = sys.argv[1:]
+    (
+        step,
+        prompts_bin,
+        model,
+        rendered_tar,
+        grid,
+        out_grid,
+        out_prompts,
+        out_chunks,
+    ) = sys.argv[1:]
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "root"
         root.mkdir()
@@ -40,14 +53,6 @@ def main() -> int:
         db.parent.mkdir(parents=True)
         shutil.copyfile(grid, db)
         os.chmod(db, 0o644)
-        # Where the steps look for the model, which they read the tokenizer
-        # from to cut the chunks; fetching is off, so a missing one fails.
-        models = root / "unified_grid_and_search_index" / "models"
-        models.mkdir()
-        os.symlink(
-            os.path.abspath(model),
-            models / "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
-        )
         groups = sorted(
             p.name for p in root.iterdir() if (p / "render_markdown").is_dir()
         )
@@ -61,11 +66,15 @@ def main() -> int:
             "DATALIB_MODELS_NO_FETCH": "1",
         }
         subprocess.run([step], env=env, check=True)
-        subprocess.run([prompts_bin, str(root), model, out_prompts], check=True)
-        # One file, no write-ahead log beside it.
-        with sqlite3.connect(db) as conn:
-            conn.execute("PRAGMA journal_mode=DELETE")
-        shutil.copyfile(db, out_grid)
+        chunks = Path(tmp) / "chunks.sqlite"
+        subprocess.run(
+            [prompts_bin, str(root), model, out_prompts, str(chunks)], check=True
+        )
+        # Each one file, no write-ahead log beside it.
+        for made, out in [(db, out_grid), (chunks, out_chunks)]:
+            with sqlite3.connect(made) as conn:
+                conn.execute("PRAGMA journal_mode=DELETE")
+            shutil.copyfile(made, out)
     print(f"[build_search_index] {len(groups)} sources indexed", flush=True)
     return 0
 

@@ -72,36 +72,12 @@ fn render_inputs(inputs: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The step, with the embedding model's tokenizer put in place and opened
-/// when a source is searched: the keyword pass cuts chunks in its tokens.
+/// The step. It needs no embedding model: its keyword pass is SQLite's
+/// FTS5, and each source's `embed` cuts the chunks the model reads.
 pub async fn run(
     data_root: &Path,
     env: &StepEnv,
     params: &Params,
-    models_dir: Option<std::path::PathBuf>,
-    now: Option<&str>,
-    emitter: &Emitter,
-    stop: &StopFlag,
-) -> Result<Vec<OutputClaim>> {
-    let render_inputs = render_inputs(&env.inputs);
-    let searched = params.searched(&crate::index_steps::groups_from_inputs(&render_inputs));
-    let model = match searched.is_empty() {
-        true => None,
-        false => Some(crate::index_steps::open_model(data_root, models_dir).await?),
-    };
-    let ends = |text: &str| match &model {
-        Some((_, tokenizer)) => tokenizer.ends(text),
-        None => anyhow::bail!("no source is searched, so no tokenizer was opened"),
-    };
-    run_with(data_root, env, params, &ends, now, emitter, stop).await
-}
-
-/// [`run`] with `ends` the tokenizer's: a test's stand-in, or the model's.
-pub(crate) async fn run_with(
-    data_root: &Path,
-    env: &StepEnv,
-    params: &Params,
-    ends: datalib_search_index::chunk::TokenEnds<'_>,
     now: Option<&str>,
     emitter: &Emitter,
     stop: &StopFlag,
@@ -178,12 +154,19 @@ pub(crate) async fn run_with(
 
     datalib_etl_render::grid_index::close_index(pool).await?;
 
+    let carried = crate::search_index::carry_chunks(data_root).await?;
+    if carried > 0 {
+        tracing::info!(
+            documents = carried,
+            "the chunks the keyword index filed moved into the inference cache"
+        );
+    }
     let searched = params.searched(&sources);
     for source in &searched {
         if stop.requested() {
             break;
         }
-        let done = crate::search_index::update_keywords(data_root, source, ends, &progress, stop)
+        let done = crate::search_index::update_keywords(data_root, source, &progress, stop)
             .await
             .with_context(|| format!("keyword-index {source}"))?;
         progress.metric(
@@ -211,7 +194,7 @@ pub(crate) async fn run_with(
         }
         // No embed runs beside this step: each reads it, off disk, so the
         // runner keeps this step waiting while one does.
-        let swept = crate::search_index::sweep(data_root).await?;
+        let swept = crate::search_index::sweep(data_root, &searched).await?;
         if swept > 0 {
             tracing::info!(swept, "vectors no chunk names left the inference cache");
         }
@@ -219,7 +202,11 @@ pub(crate) async fn run_with(
         for h in &held {
             let labels = [("source", h.source.as_str())];
             progress.metric("search_documents", &labels, h.documents as i64);
-            progress.metric("search_chunks_not_embedded", &labels, h.not_embedded as i64);
+            progress.metric(
+                "search_documents_not_embedded",
+                &labels,
+                h.not_embedded as i64,
+            );
         }
         progress.set_message(&holdings_summary(&held));
         retire_aggregator_tree(data_root)?;
@@ -260,7 +247,7 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
     let documents: usize = held.iter().map(|h| h.documents).sum();
     let left: usize = held.iter().map(|h| h.not_embedded).sum();
     format!(
-        "{documents} documents in {} searched sources; {left} chunks not embedded",
+        "{documents} documents in {} searched sources; {left} not embedded",
         held.len()
     )
 }
@@ -328,7 +315,7 @@ mod tests {
         };
         assert_eq!(
             holdings_summary(&[h("mail", 12, 0), h("notes", 3, 7)]),
-            "15 documents in 2 searched sources; 7 chunks not embedded"
+            "15 documents in 2 searched sources; 7 not embedded"
         );
     }
 
@@ -371,7 +358,6 @@ mod tests {
             data_root,
             &env,
             &Params::default(),
-            None,
             Some("2026-01-01T00:00:00+00:00"),
             &Emitter::new("test".into()),
             &StopFlag::new(),

@@ -146,10 +146,8 @@ genrule(
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         # Reads the index back for check_ingested.py.
         "//third-party/doltlite:doltlite",
-        # The `unified_grid_and_search_index` step reads its tokenizer;
-        # run_sync_pipeline.py links it into the root
-        # (INGESTED_TNG_EMBED_MODEL).
-        "//third-party/embedding_models:embeddinggemma",
+        # No embedding model: the sync runs no `embed`, and with fetching
+        # off, a step that reached for the model would fail the build.
     ],
     outs = [
         "ingested/backend_index.sqlite",
@@ -171,7 +169,6 @@ genrule(
         " ".join([
             # The sync's event stream goes to a log, printed only on
             # failure; see quiet.sh.
-            "INGESTED_TNG_EMBED_MODEL=$(execpath //third-party/embedding_models:embeddinggemma)",
             "$(execpath quiet.sh) $(RULEDIR)/sync.log",
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //datalib/backend/dag:datalib_dag_bin)",
@@ -334,8 +331,9 @@ py_test(
     ],
 )
 
-# Where run_sync_pipeline.py finds the model the
-# `unified_grid_and_search_index` step reads.
+# Where run_sync_pipeline.py finds the embedding model, for a run whose
+# servers' syncs embed (`tng_fuzz_test`). The fixture's own sync embeds
+# nothing and is given none.
 _TNG_EMBED_MODEL_ENV = {
     "INGESTED_TNG_EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
 }
@@ -381,9 +379,7 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
-        "//third-party/embedding_models:embeddinggemma",
     ],
-    env = _TNG_EMBED_MODEL_ENV,
 )
 
 # The provider contract (one_mode.md, "Layer 2"): for every render
@@ -421,20 +417,19 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
-        "//third-party/embedding_models:embeddinggemma",
     ],
-    env = _TNG_EMBED_MODEL_ENV,
     size = "large",
 )
 
 # The search index over the TNG fixture, built as a sync builds it:
 # `unified_grid_and_search_index`'s keyword pass (the real `datalib-step`) over `:ingested_tng`'s
-# rendered tree, then every chunk embedded into an inference cache. Three
-# actions, because the first's inputs change on every run (wall-clock
-# stamps in the render stores, tar_rendered.py) and the second is the slow
-# one: it reads only the prompts and links only the embedder, so Bazel
-# embeds again only when a prompt, the embedder or the model changes. The
-# third writes the vectors into the cache the search index reads.
+# rendered tree, every document cut into chunks as `embed` cuts them, then
+# every chunk embedded into an inference cache. Three actions, because the
+# first's inputs change on every run (wall-clock stamps in the render
+# stores, tar_rendered.py) and the second is the slow one: it reads only
+# the prompts and links only the embedder, so Bazel embeds again only when
+# a prompt, the embedder or the model changes. The third writes the
+# vectors beside the chunks the first filed.
 genrule(
     name = "ingested_tng_search_index",
     srcs = [
@@ -447,6 +442,7 @@ genrule(
     outs = [
         "ingested/search_index.sqlite",
         "ingested/search_prompts.tsv",
+        "ingested/search_chunks.sqlite",
     ],
     tools = [
         "build_search_index.py",
@@ -462,6 +458,7 @@ genrule(
         "$(execpath ingested/backend_index.sqlite)",
         "$(execpath ingested/search_index.sqlite)",
         "$(execpath ingested/search_prompts.tsv)",
+        "$(execpath ingested/search_chunks.sqlite)",
     ]),
     visibility = ["//visibility:public"],
 )
@@ -495,6 +492,7 @@ genrule(
     name = "ingested_tng_inference_cache",
     srcs = [
         "ingested/vectors.tsv",
+        "ingested/search_chunks.sqlite",
         "//datalib/backend/search_index:cache_vectors",
     ],
     outs = ["ingested/inference_cache.sqlite"],
@@ -503,6 +501,7 @@ genrule(
         "$(execpath quiet.sh) $(RULEDIR)/inference_cache.log",
         "$(execpath //datalib/backend/search_index:cache_vectors)",
         "$(execpath ingested/vectors.tsv)",
+        "$(execpath ingested/search_chunks.sqlite)",
         "$(execpath ingested/inference_cache.sqlite)",
     ]),
     visibility = ["//visibility:public"],

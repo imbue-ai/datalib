@@ -1,8 +1,10 @@
 //! What a search reads: the messages one term matches, and every chunk's
-//! vector with the messages it covers. Read-only, from a file a step may
-//! be writing; each read is one snapshot of it.
+//! vector with the messages it covers. Read-only, from files a step may
+//! be writing; each read is one snapshot of each. A document's chunks
+//! count only when they were cut from the rendering the keyword index
+//! holds: their sections are numbered in it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -274,19 +276,29 @@ impl Reader {
         Ok(other.is_some())
     }
 
-    /// Each chunk of `source_id`'s documents, `(markdown_uuid, prompt
-    /// hash)`, in document order: what the embed step asks the cache
-    /// about. Read-only, so an embed never waits on a writer of the file.
-    pub async fn chunk_hashes(&self, source_id: &str) -> Result<Vec<(String, String)>> {
-        sqlx::query_as(
-            "SELECT d.markdown_uuid, c.hash FROM search_chunks c \
-               JOIN search_documents d ON d.doc_id = c.doc_id \
-              WHERE d.source_id = ? ORDER BY d.markdown_uuid, c.seq",
+    /// `markdown_uuid → content_hash` for every document of `source_id`
+    /// the keyword index holds: what its `embed` cuts into chunks.
+    pub async fn documents_of(&self, source_id: &str) -> Result<BTreeMap<String, String>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?",
         )
         .bind(source_id)
         .fetch_all(&self.index)
         .await
-        .context("read the indexed chunks")
+        .context("read the indexed documents")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Whether `source_id`'s last keyword pass finished: until it does,
+    /// a document the index lacks may be one the pass has not reached.
+    pub async fn pass_finished(&self, source_id: &str) -> Result<bool> {
+        let row: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM search_sources WHERE source_id = ?")
+                .bind(source_id)
+                .fetch_optional(&self.index)
+                .await
+                .context("read whether the source's keyword pass finished")?;
+        Ok(row.is_some())
     }
 
     /// How many documents the index holds, embedded or not.
@@ -298,57 +310,85 @@ impl Reader {
         Ok(usize::try_from(n)?)
     }
 
-    /// Of `uuids`, the ones the index holds, each with whether every one of
-    /// its chunks has a vector under `model`.
+    /// Of `uuids`, the ones the index holds, each with whether it is
+    /// embedded: cut from the rendering the index holds, and every one of
+    /// its chunks with a vector under `model`.
     pub async fn states(&self, model: &str, uuids: &[String]) -> Result<HashMap<String, bool>> {
-        let mut chunks_of: HashMap<String, Vec<String>> = HashMap::new();
+        let mut held: Vec<(String, String)> = Vec::new();
         for batch in uuids.chunks(BATCH) {
-            let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-                "SELECT d.markdown_uuid, c.hash FROM search_documents d \
-                   LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
-                  WHERE d.markdown_uuid IN (SELECT value FROM json_each(?))",
+            let rows: Vec<(String, String)> = sqlx::query_as(
+                "SELECT markdown_uuid, content_hash FROM search_documents \
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
             )
             .bind(serde_json::to_string(batch)?)
             .fetch_all(&self.index)
             .await
-            .context("read the documents' chunks")?;
-            for (uuid, hash) in rows {
-                let hashes = chunks_of.entry(uuid).or_default();
-                hashes.extend(hash);
-            }
+            .context("read the documents")?;
+            held.extend(rows);
         }
-        let all: Vec<&str> = chunks_of.values().flatten().map(String::as_str).collect();
-        let have = self.vectors_held(model, &all).await?;
-        Ok(chunks_of
-            .into_iter()
-            .map(|(uuid, hashes)| {
-                let embedded = hashes.iter().all(|h| have.contains(h.as_str()));
-                (uuid, embedded)
-            })
-            .collect())
+        let asked: Vec<String> = held.iter().map(|(uuid, _)| uuid.clone()).collect();
+        self.embedded(model, held, Some(&asked)).await
     }
 
-    /// How many documents the index holds, and of them how many have a
-    /// vector under `model` for every chunk.
+    /// How many documents the index holds, and of them how many are
+    /// embedded under `model` ([`Reader::states`]).
     pub async fn coverage(&self, model: &str) -> Result<(u64, u64)> {
-        let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
-            "SELECT d.doc_id, c.hash FROM search_documents d \
-               LEFT JOIN search_chunks c ON c.doc_id = d.doc_id",
+        self.coverage_of(model, None).await
+    }
+
+    /// [`Reader::coverage`] of one source's documents, or every one.
+    pub async fn coverage_of(&self, model: &str, source_id: Option<&str>) -> Result<(u64, u64)> {
+        let held: Vec<(String, String)> = sqlx::query_as(
+            "SELECT markdown_uuid, content_hash FROM search_documents \
+              WHERE ?1 IS NULL OR source_id = ?1",
         )
+        .bind(source_id)
         .fetch_all(&self.index)
         .await
-        .context("read every document's chunks")?;
-        let mut hashes: Vec<&str> = rows.iter().filter_map(|r| r.1.as_deref()).collect();
+        .context("read the documents")?;
+        let documents = held.len() as u64;
+        let embedded = match source_id {
+            None => self.embedded(model, held, None).await?,
+            Some(_) => {
+                let asked: Vec<String> = held.iter().map(|(uuid, _)| uuid.clone()).collect();
+                self.embedded(model, held, Some(&asked)).await?
+            }
+        };
+        Ok((
+            documents,
+            embedded.values().filter(|ok| **ok).count() as u64,
+        ))
+    }
+
+    /// Whether each of `held`, `(markdown_uuid, content_hash)`, is
+    /// embedded; `asked` narrows what is read of the cache.
+    async fn embedded(
+        &self,
+        model: &str,
+        held: Vec<(String, String)>,
+        asked: Option<&[String]>,
+    ) -> Result<HashMap<String, bool>> {
+        let filed = match &self.cache {
+            Some(cache) => crate::chunked::read_filed(cache, asked).await?,
+            None => BTreeMap::new(),
+        };
+        let mut hashes: Vec<&str> = filed
+            .values()
+            .flat_map(|(_, chunks)| chunks.iter().map(|c| c.hash.as_str()))
+            .collect();
         hashes.sort_unstable();
         hashes.dedup();
         let have = self.vectors_held(model, &hashes).await?;
-        let mut whole: HashMap<i64, bool> = HashMap::new();
-        for (doc, hash) in &rows {
-            let ok = hash.as_deref().is_none_or(|h| have.contains(h));
-            *whole.entry(*doc).or_insert(true) &= ok;
-        }
-        let embedded = whole.values().filter(|ok| **ok).count();
-        Ok((whole.len() as u64, embedded as u64))
+        Ok(held
+            .into_iter()
+            .map(|(uuid, content_hash)| {
+                let embedded = filed.get(&uuid).is_some_and(|(cut_from, chunks)| {
+                    *cut_from == content_hash
+                        && chunks.iter().all(|c| have.contains(c.hash.as_str()))
+                });
+                (uuid, embedded)
+            })
+            .collect())
     }
 
     /// Which of `hashes` the cache has a vector for under `model`.
@@ -433,8 +473,9 @@ impl Reader {
             return Ok(Held::default());
         }
         let mut tx = self.index.begin().await?;
-        let docs: Vec<(i64, String, String)> = sqlx::query_as(
-            "SELECT doc_id, markdown_uuid, source_id FROM search_documents ORDER BY doc_id",
+        let docs: Vec<DocRow> = sqlx::query_as(
+            "SELECT doc_id, markdown_uuid, source_id, content_hash FROM search_documents \
+              ORDER BY doc_id",
         )
         .fetch_all(&mut *tx)
         .await
@@ -444,25 +485,24 @@ impl Reader {
                 .fetch_all(&mut *tx)
                 .await
                 .context("read the indexed sections")?;
-        let chunks: Vec<(i64, i64, i64, i64, i64, String)> = sqlx::query_as(
-            "SELECT doc_id, start_byte, end_byte, first_section, last_section, hash \
-               FROM search_chunks ORDER BY doc_id, seq",
-        )
-        .fetch_all(&mut *tx)
-        .await
-        .context("read the indexed chunks")?;
         tx.commit().await?;
-
+        let filed = match &self.cache {
+            Some(cache) => crate::chunked::read_filed(cache, None).await?,
+            None => BTreeMap::new(),
+        };
         let vectors = match &self.cache {
             Some(cache) => {
-                let mut hashes: Vec<&str> = chunks.iter().map(|c| c.5.as_str()).collect();
+                let mut hashes: Vec<&str> = filed
+                    .values()
+                    .flat_map(|(_, chunks)| chunks.iter().map(|c| c.hash.as_str()))
+                    .collect();
                 hashes.sort_unstable();
                 hashes.dedup();
                 cached(cache, model, &hashes).await?
             }
             None => HashMap::new(),
         };
-        assemble(docs, sections, chunks, &vectors)
+        assemble(docs, sections, filed, &vectors)
     }
 }
 
@@ -488,14 +528,14 @@ async fn cached(
     Ok(out)
 }
 
-type DocRow = (i64, String, String);
+type DocRow = (i64, String, String, String);
 type SectionRow = (i64, i64, Option<String>);
-type ChunkRow = (i64, i64, i64, i64, i64, String);
+type Filed = BTreeMap<String, (String, Vec<crate::FiledChunk>)>;
 
 fn assemble(
     docs: Vec<DocRow>,
     sections: Vec<SectionRow>,
-    chunks: Vec<ChunkRow>,
+    mut filed: Filed,
     vectors: &HashMap<String, Vec<u8>>,
 ) -> Result<Held> {
     let mut held = Held::default();
@@ -503,15 +543,13 @@ fn assemble(
     for (doc, _, uuid) in sections {
         sections_of.entry(doc).or_default().push(uuid);
     }
-    let mut chunks_of: HashMap<i64, Vec<ChunkRow>> = HashMap::new();
-    for c in chunks {
-        chunks_of.entry(c.0).or_default().push(c);
-    }
-    for (doc_id, markdown_uuid, source_id) in docs {
+    for (doc_id, markdown_uuid, source_id, content_hash) in docs {
+        let chunks = match filed.remove(&markdown_uuid) {
+            Some((cut_from, chunks)) if cut_from == content_hash => chunks,
+            _ => Vec::new(),
+        };
         let from = held.chunks.len();
-        for (_, start, end, first_section, last_section, hash) in
-            chunks_of.remove(&doc_id).unwrap_or_default()
-        {
+        for crate::FiledChunk { chunk, hash } in chunks {
             let Some(blob) = vectors.get(&hash) else {
                 continue;
             };
@@ -536,10 +574,10 @@ fn assemble(
                 continue;
             }
             held.chunks.push(HeldChunk {
-                start,
-                end,
-                first_section,
-                last_section,
+                start: i64::try_from(chunk.start)?,
+                end: i64::try_from(chunk.end)?,
+                first_section: i64::try_from(chunk.first_section)?,
+                last_section: i64::try_from(chunk.last_section)?,
             });
         }
         let to = held.chunks.len();
@@ -603,7 +641,7 @@ fn best_per_document(rows: Vec<(String, Option<String>, f64)>, limit: usize) -> 
         .collect()
 }
 
-async fn connect(path: &Path) -> Result<SqlitePool> {
+pub(crate) async fn connect(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .read_only(true);

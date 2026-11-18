@@ -314,32 +314,39 @@ their install scripts run.
 Three steps build the search index
 ([`datalib/backend/search_index`](../../datalib/backend/search_index)).
 `unified_grid_and_search_index`, after the grid, brings each searched source's documents in
-the index in line with its render store: it chunks each changed document
-and writes its words and chunks into `search_*` tables of the grid
-index's file, `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. Each
-source's `embed` embeds every
-chunk the inference cache,
-`unified_grid_and_search_index/search_index/inference_cache.sqlite`, has no
-vector for, in process (`datalib/backend/embedder`, llama.cpp), after
-putting the pinned, sha256-verified embedding model in place through
-`datalib_embedding_models`. `unified_grid_and_search_index` also sweeps the vectors no chunk
-names, and reports what each source holds. This is what a search matches words and meaning against (see
+the index in line with its render store: it writes each changed
+document's words into `search_*` tables of the grid index's file,
+`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
+SQLite's FTS5 ranked by BM25, with no embedding model. Each source's
+`embed` cuts each of its documents the keyword index holds into chunks,
+when the document changed since it last did, and files them in the
+inference cache,
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`, then
+embeds every chunk there with no vector, in process
+(`datalib/backend/embedder`, llama.cpp). It puts the pinned,
+sha256-verified embedding model in place through
+`datalib_embedding_models` only when it has something to cut or embed.
+`unified_grid_and_search_index` also sweeps the vectors no chunk names,
+and reports what each source holds. This is what a search matches words and meaning against (see
 `datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:
 
-- **Incremental**. A document is indexed under its render's content
-  hash, so a keyword pass rechunks only documents whose render changed,
-  and a vector is kept under the hash of exactly what the model was
-  shown, so an embed embeds only chunks whose prompt is new.
+- **Incremental**. A document is indexed, and cut into chunks, under its
+  render's content hash, so a keyword pass and an embed each redo only
+  documents whose render changed, and a vector is kept under the hash of
+  exactly what the model was shown, so an embed embeds only chunks whose
+  prompt is new. The chunks sit beside the vectors, so emptying the
+  keyword index for a new shape cuts nothing again.
 - **First run is slow**: embedding every chunk of a fresh root takes
   minutes on CPU. An embed is resumable, so stopping and re-running is
   safe, and turning one source's `embed` off leaves the rest running.
   Once the backlog drains, re-runs are no-ops.
 - **Chunks are cut in the model's tokens**: 900 a chunk, so every prompt
-  fits the 2,048 the model reads. The keyword pass reads the tokenizer
-  from the model file without its weights, so it needs the file as the
-  embed does (`search_index/src/chunk.rs`).
+  fits the 2,048 the model reads. An embed reads the tokenizer from the
+  model file without its weights, and only when a document needs cutting;
+  a chunk filed earlier is shown to the model from its span, with no
+  tokenizer (`search_index/src/chunk.rs`).
 - **Models cache**: the embedding model (~300 MB) is shared across data
   roots in `~/.cache/qmd/models` (`$XDG_CACHE_HOME/qmd/models` when that
   is set), unless a root has its own `unified_grid_and_search_index/models`.

@@ -273,10 +273,10 @@ datalib/
     embedding_models/ puts the pinned embedding model in place,
                    sha256-verified. Linked by the step and the applet.
     search_index/  the search index that replaces qmd's storage: keyword
-                   rows per message and chunks keyed by their prompt's
-                   hash, in `search_*` tables of the grid index's file,
-                   and the inference cache of vectors, holding no text
-                   (docs/dev/plans/search_index_from_ram.md).
+                   rows per message in `search_*` tables of the grid
+                   index's file, and the inference cache: each document's
+                   chunks keyed by their prompt's hash, and the vectors,
+                   holding no text (docs/dev/plans/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
                    Metal on a mac, CUDA as a module on gnu Linux. Tested
@@ -367,9 +367,10 @@ name (`*/render_markdown`, every source's) into the SQL index the grid
 reads. It then puts each source in the keyword search, the `search_*`
 tables in the same file, but those its `params.not_searched` lists. A
 source searched by meaning has one more step of its own, `embed`, which
-reads `unified_grid_and_search_index` and fills the vectors in
-`search_index/inference_cache.sqlite`, so the slow embedding can be
-turned off or run by hand per source. `unified_grid_and_search_index` also sweeps the
+reads `unified_grid_and_search_index`, cuts the source's documents into chunks and fills
+their vectors in `search_index/inference_cache.sqlite`, so the slow
+embedding can be turned off or run by hand per source; nothing else
+loads the embedding model. `unified_grid_and_search_index` also sweeps the
 vectors no chunk names and reports what search holds of each source
 (`docs/dev/plans/search_index_from_ram.md` is how the search index came
 to replace qmd's). `embedding_map` reads every `embed` and lays the

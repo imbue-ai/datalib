@@ -8,7 +8,7 @@ computation: the `embedding_map` function in `datalib-step`
 result, and the `unified_grid_and_search_index` applet serves it joined to the grid.
 
 ```
-search_* tables + search_index/inference_cache.sqlite   each chunk's vector
+search_* tables + search_index/inference_cache.sqlite   each chunk and its vector
         │  datalib_search_index::read::Held::document_vectors — one unit vector per document
         ▼
 datalib_embedding_map::layout                 this crate

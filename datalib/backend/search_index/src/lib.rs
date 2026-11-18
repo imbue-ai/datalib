@@ -1,14 +1,16 @@
 //! The search index: each document's messages in a keyword index, its
 //! chunks' embeddings, and where each falls in the document, keyed by
-//! `markdown_uuid` and holding none of the text. Its tables live in the
-//! grid index's file; the vectors in a file of their own. A document comes in as a
-//! value, so whoever has it in memory can index it; nothing here reads a
-//! file. The plan: docs/dev/plans/search_index_from_ram.md.
+//! `markdown_uuid` and holding none of the text. The keyword tables live
+//! in the grid index's file; the chunks and their vectors in a file of
+//! their own, which each source's `embed` writes. A document comes in as
+//! a value, so whoever has it in memory can index it; nothing here reads
+//! a file. The plan: docs/dev/plans/search_index_from_ram.md.
 
 use std::borrow::Cow;
 
 pub mod cache;
 pub mod chunk;
+mod chunked;
 mod file;
 pub mod holdings;
 pub mod owed;
@@ -18,10 +20,11 @@ mod store;
 pub mod text;
 
 pub use cache::InferenceCache;
+pub use chunked::{carry_chunks_from_the_index, ChunkedDoc, FiledChunk};
 pub use holdings::{holdings, Holding};
 pub use owed::{owed, Owed};
 pub use read::{Held, HeldChunk, HeldDoc, MessageHit, Reader};
-pub use store::{ChunkSpan, Index};
+pub use store::Index;
 
 /// What every table of the index starts with. The index shares the grid
 /// index's file, and each of the two empties only its own tables when its
@@ -72,15 +75,24 @@ impl IndexDoc {
         self.sections.iter().any(|s| s.lead.is_some())
     }
 
-    /// Its chunks with their hashes and prompts
-    /// ([`chunk::prompted`]): what the keyword pass files and the embed
-    /// pass embeds.
+    /// Its chunks with their hashes and prompts ([`chunk::prompted`]).
     pub fn prompted(&self, ends: chunk::TokenEnds) -> anyhow::Result<Vec<chunk::Prompted>> {
         chunk::prompted(
             &self.title,
             self.head.as_deref(),
             &self.sections_or_one(),
             ends,
+        )
+    }
+
+    /// The prompts of chunks cut from it earlier ([`chunk::prompts`]),
+    /// with no tokenizer.
+    pub fn prompts(&self, chunks: &[chunk::Chunk]) -> anyhow::Result<Vec<chunk::Prompted>> {
+        chunk::prompts(
+            &self.title,
+            self.head.as_deref(),
+            &self.sections_or_one(),
+            chunks,
         )
     }
 

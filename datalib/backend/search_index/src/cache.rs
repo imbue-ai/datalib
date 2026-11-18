@@ -2,9 +2,9 @@
 //! the hash of the prompt it was shown (`chunk::chunk_hash`). A model is a
 //! pure function, so an entry is never wrong, only unused; it lives in a
 //! file of its own so that rebuilding the index, or the grid index it may
-//! join, never throws a day of embedding away. Nothing here knows a
-//! document: the index's `chunks` name the hashes, and search joins from
-//! them to here.
+//! join, never throws a day of embedding away. The `vectors` table knows
+//! no document: the chunks filed beside it (`chunked.rs`) name the
+//! hashes, and search joins from them to here.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -24,15 +24,20 @@ const DDL: [&str; 1] = ["CREATE TABLE IF NOT EXISTS vectors (
 const BATCH: usize = 10_000;
 
 pub struct InferenceCache {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl InferenceCache {
     pub async fn open(path: &Path) -> Result<InferenceCache> {
         let pool = crate::file::open(
             path,
-            &DDL,
-            crate::file::Owns::File(StoreKind::InferenceCache),
+            &[
+                (&DDL, crate::file::Owns::File(StoreKind::InferenceCache)),
+                (
+                    &crate::chunked::DDL,
+                    crate::file::Owns::Part(StoreKind::SearchChunks),
+                ),
+            ],
             std::time::Duration::from_secs(60),
         )
         .await
@@ -99,33 +104,6 @@ impl InferenceCache {
         }
         Ok(out)
     }
-
-    /// Deletes every entry but `model`'s for one of `keep`: what a sweep
-    /// does once the index names every chunk it still has. Returns how
-    /// many went.
-    pub async fn keep_only(&self, model: &str, keep: &HashSet<String>) -> Result<u64> {
-        let mut conn = self.pool.acquire().await?;
-        sqlx::query("CREATE TEMP TABLE IF NOT EXISTS kept (hash TEXT PRIMARY KEY)")
-            .execute(&mut *conn)
-            .await?;
-        sqlx::query("DELETE FROM kept").execute(&mut *conn).await?;
-        let keep: Vec<&String> = keep.iter().collect();
-        for batch in keep.chunks(BATCH) {
-            sqlx::query("INSERT OR IGNORE INTO kept SELECT value FROM json_each(?)")
-                .bind(serde_json::to_string(batch)?)
-                .execute(&mut *conn)
-                .await?;
-        }
-        let gone = sqlx::query(
-            "DELETE FROM vectors WHERE model <> ? OR hash NOT IN (SELECT hash FROM kept)",
-        )
-        .bind(model)
-        .execute(&mut *conn)
-        .await?
-        .rows_affected();
-        sqlx::query("DROP TABLE kept").execute(&mut *conn).await?;
-        Ok(gone)
-    }
 }
 
 fn to_blob(vector: &[f32]) -> Vec<u8> {
@@ -184,33 +162,5 @@ mod tests {
         cache.close().await;
         let cache = InferenceCache::open(&path).await.unwrap();
         assert!(cache.missing("gemma", &[h("a")]).await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_sweep_keeps_the_models_named_hashes_and_nothing_else() {
-        let (_dir, cache) = open().await;
-        cache
-            .put("gemma", &[(h("kept"), vec![1.0]), (h("stale"), vec![2.0])])
-            .await
-            .unwrap();
-        cache.put("old", &[(h("kept"), vec![3.0])]).await.unwrap();
-        let gone = cache
-            .keep_only("gemma", &HashSet::from([h("kept")]))
-            .await
-            .unwrap();
-        assert_eq!(gone, 2);
-        assert!(cache
-            .missing("gemma", &[h("kept")])
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            cache.missing("gemma", &[h("stale")]).await.unwrap(),
-            [h("stale")]
-        );
-        assert_eq!(
-            cache.missing("old", &[h("kept")]).await.unwrap(),
-            [h("kept")]
-        );
     }
 }

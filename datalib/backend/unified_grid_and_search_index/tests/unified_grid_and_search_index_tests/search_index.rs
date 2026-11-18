@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use datalib_runtime::layout;
-use datalib_search_index::chunk::chunk_hash;
-use datalib_search_index::{model_key, Index, IndexDoc, IndexSection, InferenceCache};
+use datalib_search_index::chunk::{chunk_hash, four_bytes_a_token};
+use datalib_search_index::{model_key, ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache};
 use datalib_unified_grid_and_search_index::hits::mapping::Place;
 use datalib_unified_grid_and_search_index::hits::vectors::{Freshness, Kept};
 use datalib_unified_grid_and_search_index::search_index::HeldVectors;
@@ -29,18 +29,11 @@ fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
     }
 }
 
-/// Indexes `docs` and caches `vector` for each one's single chunk.
+/// Indexes `docs`, cuts each into chunks as its `embed` would, and
+/// caches `vector` for each one's single chunk.
 async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
-    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     let only: Vec<IndexDoc> = docs.iter().map(|(d, _)| d.clone()).collect();
-    index
-        .put(&only, &datalib_search_index::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
-    index.close().await;
-    let cache = InferenceCache::open(&layout::inference_cache_db(root))
-        .await
-        .unwrap();
+    let cache = index_and_cut(root, &only).await;
     let vectors: Vec<(String, Vec<f32>)> = docs
         .iter()
         .map(|(d, v)| {
@@ -50,6 +43,23 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
         .collect();
     cache.put(&model_key(), &vectors).await.unwrap();
     cache.close().await;
+}
+
+/// `docs` in the keyword index and cut into chunks in the cache, which
+/// is handed back open.
+async fn index_and_cut(root: &Path, docs: &[IndexDoc]) -> InferenceCache {
+    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
+    index.put(docs).await.unwrap();
+    index.close().await;
+    let cache = InferenceCache::open(&layout::inference_cache_db(root))
+        .await
+        .unwrap();
+    let cut: Vec<ChunkedDoc> = docs
+        .iter()
+        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
+        .collect();
+    cache.file_chunks(&cut).await.unwrap();
+    cache
 }
 
 fn documents(
@@ -156,22 +166,9 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
             })
             .collect(),
     };
-    let chunks = thread
-        .prompted(&datalib_search_index::chunk::four_bytes_a_token)
-        .unwrap();
+    let chunks = thread.prompted(&four_bytes_a_token).unwrap();
     assert_eq!(chunks.len(), 2, "a message starts a chunk of its own");
-    let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
-    index
-        .put(
-            std::slice::from_ref(&thread),
-            &datalib_search_index::chunk::four_bytes_a_token,
-        )
-        .await
-        .unwrap();
-    index.close().await;
-    let cache = InferenceCache::open(&layout::inference_cache_db(root))
-        .await
-        .unwrap();
+    let cache = index_and_cut(root, std::slice::from_ref(&thread)).await;
     let vectors = vec![
         (chunks[0].hash.clone(), vec![1.0, 0.0, 0.0]),
         (chunks[1].hash.clone(), vec![0.0, 1.0, 0.0]),
@@ -293,7 +290,7 @@ async fn held_vectors_follow_the_index_not_the_file() {
         .unwrap();
     for sql in [
         "CREATE TABLE grid_rows (uuid TEXT)",
-        "DELETE FROM search_chunks",
+        "DELETE FROM search_documents",
     ] {
         sqlx::query(sql).execute(&grid).await.unwrap();
     }

@@ -82,10 +82,7 @@ fn hit(d: &str, m: Option<&str>) -> (String, Option<String>) {
 #[tokio::test]
 async fn a_word_lands_on_the_message_that_says_it() {
     let (_dir, index) = open().await;
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     assert_eq!(hits(&index, "thursday").await, [hit("d1", Some("m2"))]);
     assert_eq!(hits(&index, "lunch").await, [hit("d1", Some("m1"))]);
     assert_eq!(
@@ -96,12 +93,9 @@ async fn a_word_lands_on_the_message_that_says_it() {
 }
 
 #[tokio::test]
-async fn sections_and_chunks_are_byte_spans_of_the_document() {
+async fn sections_are_byte_spans_of_the_document() {
     let (_dir, index) = open().await;
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     let sections: Vec<(Option<String>, i64, i64)> =
         sqlx::query_as("SELECT uuid, start_byte, end_byte FROM search_sections ORDER BY seq")
             .fetch_all(index.pool())
@@ -116,48 +110,30 @@ async fn sections_and_chunks_are_byte_spans_of_the_document() {
             (Some("m2".into()), 27, m2_end)
         ]
     );
-    let chunks: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT start_byte, end_byte, first_section, last_section FROM search_chunks ORDER BY seq",
-    )
-    .fetch_all(index.pool())
-    .await
-    .unwrap();
-    assert_eq!(chunks, [(0, m2_end, 0, 2)]);
 }
 
 #[tokio::test]
 async fn a_document_with_no_text_is_found_by_its_title() {
     let (_dir, index) = open().await;
     index
-        .put(
-            &[doc("d2", "h1", "Offsite agenda", &[])],
-            &crate::chunk::four_bytes_a_token,
-        )
+        .put(&[doc("d2", "h1", "Offsite agenda", &[])])
         .await
         .unwrap();
     assert_eq!(hits(&index, "offsite").await, [hit("d2", None)]);
-    assert_eq!(count(&index, "search_chunks").await, 0);
 }
 
-/// A changed document drops its old words and sections; each chunk
-/// carries the hash of the prompt it would be embedded as.
+/// A changed document drops its old words and sections.
 #[tokio::test]
 async fn a_changed_hash_replaces_a_document() {
     let (_dir, index) = open().await;
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     let changed = doc(
         "d1",
         "h2",
         "Planning",
         &[(Some("m3"), "dinner on saturday")],
     );
-    index
-        .put(&[changed], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[changed]).await.unwrap();
     assert_eq!(count(&index, "search_sections").await, 1);
     assert_eq!(postings(&index, "thursday").await, 0);
     assert_eq!(hits(&index, "dinner").await, [hit("d1", Some("m3"))]);
@@ -165,61 +141,18 @@ async fn a_changed_hash_replaces_a_document() {
         index.indexed("mail").await.unwrap(),
         BTreeMap::from([("d1".to_string(), "h2".to_string())])
     );
-    assert_eq!(
-        index.chunks("mail").await.unwrap(),
-        [(
-            "d1".to_string(),
-            0,
-            crate::chunk::chunk_hash("Planning", "dinner on saturday")
-        )]
-    );
-}
-
-/// A thread that grows by a message keeps the hashes of the chunks
-/// before it, so their cached vectors are found again.
-#[tokio::test]
-async fn a_grown_thread_keeps_its_earlier_chunks() {
-    let (_dir, index) = open().await;
-    let message = |i: usize| format!("message {i}: {}\n", "words ".repeat(100));
-    let sections: Vec<(Option<String>, String)> = (0..12)
-        .map(|i| (Some(format!("m{i}")), message(i)))
-        .collect();
-    let as_doc = |n: usize, hash: &str| {
-        let refs: Vec<(Option<&str>, &str)> = sections[..n]
-            .iter()
-            .map(|(u, t)| (u.as_deref(), t.as_str()))
-            .collect();
-        doc("d1", hash, "Planning", &refs)
-    };
-    index
-        .put(&[as_doc(11, "h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
-    let before = index.chunks("mail").await.unwrap();
-    index
-        .put(&[as_doc(12, "h2")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
-    let after = index.chunks("mail").await.unwrap();
-    assert!(before.len() >= 2, "{before:?}");
-    assert_eq!(before[..before.len() - 1], after[..before.len() - 1]);
-    assert_ne!(before.last(), after.get(before.len() - 1));
 }
 
 #[tokio::test]
 async fn a_removed_document_leaves_nothing_behind() {
     let (_dir, index) = open().await;
     let other = doc("d2", "h1", "Other", &[(Some("m9"), "budget again")]);
-    index
-        .put(&[thread("h1"), other], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1"), other]).await.unwrap();
     index.remove(&["d1".to_string()]).await.unwrap();
     assert_eq!(hits(&index, "budget").await, [hit("d2", Some("m9"))]);
     assert_eq!(postings(&index, "lunch").await, 0);
     assert_eq!(count(&index, "search_documents").await, 1);
     assert_eq!(count(&index, "search_sections").await, 1);
-    assert_eq!(count(&index, "search_chunks").await, 1);
 }
 
 #[tokio::test]
@@ -227,10 +160,7 @@ async fn indexed_names_only_its_own_source() {
     let (_dir, index) = open().await;
     let mut chat = doc("c1", "h9", "", &[(Some("x"), "hello")]);
     chat.source_id = "chat".into();
-    index
-        .put(&[thread("h1"), chat], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1"), chat]).await.unwrap();
     assert_eq!(
         index.indexed("chat").await.unwrap(),
         BTreeMap::from([("c1".to_string(), "h9".to_string())])
@@ -244,10 +174,7 @@ async fn the_files_hold_no_copy_of_the_text() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.sqlite");
     let index = Index::open(&path).await.unwrap();
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     assert_eq!(hits(&index, "afternoon").await.len(), 1);
     index.close().await;
     for entry in std::fs::read_dir(dir.path()).unwrap() {
@@ -266,10 +193,7 @@ async fn an_index_in_another_shape_empties_only_its_own_tables() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("db.sqlite");
     let index = Index::open(&path).await.unwrap();
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     for sql in [
         "CREATE TABLE grid_rows (uuid TEXT)",
         "INSERT INTO grid_rows VALUES ('m1')",
@@ -321,37 +245,25 @@ async fn only_a_change_raises_the_generation() {
             .unwrap()
     };
     let start = generation().await;
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     let put = generation().await;
     assert!(put > start);
-    index
-        .put(&[thread("h1")], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1")]).await.unwrap();
     assert_eq!(generation().await, put);
     index.remove(&["d1".to_string()]).await.unwrap();
     assert!(generation().await > put);
 }
 
-/// A source taken out of the config leaves the index, and the hashes
-/// the cache keeps on a sweep are the ones still named.
+/// A source taken out of the config leaves the index.
 #[tokio::test]
-async fn a_source_no_longer_configured_leaves_and_takes_its_hashes() {
+async fn a_source_no_longer_configured_leaves() {
     let (_dir, index) = open().await;
     let mut chat = doc("c1", "h9", "Chat", &[(Some("x"), "hello there")]);
     chat.source_id = "chat".into();
-    index
-        .put(&[thread("h1"), chat], &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&[thread("h1"), chat]).await.unwrap();
     assert_eq!(index.keep_sources(&["mail".to_string()]).await.unwrap(), 1);
     assert!(index.indexed("chat").await.unwrap().is_empty());
-    let hashes = index.all_hashes().await.unwrap();
-    assert!(!hashes.contains(&crate::chunk::chunk_hash("Chat", "hello there")));
-    assert_eq!(hashes.len(), index.chunks("mail").await.unwrap().len());
+    assert_eq!(index.indexed("mail").await.unwrap().len(), 1);
 }
 
 /// A large put commits in parts, each about `PUT_BYTES` of text, so the
@@ -371,10 +283,7 @@ async fn a_large_put_commits_in_parts() {
     let docs: Vec<IndexDoc> = (0..3)
         .map(|i| doc(&format!("d{i}"), "h", "T", &[(Some("m"), big.as_str())]))
         .collect();
-    index
-        .put(&docs, &crate::chunk::four_bytes_a_token)
-        .await
-        .unwrap();
+    index.put(&docs).await.unwrap();
     assert_eq!(generation().await - before, 3, "one commit per part");
     assert_eq!(count(&index, "search_documents").await, 3);
 }

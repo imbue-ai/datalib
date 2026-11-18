@@ -1,8 +1,9 @@
 //! Opening this crate's tables in a plain SQLite file: WAL, one
 //! connection, and the tables in this build's shape. Tables in another
 //! shape are emptied, since everything in them can be made again. The
-//! inference cache is a file of its own; the index is a part of the grid
-//! index's file, and empties only its own tables.
+//! inference cache is a file of its own, with the embedded chunks a part
+//! of it; the index is a part of the grid index's file. A part empties
+//! only its own tables.
 
 use std::path::Path;
 use std::time::Duration;
@@ -31,23 +32,25 @@ impl Owns {
     }
 }
 
+/// Opens `path` with each of `parts` in this build's shape, in order: a
+/// file's own tables before a part of it, so emptying the file leaves
+/// the part to make its tables again.
 pub(crate) async fn open(
     path: &Path,
-    ddl: &[&'static str],
-    owns: Owns,
+    parts: &[(&[&'static str], Owns)],
     wait: Duration,
 ) -> Result<SqlitePool> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let pool = connect(path, wait).await?;
-    match set_up(&pool, ddl, owns).await {
-        Ok(()) => Ok(pool),
-        Err(e) => {
+    for (ddl, owns) in parts {
+        if let Err(e) = set_up(&pool, ddl, *owns).await {
             pool.close().await;
-            Err(e)
+            return Err(e);
         }
     }
+    Ok(pool)
 }
 
 async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {

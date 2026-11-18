@@ -1,24 +1,26 @@
-//! The fixture's chunk prompts, one per line as `<hash>\t<prompt as JSON>`,
-//! sorted: what `:ingested_tng_vectors` embeds. Read from a root whose
-//! `unified_grid_and_search_index` has run, drawn by the store as the `embed` step
-//! draws them, and each one the index names found among them, so a prompt
-//! drawn differently from the step's fails here rather than caching a
-//! vector under the wrong text.
+//! The fixture's chunks, cut as each source's `embed` cuts them: every
+//! document the keyword index of a root holds, drawn by its render store,
+//! cut by the model's tokenizer and filed into a new inference cache at
+//! `<chunks out>`, which holds no vectors yet; and each chunk's prompt,
+//! one per line as `<hash>\t<prompt as JSON>`, sorted, which
+//! `:ingested_tng_vectors` embeds. A document its store draws from
+//! another rendering than the index holds fails here, rather than filing
+//! chunks no search would read.
 //!
-//! Usage: search_prompts <root> <model.gguf> <out>
+//! Usage: search_prompts <root> <model.gguf> <prompts out> <chunks out>
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_search_index::Reader;
+use datalib_search_index::{ChunkedDoc, InferenceCache, Reader};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let [_, root, model, out] = args.as_slice() else {
-        bail!("usage: search_prompts <root> <model.gguf> <out>");
+    let [_, root, model, prompts_out, chunks_out] = args.as_slice() else {
+        bail!("usage: search_prompts <root> <model.gguf> <prompts out> <chunks out>");
     };
     let root = PathBuf::from(root);
     let tokenizer = datalib_embedder::Tokenizer::open(Path::new(model))?;
@@ -31,37 +33,48 @@ async fn main() -> Result<()> {
     else {
         bail!("{}: no search index", root.display());
     };
+    let cache = InferenceCache::open(Path::new(chunks_out)).await?;
     let mut prompts: BTreeMap<String, String> = BTreeMap::new();
-    let sources: Vec<String> = sources(&root)?;
-    for source in &sources {
-        let spans = index.chunk_hashes(source).await?;
-        if spans.is_empty() {
+    for source in &sources(&root)? {
+        let held = index.documents_of(source).await?;
+        if held.is_empty() {
             continue;
         }
         let docs = {
             let (root, source) = (root.clone(), source.clone());
-            let uuids: Vec<String> = spans.iter().map(|(doc, _)| doc.clone()).collect();
+            let uuids: Vec<String> = held.keys().cloned().collect();
             tokio::task::spawn_blocking(move || docs(&root, &source, uuids)).await??
         };
-        let mut drawn: BTreeMap<String, String> = BTreeMap::new();
+        let mut cut = Vec::with_capacity(docs.len());
         for doc in &docs {
-            for p in doc.prompted(&ends)? {
-                drawn.insert(p.hash, p.prompt);
+            if held.get(&doc.markdown_uuid) != Some(&doc.content_hash) {
+                bail!(
+                    "{}: drawn from another rendering than the index holds",
+                    doc.markdown_uuid
+                );
+            }
+            let prompted = doc.prompted(&ends)?;
+            cut.push(ChunkedDoc::from_prompted(doc, &prompted));
+            for p in prompted {
+                prompts.insert(p.hash, p.prompt);
             }
         }
-        for (doc, hash) in spans {
-            let p = drawn
-                .get(&hash)
-                .with_context(|| format!("{doc}: a chunk its document no longer draws"))?;
-            prompts.insert(hash, p.clone());
+        if cut.len() != held.len() {
+            bail!(
+                "{source}: the index holds {} documents and the store draws {}",
+                held.len(),
+                cut.len()
+            );
         }
+        cache.file_chunks(&cut).await?;
     }
+    cache.close().await;
     index.close().await;
     let mut body = String::new();
     for (hash, p) in &prompts {
         body.push_str(&format!("{hash}\t{}\n", serde_json::to_string(p)?));
     }
-    std::fs::write(out, body).with_context(|| format!("write {out}"))?;
+    std::fs::write(prompts_out, body).with_context(|| format!("write {prompts_out}"))?;
     Ok(())
 }
 
@@ -82,14 +95,12 @@ fn sources(root: &Path) -> Result<Vec<String>> {
 fn docs(
     root: &Path,
     source: &str,
-    mut uuids: Vec<String>,
+    uuids: Vec<String>,
 ) -> Result<Vec<datalib_search_index::IndexDoc>> {
     let render_root = datalib_etl::layout::render_markdown_root(root, source);
     let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
         return Ok(Vec::new());
     };
-    uuids.sort();
-    uuids.dedup();
     let out = store.index_docs(source, &uuids);
     store.close();
     out

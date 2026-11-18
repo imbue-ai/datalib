@@ -698,17 +698,14 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             let index = datalib_search_index::Index::open(&path).await.unwrap();
             index
-                .put(
-                    &[datalib_search_index::IndexDoc {
-                        source_id: "mail".into(),
-                        markdown_uuid: "d".into(),
-                        content_hash: key,
-                        title: "Ten Forward".into(),
-                        head: None,
-                        sections: Vec::new(),
-                    }],
-                    &datalib_search_index::chunk::four_bytes_a_token,
-                )
+                .put(&[datalib_search_index::IndexDoc {
+                    source_id: "mail".into(),
+                    markdown_uuid: "d".into(),
+                    content_hash: key,
+                    title: "Ten Forward".into(),
+                    head: None,
+                    sections: Vec::new(),
+                }])
                 .await
                 .unwrap();
             index.close().await;

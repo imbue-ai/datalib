@@ -143,9 +143,10 @@ package's programs by its path under the data root, in its `command`;
   how the step does it: `docs/dev/plans/embed_on_modal.md`.
 - The search steps are the exception to "a step writes its own tree":
   `unified_grid_and_search_index`'s keyword pass writes the search index's tables in the
-  grid index's file, each source's `embed` writes its vectors to the
-  one inference cache under `unified_grid_and_search_index/search_index/`,
-  and `unified_grid_and_search_index`'s sweep deletes the vectors no chunk names from it.
+  grid index's file, each source's `embed` writes its chunks and their
+  vectors to the one inference cache under
+  `unified_grid_and_search_index/search_index/`, and
+  `unified_grid_and_search_index`'s sweep deletes the vectors no chunk names from it.
   The runner cannot see those files as shared, so these steps hold
   one-slot locks instead (below), and an `embed` reads `unified_grid_and_search_index` off
   disk, so the runner never runs the two at once.
@@ -456,14 +457,15 @@ reads its render store at one commit and is skipped when neither that
 commit nor the index text's version has moved since its last finished
 pass (`search_sources` in the search index). The step's version is the
 grid's generation and the search index's together, so a keyword change
-alone still reaches the embeds. The pass cuts the chunks with the
-embedding model's tokenizer, so `unified_grid_and_search_index` needs the model file when
-any source is searched. A source's `embed` (input: `unified_grid_and_search_index`) loads
-the model and fills the vectors. Both fetch the model when it is
-missing. After the keyword passes `unified_grid_and_search_index` sweeps the vectors no
+alone still reaches the embeds. The pass is SQLite's FTS5 and needs no
+embedding model. A source's `embed` (input: `unified_grid_and_search_index`) cuts its
+documents into chunks with the model's tokenizer, files them in the
+inference cache and fills their vectors; it fetches the model when it
+is missing, and only once it has a document to cut or a chunk to
+embed. After the keyword passes `unified_grid_and_search_index` sweeps the vectors no
 chunk names from the inference cache, and reports each searched
-source's documents and chunks not yet embedded; each `embed` reports
-what it left of its own. Nothing of a source's reads a step that reads
+source's documents and how many of them are not embedded yet; each
+`embed` reports what it left of its own. Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
 own: the runner holds a step's finish back while anything upstream of
 it is still running, so a step downstream of a fan-in would finish only
