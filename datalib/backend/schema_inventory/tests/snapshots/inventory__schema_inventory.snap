@@ -1982,6 +1982,7 @@ markdowns
     section_layout
     content_hash
     front
+    searchable
 problems
     problem_uuid
     source_id
