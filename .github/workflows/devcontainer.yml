@@ -137,13 +137,13 @@ jobs:
               .
           printf 'pushed %s\n' "${tags[@]}"
 
-      # GHCR keeps every pushed version. Keep the newest few `sha-` builds
-      # (enough to roll `latest` back by hand) and drop the rest; the
-      # `latest`-tagged version is never among the deleted.
+      # GHCR keeps every pushed version. Drop old `sha-` builds, and never
+      # an image a release tag, `latest` or a workflow's pin names, nor a
+      # manifest a kept image lists: scripts/prune_devcontainer.py.
+      # Not actions/delete-package-versions: it tests `ignore-versions`
+      # against a version's digest, never its tags, and counts each push's
+      # untagged manifests, so it deleted the image test.yml was pinned to.
       - name: Prune old image versions
-        uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5
-        with:
-          package-name: ${{ github.event.repository.name }}_devcontainer
-          package-type: container
-          min-versions-to-keep: 6
-          ignore-versions: '^(latest|[0-9]+\.[0-9]+\.[0-9]+)$'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/prune_devcontainer.py

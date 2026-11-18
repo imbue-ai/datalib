@@ -21,6 +21,13 @@ runs:
         echo "Free disk before:" && df -h /
         sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
             /opt/ghc /usr/local/.ghcup || true
+        # The runner still names the deleted SDK in these, and rules_android
+        # fails a Bazel build on an SDK that is named and empty; unnamed, it
+        # stands in an empty one.
+        for v in ANDROID_HOME ANDROID_SDK_ROOT ANDROID_NDK ANDROID_NDK_HOME \
+            ANDROID_NDK_ROOT ANDROID_NDK_LATEST_HOME; do
+          echo "$v=" >> "$GITHUB_ENV"
+        done
         sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
             '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
             google-chrome-stable firefox powershell mono-devel \

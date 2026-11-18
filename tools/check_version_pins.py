@@ -167,21 +167,6 @@ FAMILIES: list[Family] = [
         ],
     ),
     Family(
-        name="playwright",
-        why=(
-            "The devcontainer preinstalls the browser bundle for a "
-            "specific Playwright version. If the UI lockfile resolves a "
-            "different one, `//datalib/ui:e2e_test` runs a Playwright "
-            "whose browsers were never staged and fails on a cold "
-            "container with a download attempt."
-        ),
-        canonical="datalib/ui/pnpm-lock.yaml",
-        sites=[
-            (".devcontainer/Dockerfile", r"^ARG PLAYWRIGHT_VERSION=(\S+)"),
-            ("datalib/ui/pnpm-lock.yaml", r"^  '@playwright/test@([\d.]+)':"),
-        ],
-    ),
-    Family(
         name="bazelisk",
         why=(
             "The Claude Code cloud environment's setup script installs "

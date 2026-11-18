@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - .bazelrc
+      - .github/actions/free-runner-disk/**
       - .github/workflows/cuda.yml
       - MODULE.bazel
       - datalib/docker/Dockerfile
@@ -39,6 +40,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # As the release's `cuda` job does, so the build is checked on a
+      # runner whose SDKs are gone.
+      - uses: ./.github/actions/free-runner-disk
 
       # The contributor cache, as test.yml's PR runs use it
       # (.github/actions/prepare-bazel, whose disk and output-base steps
