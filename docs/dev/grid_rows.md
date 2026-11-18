@@ -354,7 +354,9 @@ config may also give it. A renderer does not set it. The one writer
 every document passes through (`grid_index::apply_one`) files each row
 under the group whose render store holds its document, and a storage
 row (provider `datalib`) under `datalib`
-(`grid_rows::filed_under`). The `source:` filter compares it.
+(`grid_rows::filed_under`). A document that names no source
+(`RenderedMarkdown::source_id` empty) is refused, and its render fails
+rather than filing rows under nothing. The `source:` filter compares it.
 
 A row names its document by `markdown_uuid`, and the document's file,
 relative to the data root, is `markdowns.md_path`:

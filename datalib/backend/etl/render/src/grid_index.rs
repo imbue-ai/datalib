@@ -994,10 +994,18 @@ pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf
     )
 }
 
-/// Why a document cannot be indexed where it was written: a file not
-/// named for its id, or a row of another document. `None` when it can.
+/// Why a document cannot be indexed where it was written: it names no
+/// source, its file is not named for its id, or it holds a row of another
+/// document. `None` when it can.
 fn misfiled(md: &RenderedMarkdown, md_rel: &str) -> Option<String> {
     use datalib_schema::grid_rows::markdown_uuid_of_path;
+    if md.source_id.is_empty() {
+        return Some(format!(
+            "document {} names no source: its renderer must set \
+             `RenderedMarkdown::source_id` to its group's id",
+            md.markdown_uuid
+        ));
+    }
     if markdown_uuid_of_path(md_rel) != Some(md.markdown_uuid.as_str()) {
         return Some(format!(
             "document {} is written to {md_rel}, not to the file its id names \
@@ -1944,12 +1952,11 @@ async fn apply_markdown(
     .context("delete the rows this document no longer has")?;
     write_lock.note_changed(gone);
 
-    let source = document_source(md, canonical);
     for row in &md.rows {
         let row = GridRow {
             source_id: Some(datalib_schema::grid_rows::filed_under(
                 &row.provider,
-                source,
+                &md.source_id,
             )),
             ..row.clone()
         };
@@ -2048,16 +2055,6 @@ fn run_stamp(now_override: Option<&str>) -> datalib_time::StoredStamp {
     }
 }
 
-/// The source a document belongs to: the group whose render store holds
-/// it, or, from a caller that names none, its canonical row's provider.
-fn document_source<'a>(md: &'a RenderedMarkdown, canonical: &'a GridRow) -> &'a str {
-    if md.source_id.is_empty() {
-        &canonical.provider
-    } else {
-        &md.source_id
-    }
-}
-
 async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
@@ -2066,7 +2063,6 @@ async fn upsert_markdown(
 ) -> Result<()> {
     let kind = doc_kind_for(&canonical.kind);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
-    let source_id = document_source(md, canonical);
 
     let section_layout = section_layout(md)?;
     let content_hash = if md.sections.is_empty() {
@@ -2088,7 +2084,7 @@ async fn upsert_markdown(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
-    .bind(source_id)
+    .bind(&md.source_id)
     .bind(&canonical.provider)
     .bind(kind)
     .bind(&canonical.conversation_name)
@@ -3100,11 +3096,11 @@ mod source_cursor_tests {
 
     use crate::grid_index::{
         build_grid_index, build_grid_index_for, discover_sources, doc_md_path, load_source_cursors,
-        RenderedMarkdown,
+        misfiled, RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl::stop::StopFlag;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
     use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
@@ -3148,6 +3144,39 @@ mod source_cursor_tests {
             photos: Vec::new(),
             problems: Vec::new(),
         }
+    }
+
+    /// A document must name its source, be written to the file its id
+    /// names, and hold only its own rows; a renderer that forgets its
+    /// group's id would otherwise file every row under nothing.
+    #[test]
+    fn misfiled_says_what_a_document_got_wrong() {
+        let root = Path::new("/data");
+        let rel = |md: &RenderedMarkdown| {
+            md.md_path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let good = doc(root, "enterprise", "d-1", "Engage.");
+        assert_eq!(misfiled(&good, &rel(&good)), None);
+
+        let nameless = RenderedMarkdown {
+            source_id: String::new(),
+            ..good.clone()
+        };
+        let why = misfiled(&nameless, &rel(&nameless)).expect("refused");
+        assert!(why.contains("names no source"), "{why}");
+
+        let elsewhere = format!("enterprise/render_markdown/{}", doc_file_rel("d-2"));
+        let why = misfiled(&good, &elsewhere).expect("refused");
+        assert!(why.contains("not to the file its id names"), "{why}");
+
+        let mut stray = good.clone();
+        stray.rows[0].markdown_uuid = Some("d-2".to_string());
+        let why = misfiled(&stray, &rel(&stray)).expect("refused");
+        assert!(why.contains("as its document"), "{why}");
     }
 
     fn rendered_root(root: &Path, source: &str) -> std::path::PathBuf {
