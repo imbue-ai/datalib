@@ -4,7 +4,7 @@
 landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
 step 1 (#1765): a chat is one document. 5a–5d have landed (#1868,
 #1872, #1876) and 5e is in review. 4a is under way; nothing else has
-started.** Facts about the tree were checked against
+started, step 10 (bodies in their own format) included.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
 ## Words
@@ -619,6 +619,37 @@ against the eval before the next.
    source on the Manage screen.
 9. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
+10. **Each block keeps its body in the format it came in.** Today every
+    body is turned into markdown at render. For some sources that is
+    what the text already is (a Claude or ChatGPT message, a Notion
+    page), and for a PDF it is a good target. For email it is a lossy
+    conversion: each HTML part goes through `htmd`
+    (`email_render/src/render/render.rs`), with handlers to repair what
+    it gets wrong. A mail reader like Thunderbird does no such thing: it
+    draws the sender's HTML in a locked-down view (no scripts, no remote
+    content) and offers simplified HTML or plain text as fallbacks.
+    Since 5e a block's body is a row of its own, so the format can be
+    a column beside it:
+    - **What is stored.** `sections` gains the body's format: markdown,
+      HTML or plain text. Email keeps its HTML part as sent; chat sources
+      whose messages are plain text say so rather than escaping them into
+      markdown; markdown sources stay as they are.
+    - **What draws it.** The viewer draws each block by its format: markdown
+      through markdown-it as now, HTML through the sanitizer
+      (`ui/src/cards/sanitize.ts`) on its allowlist, text as text. Each
+      block is still a fragment of its own, so one cannot reach into the
+      next.
+    - **What search reads.** Search draws words from each format with its
+      own extractor (`search_index/src/text.rs` does markdown today).
+      Changing the extractor changes the indexed text, so it is an
+      `INDEX_TEXT_VERSION` bump.
+    - **What an export writes.** `datalib-step markdown` still writes
+      markdown, converting an HTML block on the way out, or writes it as
+      HTML. Which one is to decide; nothing else depends on it.
+
+    Email goes first, since it loses the most. It costs a re-render of
+    every email source and the two new drawing paths; the
+    `htmd` repairs go.
 
 ## Open questions
 
