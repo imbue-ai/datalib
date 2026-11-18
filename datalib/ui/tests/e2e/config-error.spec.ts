@@ -10,7 +10,13 @@
 // no reload. `watch.rs` reports the write as `config_changed`; `App.vue`
 // re-checks on it.
 import { test, expect, type Page } from "@playwright/test";
-import { MENU_DISABLED, cardOf, nameCell, rowMenuEntry } from "./grid-helpers";
+import {
+  MENU_DISABLED,
+  cardOf,
+  expectSyncEverything,
+  nameCell,
+  rowMenuEntry,
+} from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -78,6 +84,7 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
   expect(search.status()).toBe(200);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   // No gate, and the app is fully navigable.
   await expect(gate(page)).toHaveCount(0);
   await expect(toolbar(page)).toBeVisible();
@@ -102,6 +109,7 @@ test("a config warning drops nothing, and the System row counts it", async ({ pa
   writeConfig(`${original}\n[[groups]]\nid = "lonely"\n`);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(gate(page)).toHaveCount(0);
   const warning = nameCell(page, "system").locator(".tg-chip-warning");
   await expect(warning).toHaveText("1");
@@ -122,6 +130,7 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   writeConfig(`${original}\n[[steps]]\ngroup = "ghost"\nfunction = "ingest"\n`);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
@@ -140,6 +149,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   request,
 }) => {
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(toolbar(page)).toBeVisible();
   await expect(gate(page)).toHaveCount(0);
   // The Manage table's element, marked: the cards wait behind the gate
@@ -189,6 +199,7 @@ test("a config with no unified_grid_and_search_index applet blocks too", async (
   request,
 }) => {
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(toolbar(page)).toBeVisible();
 
   // Valid TOML, a valid config, and useless: every view in the app is
