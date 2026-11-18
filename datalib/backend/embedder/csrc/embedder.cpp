@@ -9,13 +9,18 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <set>
 #include <vector>
 
 #include "llama.h"
 
 struct dl_embedder {
+    // Held by every call that reads the model, and by the exit hook.
+    mutable std::mutex mu;
+    // Both NULL once the exit hook has freed them.
     llama_model *model;
     llama_context *ctx;
     const char *device;
@@ -47,6 +52,56 @@ void init_once() {
         llama_backend_init();
     });
 }
+
+// Every embedder not yet closed. Never destroyed, since the exit hook
+// reads it while the process's statics are being torn down.
+struct Open {
+    std::mutex mu;
+    std::set<dl_embedder *> all;
+};
+
+Open &open_embedders() {
+    static Open *open = new Open;
+    return *open;
+}
+
+void free_model(dl_embedder *e) {
+    llama_free(e->ctx);
+    llama_model_free(e->model);
+    e->ctx = nullptr;
+    e->model = nullptr;
+}
+
+// ggml's Metal device is a C++ static whose destructor asserts that no
+// model's buffers are left on it, and aborts the process otherwise. An
+// atexit hook registered after that static was built runs before its
+// destructor, so a model still loaded at exit is freed here first.
+void free_models_left_at_exit() {
+    Open &open = open_embedders();
+    std::lock_guard<std::mutex> all(open.mu);
+    for (dl_embedder *e : open.all) {
+        std::lock_guard<std::mutex> one(e->mu);
+        if (e->model) free_model(e);
+    }
+}
+
+void track(dl_embedder *e) {
+    Open &open = open_embedders();
+    {
+        std::lock_guard<std::mutex> all(open.mu);
+        open.all.insert(e);
+    }
+    static std::once_flag once;
+    std::call_once(once, [] { std::atexit(free_models_left_at_exit); });
+}
+
+void untrack(dl_embedder *e) {
+    Open &open = open_embedders();
+    std::lock_guard<std::mutex> all(open.mu);
+    open.all.erase(e);
+}
+
+const char kFreedAtExit[] = "the process is exiting; its model is freed";
 
 }  // namespace
 
@@ -141,27 +196,47 @@ dl_embedder *dl_embedder_open(const char *model_path, int32_t n_ctx, int32_t n_t
         set_err(err, err_len, "the model pools nothing: not an embedding model");
         return nullptr;
     }
-    return new dl_embedder{model, ctx, dev ? ggml_backend_dev_name(dev) : "CPU"};
+    auto *e = new dl_embedder{{}, model, ctx, dev ? ggml_backend_dev_name(dev) : "CPU"};
+    track(e);
+    return e;
 }
 
 void dl_embedder_close(dl_embedder *e) {
     if (!e) return;
-    llama_free(e->ctx);
-    llama_model_free(e->model);
+    untrack(e);
+    {
+        std::lock_guard<std::mutex> one(e->mu);
+        if (e->model) free_model(e);
+    }
     delete e;
 }
 
 const char *dl_embedder_device(const dl_embedder *e) { return e->device; }
 
-int32_t dl_embedder_n_embd(const dl_embedder *e) { return llama_model_n_embd_out(e->model); }
+int32_t dl_embedder_n_embd(const dl_embedder *e) {
+    std::lock_guard<std::mutex> one(e->mu);
+    return e->model ? llama_model_n_embd_out(e->model) : 0;
+}
 
-int32_t dl_embedder_n_ctx(const dl_embedder *e) { return (int32_t)llama_n_ctx_seq(e->ctx); }
+int32_t dl_embedder_n_ctx(const dl_embedder *e) {
+    std::lock_guard<std::mutex> one(e->mu);
+    return e->model ? (int32_t)llama_n_ctx_seq(e->ctx) : 0;
+}
 
-int32_t dl_embedder_n_seq_max(const dl_embedder *e) { return (int32_t)llama_n_seq_max(e->ctx); }
+int32_t dl_embedder_n_seq_max(const dl_embedder *e) {
+    std::lock_guard<std::mutex> one(e->mu);
+    return e->model ? (int32_t)llama_n_seq_max(e->ctx) : 0;
+}
 
-int32_t dl_embedder_keeps_cache(const dl_embedder *e) { return llama_get_memory(e->ctx) != nullptr; }
+int32_t dl_embedder_keeps_cache(const dl_embedder *e) {
+    std::lock_guard<std::mutex> one(e->mu);
+    return e->model ? llama_get_memory(e->ctx) != nullptr : 0;
+}
 
-int32_t dl_embedder_n_tokens(const dl_embedder *e) { return (int32_t)llama_n_ubatch(e->ctx); }
+int32_t dl_embedder_n_tokens(const dl_embedder *e) {
+    std::lock_guard<std::mutex> one(e->mu);
+    return e->model ? (int32_t)llama_n_ubatch(e->ctx) : 0;
+}
 
 dl_tokenizer *dl_tokenizer_open(const char *model_path, char *err, size_t err_len) {
     init_once();
@@ -220,6 +295,8 @@ int32_t dl_tokenizer_ends(const dl_tokenizer *t, const char *text, int32_t text_
 
 int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t text_len,
                              int32_t *out, int32_t cap) {
+    std::lock_guard<std::mutex> one(e->mu);
+    if (!e->model) return -1;
     const llama_vocab *vocab = llama_model_get_vocab(e->model);
     int32_t n = llama_tokenize(vocab, text, text_len, out, cap, true, false);
     // llama.cpp answers "too small" with the negated count.
@@ -228,6 +305,11 @@ int32_t dl_embedder_tokenize(const dl_embedder *e, const char *text, int32_t tex
 
 int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int32_t batch,
                           float *out, char *err, size_t err_len) {
+    std::lock_guard<std::mutex> one(e->mu);
+    if (!e->model) {
+        set_err(err, err_len, kFreedAtExit);
+        return -1;
+    }
     if (n <= 0 || n > (int32_t)llama_n_ctx_seq(e->ctx)) {
         set_err(err, err_len, "the input is empty or longer than the context");
         return -1;
@@ -258,12 +340,17 @@ int32_t dl_embedder_embed(dl_embedder *e, const int32_t *tokens, int32_t n, int3
         set_err(err, err_len, "llama.cpp returned no pooled embedding");
         return -1;
     }
-    std::memcpy(out, pooled, sizeof(float) * (size_t)dl_embedder_n_embd(e));
+    std::memcpy(out, pooled, sizeof(float) * (size_t)llama_model_n_embd_out(e->model));
     return 0;
 }
 
 int32_t dl_embedder_embed_seqs(dl_embedder *e, const int32_t *tokens, const int32_t *lens,
                                int32_t n_seqs, float *out, char *err, size_t err_len) {
+    std::lock_guard<std::mutex> one(e->mu);
+    if (!e->model) {
+        set_err(err, err_len, kFreedAtExit);
+        return -1;
+    }
     if (n_seqs <= 0 || n_seqs > (int32_t)llama_n_seq_max(e->ctx)) {
         set_err(err, err_len, "no inputs, or more than the context takes at once");
         return -1;
@@ -300,7 +387,7 @@ int32_t dl_embedder_embed_seqs(dl_embedder *e, const int32_t *tokens, const int3
         set_err(err, err_len, "llama.cpp failed to evaluate the inputs");
         return -1;
     }
-    const size_t n_embd = (size_t)dl_embedder_n_embd(e);
+    const size_t n_embd = (size_t)llama_model_n_embd_out(e->model);
     for (int32_t s = 0; s < n_seqs; s++) {
         const float *pooled = llama_get_embeddings_seq(e->ctx, s);
         if (!pooled) {

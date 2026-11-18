@@ -92,8 +92,6 @@ fn qmd_cpu() -> &'static (Vec<Side>, Vec<Side>) {
     })
 }
 
-/// An embedder of the test's own, dropped when it ends: on Metal, ggml
-/// aborts at exit if a model is still loaded, so none may live in a static.
 fn open(device: Device) -> Embedder {
     Embedder::open(&runfile("EMBED_MODEL_RLOC"), device, 2).unwrap()
 }

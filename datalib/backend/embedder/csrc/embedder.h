@@ -34,6 +34,8 @@ int32_t dl_embedder_load_module(const char *path, char *err, size_t err_len);
 int32_t dl_embedder_can_load(const char *name);
 
 int32_t dl_embedder_gpu_available(void);
+// An embedder still open when the process exits has its model freed then;
+// a call on it after that fails. Close it still, to free the handle.
 void dl_embedder_close(dl_embedder *e);
 
 // The device the model runs on: "CPU", or the GPU's name ("MTL0").

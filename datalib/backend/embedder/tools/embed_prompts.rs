@@ -25,7 +25,5 @@ fn main() -> Result<()> {
         let (vector, _) = embedder.embed_fitted(&p)?;
         body.push_str(&format!("{hash}\t{}\n", serde_json::to_string(&vector)?));
     }
-    // On Metal, ggml aborts at exit while a model is still loaded.
-    drop(embedder);
     std::fs::write(out, body).with_context(|| format!("write {out}"))
 }

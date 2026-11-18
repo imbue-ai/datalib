@@ -413,8 +413,6 @@ async fn embed_into<E: EmbedPrompt>(
             Err(e) => Err(e),
         };
     }
-    // On Metal, ggml aborts at exit while a model is still loaded.
-    drop(embedder.take());
     result.map(|()| done)
 }
 
