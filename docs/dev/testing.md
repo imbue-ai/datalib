@@ -98,10 +98,10 @@ measurement).
 
 Two things follow from sharing a process:
 
-* **Anything process-global is now shared.** An environment variable
-  one test sets is every test's. A binary whose tests need one runs
-  them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
-  beside it); none does today. Playback is not one: a test points the future it
+* **Anything process-global is shared.** An environment variable
+  one test sets is every test's ([`AGENTS.md`](/AGENTS.md) §"Tests wait
+  on the observable, never on the clock" says what to do instead).
+  Playback is not one: a test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:
@@ -139,8 +139,10 @@ rust_test_slice(
 
 A slice fails when its filter matches no test, so renaming the module
 cannot leave it green and empty. `datalib/backend/http` is the example:
-five slices over one binary — four that own the tracing subscriber and
-`applet_tests`, which is `no-sandbox` and `requires-network`. Only a test
+six slices over one binary — four that own the tracing subscriber,
+`applet_tests`, which is `no-sandbox` and `requires-network`, and
+`watch_os_test`, which is `exclusive` because the OS delays its file
+events when the disk is busy. Only a test
 that needs a different `manual` or `external` tag, or a binary of its
 own on purpose, stays a separate `rust_test` (`http`'s `shutdown_test`
 runs the real server binary).
@@ -248,9 +250,10 @@ the spec's own, not as a collision.
 
 ### It is a CI merge gate
 
-`.github/workflows/test.yml` runs a bare `bazel test ... //...`, so this
-suite gates merges like everything else. Two things make it work in the
-CI image:
+`.github/workflows/test.yml` runs each part in a job of its own, and
+`e2e-gate`, green only when all three are, is the check the merge
+ruleset requires ([`ci.md`](ci.md) §"What runs where"). Two things make
+it work in the CI image:
 
 * **The embedding model is a bazel input.** A build action
   (`//third-party/embedding_models`) fetches it into the remote cache, and
@@ -267,23 +270,21 @@ CI image:
   `playwright install` re-downloads ~400 MB of chromium + webkit every
   run.
 
-The suite is `no-sandbox` + `requires-network` + `cpu:4` and takes ~4
-minutes, so unlike the rest of a warm `main` run it is real work on the
-critical path rather than a cache replay. It catches what a build
+Each part is `no-sandbox` + `requires-network` + `cpu:4` and takes two
+to five minutes on CI, so unlike the rest of a warm `main` run it is
+real work on the critical path rather than a cache replay. It catches what a build
 cannot: in #252 a Vite 8 `outDir` change let the `dist` action succeed
 with an empty output, and this suite was what said so (60 tests
 reporting "UI bundle not embedded in this binary").
 
 ### It needs a `long` timeout, and that is not slack
 
-The target sets `timeout = "long"` (900s). Bazel's default for a test
-with no `size` or `timeout` is `medium` — **300s** — and this suite does
-not fit in that: the suite runs across two engines behind nine backend
-processes, plus the search model's cold load.
-Measured wall clock is ~70s warm and 200-270s on a loaded machine,
-so the default budget made `bazelisk test //...` flaky in a way that
-pointed at nothing. Bazel enforces the ceiling but does not wait for it,
-so the larger budget costs nothing.
+Each part sets `timeout = "long"` (900 s). Bazel's default for a test
+with no `size` or `timeout` is `medium`, **300 s**, and a part has
+needed more than a third of that on a slow runner. Bazel enforces the
+ceiling but does not wait for it, so the larger budget costs nothing.
+Whole, the suite took 600 to 850 s on CI and once timed out at 900 s,
+which is why it is three tests.
 
 ### Writing a spec that does not flake
 
@@ -407,9 +408,8 @@ went red and then green on the same commit.
 
 ## The sign-in suite
 
-`//datalib/ui:e2e_auth_test` drives the wizard's latchkey flows (pasting
-a key, "Sign in with browser", Check connection, a picker's Load, a
-gateway) against the real latchkey, curl router and browser, with the
+`//datalib/ui:e2e_auth_test` drives the wizard's latchkey flows
+against the real latchkey, curl router and browser, with the
 third-party sites faked. It is `manual`, not part of the merge gate; run it with
 `bazelisk run //datalib/ui:e2e_auth`, and CI runs it nightly on macOS
 (`.github/workflows/latchkey-auth.yml`). What is real and what is faked:
@@ -743,12 +743,12 @@ ids are in `runs`. What to look at, and where:
 | question | where it shows |
 |---|---|
 | how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
-| did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `'the keyword index is done'`: `N new … N removed` means every path moved, and a high `updated` on a quiet day means content churned. |
+| did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `"the source's keywords are done"`, one line per source the index step re-keyed: a `put` far above what the sync changed means its documents' content churned. |
 | did an incremental pass stay small | render's `reverse lookup from the changed rows to the buckets`: `stale_buckets` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
 | who a step reached | `target = 'http.outbound'` at `info`: per host, at the first request, each minute and in all |
 | why a run started | `runs.kind` and `runs.reason`, and the run's first line |
 | where a render's time went | `msg LIKE 'where the render%'` (`load_ms`, `parse_ms`, `render_ms`, `write_ms`; each page at `debug`), and `msg LIKE 'the render took%'` for any source |
-| where a step's time went | `event = 'http_request'` (debug), one line per request with its `url` (without the query), `status` and `duration_ms`, from every source that reaches a web service. Summed per ten minutes, a sum close to the wall time means one request at a time. A Slack download also logs each batch of threads and of files with its `elapsed_ms`. A keyword index or an embed logs its phases (`open_ms` …) with its last line. |
+| where a step's time went | `event = 'http_request'` (debug), one line per request with its `url` (without the query), `status` and `duration_ms`, from every source that reaches a web service. Summed per ten minutes, a sum close to the wall time means one request at a time. A Slack download also logs each batch of threads and of files with its `elapsed_ms`. An embed's last line, `the search index's embeddings are done`, gives its chunks and KB per second. |
 | what rate limits cost | `msg LIKE 'HTTP 429%'`, with its `retry_after_ms` |
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |

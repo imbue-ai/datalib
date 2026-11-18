@@ -13,12 +13,17 @@ commit `facd35e0`), not a tree in this repo; function names are given
 so a line number that drifts is still findable.
 
 No sync drives qmd now: search keeps its own index
-(`datalib/backend/search_index`), built in process. These facts stay as
-the record behind what still bears qmd's mark — the one-slot
-`embedder` lock, once `qmd_embed` (findings 5 and 12), and the shared
-model cache's path — until those are revisited. Its other lock,
-`qmd_keyword` (finding 4), is gone: only the index step writes the file it
-guarded.
+(`datalib/backend/search_index`), built in process. These facts are the
+record of how the qmd-driven steps were built. One thing in the tree
+still follows qmd: the model cache every root shares is where qmd put
+it, `$XDG_CACHE_HOME/qmd/models` else `~/.cache/qmd/models`, under
+node-llama-cpp's file names, so the models already downloaded there are
+kept (`datalib_embedding_models::shared_models_dir`,
+`PinnedModel::cache_name`). The one-slot `embedder` lock, once
+`qmd_embed` (finding 5), stands on the search index's own reason: two
+embeds race on the inference cache's vector table, and share one GPU
+(`dag/src/supervisor/locks.rs`). The `qmd_keyword` lock (finding 12) is
+gone.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -245,8 +250,8 @@ does not carry over to `createStore()` without being re-measured.
 
     All of this is one Apple Silicon mac, where the GPU shares the
     machine's memory. A machine with a discrete GPU has not been measured
-    and may well gain from more contexts, which is what `embed_contexts`
-    in `config.toml` is for.
+    and may well gain from more contexts, which is what `config.toml`'s
+    `embed_contexts` was for while qmd embedded.
 
 ## What the qmd-driven steps did with these
 
@@ -326,7 +331,7 @@ and point `qmd()` below at its `dist/cli/qmd.js`.
 
 ```sh
 S=/tmp/qmd-exp; mkdir -p $S/root
-tar -xf bazel-bin/tests/fixtures/ingested/qmd_md.tar -C $S/root --strip-components=1
+tar -xf bazel-bin/tests/fixtures/ingested/rendered_md.tar -C $S/root --strip-components=1
 export XDG_CACHE_HOME=$S/root/unified_grid_and_search_index/qmd_index
 export XDG_CONFIG_HOME=$XDG_CACHE_HOME
 export QMD_CONFIG_DIR=$XDG_CACHE_HOME/qmd

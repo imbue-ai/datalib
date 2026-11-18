@@ -216,7 +216,7 @@ what the grid's "Copy upstream ID(s)" action reads.
 
 Two checks stand between a bad recipe and silent data loss. Beside
 them, the load refuses two documents written in one run that mint the
-same id: `grid_index::insert_grid_row` names the document already
+same id: `grid_index::put_grid_row` names the document already
 holding it. (A row whose id an *earlier* run's document holds has
 moved, and the incoming document takes it over.)
 
@@ -344,12 +344,11 @@ backup, and expect a re-key when you do:
    are minted; a bucket key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,
    claude, email, slack all do).
-4. Bump the provider's `RENDER_VERSION`. A re-key moves `chat_uuid`,
-   which *names the output directory*, so the new documents land beside
-   the old ones rather than over them and the index loads both. The
-   render step handles that — a store whose documents carry a version
-   this build doesn't produce is deleted and re-rendered from the raw
-   store.
+4. Bump the provider's `RENDER_VERSION`. A re-key moves each
+   document's id, and so its `.md` file. The bump makes the next render
+   a full walk, whose sweep removes every document the walk did not
+   produce, old ids included
+   ([`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#the-sweep)).
    Skip the bump and the port silently does nothing to any data root
    that already exists: the raw store has not moved, so nothing
    re-renders and the old ids stay.
@@ -368,12 +367,12 @@ old `grid_rows.uuid`s does not survive, and that is not recoverable.
 
 What *is* handled — neither needs a human to delete anything:
 
-- **The index.** `grid_index::init_schema` compares the on-disk tables
-  against their DDL and, when any disagrees, drops and rebuilds them
-  all from the per-source render stores.
-- **The rendered tree.** The render step discards a tree stamped with a
-  foreign `render_version`, cursor included, and re-renders from the
-  raw store.
+- **The rendered tree.** The version bump renders every bucket again,
+  and the full walk's sweep removes each document the new recipe no
+  longer mints, rows and `.md` file. The store, its history and its
+  cursor are kept.
+- **The index.** It reads the re-keyed documents from the render
+  store's diff, as a deletion plus an addition.
 
 Both are derived data, so the cost is a re-render plus a re-index. No
 re-download: a raw store's keys are the upstream's own and never move

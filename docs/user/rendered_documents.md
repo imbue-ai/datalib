@@ -58,8 +58,9 @@ the time:
 ## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time class="msg-ts" datetime="2369-04-15T10:05:00+02:00" title="2369-04-15 10:05:00 +02:00">Tue Apr 15th, 2369 at 10:05</time>
 ```
 
-It is a real `##` heading because the search's chunker cuts at
-headings. Datalib's viewer styles it down to one line; yours may too.
+It is a real `##` heading so that anyone reading the file sees where
+each message starts. Datalib's viewer styles it down to one line; yours
+may too.
 
 ## A person
 
@@ -197,9 +198,10 @@ an address on datalib's own server:
 kept, by the hash of its bytes; `…/part/<hash>` is one part of an email
 kept whole. Both are paths on `datalib-http`'s origin, behind the same
 API token as the applets (`Authorization: Bearer …`). The answer never
-changes, so cache it for good. The server answers any type that could
-run script as `application/octet-stream`, and an unknown address as
-404.
+changes, so cache it for good. The server sends a type outside its
+short list of safe ones as `application/octet-stream`, sends every file
+but a PDF under a policy that runs no script, and answers an unknown
+address with 404.
 
 Any other link in a body is what the source wrote, and points wherever
 its sender pointed it. Datalib's viewer loads no remote image until its

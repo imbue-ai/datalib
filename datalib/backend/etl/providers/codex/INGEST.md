@@ -3,7 +3,7 @@
 The `codex` source mirrors the rollouts Codex CLI keeps on this machine
 — every thread run in the terminal, `codex exec`, or an IDE extension
 — into a raw store, and renders each one as a document. It has one
-ingest method today:
+ingest method:
 
 | method table               | reads                                      | needs credentials |
 |----------------------------|--------------------------------------------|-------------------|

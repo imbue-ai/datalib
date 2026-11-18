@@ -1,6 +1,6 @@
 //! The counts after a Manage row's name. A red and a yellow number are
 //! the error and warning rows the problems grid shows for that row: the
-//! grid index's rows the step found, less the ones a person muted
+//! rows the step keeps where it found them, less the ones a person muted
 //! (`problem_mutes/README.md`), counted by the one function that also
 //! writes the grid's query, so a double-click opens exactly what was
 //! counted. A grey number beside them is what is in the step's log

@@ -132,7 +132,7 @@ That does nothing about the build scripts that run once one starts.
 
 - **Bad code a release compiles itself** (item 1 above). The burn-in and
   `cargo deny` are all that stand in front of it.
-- **The write key sits where crates compile.** `test.yml`'s three jobs
+- **The write key sits where crates compile.** `test.yml`'s jobs
   that run on a push to `main` hold it, and it cannot be hidden from
   build scripts on those runners. Its reach is `main`'s CI.
 - **Nothing can tell a bad entry from a good one.** If a compromise is

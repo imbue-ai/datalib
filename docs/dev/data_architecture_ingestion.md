@@ -1,7 +1,7 @@
 # Data architecture: ingestion
 
 # Introduction and Context
-We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, a plain SQLite sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. Every other store the pipeline writes is doltlite: the raw stores, each source's render store and the grid index. The CAS is not, because a content-addressed table is its own history.
+We have an incremental, resumable, layered ETL-shaped architecture that downloads raw data from many upstream sources and stores it as **JSON API responses preserved** in versioned doltlite tables, with attachment **BLOBs in a content-addressable store** (CAS, a plain SQLite sibling database per source), then applies transformations (rendering, indexing) and presents the rendered data in a UI. The raw stores and each source's render store are doltlite. The CAS is plain SQLite, because a content-addressed table is its own history, and so is the grid and search index, which is rebuilt from the render stores and keeps no history ([`app_stores.md`](app_stores.md) maps every store).
 
 Parts of this are not novel — the data pipeline aspect shares shape with Flume / Apache Beam / Dask / Prefect / Airflow ETL pipelines. What we optimize for that those tools don't:
 
@@ -22,8 +22,8 @@ The **parse and render stage** — deserializing a stored payload, projecting it
 The pipeline has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<group>/ingest/entities.doltlite_db` (entities) and `<data_root>/<group>/ingest/blobs.sqlite` (a single `cas_objects` table keyed by blake3 hash).
-2. **Render** — derive `.md` files under `<group>/render_markdown/` plus that source's render store (`render_markdown/indexed_markdown.doltlite_db`) from the raw store, deterministically. The source's `embed` step embeds it for search by meaning.
-3. **Grid index** — read every source's render store into the one `grid_rows` table the UI's grid reads.
+2. **Render** — derive `.md` files under `<group>/render_markdown/` plus that source's render store (`render_markdown/indexed_markdown.doltlite_db`) from the raw store, deterministically.
+3. **Index** — `unified_grid_and_search_index` reads every source's render store into the one `grid_rows` table the UI's grid reads, and into the keyword search; a source's `embed` step then fills the vectors for search by meaning.
 
 Each provider (data source) is **three** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib_etl_<name>_config` is the config schema (serde structs, nothing else), `datalib_etl_<name>` downloads, and `datalib_etl_<name>_render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Ingest and render are separate crates".
 
@@ -36,7 +36,7 @@ upstream → download → render → unified_grid_and_search_index
 
 - **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the search index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
 - **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `ingest::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<group>/ingest/` (`RenderCommon::raw_path`); it must never reach back into upstream (the API) or into a file-backed method's `path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
-- **`unified_grid_and_search_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
+- **`unified_grid_and_search_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no index-side change.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
 
@@ -80,13 +80,7 @@ Within each provider crate the bytes-at-rest schema is its own file, deliberatel
 
 Each entity table has a JSONB `payload` column holding the raw upstream wire payload, plus a small number of typed columns the writer must populate at insert time (synthesized-PK components, FKs into parent tables that aren't in the payload, namespace discriminators). On disk `payload` is stored as JSONB — purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
 
-**The JSONB convention, concretely.** Doltlite carries SQLite's binary JSON. A `payload` column holds JSONB (a BLOB at the SQLite level): wrap the bind in `jsonb(?)` on INSERT, unwrap with `json(payload) AS payload` on SELECT. The Rust side still binds and reads a text JSON string; only the on-disk representation changes. Three things that are easy to get wrong:
-
-- `ON CONFLICT … DO UPDATE SET payload = excluded.payload` carries the JSONB through the upsert already — **don't re-wrap it**.
-- `dr::load_payloads()` unwraps for you; a hand-written SELECT that returns `payload` must call `json()` itself.
-- **Don't** wrap `sync_runs.config` / `summary`. Those are tiny single-row bookkeeping where plain-text `SELECT` ergonomics beat binary-parse speed.
-
-Because dropping the `jsonb()` wrapper silently falls back to text storage with no other visible difference, providers assert the encoding directly — `SELECT typeof(payload)` must be `blob`. Five provider test modules do this (email, github, gitlab, notion, slack); a new one should too.
+How a `payload` is written and read as JSONB, and the test that keeps it so: [`etl/README.md` §"JSONB payloads"](/datalib/backend/etl/README.md#jsonb-payloads).
 
 ### More details
 
@@ -101,7 +95,7 @@ Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`. The split i
 
 A per-row resume cursor is the one kind of writer state that lives on the entity table: AirVisual's `<device>.last_ts_ms`, an address book's `ctag` / `sync_token`, a contact's `etag`. Each is a typed column advanced by its own `UPDATE` once the work it vouches for is stored, and left out of the upsert's column list so a re-fetch of the row cannot clobber it.
 
-The split matters because bookkeeping changes on every attempt regardless of upstream change. Storing it on the entity table makes every `dolt diff` noisy, defeats the wire-fidelity of `payload`, and forces re-renders of unchanged content. Keeping it on the sidecar means `<t>` mutates only when upstream actually changed.
+Why the split matters — `<t>` then changes only when upstream did, so a diff over it means something and render redoes nothing — is [`etl/README.md` §"Bookkeeping lives in a sidecar table"](/datalib/backend/etl/README.md#bookkeeping-lives-in-a-sidecar-table).
 
 **Sanctioned divergence: no sidecar for a snapshot input read whole every run.** `facebook`, `claude_code`, `codex` and `airvisual` read a local export or tree from the start every run; there is no per-row fetch to record, so a sidecar would only churn `last_attempt_at_utc` on every row for nothing. Those tables have no `<t>_bookkeeping`. A provider that fetches records one at a time from a service keeps the sidecar — it is what makes a partial run resumable and a failed row visible.
 
@@ -253,7 +247,7 @@ Corollary: **the raw store is the source of truth; downstream stages are rebakea
 ## Verifiable via a reset
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. Nothing resets the CAS. To get its space back, delete `blobs.sqlite` by hand **and** reset the ingest step: deleting only the file leaves edge rows naming bytes that are gone, and the download will not fetch what its edge rows say it has. `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
+Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. Nothing resets the CAS itself ([`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md#blob-cas-and-per-provider-edge-tables) says how to reclaim its space). `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
 
 Nothing garbage-collects `cas_objects`: bytes are byte-stable and nothing in the tree deletes them. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
@@ -331,9 +325,10 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 8 of the 28 providers with a download side use `DownloadRun`**
-(calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
-github and gitlab through `forge-ingest-common`, notion, slack). The
+**Only 12 of the 32 source types use `DownloadRun`** (baby_connect,
+calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
+github and gitlab through `forge-ingest-common`, google_drive, linear,
+notion, slack, todoist). The
 others write no `sync_runs` row and no deltas — their history is still
 in the commits, but nothing precomputes it. A source that reads a local
 input whole keeps none on purpose: a row per run would make every run a
@@ -494,12 +489,6 @@ that reads a whole export or file each time (the `.vcf` address books,
 a Takeout tree) sees deletions on every sync. When you build a
 provider, this is one more reason to prefer the full re-read.
 
-**`deleted_upstream_at` is specified but not built.** [Transient vs
-non-transient](#transient-vs-non-transient) below says a confirmed 404
-should carry that marker; no such column exists anywhere in the tree. A
-provider that hard-deletes the row instead keeps the fact only in
-history, not in current state.
-
 ## Timestamps: one clock, no fabrication
 
 What goes in `GridRow.created_at` — the global-ordering policy, the
@@ -511,7 +500,7 @@ How a stamp is stored (`<x>_at_utc` plus `tz_offset`) is AGENTS.md
 shares, including download for its own `fetched_at_utc` stamps.
 
 ### Single source of truth: `datalib-time`
-Mint every `now` and parse every inbound RFC 3339 string through the `datalib-time` crate (`datalib/backend/time/`); a handful of call sites still reach `chrono` directly, and new code should not. The crate exposes:
+Mint every `now` and parse every inbound RFC 3339 string through the `datalib-time` crate (`datalib/backend/time/`); some call sites still reach `chrono` directly for a now or a parse, and new code should not. The instant inside is a jiff `Timestamp`. The crate exposes:
 
 - `IsoOffsetTimestamp::now_local()` — the canonical "now," returning the wall clock with the **generating system's local-tz offset** (e.g. `2026-06-10T14:23:00-07:00`). An offset-bearing timestamp is strictly more information than the same instant in UTC: you can recover UTC from `-07:00`, but you can't recover the originating offset once it's been normalized away. `to_utc_and_offset()` splits a value into the stored pair, `split_stamp` does the same for one that arrived as a string, and `bulk_upsert_bookkeeping` does it for the sidecar.
 - `parse_strict(s)` — accepts only strings that already carry an explicit offset. Most parse callsites should use this.
@@ -561,11 +550,7 @@ The tape variants are the right tool **only for tables whose rows came off a wir
 The `ON CONFLICT` clause is **the same shape on every table**; only the column list varies (see [Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives) for which extras belong on the entity table vs the sidecar vs as VIRTUAL+index over payload), and the derive supplies it from the row type.
 
 ## dolt_diff supersedes per-bucket fingerprints
-Render decides what changed with **`dolt_diff_<table>` virtual tables driven by a per-source render cursor**, not with fingerprints of its own: doltlite's prolly-tree diff answers "what changed since last render?" directly.
-
-Mechanism: on render success, the render step records the doltlite HEAD the provider pinned in the render store's `render_cursor` row, in the same transaction as the run's last document. On the next render, the provider is handed that hash (`RenderCtx::raw_cursor`) and `parse` runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { fanout_query, bucket_query })`, which cold-starts if the `fanout_query` returns a row (a change that fans out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
-
-There is no fingerprint compare beside it: rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it.
+Render decides what changed with **`dolt_diff_<table>` from the raw-store commit its render cursor names**, not with fingerprints of its own: doltlite's prolly-tree diff answers "what changed since last render?" directly, and rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. The mechanism — the cursor, the reverse lookup through `render_inputs`, a provider's forward `scan_buckets` — is [parse and render §5](data_architecture_parse_and_render.md#5-incrementality-and-deletion).
 
 **Rule for new stages.** Any new derivation added to the pipeline follows the same recipe: read its input pinned at a commit, record that commit beside its output in the same transaction, and on the next run diff the input from there. The grid index does the same over every render store (`source_cursors`). The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 
@@ -757,7 +742,7 @@ We want enough transient error handling that syncs "usually" work. The goals are
 Distinctions every provider should try to follow.
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (next bullet), advance the cursor, keep going. The run's `FetchSummary` reports the count.
-- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which render carries forward and the Manage row counts. How the rows travel: [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
+- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which the Manage row counts and the record's document shows once render has linked it. Where the rows are read: [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 - **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the step succeeds; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
 - **A row clears only when the same thing was tried again and worked, so every report says what the run covered.** Adding a row needs no coverage; clearing one does, and the collector clears exactly what the run vouches for:
 
@@ -772,7 +757,7 @@ Distinctions every provider should try to follow.
   Two reports on one key are one row. Anything the cursor moves past still needs a retry: read the failed ids back (`doltlite_raw::failed_ids`, the sidecar's `last_error`) and ask for them next run, or hold the cursor. What a stamped file held that could not be used (a record that would not parse, one with no key) goes on the file's stamp through `file_checkpoint::record_file_with_problem`: the file is not read again until it changes, so its row stands until the next stamp of it or `forget_file`. A pruned record takes its row with it (`prune.rs`).
 - **What a run leaves out on purpose is a row too**, so a person can tell it is absent. A warning per record where there are few (a file over `max_bytes`); where a single folder could hold thousands, one row with the count and one example, through `.skipped(part, set)` with a set of one or none (the PDFs with no text, media's cloud placeholders). Name the example by a stable order, or an unchanged tree rewrites the row and commits. When each dropped thing belongs to a document that does render, the row goes on that document at `info`, where its banner shows it, rather than as thousands of warnings on the Manage row (Slack's cards).
 - **A checkpoint carries the problems found so far.** A download that seals as it goes uses `run_problems::collecting_sealed` with its `Sealer`: each seal first writes the collector as it stands, then publishes the store's `problems` metric, so a consumer reading a checkpoint, and the Manage row, see what could not be fetched for the rows that checkpoint publishes. Only the clearing of listing and phase rows waits for the end of the run, because only then is it known that every one of them ran.
-- **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`file_changes_scan::Scan::deletions_held_back`). A file the walk found and could not open is not such an error: it is there (`Scan::present_unread`), keeps its rows, and is a row of its own (`Scan::report_problems`); a source that deletes only after reading every file still holds back while one is unread. A file over `max_bytes` is the same, and its row is a warning.
+- **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`file_changes_scan::Scan::deletions_held_back`). How a local scan reports a file it could not open or would not read: [`files/README.md`](/datalib/backend/etl/files/README.md) §"Answering "did it change?" for a file-backed source".
 - **A store that will not take a write fails the step.** Swallowing it (`warn!`, `.ok()`, `unwrap_or_default()`) commits a run that says it wrote what it did not.
 - **Fail the step only when the run can do nothing useful.** A workspace-wide 401 / 403 from the auth provider before anything was fetched, or a listing with nothing stored from an earlier run to fall back on, should return `Err` from `fetch(...)`, which fails the step. The final commit does not happen ([`RawStoreSession::run`](/datalib/backend/etl/src/raw_store.rs) closes the store uncommitted): what the run sealed at its last checkpoint, a point it called consistent, stands, and the rest is discarded at the next `open`. Sealing at the error instead would make durable a state nothing vouched for, such as a conversation stamped current before its attachments were stored, which the next run would skip.
 - **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.gave_up(said)`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. `owed::drain` does all of this when it gives up. `.gave_up` cuts the run short and tells the step, which ends `incomplete` once the store is committed: the Manage row says the download is not done, and its dependents still read what it got. A run that covers less on purpose (one page, one conversation) calls only `.cut_short()`, and succeeds. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run, the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.
@@ -788,6 +773,6 @@ A network that is not there is the same case. A request that never reached the s
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:
 
-- **Confirmed-deletion (404 on a known-existed thing).** The upstream is telling us "this is gone." A retry will only ever return 404 again. The row should carry a distinct `deleted_upstream_at` marker so we don't burn API quota retrying forever, while still preserving the row (and any history) for backpointer / outlink purposes. Not built yet (see [The delta as a source](#the-delta-as-a-source-diff-groups)).
+- **Confirmed-deletion (404 on a known-existed thing).** The upstream is telling us "this is gone," and a retry will only ever return 404 again. No row carries a mark for it: a provider either deletes the row, keeping the fact only in history, or keeps retrying. Whether a record a complete listing no longer names is kept is the person's choice where a source offers it ([`deleted_upstream.md`](deleted_upstream.md)).
 - **Workspace-wide auth failures.** Per [Error handling](#error-handling) above, these are fatal and bail the run; per-row retry doesn't apply.
 - **An optional call this credential may never make.** A refusal that says what the token is (Slack's `unknown_method` or `missing_scope`, a latchkey permission's `Upstream::NotPermitted`) comes back the same every run until someone changes the token. A warning every sync about it reads as something broken, so remember the refusal (a sweep marker), skip the call for a while, and report it as `RunProblem::not_asked`: one `info` row, which the Manage row does not count. Slack's `client.counts` and `saved.list` are the worked example ([`slack/INGEST.md`](/datalib/backend/etl/providers/slack/INGEST.md#a-call-this-token-may-not-make)).

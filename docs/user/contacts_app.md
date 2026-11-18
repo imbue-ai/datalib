@@ -14,7 +14,7 @@ What a link gets you:
   about the person under every handle linked there
   ([Searching your mirror](searching.md)).
 - **Nothing re-renders.** Links sit over the view: no document changes,
-  and neither index runs again, so a link costs nothing to make or undo.
+  and nothing is indexed again, so a link costs nothing to make or undo.
 
 The app also holds **labels** on people and senders (`real`: in when
 the person or sender is not spam, out when it is) and every link a person
@@ -36,12 +36,13 @@ curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/datalib_contacts/"
 ```
 
 An answer of 502 naming `no applet "datalib_contacts"` means this
-library's config has no entry for it: a root set up before the app
-existed. Turning it on is the person's call, in **Add data source** →
-Contacts app, or with the entry [the applets page](applets.md#what-ships)
-gives.
+library's config has no entry for it. A root made by `datalib-dag init`
+or the app has one; an older one may not. Turning it on is the person's
+call, in **Add data source** → Contacts app, or with the entry
+[the applets page](applets.md#what-ships) gives, which the app starts
+with no restart.
 
-That answer lists every route, what each does and its `kind`; so does
+`GET /applet/datalib_contacts/` lists every route, what each does and its `kind`; so does
 `datalib-applet datalib_contacts --help`, with no server. `kind` is the
 part to read before you write:
 
@@ -59,17 +60,6 @@ never appears for them to review. Confirming your own proposals erases
 the same difference. When the person says "link this address to Riker",
 calling it is what they asked for. When you are working through a
 mailbox, it is not.
-
-If the answer is a 502 saying `no applet "datalib_contacts"`, the config
-has no entry for it. A root made by `datalib-dag init` or the app has
-one; an older one may not. Add this and the app starts it:
-
-```toml fragment
-[[applets]]
-group = "unified_grid_and_search_index"
-id = "datalib_contacts"
-command = "datalib-applet datalib_contacts"
-```
 
 ## Spelling a handle
 

@@ -1,6 +1,6 @@
 # GitHub Translate
 
-The render step for a `github` source reads the raw store `github-ingest`
+The render step for a `github` source reads the raw store its `ingest` step
 writes and emits **one markdown document per pull request**, plus that
 document's `grid_rows`. The document and its rows are built by
 `datalib/backend/etl/forge-render-common/`, which GitLab shares; this

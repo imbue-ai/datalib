@@ -1691,9 +1691,8 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Enterprise.lrcat"
 
-# Lightroom renders no documents yet: query the raw store with
-# `datalib-doltlite`. This step writes the storage report every source
-# gets, which is what puts Lightroom in the grid.
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
 [[steps]]
 group = "lightroom-catalog"
 function = "render_markdown"
@@ -1741,9 +1740,8 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 [steps.params.backups]
 path = "~/Pictures/Lightroom/Backups"
 
-# Lightroom renders no documents yet: query the raw store with
-# `datalib-doltlite`. This step writes the storage report every source
-# gets, which is what puts Lightroom in the grid.
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
 [[steps]]
 group = "lightroom-backups"
 function = "render_markdown"

@@ -88,8 +88,8 @@ it into `~/.local/lib/datalib` and links the tools into
 
 Also installed: `latchkey` (the credential tool, step 2, running on
 the fetched Node runtime), `datalib-file-inventory` (a standalone directory
-scanner) and the two
-`latchkey-curl-*` binaries the web-API sources fetch through. If
+scanner) and the two binaries the web-API sources fetch through,
+`latchkey-curl-router` and `curl-impersonate`. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
 line to add to your `~/.zshrc` — add it and restart your shell.
 
@@ -344,8 +344,8 @@ data out of Google's silos. Useful targets:
 - **Mail** — exports as a single `.mbox` (one file for "All mail
   Including Spam and Trash"). The email source reads it directly.
 - **Chat**, **Voice**, **Maps**, **YouTube history**, **Gemini** — the
-  `google_takeout` source reads the unpacked tree. Chat and Voice
-  render to markdown today; the rest land in the raw store.
+  `google_takeout` source reads the export and renders each of them to
+  markdown.
 
 Steps:
 
@@ -482,7 +482,7 @@ you write after a `[…]` header belongs to that header's table until the
 next one.
 
 You normally don't write this by hand. The app's first-run screen
-writes the index steps and the applets (search, and your contacts)
+writes the index step and the applets (search, and your contacts)
 for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
 step). From a terminal, two commands do the same:
@@ -493,8 +493,8 @@ datalib-step examples slack --append ~/datalib/config.toml
 ```
 
 The first writes the starter config and nothing else. The second adds
-a source's smallest working config and puts it in the index steps'
-`inputs`; a source with more than one way in names it
+a source's smallest working config, and makes sure the index step's
+`inputs` read it; a source with more than one way in names it
 (`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](../../configs/dag_example.toml),
@@ -509,7 +509,7 @@ one source's entries, straight into `<data_root>/config.toml`:
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
 - [**claude_only.toml**](config_examples/claude_only.toml)
-  — just the Claude source, plus the two index steps.
+  — just the Claude source, plus the index step and the applets.
 - [**all_sources.toml**](config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
   every input mode for email and contacts).
@@ -529,14 +529,13 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A config whose
-search is still one shared `qmd_index` step needs none of this: the app
-gives each source its own search steps the first time it reads the
-file, and keeps the old one as `config.toml.bak`. The same is true of a
-config whose index is still called `unified_index` or
-`unified_document_index`: the app renames it
-`unified_grid_and_search_index`, and moves the index's folder to match
-rather than rebuilding it. A much older root with
+from the old file don't carry over, so review the result. A config with
+an older search or index step (a shared `qmd_index` step, or an index
+group called `unified_index` or `unified_document_index`) needs none of
+this: the app rewrites it the first time it reads the file and keeps the
+old one as `config.toml.bak`
+([the retired shapes](../dev/config_model.md#the-retired-shapes) lists
+every such rewrite). A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 
@@ -721,8 +720,8 @@ datalib-applet search ~/datalib "hello"
 ## 8. Getting your data back out
 
 The point of mirroring your data locally is that it stays yours, so it
-is worth knowing the exit before you need it. Two of the three copies
-are already in open formats you can read with no datalib at all:
+is worth knowing the exit before you need it. The markdown is already
+in an open format, and one command turns each database into one:
 
 - **The markdown.** `<group>/render_markdown/` is a tree of ordinary
   UTF-8 `.md` files, one per conversation or document. Copy it
@@ -766,7 +765,7 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. 
+transaction it leaves open stalls that sync.
 
 From Python, `uv add imbue-datalib-reader` reads a store in place, with no
 export: see [Reading the raw stores](raw_stores.md).
@@ -780,7 +779,7 @@ If you prefer a GUI, you have two options:
 
 In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+in `datalib-doltlite` in Terminal. More recipes, including the commit history
 and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback

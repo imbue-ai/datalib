@@ -58,8 +58,9 @@ so a windowed calendar is listed whole every run, whatever the listing
 no longer names is dropped, and the calendar's token is cleared.
 
 Either end may be an offset from the run's day (`since = "-2d"`,
-`until = "+21d"`), which the processor turns into dates in the run's
-own offset each run (`Window::resolve`). Such a window slides, and
+`until = "+21d"`; the grammar is
+[`config_model.md`](/docs/dev/config_model.md#time-windows-since-and-until)),
+which the processor turns into dates each run (`Window::resolve`). Such a window slides, and
 since what the listing no longer names is dropped, the store holds the
 window as it stands on the last run: an event that has slid out of it
 goes, the same as one deleted upstream. The listing cannot tell the
@@ -104,6 +105,16 @@ Which credential to use, and how to make it read-only, is in
 - Depth makes no difference: `sync-collection`, `calendar-multiget`
   and `calendar-query` returned the same at Depth 0, 1 and none, on
   each of 6 calendars. We send what the RFCs define (0, 0 and 1).
+- Shape of the data across ~5,200 objects: 3,855 single events; the
+  rest a series with 0 to many overrides in the same object; 5 objects
+  holding only overrides (invitations to one occurrence). No `STATUS`
+  properties at all — cancelled occurrences are `EXDATE`s. Every
+  `TZID` was an IANA name.
+- **An event made in Google keeps Google's HTML in `DESCRIPTION`**
+  (a `@google.com` `UID`, `<a href=…>` and `<br />` beside `\n`
+  line breaks): 24 of 42 events in one week of a calendar shared from
+  Google. Render reads a description holding an editor's tag as HTML,
+  as it does Google's own.
 
 The loop is `datalib_etl_web::dav::sync`, which CardDAV shares: each page
 of a listing is one transaction (what it names, what came with its
@@ -115,16 +126,6 @@ until a later run carries it to the end. An object with no `VEVENT`
 and not asked for again until the listing names it at a new etag. A
 server without `sync-collection` fails the calendar: there is no second
 way to list one, apart from the window's `calendar-query` above.
-- Shape of the data across ~5,200 objects: 3,855 single events; the
-  rest a series with 0 to many overrides in the same object; 5 objects
-  holding only overrides (invitations to one occurrence). No `STATUS`
-  properties at all — cancelled occurrences are `EXDATE`s. Every
-  `TZID` was an IANA name.
-- **An event made in Google keeps Google's HTML in `DESCRIPTION`**
-  (a `@google.com` `UID`, `<a href=…>` and `<br />` beside `\n`
-  line breaks): 24 of 42 events in one week of a calendar shared from
-  Google. Render reads a description holding an editor's tag as HTML,
-  as it does Google's own.
 
 ## Google Calendar — measured against a live account
 

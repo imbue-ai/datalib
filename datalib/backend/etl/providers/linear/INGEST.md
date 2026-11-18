@@ -62,8 +62,8 @@ Otherwise an issue is copied when its team is in `teams` **or** its
 project is in `projects`. Most issues belong to a team and to no
 project, so a list of projects alone leaves most of the workspace out.
 
-- `teams` matches a team by key (`ENG`, ignoring case) or by name.
-- `projects` matches a project by its name.
+- `teams` matches a team by key (`ENG`, ignoring case), name or id.
+- `projects` matches a project by name, slug id or id.
 - A name that matches nothing becomes a `config` problem row, and
   selects nothing.
 
@@ -119,13 +119,13 @@ largest page here (50 projects with their members) costs about 2,400.
 
 ### One transaction between two seals
 
-The whole run writes through one SQL transaction at a time
-(`datalib_etl::raw_store::Batch`), committed only when a checkpoint is
-due and at the end. Linear's ids are random, so each page lands all over
-each table, and a doltlite `COMMIT` writes a fresh copy of every page of
-the tree it touched; the replaced copies stay in the file, since nothing
-runs `dolt_gc()` on a raw store. Measured on a first run over a real
-workspace (about 92 MB of records):
+The whole run writes through one `datalib_etl::raw_store::Batch`,
+committed only when a checkpoint is due and at the end; why, and what a
+transaction costs, is in
+[`etl/README.md`](../../README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
+It matters here because Linear's ids are random, so each page lands all
+over each table. Measured on a first run over a real workspace (about
+92 MB of records):
 
 | writes | checkpoints | store | after `dolt_gc()` |
 |---|---|---|---|
@@ -136,8 +136,6 @@ Committing more often than the seals bought nothing: what no seal
 reached is discarded on the next open anyway. What is left is the
 checkpoints' own history; folded into one commit, the same store is
 122 MB.
-Because the open transaction holds the store's one connection, every
-read during the run goes through it too.
 
 ### Why the walk pages by stamp, not by cursor
 
@@ -160,16 +158,15 @@ is requests, not writes.
 
 ## Volatile fields
 
-A field that changes without anyone editing the record goes into the
-sidecar's `volatile_payload` instead of the payload, so a diff of a
-table shows real edits only. Each table's list is beside it in
-`ingest/schema_raw.rs`:
+Fields that move without anyone editing the record are volatile
+([`etl/README.md`](../../README.md#volatile-fields-split-them-out-dont-diff-them)).
+Each table's list is beside it in `ingest/schema_raw.rs`:
 
 - `updatedAt` everywhere. A comment, a board drag or a sub-issue moves
   it. On the walked tables it is also the version the record is held at.
 - Sort orders (`sortOrder`, `prioritySortOrder`, `subIssueSortOrder`),
   which move when someone drags a neighbour on a board.
-- The progress series of projects, cycles, milestones and teams, and
+- The progress series of projects, cycles and milestones, and
   derived counts (`issueCount`, `customerTicketCount`, `resourceCount`,
   `commentCount`).
 - A person's status and `lastSeen`; a project update's `isStale`, which

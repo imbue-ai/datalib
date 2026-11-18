@@ -91,18 +91,16 @@ nothing else on your network can reach it.
 
 You are looking at Captain Picard's Claude conversations, a Gmail
 Takeout, Google Chat and Voice, texts and calls, a LinkedIn export,
-contacts and a folder of PDFs, all in one grid. Keyword search works
-right away. Semantic search needs an index the image doesn't carry
-(building one during the image build would slow every release down), so
-build it now — a minute or so on a laptop, and the models are already in
-the image:
+contacts and a folder of PDFs, all in one grid. Search by words and by
+meaning both work right away: the image was built with every step run,
+the embeddings included. To sync from the command line, the same as
+**Sync everything** on the Data sources card:
 
 <!-- doc-test: run demo-index -->
 ```sh
 docker exec datalib-demo datalib-dag /opt/datalib/demo/config.toml
 ```
 
-The same thing happens if you press **Sync everything** on the Data sources card.
 Every store in the library is a database you can query, from inside
 the container or from any other one with the folder mounted:
 

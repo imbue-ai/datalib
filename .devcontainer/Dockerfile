@@ -1,5 +1,5 @@
 # The image `bazel test //...` runs in on CI, and the devcontainer a
-# contributor opens the repo in. Built from `ubuntu:24.04` directly — it
+# contributor opens the repo in. Built from `ubuntu:26.04` directly — it
 # used to inherit the prod runtime image, which bought it a Node it only
 # needs at build time and cost it a publish that could only run after
 # a release's prod-image job, so the CI image went unpublished for four

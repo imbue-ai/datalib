@@ -4,12 +4,12 @@ A **problem** is one row saying what a step could not fully do to one
 record (`datalib/backend/problems/`, and `etl/README.md` §"Problems stay
 in the step that found them"). Many are true and cannot be fixed: a
 corrupt PDF, a date written in a form nobody can parse, a file no source
-reads. Every error and warning used to count toward the Dashboard's
-"Needs you" and the Manage row's count forever, so "Needs you" was
-almost never empty, and a problem that did need someone (an expired
-sign-in, a failed fetch) was easy to miss among them.
+reads. Counted toward the Dashboard's "Needs you" and the Manage row's
+count for as long as they hold, they would keep "Needs you" from ever
+emptying and hide a problem that does need someone (an expired
+sign-in, a failed fetch) among them.
 
-A person can now **mute** a problem row they have seen. In the problems
+So a person can **mute** a problem row they have seen. In the problems
 grid (the one "Review" and a Manage row's count open) they select rows,
 right-click, and pick **Mute**; **Unmute** undoes it.
 

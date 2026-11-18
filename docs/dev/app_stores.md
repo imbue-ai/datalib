@@ -4,6 +4,9 @@
 <data_root>/<group>/ingest/entities.doltlite_db   per-source entities + sync bookkeeping
 <data_root>/<group>/ingest/blobs.sqlite           content-addressed blobs (plain SQLite)
 <data_root>/<group>/render_markdown/…             the rendered tree + its render store
+<data_root>/<group>/<function>/problems.sqlite    the problems of a step with no store of
+                                                  its own (plain SQLite; `etl/README.md`
+                                                  § "Problems stay in the step that found them")
 <data_root>/<group>/render_time_series/time_series.doltlite_db
                                                   a source's time series and their points,
                                                   as encoded chunks (`docs/dev/time_series.md`)
@@ -29,9 +32,8 @@
                                                   each chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
-<data_root>/unified_grid_and_search_index/qmd_aggregator/           nothing now: the retired aggregator's
-                                                  directory, where qmd's index was;
-                                                  the index step deletes it
+<data_root>/unified_grid_and_search_index/qmd_aggregator/           left by an older build, where qmd kept
+                                                  its index; the index step deletes it
 <data_root>/unified_grid_and_search_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
@@ -111,12 +113,14 @@
                                                   moved (`http/src/manage/summary.rs`)
 ```
 
-Every store above but the JSON files carries a
+Every store above but the JSON files, the blob stores and the
+`problems.sqlite` files carries a
 `_datalib_meta` table — which datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
 and committed with the schema (`datalib_store_meta`;
-[`plans/completed/schema_migrations.md`](plans/completed/schema_migrations.md) §3.1). A reader that wants to
+[`etl/README.md`](../../datalib/backend/etl/README.md) § "`_datalib_meta`:
+which build wrote this store"). A reader that wants to
 know what it is looking at reads that before its first query — and
 every owner does, refusing a store a newer `major.minor` of datalib
 wrote (`datalib_store_meta::guard`; the app server then boots only to
@@ -135,17 +139,17 @@ One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `unified_grid_and_search_index` owns
 the grid index's tables and the search index's `search_*` tables in the
-same file; `datalib-http` owns feedback, usage and remote media;
+same file; `datalib-http` owns feedback, disk stats and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
 SQLite in WAL mode, and its step writes one source per transaction, so
 that transaction reads one state of it and a `unified_grid_and_search_index` pass in
 flight is never served; a request also reopens the file when a reset
-has replaced it. Doltlite never copies a plain file's WAL back by
-itself ([`doltlite.md`](doltlite.md) § "Plain SQLite files and SQLite
-compatibility"), so the step
-does it at the end of every pass (`grid_index::close_index`). The grid's
+has replaced it. The `-wal` can keep the size a large transaction
+gave it ([`doltlite.md`](doltlite.md) §
+"Plain SQLite files and SQLite compatibility"), so the step truncates
+it at the end of every pass (`grid_index::close_index`). The grid's
 load and the search index's writes are two parts of the one step, each
 with its own connection; each write transaction starts with `BEGIN
 IMMEDIATE`, and the search index writes in batches of a few hundred

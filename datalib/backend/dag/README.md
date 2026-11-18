@@ -319,18 +319,12 @@ update until it is dismissed. The pass is held in the server's memory
 (`/api/config`'s `upgrade`) and announced as `pass_changed` on
 `/api/sync/stream`; freeing disk space is drawn by the same pill
 (§"Resets and purges").
-Before any of that, the http server brings the index from before its
-renames forward (`http/src/config_upgrade.rs`): it moves
-`<root>/unified_document_index/` or `<root>/unified_index/` to
-`<root>/unified_grid_and_search_index/` and the record's rows for those
-steps to their new ids
-(`Store::rename_group_steps`), moves the index step's tree from
-`grid_index/` to `unified_grid_and_search_index/` under it, with the
-record's rows for that step (`move_index_step_dir`,
-`Store::rename_step`), and moves each folder an older config
-spelled with capitals to the lowercase spelling the config now uses
-(`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
-has the config side.
+Before any of that, the http server moves each tree a config rewrite
+renamed to its new path, and the record's rows for its steps with it
+(`http/src/config_upgrade.rs`): the index under an earlier group name, the index
+step's `grid_index/` tree, and a folder an older config spelled with
+capitals. [`config_model.md`](../../../docs/dev/config_model.md)
+§"The retired shapes" has each rewrite and its move.
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
 release left, and a test migrates each one
 ([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
@@ -515,20 +509,13 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. The four warnings: a group nothing
-is filed under; a `name` written on a grouped step, whose label comes
-from the group; an applet filed under a group that does not exist; and a built-in
-step's `common.always_clear_before_ingest`, linkedin's
-`export.fetch_photos` or email's `gmail.request_concurrency`, which no
-longer do anything (`datalib-step`
-drops them before parsing, so the step still runs). The Manage screen's System row counts the warnings and shows
-their words on hover. The retired
-shapes — `datalib-step download|render|grid_index|qmd_index` on a
-command line, a built-in `qmd_index` step and a built-in
-`keyword_index` step — are `Rejected`, because
-they no longer run, and the diagnostic names `datalib-migrate-config`.
-The full list of what the loader drops is in
-[`config_model.md`](../../../docs/dev/config_model.md) § "What the loader checks". A warning passes the strict door too
+and the fix is on the group's line. A retired shape is `Rejected`,
+since it no longer runs, and its diagnostic names
+`datalib-migrate-config`; a key that no longer does anything is a
+`Warning`, since the step still runs. What the loader drops and what it
+warns about, entry by entry, is in
+[`config_model.md`](../../../docs/dev/config_model.md) § "What the
+loader checks". A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.

@@ -57,10 +57,13 @@ datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
 agent, and sends no telemetry: the only network traffic is datalib reading
 from the services you configured, which means sending them your sign-in and
 your requests, plus one-time downloads the first time they are needed: the
-search models, and (for the command-line install) the Node runtime that search
-and latchkey run on. A sign-in that opens a browser also loads that service's
-pages, and may first download the browser. A package you add is fetched from
-the URL you gave it, and runs as you.
+search model, its CUDA module on a Linux machine with an NVIDIA GPU, and (for
+the command-line install) the Node runtime that latchkey runs on. A sign-in
+that opens a browser also loads that service's pages, and may first download
+the browser. A package you add is fetched from the URL you gave it, and runs
+as you. The one exception is opt-in: a source you set to embed on Modal sends
+its text to your own Modal account, to be embedded there
+([what leaves the machine for Modal](docs/dev/security_posture.md#what-leaves-the-machine-for-modal)).
 
 What it produces, though, is a very valuable pile of private data in one
 place — and most of it was written by other people. Three things follow:
@@ -275,11 +278,10 @@ A mirror you can't leave is just another silo, so the exits are plain:
   From Python, `uv add imbue-datalib-reader` reads a store directly
   ([Reading the raw stores](docs/user/raw_stores.md)).
 
-  Or browse a store in a GUI: a build of DB Browser for SQLite patched to
-  open doltlite files is at
-  <https://github.com/thadd3us/sqlitebrowser/releases> (macOS).
-
-Details, and what a snapshot does and doesn't carry, in
+What an export carries and what it leaves behind, and the GUIs that open
+a store, are in the first-time user guide's
+[Getting your data back out](docs/user/first_time_user.md#8-getting-your-data-back-out);
+the commit history and per-sync diffs in
 [`docs/dev/doltlite.md`](docs/dev/doltlite.md).
 
 ## Documentation

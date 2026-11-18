@@ -41,9 +41,9 @@ those its `params.not_searched` lists), and, for a source searched by
 meaning, `<group>/embed`, which embeds that source's part of the search
 index; `unified_grid_and_search_index` keeps only the embeddings the index still names. A
 step's function
-is the directory it writes (the search steps are the exception: they
-write the search index's tables in the grid index's file, and the
-vectors in `unified_grid_and_search_index/search_index/`):
+is the directory it writes (each `embed` is the exception: it writes
+its vectors to the one cache in
+`unified_grid_and_search_index/search_index/`):
 
 ```
 <data_root>/
@@ -126,8 +126,8 @@ header, and a step's `params` sub-tables come after its plain keys — a
   signing in or asking for access happens wherever that gateway is managed.
 - **How far back (and ahead)**: every source that can mirror part of
   its history takes `since` in its method table (`[steps.params.api]`,
-  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
-  and Garmin also take `until`. Each is a day (`"2026-09-01"`), an
+  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar,
+  Garmin and Baby Connect also take `until`. Each is a day (`"2026-09-01"`), an
   RFC 3339 instant, or an offset from the run's start (`"-30d"`,
   `"+21d"`; units `h`, `d`, `w`), so `since = "-30d"` keeps the last
   month without a daily edit. A record an offset slides past stays in
@@ -392,13 +392,11 @@ Pick the surface that fits the question:
   datalib-applet search ~/datalib 'warp core semantic:off'
   ```
 
-  It exits 1, with each reason on stderr, when the answer is not the
-  search you asked for: a query it refused (`refused`), an error, a
-  free-text search the search index could not answer, or free text on a root with no
-  search index yet (a source's words are searchable once `unified_grid_and_search_index`
-  has run after its render), or part of a search that could not
-  answer (`query_echo.partial`, with the rows the rest found). An empty
-  answer with exit 0 means nothing matched. Free text loads the embedding
+  It exits 1 when the answer is not the whole search you asked for (a
+  refusal, an error, a part that could not answer), with each reason on
+  stderr; an empty answer with exit 0 means nothing matched.
+  [Searching your mirror](user/searching.md) § "When the search says
+  no" has each case. Free text loads the embedding
   model and the vectors first, each command afresh, which on a large root
   takes tens of seconds; `semantic:off` in the query loads neither. A running
   app holds them loaded, so `GET …/search` has no such wait.
@@ -489,40 +487,28 @@ Pick the surface that fits the question:
 - **Semantic search** — `datalib-applet search <data_root> '<words>'`
   (above) searches by meaning as well as by words.
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_grid_and_search_index/search?q=…` (the query language,
-  `from:me` included, is [Searching your mirror](user/searching.md);
-  `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
-  the values one takes, most rows first. A key the search does not
-  have is refused by name, in `refused`, rather than ignored. Free text
+  `GET /applet/unified_grid_and_search_index/search?q=…` (the query
+  language, `from:me` and the cutoff on meaning included, and what a
+  refusal or a partial answer says, are [Searching your
+  mirror](user/searching.md); `GET …/search/keys` lists every key and
+  `…/search/values?key=…&typed=…&q=…` the values one takes. Free text
   made only of uuids and handles (an email address, `tel:+…`,
   `slack:T…/U…`) is looked up in the grid index's search terms, not ranked
   by text: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author or an addressee,
   3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
-  Other free text has one answer: `score` is reciprocal rank fusion of the
+  Other free text's `score` is reciprocal rank fusion of the
   search terms (any word as the start of one), every document's text by BM25
-  (over each message, a document holding the words as typed first) and
-  the documents nearest the text by cosine over the search index's vectors, one row a
-  document. `semantic:off` in the query leaves out the vectors, and
-  `semantic:0.4` asks for that similarity where the default is 0.25: a word or
-  a field that matches counts however far off its meaning is. All are ranked
-  within the rows the other terms leave, so `from:`, `after:` or `source:`
-  narrow what is ranked rather than what is kept. `query_echo.without_vectors`
-  says on the first page how many of the documents those terms leave have no
-  vectors yet, in all and by source, and `query_echo.partial` what part of the
-  search could not answer when the rest did. `tab=` is gone, and refused. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
-  and the `next_offset`; `sort=created_at:desc,author` orders by grid
-  columns in turn, a row with no value last either way. `GET /applet/unified_grid_and_search_index/search/groups?q=…&by=kind`
-  counts the groups, and `within=[["kind","Chat"]]` on `search` lists
-  one group), `GET /api/log?q=…` (the
-  runner's log lines in the same grammar — keys `run:`, `process:`,
-  `process_id:`, `step:`, `attempt:`, `level:`, `stream:`, `target:`,
-  `thread:`, `msg:`, and `commit:` by prefix; free text is a
-  substring of the line; `run:`, `process_id:`, `step:` and `attempt:`
-  narrow it to a run, a process or a step's attempt; the newest `limit=`
-  lines, oldest first, with `before_seq=` paging back and `after_seq=`
-  tailing),
+  (over each message) and the documents nearest the text by cosine over
+  the search index's vectors, one row a document. Each row's `link` is
+  where opening it goes, `datalib:doc/<page>#<section>`: its page, at
+  the row when it is a message of the page. It answers a page: `limit=`
+  rows from `offset=`, with `total` and the `next_offset`; `sort=`,
+  `GET …/search/groups?q=…&by=kind` and `within=[["kind","Chat"]]` on
+  `search` sort and group as the search page's §"Sorting and grouping"
+  says), `GET /api/log?q=…` (the log lines in the same grammar, a page
+  at a time: [logging](dev/logging.md) §"Reading it"),
   `GET /applet/unified_grid_and_search_index/docs`, `GET /applet/unified_grid_and_search_index/chat/{uuid}`,
   `GET /applet/unified_grid_and_search_index/children/{uuid}?at=…` (what a
   thread, channel or label holds, in order, a page each way around a

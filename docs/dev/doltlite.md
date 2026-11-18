@@ -143,35 +143,15 @@ calls it:
 uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
 ```
 
-Wheels exist for Apple-silicon Macs on macOS 11 or later (`macosx_11_0`), and
-for Linux on x86_64 and aarch64: `manylinux_2_17` for any glibc from glibc 2.17
-on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right one. Each
-version carries the library that release's binaries were built from. There is
-no source distribution, so anywhere else (an Intel Mac, say) use the shell:
-`datalib-doltlite -readonly -json`.
+Its page, [`datalib/reader/README.md`](/datalib/reader/README.md), is
+what PyPI shows: the API, its errors, what it refuses and which wheels
+exist. Where no wheel fits (an Intel Mac, say), use the shell:
+`datalib-doltlite -readonly -json`. `Store(path, commit)` is the
+[detached open](#opening-a-revision-by-path) our own readers use. Beyond
+that page:
 
-```python
-from datalib_reader import Store
-
-with Store(f"{root}/gmail/ingest/entities.doltlite_db") as store:  # main
-    rows = store.query("SELECT subject FROM emails WHERE id = ?", email_id)
-
-with Store(path, commit) as store:  # one commit, however far main moves on
-    changed = store.query("SELECT to_id FROM dolt_diff_emails(?, ?)", cursor, commit)
-```
-
-`query` returns a list of rows, each a tuple that also answers by column name; each kind of failure has its own `OSError` subclass (`datalib/reader/README.md`). The second form is the
-[detached open](#opening-a-revision-by-path) our own readers use.
-
-What to know about it:
-
-- **It only reads.** Both kinds of open refuse writes with `attempt to
-  write a readonly database`, and the store comes out byte-identical.
-- **A JSONB column comes back as `bytes`**, which `json.loads` refuses
-  with a `UnicodeDecodeError`. Every `payload` is JSONB, so select
-  `json(payload)` to get text.
 - **A connection kept open sees later seals**, and the one opened on a
-  commit stays on that commit. Give each thread its own `Store`.
+  commit stays on that commit.
 - **The `sqlite3` module stays as it was**, stock, beside it, whichever
   was imported first. So `sqlite3` still cannot read a store, and a child
   process inherits nothing. The library opens plain SQLite files too,
@@ -633,10 +613,11 @@ in the doltlite repo, at the pinned tag.
 | a table committed later | readable by name | at the next transaction | open the newer commit |
 | what holds it | `datalib_pin` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
 
-Every reader in the tree uses the third (`doltlite_raw::open_reader`),
-except the search applet, which holds a transaction; `dolt_at_` is for
+A reader in the tree that pins a commit uses the third
+(`doltlite_raw::open_reader`, `datalib_pin::open_at`); `dolt_at_` is for
 reading one table at another commit on a connection already open (the
-history reader). The detached open works on our `.doltlite_db` names
+history reader). The grid index's readers hold a transaction, but that
+file is plain SQLite. The detached open works on our `.doltlite_db` names
 from 0.50.13 and runs every query from 0.50.14: three detached readers beside 500
 flat-out seals saw 0 errors, each open read one sealed commit, opens
 took ~1–10 ms even while the writer held a transaction, and the file
@@ -830,10 +811,8 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
 - **The pages a transaction touches are the pages its keys fall in.**
   The tree is sorted by primary key. Rows whose keys are adjacent land
   in one or two leaves; the same number of rows with random keys land
-  in one leaf each (400 rows: 39 KB against 1.75 MB written). Random
-  keys are uuidv4s, uuidv5s and content hashes; adjacent keys are
-  `(device_id, ts_ms)`, `"{metric}#{date}"`, and the time-prefixed ids
-  `datalib_id` mints.
+  in one leaf each (400 rows: 39 KB against 1.75 MB written). Which of
+  our keys are which: [`etl/README.md`](/datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
 - **A row is stored whole.** Changing one small column rewrites the
   row and the leaf it sits in, whatever else the row holds: in 400
   rows, one integer changed on a 4 KB row grew the file by 15 KB, and
@@ -926,8 +905,8 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   no orphan branch, no shallow history, and `dolt_gc` takes no options.
   A fold, a tag and gc are the whole kit. Dolt, the separate DoltHub
   database whose SQL doltlite follows, added `dolt_squash_history` in
-  July 2026; it is our fold as one call. Doltlite has not, through
-  0.51.1.
+  July 2026; it is our fold as one call. Doltlite has not
+  (`there_is_no_verb_that_drops_history`).
 
 ### Full-text search (FTS5)
 
@@ -1046,8 +1025,10 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
   rollback journal (dolthub/doltlite#3740, fixed in 0.50.16; before
   that a plain file always kept a rollback journal). The run store
   asks for `wal`, because in a rollback journal its readers waited out
-  every commit (measured in [`logging.md`](logging.md) § One store);
-  our other plain stores ask for `delete`. On a WAL file, doltlite's
+  every commit (measured in [`logging.md`](logging.md) § One store), and
+  so do the grid index's file, the inference cache and a step's
+  `problems.sqlite`, which are read while they are written; our other
+  plain stores ask for `delete`. On a WAL file, doltlite's
   reset (`SQLITE_DBCONFIG_RESET_DATABASE`, then `VACUUM`) waits for
   every other connection to close, where stock SQLite resets with an
   idle one open. `synchronous`
@@ -1069,8 +1050,7 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
 - **A writer waiting on a plain WAL file gets in between another
   process's transactions**, as with stock SQLite, after about one of
   them. Under 0.51.3 it waited until the other process stopped writing
-  altogether, so the grid index's step could not open its file while a
-  `keyword_index` ran for minutes, and failed after 30 seconds.
+  altogether.
 - **Doltlite reads a WAL another program wrote.** A plain SQLite
   file another program keeps in WAL mode reads through doltlite with
   the rows only its `-wal` holds, so a reader sees what that program
@@ -1199,7 +1179,7 @@ cause (network timeout, panic, OOM, etc.).
 ## Not yet measured
 
 Claims that were true on an older doltlite, or seen only in a shell
-probe, and that nothing in the tree yet checks on 0.50.13:
+probe, and that nothing in the tree checks:
 
 - **Two writers, each on a branch of its own, through `commit_run`.**
   Needs a harness role that seals on a named branch.

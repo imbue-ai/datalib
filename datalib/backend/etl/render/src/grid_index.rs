@@ -827,11 +827,11 @@ fn retire_old_files(db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the WAL back into the index and empty it, then close. Doltlite,
-/// which our binaries link, never does this by itself
-/// (`docs/dev/doltlite.md`), and while the search applet holds the file
-/// open, closing the writer's connection does not either: the `-wal`
-/// would keep every page any pass wrote.
+/// Copy the WAL back into the index and empty it, then close. A
+/// checkpoint by itself leaves the `-wal` at the size its largest
+/// transaction gave it (`docs/dev/doltlite.md`), and while the search
+/// applet holds the file open, closing the writer's connection does not
+/// empty it either.
 pub async fn close_index(pool: SqlitePool) -> Result<()> {
     let checkpoint: Result<(i64, i64, i64), sqlx::Error> =
         sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")

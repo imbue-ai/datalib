@@ -47,8 +47,7 @@ the same image with NVIDIA's cuBLAS and datalib's CUDA module added, for
 a machine with an NVIDIA GPU (§ "The CUDA variant"). The devcontainer
 CI runs in is a separate image
 (`.devcontainer/Dockerfile`, published by `devcontainer.yml`) and does
-not build on it. Releases up to v0.53.0 also published a
-`:<version>-slim` tag without the models; later releases do not.
+not build on it.
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
