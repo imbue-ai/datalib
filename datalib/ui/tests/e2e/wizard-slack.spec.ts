@@ -3,7 +3,12 @@
 // email and Claude forms use.
 import { test, expect, type Page } from "@playwright/test";
 import { reviewToml, row, wizardOf } from "./wizard-helpers";
-import { fillConfigEditor, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  fillConfigEditor,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+  expectSyncEverything,
+} from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = wizardOf;
@@ -105,7 +110,7 @@ async function stubBackend(page: Page) {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 async function pickSlack(page: Page) {

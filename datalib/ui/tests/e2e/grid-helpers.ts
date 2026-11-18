@@ -342,14 +342,22 @@ export async function fillConfigEditor(page: Page, text: string) {
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
 
+/// How long the sources card may take to draw after a navigation. Each
+/// sandboxed spec is a project of its own, so its first page is a cold
+/// browser's, and the first four start together on a four-core runner:
+/// on CI the card has drawn a second past the default five.
+export const CARD_DRAWN = 15_000;
+
 /// Wait for the sources card's "Sync everything", which it shows only
 /// once the card has drawn and while nothing syncs. When it is not
 /// there, fail with what the card and the server say instead, so the
 /// report names the state rather than "element(s) not found".
-export async function expectSyncEverything(page: Page, timeout = 5_000): Promise<void> {
+export async function expectSyncEverything(page: Page, timeout = CARD_DRAWN): Promise<void> {
   const started = Date.now();
   try {
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible({ timeout });
+    const waited = Date.now() - started;
+    if (waited > 5_000) console.log(`[e2e] the sources card took ${waited} ms to draw`);
   } catch (err) {
     const waited = Date.now() - started;
     throw new Error(

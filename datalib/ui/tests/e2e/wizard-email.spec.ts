@@ -8,6 +8,7 @@ import {
   pickRowMenu,
   MANAGE_WITH_CONFIG,
   savedConfig,
+  expectSyncEverything,
 } from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
@@ -156,7 +157,7 @@ async function stubBackend(page: Page) {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 /// Opens the account box's list and picks a stored name from it.

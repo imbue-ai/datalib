@@ -14,11 +14,12 @@ import {
   pipelineRow as row,
   MANAGE_WITH_CONFIG,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 const wizard = (page: Page) => page.getByRole("dialog");
